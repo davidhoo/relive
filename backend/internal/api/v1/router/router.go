@@ -80,8 +80,15 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 		v1.POST("/import", handlers.Export.Import)
 		v1.POST("/export/check", handlers.Export.CheckExport)
 
-		// TODO: 配置管理等路由
-		// config := v1.Group("/config")
+		// 配置管理相关
+		configGroup := v1.Group("/config")
+		{
+			configGroup.GET("", handlers.Config.ListConfigs)           // 获取所有配置
+			configGroup.POST("/batch", handlers.Config.SetBatchConfigs) // 批量设置配置
+			configGroup.GET("/:key", handlers.Config.GetConfig)         // 获取配置
+			configGroup.PUT("/:key", handlers.Config.SetConfig)         // 设置配置
+			configGroup.DELETE("/:key", handlers.Config.DeleteConfig)   // 删除配置
+		}
 	}
 
 	return r

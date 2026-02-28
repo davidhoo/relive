@@ -688,9 +688,9 @@ GET /api/v1/ai/provider
 
 ## 6. 导出/导入 API
 
-### 6.1 导出数据 📋
+### 6.1 导出数据 ✅
 
-导出分析所需数据（export.db + 缩略图）。
+导出照片数据到独立的 SQLite 数据库文件。
 
 **请求**
 ```http
@@ -703,13 +703,35 @@ Content-Type: application/json
 }
 ```
 
-**状态**: 📋 计划中
+**响应**
+```json
+{
+  "success": true,
+  "data": {
+    "output_path": "/volume1/temp/export/export.db",
+    "photo_count": 1000,
+    "database_size": 524288,
+    "thumbnail_dir": ""
+  },
+  "message": "Export completed successfully"
+}
+```
+
+**字段说明**
+- `output_path`: 导出数据库的完整路径
+- `photo_count`: 导出的照片数量
+- `database_size`: 数据库文件大小（字节）
+- `analyzed`: 是否仅导出已分析的照片（默认 false）
+
+**使用场景**
+- 离线分析：导出未分析的照片到有 GPU 的主机
+- 备份：导出已分析的数据用于备份
 
 ---
 
-### 6.2 导入数据 📋
+### 6.2 导入数据 ✅
 
-导入 AI 分析结果。
+从导出文件导入 AI 分析结果。
 
 **请求**
 ```http
@@ -721,11 +743,30 @@ Content-Type: application/json
 }
 ```
 
-**状态**: 📋 计划中
+**响应**
+```json
+{
+  "success": true,
+  "data": {
+    "updated_count": 980,
+    "failed_count": 20
+  },
+  "message": "Import completed successfully"
+}
+```
+
+**字段说明**
+- `updated_count`: 成功导入的照片数
+- `failed_count`: 导入失败的照片数
+
+**说明**
+- 使用 file_hash 匹配照片，确保准确导入
+- 只导入已分析的照片（ai_analyzed=true）
+- 失败的照片会记录日志
 
 ---
 
-### 6.3 检查导出 📋
+### 6.3 检查导出 ✅
 
 检查导出数据的完整性。
 
@@ -739,41 +780,58 @@ Content-Type: application/json
 }
 ```
 
-**状态**: 📋 计划中
-
----
-
-### 6.4 导入进度 📋
-
-获取导入的实时进度。
-
-**请求**
-```http
-GET /api/v1/import/progress
+**响应**
+```json
+{
+  "success": true,
+  "message": "Export data is valid"
+}
 ```
 
-**状态**: 📋 计划中
+**说明**
+- 验证 export.db 是否存在
+- 检查数据库是否可以打开
+- 验证 photos 表是否有数据
 
 ---
 
 ## 7. 配置管理 API
 
-### 7.1 获取配置 📋
+### 7.1 获取配置 ✅
 
-获取应用配置。
+根据键获取配置值。
 
 **请求**
 ```http
 GET /api/v1/config/{key}
 ```
 
-**状态**: 📋 计划中
+**示例**
+```http
+GET /api/v1/config/display.algorithm
+```
+
+**响应**
+```json
+{
+  "success": true,
+  "data": {
+    "id": 1,
+    "key": "display.algorithm",
+    "value": "on_this_day",
+    "description": "",
+    "created_at": "2026-02-28T10:00:00Z",
+    "updated_at": "2026-02-28T10:00:00Z"
+  },
+  "message": "Config retrieved successfully"
+}
+```
 
 ---
 
-### 7.2 更新配置 📋
+### 7.2 设置配置 ✅
 
-更新应用配置。
+设置或更新配置值。
 
 **请求**
 ```http
@@ -781,24 +839,130 @@ PUT /api/v1/config/{key}
 Content-Type: application/json
 
 {
-  "value": "new_value"
+  "value": "random"
 }
 ```
 
-**状态**: 📋 计划中
+**示例**
+```http
+PUT /api/v1/config/display.algorithm
+Content-Type: application/json
+
+{
+  "value": "random"
+}
+```
+
+**响应**
+```json
+{
+  "success": true,
+  "message": "Config updated successfully"
+}
+```
+
+**常用配置键**
+- `display.algorithm`: 展示算法（on_this_day / random / top_score）
+- `display.refresh_interval`: 刷新间隔（秒）
+- `display.avoid_repeat_days`: 避免重复展示天数
+- `ai.provider`: AI Provider（ollama / qwen / openai / vllm）
+- `ai.temperature`: AI 温度参数
+- `system.maintenance_mode`: 维护模式（true / false）
 
 ---
 
-### 7.3 重置配置 📋
+### 7.3 删除配置 ✅
 
-重置配置为默认值。
+删除配置项，系统将使用默认值。
 
 **请求**
 ```http
 DELETE /api/v1/config/{key}
 ```
 
-**状态**: 📋 计划中
+**示例**
+```http
+DELETE /api/v1/config/display.algorithm
+```
+
+**响应**
+```json
+{
+  "success": true,
+  "message": "Config deleted successfully"
+}
+```
+
+**说明**
+- 删除后系统将使用代码中定义的默认值
+- 适用于重置配置到默认状态
+
+---
+
+### 7.4 获取所有配置 ✅
+
+获取系统中的所有配置项。
+
+**请求**
+```http
+GET /api/v1/config
+```
+
+**响应**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 1,
+      "key": "display.algorithm",
+      "value": "on_this_day",
+      "description": "",
+      "created_at": "2026-02-28T10:00:00Z",
+      "updated_at": "2026-02-28T10:00:00Z"
+    },
+    {
+      "id": 2,
+      "key": "display.refresh_interval",
+      "value": "3600",
+      "description": "",
+      "created_at": "2026-02-28T10:00:00Z",
+      "updated_at": "2026-02-28T10:00:00Z"
+    }
+  ],
+  "message": "Configs retrieved successfully"
+}
+```
+
+---
+
+### 7.5 批量设置配置 ✅
+
+批量设置多个配置项。
+
+**请求**
+```http
+POST /api/v1/config/batch
+Content-Type: application/json
+
+{
+  "display.algorithm": "on_this_day",
+  "display.refresh_interval": "3600",
+  "ai.provider": "ollama"
+}
+```
+
+**响应**
+```json
+{
+  "success": true,
+  "message": "Configs updated successfully"
+}
+```
+
+**说明**
+- 使用事务确保所有配置要么全部成功要么全部失败
+- 适用于批量导入配置或恢复配置
 
 ---
 
