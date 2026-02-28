@@ -8,118 +8,94 @@
       <p class="page-subtitle">照片管理系统概览</p>
     </div>
 
-    <!-- Bento Grid 布局 - 现代非对称设计 -->
-    <div class="bento-grid animate-fade-in">
-      <!-- 总照片数 - 大卡片 (2x2) -->
-      <div class="bento-card bento-card-large">
-        <div class="bento-card-bg"></div>
-        <div class="bento-card-content">
-          <div class="stat-card-header">
-            <div class="stat-card-icon stat-icon-emerald">
-              <el-icon><Picture /></el-icon>
-            </div>
-          </div>
-          <div class="stat-card-value-large">{{ systemStats?.total_photos || 0 }}</div>
-          <div class="stat-card-title-large">总照片数</div>
-          <div class="stat-card-subtitle">所有照片</div>
+    <!-- 统计卡片网格 - WeDance 风格 -->
+    <div class="stats-grid animate-fade-in">
+      <!-- 总照片数 -->
+      <div class="stat-card">
+        <div class="stat-card-icon stat-icon-primary">
+          <el-icon><Picture /></el-icon>
+        </div>
+        <div class="stat-card-title">总照片数</div>
+        <div class="stat-card-value">{{ systemStats?.total_photos || 0 }}</div>
+        <div class="stat-card-subtitle">所有照片</div>
+      </div>
+
+      <!-- 已分析 -->
+      <div class="stat-card">
+        <div class="stat-card-icon stat-icon-success">
+          <el-icon><MagicStick /></el-icon>
+        </div>
+        <div class="stat-card-title">已分析</div>
+        <div class="stat-card-value">{{ systemStats?.analyzed_photos || 0 }}</div>
+        <div class="stat-card-subtitle">
+          分析率 <span class="stat-highlight">{{ analysisRate }}%</span>
         </div>
       </div>
 
-      <!-- 已分析 - 中等卡片 -->
-      <div class="bento-card bento-card-medium animate-delay-1">
-        <div class="bento-card-bg"></div>
-        <div class="bento-card-content">
-          <div class="stat-card-header">
-            <div class="stat-card-icon stat-icon-cyan">
-              <el-icon><MagicStick /></el-icon>
-            </div>
-          </div>
-          <div class="stat-card-value">{{ systemStats?.analyzed_photos || 0 }}</div>
-          <div class="stat-card-title">已分析</div>
-          <div class="stat-card-subtitle">
-            分析率 <span class="stat-highlight">{{ analysisRate }}%</span>
-          </div>
-          <div class="progress-mini">
-            <div class="progress-mini-bar" :style="{ width: analysisRate + '%' }"></div>
-          </div>
+      <!-- 在线设备 -->
+      <div class="stat-card">
+        <div class="stat-card-icon stat-icon-warning">
+          <el-icon><Monitor /></el-icon>
+        </div>
+        <div class="stat-card-title">在线设备</div>
+        <div class="stat-card-value">{{ systemStats?.online_devices || 0 }}</div>
+        <div class="stat-card-subtitle">
+          共 {{ systemStats?.total_devices || 0 }} 台
         </div>
       </div>
 
-      <!-- 在线设备 - 小卡片 -->
-      <div class="bento-card bento-card-small animate-delay-2">
-        <div class="bento-card-bg"></div>
-        <div class="bento-card-content">
-          <div class="stat-card-icon stat-icon-amber">
-            <el-icon><Monitor /></el-icon>
-          </div>
-          <div class="stat-card-value-small">{{ systemStats?.online_devices || 0 }}</div>
-          <div class="stat-card-title-small">在线设备</div>
-          <div class="stat-card-subtitle-small">
-            共 {{ systemStats?.total_devices || 0 }} 台
-          </div>
+      <!-- 存储空间 -->
+      <div class="stat-card">
+        <div class="stat-card-icon stat-icon-info">
+          <el-icon><DataLine /></el-icon>
         </div>
-      </div>
-
-      <!-- 存储空间 - 小卡片 -->
-      <div class="bento-card bento-card-small animate-delay-3">
-        <div class="bento-card-bg"></div>
-        <div class="bento-card-content">
-          <div class="stat-card-icon stat-icon-rose">
-            <el-icon><DataLine /></el-icon>
-          </div>
-          <div class="stat-card-value-small storage-value-small">{{ storageSize }}</div>
-          <div class="stat-card-title-small">存储空间</div>
-          <div class="stat-card-subtitle-small">
-            {{ systemStats?.total_photos || 0 }} 张
-          </div>
+        <div class="stat-card-title">存储空间</div>
+        <div class="stat-card-value storage-value">{{ storageSize }}</div>
+        <div class="stat-card-subtitle">
+          {{ systemStats?.total_photos || 0 }} 张
         </div>
       </div>
     </div>
 
-    <!-- AI 分析进度 - 液态玻璃效果 -->
+    <!-- AI 分析进度 - 简洁卡片 -->
     <el-row :gutter="20" class="progress-row">
       <el-col :span="24">
-        <div class="progress-card glass-card animate-fade-in animate-delay-4">
+        <div class="progress-card modern-card animate-fade-in animate-delay-1">
           <div class="progress-card-header">
             <div class="progress-title">
               <el-icon class="progress-icon"><MagicStick /></el-icon>
               <span>AI 分析进度</span>
             </div>
-            <button
-              class="magnetic-button"
+            <el-button
+              type="primary"
+              size="default"
               @click="handleStartAnalysis"
               :disabled="analyzing"
+              class="start-button"
             >
-              <span class="magnetic-button-bg"></span>
-              <span class="magnetic-button-content">
-                <el-icon v-if="!analyzing"><VideoPlay /></el-icon>
-                {{ analyzing ? '分析中...' : '开始批量分析' }}
-              </span>
-            </button>
+              <el-icon v-if="!analyzing"><VideoPlay /></el-icon>
+              {{ analyzing ? '分析中...' : '开始批量分析' }}
+            </el-button>
           </div>
           <div v-if="aiProgress" class="progress-content">
             <div class="modern-progress">
               <div
-                class="modern-progress-bar flowing-bar"
+                class="modern-progress-bar"
                 :style="{ width: progressPercentage + '%' }"
-                :class="{
-                  'progress-success': progressStatus === 'success',
-                  'progress-warning': progressStatus === 'warning'
-                }"
               ></div>
             </div>
             <div class="progress-info">
               <div class="progress-stat">
                 <span class="progress-label">已完成</span>
-                <span class="progress-value animated-number">{{ aiProgress.completed }}/{{ aiProgress.total }}</span>
+                <span class="progress-value">{{ aiProgress.completed }}/{{ aiProgress.total }}</span>
               </div>
               <div class="progress-stat">
                 <span class="progress-label">进度</span>
-                <span class="progress-value animated-number">{{ progressPercentage }}%</span>
+                <span class="progress-value">{{ progressPercentage }}%</span>
               </div>
               <div class="progress-stat" v-if="aiProgress.failed > 0">
                 <span class="progress-label">失败</span>
-                <span class="progress-value error animated-number">{{ aiProgress.failed }}</span>
+                <span class="progress-value error">{{ aiProgress.failed }}</span>
               </div>
               <div class="progress-stat" v-if="aiProgress.current_photo_id">
                 <span class="progress-label">当前照片</span>
@@ -132,11 +108,10 @@
       </el-col>
     </el-row>
 
-    <!-- 最近照片 - 聚光灯边框效果 -->
+    <!-- 最近照片 - 简洁卡片 -->
     <el-row :gutter="20" class="photos-row">
       <el-col :span="24">
-        <div class="photos-card spotlight-card animate-fade-in">
-          <div class="spotlight-border"></div>
+        <div class="photos-card modern-card animate-fade-in animate-delay-2">
           <div class="photos-card-header">
             <div class="photos-title">
               <el-icon class="photos-icon"><Picture /></el-icon>
@@ -159,8 +134,8 @@
               class="photo-col"
             >
               <div
-                class="image-card tilt-card animate-scale-in"
-                :style="{ animationDelay: `${index * 50}ms` }"
+                class="image-card animate-scale-in"
+                :style="{ animationDelay: `${index * 30}ms` }"
                 @click="gotoPhotoDetail(photo.id)"
               >
                 <el-image
@@ -356,7 +331,7 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-/* ============ Dashboard 容器 - 浅色主题 ============ */
+/* ============ Dashboard 容器 - WeDance 风格 ============ */
 .dashboard {
   padding: 48px;
   background: var(--color-bg-primary);
@@ -385,256 +360,39 @@ onMounted(async () => {
   color: var(--color-primary);
 }
 
-/* ============ Bento Grid 布局 ============ */
-.bento-grid {
+/* ============ 统计卡片网格 ============ */
+.stats-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  grid-template-rows: repeat(2, 180px);
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 20px;
   margin-bottom: 40px;
 }
 
-/* Bento 卡片基础样式 */
-.bento-card {
-  position: relative;
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  cursor: pointer;
-  transition: all var(--transition-base);
-}
-
-.bento-card-bg {
-  position: absolute;
-  inset: 0;
-  background: #ffffff;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  transition: all var(--transition-base);
-  z-index: 0;
-  box-shadow: var(--shadow-sm);
-}
-
-.bento-card:hover .bento-card-bg {
-  border-color: var(--color-primary);
-  box-shadow: var(--shadow-md);
-}
-
-.bento-card:hover {
-  transform: translateY(-2px);
-}
-
-.bento-card-content {
-  position: relative;
-  height: 100%;
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  z-index: 1;
-}
-
-/* 大卡片 - 2x2 */
-.bento-card-large {
-  grid-column: span 2;
-  grid-row: span 2;
-}
-
-.bento-card-large .stat-card-value-large {
-  font-size: var(--font-size-5xl);
-  font-weight: var(--font-weight-bold);
-  line-height: 1;
-  color: var(--color-primary);
-  margin-top: auto;
+/* 统计卡片样式 - 继承自 common.css */
+.stat-card .stat-card-icon {
+  width: 56px;
+  height: 56px;
+  font-size: 28px;
   margin-bottom: 16px;
-  transition: all var(--transition-base);
 }
 
-.bento-card-large:hover .stat-card-value-large {
-  transform: scale(1.03);
-}
-
-.bento-card-large .stat-card-title-large {
-  font-size: var(--font-size-xl);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
+.stat-card .stat-card-title {
   margin-bottom: 8px;
 }
 
-/* 中等卡片 - 2x1 */
-.bento-card-medium {
-  grid-column: span 2;
-  grid-row: span 1;
+.stat-card .stat-card-value {
+  font-size: 48px;
+  font-weight: 600;
+  margin-bottom: 8px;
 }
 
-/* 小卡片 - 1x1 */
-.bento-card-small {
-  grid-column: span 1;
-  grid-row: span 1;
-}
-
-.bento-card-small .stat-card-value-small {
-  font-size: var(--font-size-3xl);
-  font-weight: var(--font-weight-bold);
-  color: var(--color-text-primary);
-  margin: auto 0;
-  line-height: 1;
-}
-
-.bento-card-small .stat-card-title-small {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-secondary);
-  margin-bottom: 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.bento-card-small .stat-card-subtitle-small {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-/* 统计卡片组件 */
-.stat-card-header {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-md);
-  margin-bottom: var(--spacing-md);
-}
-
-.stat-card-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: var(--radius-md);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 24px;
-  transition: all var(--transition-base);
-}
-
-.bento-card:hover .stat-card-icon {
-  transform: scale(1.1);
-}
-
-/* 配色方案 */
-.stat-icon-emerald {
-  background: rgba(74, 144, 226, 0.1);
-  color: var(--color-primary);
-}
-
-.stat-icon-cyan {
-  background: rgba(82, 196, 26, 0.1);
-  color: var(--color-success);
-}
-
-.stat-icon-amber {
-  background: rgba(250, 173, 20, 0.1);
-  color: var(--color-warning);
-}
-
-.stat-icon-rose {
-  background: rgba(255, 77, 79, 0.1);
-  color: var(--color-error);
-}
-
-.stat-card-title {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  font-weight: var(--font-weight-medium);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: var(--spacing-xs);
-}
-
-.stat-card-value {
-  font-size: var(--font-size-3xl);
-  font-weight: var(--font-weight-bold);
-  color: var(--color-text-primary);
-  margin-bottom: var(--spacing-xs);
-  line-height: 1;
-}
-
-.stat-card-subtitle {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-tertiary);
+.storage-value {
+  font-size: 24px !important;
 }
 
 .stat-highlight {
   color: var(--color-primary);
   font-weight: var(--font-weight-semibold);
-}
-
-.storage-value-small {
-  font-size: var(--font-size-lg) !important;
-}
-
-/* 迷你进度条 */
-.progress-mini {
-  margin-top: auto;
-  height: 4px;
-  background: var(--color-bg-secondary);
-  border-radius: var(--radius-full);
-  overflow: hidden;
-}
-
-.progress-mini-bar {
-  height: 100%;
-  background: var(--color-primary);
-  border-radius: var(--radius-full);
-  transition: width var(--transition-slow);
-}
-
-/* ============ 玻璃卡片 ============ */
-.glass-card {
-  background: #ffffff;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: 32px;
-  box-shadow: var(--shadow-sm);
-  transition: all var(--transition-base);
-}
-
-.glass-card:hover {
-  box-shadow: var(--shadow-md);
-}
-
-/* ============ 按钮效果 ============ */
-.magnetic-button {
-  padding: 14px 28px;
-  border: none;
-  border-radius: var(--radius-md);
-  font-size: var(--font-size-base);
-  font-weight: var(--font-weight-semibold);
-  cursor: pointer;
-  background: var(--color-primary);
-  color: white;
-  transition: all var(--transition-base);
-  box-shadow: var(--shadow-sm);
-}
-
-.magnetic-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.magnetic-button:hover:not(:disabled) {
-  background: var(--color-primary-light);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-md);
-}
-
-.magnetic-button:active:not(:disabled) {
-  transform: translateY(0);
-}
-
-.magnetic-button-bg {
-  display: none;
-}
-
-.magnetic-button-content {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 /* ============ AI 进度卡片 ============ */
@@ -643,7 +401,7 @@ onMounted(async () => {
 }
 
 .progress-card {
-  padding: var(--spacing-2xl) !important;
+  padding: var(--spacing-xl) !important;
 }
 
 .progress-card-header {
@@ -669,13 +427,19 @@ onMounted(async () => {
   color: var(--color-primary);
 }
 
+.start-button {
+  border-radius: var(--radius-sm);
+  font-weight: var(--font-weight-semibold);
+  transition: all var(--transition-base);
+}
+
 .progress-content {
-  margin-top: var(--spacing-xl);
+  margin-top: var(--spacing-lg);
 }
 
 .modern-progress {
-  margin-bottom: var(--spacing-xl);
-  height: 12px;
+  margin-bottom: var(--spacing-lg);
+  height: 8px;
   background: var(--color-bg-secondary);
   border-radius: var(--radius-full);
   overflow: hidden;
@@ -683,21 +447,9 @@ onMounted(async () => {
 
 .modern-progress-bar {
   height: 100%;
-  background: var(--color-primary);
+  background: linear-gradient(to right, var(--color-success) 0%, var(--color-warning) 100%);
   border-radius: var(--radius-full);
   transition: width var(--transition-slow);
-}
-
-.flowing-bar {
-  /* 不需要流动效果 */
-}
-
-.progress-success {
-  background: var(--color-success);
-}
-
-.progress-warning {
-  background: var(--color-warning);
 }
 
 .progress-info {
@@ -706,7 +458,7 @@ onMounted(async () => {
   gap: var(--spacing-lg);
   padding: var(--spacing-lg);
   background: var(--color-bg-secondary);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
 }
 
 .progress-stat {
@@ -719,8 +471,6 @@ onMounted(async () => {
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   font-weight: var(--font-weight-medium);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 
 .progress-value {
@@ -733,34 +483,13 @@ onMounted(async () => {
   color: var(--color-error);
 }
 
-.animated-number {
-  transition: all var(--transition-base);
-}
-
 /* ============ 照片卡片 ============ */
 .photos-row {
   margin-bottom: var(--spacing-xl);
 }
 
 .photos-card {
-  padding: var(--spacing-2xl) !important;
-}
-
-.spotlight-card {
-  background: #ffffff;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: 32px;
-  box-shadow: var(--shadow-sm);
-  transition: all var(--transition-base);
-}
-
-.spotlight-card:hover {
-  box-shadow: var(--shadow-md);
-}
-
-.spotlight-border {
-  display: none;
+  padding: var(--spacing-xl) !important;
 }
 
 .photos-card-header {
@@ -810,26 +539,17 @@ onMounted(async () => {
 }
 
 .photos-grid {
-  margin-top: var(--spacing-xl);
+  margin-top: var(--spacing-lg);
 }
 
 .photo-col {
   margin-bottom: var(--spacing-md);
 }
 
-/* 简洁卡片效果 */
-.tilt-card {
-  transition: all var(--transition-base);
-}
-
-.tilt-card:hover {
-  transform: translateY(-4px);
-}
-
 .image-card {
   height: 240px;
   position: relative;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   overflow: hidden;
   cursor: pointer;
   transition: all var(--transition-base);
@@ -847,7 +567,7 @@ onMounted(async () => {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transition: all var(--transition-base);
+  transition: transform var(--transition-base);
 }
 
 .image-card:hover .image-card-image {
@@ -859,7 +579,7 @@ onMounted(async () => {
   position: absolute;
   top: var(--spacing-sm);
   right: var(--spacing-sm);
-  padding: 6px 12px;
+  padding: 4px 12px;
   border-radius: var(--radius-full);
   background: rgba(255, 255, 255, 0.95);
   color: var(--color-text-primary);
@@ -869,25 +589,22 @@ onMounted(async () => {
   align-items: center;
   gap: 4px;
   z-index: 2;
-  transition: all var(--transition-base);
+  transition: transform var(--transition-base);
   box-shadow: var(--shadow-sm);
-  border: 1px solid var(--color-border);
 }
 
 .score-badge {
   background: var(--color-primary);
   color: white;
-  border-color: var(--color-primary);
 }
 
 .badge-info {
   background: var(--color-info);
   color: white;
-  border-color: var(--color-info);
 }
 
 .image-card:hover .image-card-badge {
-  transform: scale(1.1);
+  transform: scale(1.05);
 }
 
 .image-card-overlay {
@@ -896,7 +613,7 @@ onMounted(async () => {
   left: 0;
   right: 0;
   background: linear-gradient(to top, rgba(0, 0, 0, 0.8), transparent);
-  padding: var(--spacing-lg);
+  padding: var(--spacing-md);
   transform: translateY(100%);
   transition: transform var(--transition-base);
   z-index: 1;
@@ -930,18 +647,8 @@ onMounted(async () => {
     padding: var(--spacing-xl);
   }
 
-  .bento-grid {
-    grid-template-columns: repeat(3, 1fr);
-    grid-template-rows: auto;
-  }
-
-  .bento-card-large {
-    grid-column: span 2;
-    grid-row: span 1;
-  }
-
-  .bento-card-medium {
-    grid-column: span 3;
+  .stats-grid {
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   }
 
   .page-title {
@@ -954,21 +661,13 @@ onMounted(async () => {
     padding: var(--spacing-lg);
   }
 
-  .bento-grid {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto;
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
     gap: 16px;
   }
 
-  .bento-card-large,
-  .bento-card-medium,
-  .bento-card-small {
-    grid-column: span 1;
-    grid-row: span 1;
-  }
-
-  .bento-card-large .stat-card-value-large {
-    font-size: var(--font-size-4xl);
+  .stat-card .stat-card-value {
+    font-size: 36px;
   }
 
   .page-title {
@@ -980,8 +679,7 @@ onMounted(async () => {
   }
 
   .progress-card,
-  .photos-card,
-  .spotlight-card {
+  .photos-card {
     padding: var(--spacing-lg) !important;
   }
 
@@ -995,22 +693,17 @@ onMounted(async () => {
     padding: var(--spacing-md);
   }
 
-  .bento-card-content {
-    padding: 16px;
+  .stats-grid {
+    grid-template-columns: 1fr;
   }
 
-  .bento-card-large .stat-card-value-large {
-    font-size: var(--font-size-3xl);
+  .stat-card .stat-card-value {
+    font-size: 32px;
   }
 
   .progress-title,
   .photos-title {
     font-size: var(--font-size-base);
-  }
-
-  .magnetic-button {
-    width: 100%;
-    justify-content: center;
   }
 
   .image-card {

@@ -1,88 +1,88 @@
 /**
- * Design System - 淡雅浅色主题
- * 简洁 + 优雅 + 统一
+ * Design System - WeDance Inspired Theme
+ * 极简 + 清爽 + 专业
  */
 
 :root {
-  /* ============ 浅色主题基础色 ============ */
-  /* 背景色 - 极浅灰 */
-  --color-bg-primary: #fafafa;
-  --color-bg-secondary: #f8f9fa;
+  /* ============ 主色 - 青绿色（Teal/Mint Green）============ */
+  --color-primary: #00b894;
+  --color-primary-light: #55efc4;
+  --color-primary-lighter: #81ecdc;
+  --color-primary-dark: #00a887;
+
+  /* ============ 背景色系统 ============ */
+  --color-bg-primary: #f5f5f5;
+  --color-bg-secondary: #fafafa;
   --color-bg-tertiary: #ffffff;
-  --color-bg-hover: #f5f5f5;
-  --color-bg-active: #f0f0f0;
+  --color-bg-hover: #f0f0f0;
+  --color-bg-active: #ebebeb;
+  --color-bg-sidebar: #f8f9fa;
 
-  /* 文字颜色 */
-  --color-text-primary: #303133;
-  --color-text-secondary: #606266;
-  --color-text-tertiary: #909399;
-  --color-text-disabled: #c0c4cc;
+  /* ============ 文字颜色 ============ */
+  --color-text-primary: #2d3436;
+  --color-text-secondary: #636e72;
+  --color-text-tertiary: #95a5a6;
+  --color-text-disabled: #b2bec3;
 
-  /* 边框颜色 */
-  --color-border: #e4e7ed;
-  --color-border-light: #f0f0f0;
-  --color-border-dark: #dcdfe6;
+  /* ============ 边框颜色 ============ */
+  --color-border: #dfe6e9;
+  --color-border-light: #ecf0f1;
+  --color-border-dark: #b2bec3;
 
-  /* ============ 淡雅配色系统（低饱和度）============ */
-  /* 主色 - 柔和蓝 */
-  --color-primary: #4a90e2;
-  --color-primary-light: #6ca5eb;
-  --color-primary-lighter: #a8c9f2;
-  --color-primary-dark: #3d7ac7;
+  /* ============ 功能色 ============ */
+  /* 成功色 - 同主色 */
+  --color-success: #00b894;
+  --color-success-light: #55efc4;
+  --color-success-lighter: #81ecdc;
+  --color-success-dark: #00a887;
 
-  /* 成功色 - 柔和绿 */
-  --color-success: #52c41a;
-  --color-success-light: #73d13d;
-  --color-success-lighter: #95de64;
-  --color-success-dark: #389e0d;
+  /* 警告色 - 橙色 */
+  --color-warning: #ff9f43;
+  --color-warning-light: #ffbe76;
+  --color-warning-lighter: #ffd7a0;
+  --color-warning-dark: #ee8c2e;
 
-  /* 警告色 - 柔和橙 */
-  --color-warning: #faad14;
-  --color-warning-light: #ffc53d;
-  --color-warning-lighter: #ffd666;
-  --color-warning-dark: #d48806;
+  /* 错误色 - 红色 */
+  --color-error: #ff6b6b;
+  --color-error-light: #ff8787;
+  --color-error-lighter: #ffa5a5;
+  --color-error-dark: #ee5a52;
 
-  /* 错误色 - 柔和红 */
-  --color-error: #ff4d4f;
-  --color-error-light: #ff7875;
-  --color-error-lighter: #ffa39e;
-  --color-error-dark: #cf1322;
-
-  /* 信息色 - 中性灰 */
-  --color-info: #909399;
-  --color-info-light: #b1b3b8;
-  --color-info-lighter: #c8c9cc;
-  --color-info-dark: #73767a;
+  /* 信息色 - 蓝色 */
+  --color-info: #74b9ff;
+  --color-info-light: #a29bfe;
+  --color-info-lighter: #dfe6e9;
+  --color-info-dark: #0984e3;
 
   /* ============ 间距系统 ============ */
-  --spacing-xs: 4px;
-  --spacing-sm: 8px;
+  --spacing-xs: 8px;
+  --spacing-sm: 12px;
   --spacing-md: 16px;
   --spacing-lg: 24px;
   --spacing-xl: 32px;
   --spacing-2xl: 48px;
   --spacing-3xl: 64px;
 
-  /* ============ 圆角 - 适度 ============ */
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-2xl: 20px;
+  /* ============ 圆角 - WeDance 风格 ============ */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
   --radius-full: 9999px;
 
-  /* ============ 阴影 - 柔和 ============ */
-  --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.03);
+  /* ============ 阴影 - 极简柔和 ============ */
+  --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.02);
   --shadow-sm: 0 2px 4px 0 rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 4px 12px 0 rgba(0, 0, 0, 0.06);
-  --shadow-lg: 0 8px 20px 0 rgba(0, 0, 0, 0.08);
-  --shadow-xl: 0 12px 28px 0 rgba(0, 0, 0, 0.10);
-  --shadow-2xl: 0 16px 36px 0 rgba(0, 0, 0, 0.12);
+  --shadow-md: 0 2px 8px 0 rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 4px 16px 0 rgba(0, 0, 0, 0.08);
+  --shadow-xl: 0 8px 24px 0 rgba(0, 0, 0, 0.10);
+  --shadow-2xl: 0 12px 32px 0 rgba(0, 0, 0, 0.12);
 
-  /* ============ 过渡动画 - 简洁流畅 ============ */
+  /* ============ 过渡动画 - 简洁 ============ */
   --transition-fast: 150ms ease;
-  --transition-base: 300ms ease;
-  --transition-slow: 500ms ease;
+  --transition-base: 250ms ease;
+  --transition-slow: 400ms ease;
 
   /* ============ 字体 ============ */
   --font-family-base: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,

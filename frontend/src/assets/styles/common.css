@@ -1,6 +1,6 @@
 /**
- * Common Styles - 淡雅浅色主题
- * 简洁 + 优雅 + 统一
+ * Common Styles - WeDance Inspired Theme
+ * 极简 + 清爽 + 专业
  */
 
 /* ============ 基础重置 ============ */
@@ -48,34 +48,33 @@ body {
   font-weight: var(--font-weight-normal);
 }
 
-/* ============ 简洁卡片设计 ============ */
+/* ============ 卡片设计 - WeDance 风格 ============ */
 .modern-card {
-  background: #ffffff;
+  background: var(--color-bg-tertiary);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-2xl);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-xl);
   box-shadow: var(--shadow-sm);
   transition: all var(--transition-base);
 }
 
 .modern-card:hover {
-  transform: translateY(-2px);
   box-shadow: var(--shadow-md);
-  border-color: var(--color-border-dark);
 }
 
-/* ============ 统计卡片 ============ */
+/* ============ 统计卡片 - 简化设计 ============ */
 .stat-card {
-  background: #ffffff;
+  background: var(--color-bg-tertiary);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   padding: var(--spacing-lg);
   transition: all var(--transition-base);
-  cursor: pointer;
+  cursor: default;
+  display: flex;
+  flex-direction: column;
 }
 
 .stat-card:hover {
-  transform: translateY(-2px);
   box-shadow: var(--shadow-md);
   border-color: var(--color-primary);
 }
@@ -88,84 +87,88 @@ body {
 }
 
 .stat-card-icon {
-  width: 48px;
-  height: 48px;
+  width: 56px;
+  height: 56px;
   border-radius: var(--radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 24px;
-  transition: all var(--transition-base);
+  font-size: 28px;
+  transition: transform var(--transition-base);
 }
 
 .stat-card:hover .stat-card-icon {
-  transform: scale(1.1);
+  transform: scale(1.05);
 }
 
 .stat-card-title {
   font-size: var(--font-size-sm);
-  color: var(--color-text-tertiary);
+  color: var(--color-text-secondary);
   font-weight: var(--font-weight-medium);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
   margin-bottom: var(--spacing-xs);
 }
 
 .stat-card-value {
-  font-size: var(--font-size-3xl);
-  font-weight: var(--font-weight-bold);
+  font-size: 48px;
+  font-weight: 600;
   color: var(--color-text-primary);
   line-height: 1;
+  margin-bottom: var(--spacing-xs);
 }
 
 .stat-card-subtitle {
   font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  margin-top: var(--spacing-xs);
+  color: var(--color-text-tertiary);
 }
 
-/* 图标配色 */
+/* 图标配色 - 青绿色系 */
 .stat-icon-primary {
-  background: rgba(74, 144, 226, 0.1);
+  background: rgba(0, 184, 148, 0.1);
   color: var(--color-primary);
 }
 
 .stat-icon-success {
-  background: rgba(82, 196, 26, 0.1);
+  background: rgba(0, 184, 148, 0.1);
   color: var(--color-success);
 }
 
 .stat-icon-warning {
-  background: rgba(250, 173, 20, 0.1);
+  background: rgba(255, 159, 67, 0.1);
   color: var(--color-warning);
 }
 
 .stat-icon-info {
-  background: rgba(144, 147, 153, 0.1);
+  background: rgba(116, 185, 255, 0.1);
   color: var(--color-info);
 }
 
-/* ============ 图片卡片 ============ */
+.stat-icon-error {
+  background: rgba(255, 107, 107, 0.1);
+  color: var(--color-error);
+}
+
+/* ============ 图片卡片 - 简化 ============ */
 .image-card {
   position: relative;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   overflow: hidden;
   cursor: pointer;
   transition: all var(--transition-base);
   background: var(--color-bg-secondary);
   box-shadow: var(--shadow-sm);
+  border: 1px solid var(--color-border);
 }
 
 .image-card:hover {
-  transform: translateY(-4px);
   box-shadow: var(--shadow-lg);
+  border-color: var(--color-primary);
 }
 
 .image-card-image {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transition: all var(--transition-base);
+  transition: transform var(--transition-base);
 }
 
 .image-card:hover .image-card-image {
@@ -178,7 +181,7 @@ body {
   left: 0;
   right: 0;
   background: linear-gradient(to top, rgba(0, 0, 0, 0.7), transparent);
-  padding: var(--spacing-lg);
+  padding: var(--spacing-md);
   transform: translateY(100%);
   transition: transform var(--transition-base);
   color: white;
@@ -192,21 +195,21 @@ body {
   position: absolute;
   top: var(--spacing-sm);
   right: var(--spacing-sm);
-  padding: 6px 12px;
+  padding: 4px 12px;
   border-radius: var(--radius-full);
   background: rgba(255, 255, 255, 0.95);
   color: var(--color-text-primary);
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-semibold);
   box-shadow: var(--shadow-sm);
-  transition: all var(--transition-base);
+  transition: transform var(--transition-base);
 }
 
 .image-card:hover .image-card-badge {
-  transform: scale(1.1);
+  transform: scale(1.05);
 }
 
-/* ============ 进度条 ============ */
+/* ============ 进度条 - 双色设计 ============ */
 .modern-progress {
   position: relative;
   height: 8px;
@@ -217,92 +220,102 @@ body {
 
 .modern-progress-bar {
   height: 100%;
-  background: var(--color-primary);
+  background: linear-gradient(to right, var(--color-success) 0%, var(--color-warning) 100%);
   border-radius: var(--radius-full);
   transition: width var(--transition-slow);
 }
 
-/* ============ 标签 ============ */
+/* ============ 标签徽章 ============ */
 .modern-tag {
   display: inline-flex;
   align-items: center;
   padding: 4px 12px;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);
   transition: all var(--transition-fast);
 }
 
 .modern-tag-primary {
-  background: rgba(74, 144, 226, 0.1);
+  background: rgba(0, 184, 148, 0.1);
   color: var(--color-primary);
-  border: 1px solid rgba(74, 144, 226, 0.2);
 }
 
 .modern-tag-success {
-  background: rgba(82, 196, 26, 0.1);
+  background: rgba(0, 184, 148, 0.1);
   color: var(--color-success);
-  border: 1px solid rgba(82, 196, 26, 0.2);
 }
 
 .modern-tag-warning {
-  background: rgba(250, 173, 20, 0.1);
+  background: rgba(255, 159, 67, 0.1);
   color: var(--color-warning);
-  border: 1px solid rgba(250, 173, 20, 0.2);
 }
 
 .modern-tag-error {
-  background: rgba(255, 77, 79, 0.1);
+  background: rgba(255, 107, 107, 0.1);
   color: var(--color-error);
-  border: 1px solid rgba(255, 77, 79, 0.2);
 }
 
-/* ============ Element Plus 按钮覆盖 ============ */
+/* ============ Element Plus 按钮覆盖 - 青绿色 ============ */
 .el-button--primary {
   background: var(--color-primary);
   border-color: var(--color-primary);
+  border-radius: var(--radius-sm);
 }
 
-.el-button--primary:hover {
-  background: var(--color-primary-light);
-  border-color: var(--color-primary-light);
+.el-button--primary:hover,
+.el-button--primary:focus {
+  background: var(--color-primary-dark);
+  border-color: var(--color-primary-dark);
 }
 
 .el-button--success {
   background: var(--color-success);
   border-color: var(--color-success);
+  border-radius: var(--radius-sm);
 }
 
-.el-button--success:hover {
-  background: var(--color-success-light);
-  border-color: var(--color-success-light);
+.el-button--success:hover,
+.el-button--success:focus {
+  background: var(--color-success-dark);
+  border-color: var(--color-success-dark);
 }
 
 .el-button--warning {
   background: var(--color-warning);
   border-color: var(--color-warning);
+  border-radius: var(--radius-sm);
 }
 
-.el-button--warning:hover {
-  background: var(--color-warning-light);
-  border-color: var(--color-warning-light);
+.el-button--warning:hover,
+.el-button--warning:focus {
+  background: var(--color-warning-dark);
+  border-color: var(--color-warning-dark);
 }
 
 .el-button--danger {
   background: var(--color-error);
   border-color: var(--color-error);
+  border-radius: var(--radius-sm);
 }
 
-.el-button--danger:hover {
-  background: var(--color-error-light);
-  border-color: var(--color-error-light);
+.el-button--danger:hover,
+.el-button--danger:focus {
+  background: var(--color-error-dark);
+  border-color: var(--color-error-dark);
 }
 
-/* ============ 动画效果 ============ */
+/* 默认按钮 */
+.el-button {
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+/* ============ 简化动画 ============ */
 @keyframes fadeIn {
   from {
     opacity: 0;
-    transform: translateY(20px);
+    transform: translateY(10px);
   }
   to {
     opacity: 1;
@@ -310,32 +323,10 @@ body {
   }
 }
 
-@keyframes slideInRight {
-  from {
-    opacity: 0;
-    transform: translateX(30px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-@keyframes slideInLeft {
-  from {
-    opacity: 0;
-    transform: translateX(-30px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
 @keyframes scaleIn {
   from {
     opacity: 0;
-    transform: scale(0.95);
+    transform: scale(0.98);
   }
   to {
     opacity: 1;
@@ -347,42 +338,25 @@ body {
   animation: fadeIn var(--transition-base) ease-out;
 }
 
-.animate-slide-in-right {
-  animation: slideInRight var(--transition-base) ease-out;
-}
-
-.animate-slide-in-left {
-  animation: slideInLeft var(--transition-base) ease-out;
-}
-
 .animate-scale-in {
   animation: scaleIn var(--transition-base) ease-out;
 }
 
 /* 延迟动画 */
 .animate-delay-1 {
-  animation-delay: 100ms;
+  animation-delay: 50ms;
 }
 
 .animate-delay-2 {
-  animation-delay: 200ms;
+  animation-delay: 100ms;
 }
 
 .animate-delay-3 {
-  animation-delay: 300ms;
+  animation-delay: 150ms;
 }
 
 .animate-delay-4 {
-  animation-delay: 400ms;
-}
-
-/* ============ 工具类 ============ */
-.hover-lift {
-  transition: transform var(--transition-base);
-}
-
-.hover-lift:hover {
-  transform: translateY(-2px);
+  animation-delay: 200ms;
 }
 
 /* ============ 滚动条美化 ============ */
@@ -428,7 +402,7 @@ body {
   }
 
   .stat-card-value {
-    font-size: var(--font-size-2xl);
+    font-size: 36px;
   }
 }
 
@@ -439,5 +413,9 @@ body {
 
   .page-title {
     font-size: var(--font-size-xl);
+  }
+
+  .stat-card-value {
+    font-size: 32px;
   }
 }

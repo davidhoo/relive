@@ -115,17 +115,16 @@ onMounted(() => {
 </script>
 
 <style scoped>
-<style scoped>
 /* ============ 主布局容器 ============ */
 .main-layout {
   height: 100vh;
   overflow: hidden;
 }
 
-/* ============ 侧边栏 - 浅色 ============ */
+/* ============ 侧边栏 - WeDance 风格 ============ */
 .sidebar {
-  background: #ffffff;
-  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.06);
+  background: var(--color-bg-sidebar);
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.04);
   z-index: 100;
   overflow-y: auto;
   border-right: 1px solid var(--color-border);
@@ -139,7 +138,7 @@ onMounted(() => {
   justify-content: center;
   gap: var(--spacing-md);
   padding: var(--spacing-lg);
-  background: #ffffff;
+  background: var(--color-bg-sidebar);
   border-bottom: 1px solid var(--color-border);
   transition: all var(--transition-base);
 }
@@ -158,11 +157,11 @@ onMounted(() => {
   background: var(--color-primary);
   border-radius: var(--radius-md);
   color: white;
-  transition: all var(--transition-base);
+  transition: transform var(--transition-base);
 }
 
 .logo:hover .logo-icon {
-  transform: scale(1.1);
+  transform: scale(1.05);
 }
 
 .logo-text {
@@ -183,31 +182,45 @@ onMounted(() => {
   height: 48px;
   line-height: 48px;
   margin-bottom: var(--spacing-sm);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   color: var(--color-text-secondary);
   transition: all var(--transition-base);
+  background: transparent;
 }
 
 .sidebar-menu :deep(.el-menu-item:hover) {
-  background: var(--color-bg-hover) !important;
+  background: var(--color-bg-tertiary) !important;
   color: var(--color-text-primary);
 }
 
 .sidebar-menu :deep(.el-menu-item.is-active) {
-  background: rgba(74, 144, 226, 0.1) !important;
+  background: var(--color-bg-tertiary) !important;
   color: var(--color-primary);
   font-weight: var(--font-weight-semibold);
+  position: relative;
+}
+
+.sidebar-menu :deep(.el-menu-item.is-active::before) {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 24px;
+  background: var(--color-primary);
+  border-radius: 0 4px 4px 0;
 }
 
 .menu-icon {
   font-size: 20px;
   margin-right: var(--spacing-sm);
-  transition: all var(--transition-base);
+  transition: transform var(--transition-base);
 }
 
 .sidebar-menu :deep(.el-menu-item:hover) .menu-icon,
 .sidebar-menu :deep(.el-menu-item.is-active) .menu-icon {
-  transform: scale(1.1);
+  transform: scale(1.05);
 }
 
 .menu-title {
@@ -222,9 +235,9 @@ onMounted(() => {
 
 /* ============ 顶部栏 ============ */
 .header {
-  background: #ffffff;
+  background: var(--color-bg-tertiary);
   border-bottom: 1px solid var(--color-border);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.04);
   display: flex;
   align-items: center;
   padding: 0 var(--spacing-xl);

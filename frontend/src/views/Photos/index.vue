@@ -267,7 +267,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* ============ Photos 页面容器 - 浅色主题 ============ */
+/* ============ Photos 页面容器 - WeDance 风格 ============ */
 .photos-page {
   padding: var(--spacing-2xl);
   background: var(--color-bg-primary);
@@ -303,11 +303,11 @@ onMounted(() => {
 }
 
 .search-input {
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
 }
 
 .search-input :deep(.el-input__wrapper) {
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   box-shadow: var(--shadow-sm);
   transition: all var(--transition-base);
 }
@@ -317,7 +317,7 @@ onMounted(() => {
 }
 
 .search-input :deep(.el-input__wrapper.is-focus) {
-  box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.2);
+  box-shadow: 0 0 0 2px rgba(0, 184, 148, 0.2);
 }
 
 .filter-group {
@@ -331,7 +331,7 @@ onMounted(() => {
 
 .filter-group :deep(.el-radio-button__inner) {
   width: 100%;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
 }
 
 .action-col {
@@ -343,21 +343,20 @@ onMounted(() => {
   width: 100%;
   background: var(--color-primary);
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   font-weight: var(--font-weight-semibold);
   transition: all var(--transition-base);
   box-shadow: var(--shadow-sm);
 }
 
 .scan-button:hover {
-  background: var(--color-primary-light);
-  transform: translateY(-2px);
+  background: var(--color-primary-dark);
   box-shadow: var(--shadow-md);
 }
 
 /* ============ 照片网格卡片 ============ */
 .photos-grid-card {
-  padding: var(--spacing-2xl) !important;
+  padding: var(--spacing-xl) !important;
 }
 
 /* 统计信息 */
@@ -365,11 +364,10 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: var(--spacing-xl);
-  margin-bottom: var(--spacing-xl);
-  padding: var(--spacing-lg);
+  margin-bottom: var(--spacing-lg);
+  padding: var(--spacing-md);
   background: var(--color-bg-secondary);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
 }
 
 .stat-item {
@@ -409,15 +407,11 @@ onMounted(() => {
   transition: all var(--transition-base);
 }
 
-.photo-card-parallax:hover {
-  transform: translateY(-4px);
-}
-
 .photo-image-wrapper {
   position: relative;
   width: 100%;
   height: 280px;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   overflow: hidden;
   background: var(--color-bg-secondary);
   box-shadow: var(--shadow-sm);
@@ -433,7 +427,7 @@ onMounted(() => {
 .photo-image {
   width: 100%;
   height: 100%;
-  transition: all var(--transition-base);
+  transition: transform var(--transition-base);
 }
 
 .photo-card:hover .photo-image {
@@ -464,7 +458,7 @@ onMounted(() => {
   position: absolute;
   top: var(--spacing-sm);
   right: var(--spacing-sm);
-  padding: 6px 12px;
+  padding: 4px 12px;
   border-radius: var(--radius-full);
   background: rgba(255, 255, 255, 0.95);
   color: var(--color-text-primary);
@@ -474,43 +468,37 @@ onMounted(() => {
   align-items: center;
   gap: 4px;
   z-index: 2;
-  transition: all var(--transition-base);
+  transition: transform var(--transition-base);
   box-shadow: var(--shadow-sm);
-  border: 1px solid var(--color-border);
 }
 
 .photo-card:hover .photo-badge {
-  transform: scale(1.1);
+  transform: scale(1.05);
 }
 
 .badge-excellent {
   background: var(--color-primary);
   color: white;
-  border-color: var(--color-primary);
 }
 
 .badge-good {
   background: var(--color-success);
   color: white;
-  border-color: var(--color-success);
 }
 
 .badge-medium {
   background: var(--color-warning);
   color: white;
-  border-color: var(--color-warning);
 }
 
 .badge-low {
   background: var(--color-error);
   color: white;
-  border-color: var(--color-error);
 }
 
 .badge-unanalyzed {
   background: var(--color-info);
   color: white;
-  border-color: var(--color-info);
 }
 
 /* 悬停信息遮罩 */
@@ -519,8 +507,8 @@ onMounted(() => {
   bottom: 0;
   left: 0;
   right: 0;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.8), transparent);
-  padding: var(--spacing-lg);
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.7), transparent);
+  padding: var(--spacing-md);
   transform: translateY(100%);
   transition: transform var(--transition-base);
   z-index: 1;
@@ -561,8 +549,8 @@ onMounted(() => {
 .pagination-wrapper {
   display: flex;
   justify-content: center;
-  margin-top: var(--spacing-2xl);
-  padding-top: var(--spacing-xl);
+  margin-top: var(--spacing-xl);
+  padding-top: var(--spacing-lg);
   border-top: 1px solid var(--color-border);
 }
 
