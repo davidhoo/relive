@@ -1,129 +1,195 @@
 <template>
   <div class="dashboard">
-    <el-row :gutter="20">
-      <!-- 系统统计卡片 -->
-      <el-col :span="6">
-        <el-card shadow="hover">
-          <template #header>
-            <div class="card-header">
+    <!-- 页面标题 -->
+    <div class="page-header animate-fade-in">
+      <h1 class="page-title">
+        <span class="text-gradient">Dashboard</span>
+      </h1>
+      <p class="page-subtitle">照片管理系统概览</p>
+    </div>
+
+    <!-- 统计卡片 -->
+    <el-row :gutter="20" class="stats-row">
+      <!-- 总照片数 -->
+      <el-col :xs="24" :sm="12" :md="6" class="animate-fade-in">
+        <div class="stat-card">
+          <div class="stat-card-header">
+            <div class="stat-card-icon stat-icon-primary">
               <el-icon><Picture /></el-icon>
-              <span>总照片数</span>
             </div>
-          </template>
-          <div class="stat-value">{{ systemStats?.total_photos || 0 }}</div>
-        </el-card>
+            <div class="stat-card-title">总照片数</div>
+          </div>
+          <div class="stat-card-value">{{ systemStats?.total_photos || 0 }}</div>
+          <div class="stat-card-subtitle">所有照片</div>
+        </div>
       </el-col>
 
-      <el-col :span="6">
-        <el-card shadow="hover">
-          <template #header>
-            <div class="card-header">
+      <!-- 已分析 -->
+      <el-col :xs="24" :sm="12" :md="6" class="animate-fade-in animate-delay-1">
+        <div class="stat-card">
+          <div class="stat-card-header">
+            <div class="stat-card-icon stat-icon-success">
               <el-icon><MagicStick /></el-icon>
-              <span>已分析</span>
             </div>
-          </template>
-          <div class="stat-value">{{ systemStats?.analyzed_photos || 0 }}</div>
-          <div class="stat-subtitle">
-            {{ analysisRate }}%
+            <div class="stat-card-title">已分析</div>
           </div>
-        </el-card>
+          <div class="stat-card-value">{{ systemStats?.analyzed_photos || 0 }}</div>
+          <div class="stat-card-subtitle">
+            分析率 <span class="stat-highlight">{{ analysisRate }}%</span>
+          </div>
+        </div>
       </el-col>
 
-      <el-col :span="6">
-        <el-card shadow="hover">
-          <template #header>
-            <div class="card-header">
+      <!-- 在线设备 -->
+      <el-col :xs="24" :sm="12" :md="6" class="animate-fade-in animate-delay-2">
+        <div class="stat-card">
+          <div class="stat-card-header">
+            <div class="stat-card-icon stat-icon-info">
               <el-icon><Monitor /></el-icon>
-              <span>在线设备</span>
             </div>
-          </template>
-          <div class="stat-value">{{ systemStats?.online_devices || 0 }}</div>
-          <div class="stat-subtitle">
-            总计 {{ systemStats?.total_devices || 0 }} 台
+            <div class="stat-card-title">在线设备</div>
           </div>
-        </el-card>
+          <div class="stat-card-value">{{ systemStats?.online_devices || 0 }}</div>
+          <div class="stat-card-subtitle">
+            总计 {{ systemStats?.total_devices || 0 }} 台设备
+          </div>
+        </div>
       </el-col>
 
-      <el-col :span="6">
-        <el-card shadow="hover">
-          <template #header>
-            <div class="card-header">
+      <!-- 存储空间 -->
+      <el-col :xs="24" :sm="12" :md="6" class="animate-fade-in animate-delay-3">
+        <div class="stat-card">
+          <div class="stat-card-header">
+            <div class="stat-card-icon stat-icon-warning">
               <el-icon><DataLine /></el-icon>
-              <span>存储空间</span>
             </div>
-          </template>
-          <div class="stat-value">{{ storageSize }}</div>
-          <div class="stat-subtitle">{{ systemStats?.total_photos || 0 }} 张照片</div>
-        </el-card>
+            <div class="stat-card-title">存储空间</div>
+          </div>
+          <div class="stat-card-value storage-value">{{ storageSize }}</div>
+          <div class="stat-card-subtitle">{{ systemStats?.total_photos || 0 }} 张照片</div>
+        </div>
       </el-col>
     </el-row>
 
     <!-- AI 分析进度 -->
-    <el-row :gutter="20" style="margin-top: 20px">
+    <el-row :gutter="20" class="progress-row">
       <el-col :span="24">
-        <el-card shadow="hover">
-          <template #header>
-            <div class="card-header">
+        <div class="progress-card modern-card animate-fade-in animate-delay-4">
+          <div class="progress-card-header">
+            <div class="progress-title">
+              <el-icon class="progress-icon"><MagicStick /></el-icon>
               <span>AI 分析进度</span>
-              <el-button
-                type="primary"
-                size="small"
-                @click="handleStartAnalysis"
-                :loading="analyzing"
-              >
-                {{ analyzing ? '分析中...' : '开始批量分析' }}
-              </el-button>
             </div>
-          </template>
-          <div v-if="aiProgress">
-            <el-progress
-              :percentage="progressPercentage"
-              :status="progressStatus"
-              :stroke-width="20"
-            />
+            <el-button
+              type="primary"
+              size="default"
+              @click="handleStartAnalysis"
+              :loading="analyzing"
+              :disabled="analyzing"
+              class="gradient-button"
+            >
+              <el-icon v-if="!analyzing"><VideoPlay /></el-icon>
+              {{ analyzing ? '分析中...' : '开始批量分析' }}
+            </el-button>
+          </div>
+          <div v-if="aiProgress" class="progress-content">
+            <div class="modern-progress">
+              <div
+                class="modern-progress-bar"
+                :style="{ width: progressPercentage + '%' }"
+                :class="{
+                  'progress-success': progressStatus === 'success',
+                  'progress-warning': progressStatus === 'warning'
+                }"
+              ></div>
+            </div>
             <div class="progress-info">
-              <span>已完成: {{ aiProgress.completed }}/{{ aiProgress.total }}</span>
-              <span>失败: {{ aiProgress.failed }}</span>
-              <span v-if="aiProgress.current_photo_id">
-                当前: Photo #{{ aiProgress.current_photo_id }}
-              </span>
+              <div class="progress-stat">
+                <span class="progress-label">已完成</span>
+                <span class="progress-value">{{ aiProgress.completed }}/{{ aiProgress.total }}</span>
+              </div>
+              <div class="progress-stat">
+                <span class="progress-label">进度</span>
+                <span class="progress-value">{{ progressPercentage }}%</span>
+              </div>
+              <div class="progress-stat" v-if="aiProgress.failed > 0">
+                <span class="progress-label">失败</span>
+                <span class="progress-value error">{{ aiProgress.failed }}</span>
+              </div>
+              <div class="progress-stat" v-if="aiProgress.current_photo_id">
+                <span class="progress-label">当前照片</span>
+                <span class="progress-value">#{{ aiProgress.current_photo_id }}</span>
+              </div>
             </div>
           </div>
-          <el-empty v-else description="暂无分析任务" />
-        </el-card>
+          <el-empty v-else description="暂无分析任务" :image-size="80" />
+        </div>
       </el-col>
     </el-row>
 
     <!-- 最近照片 -->
-    <el-row :gutter="20" style="margin-top: 20px">
+    <el-row :gutter="20" class="photos-row">
       <el-col :span="24">
-        <el-card shadow="hover">
-          <template #header>
-            <div class="card-header">
+        <div class="photos-card modern-card animate-fade-in">
+          <div class="photos-card-header">
+            <div class="photos-title">
+              <el-icon class="photos-icon"><Picture /></el-icon>
               <span>最近照片</span>
-              <el-button type="primary" size="small" link @click="gotoPhotos">
-                查看全部
-              </el-button>
+              <span class="photos-count">{{ recentPhotos.length }} 张</span>
             </div>
-          </template>
-          <el-row :gutter="10" v-if="recentPhotos.length">
+            <el-button type="primary" size="default" link @click="gotoPhotos" class="view-all-btn">
+              查看全部
+              <el-icon><ArrowRight /></el-icon>
+            </el-button>
+          </div>
+          <el-row :gutter="16" v-if="recentPhotos.length" class="photos-grid">
             <el-col
-              :span="4"
-              v-for="photo in recentPhotos"
+              :xs="12"
+              :sm="8"
+              :md="6"
+              :lg="4"
+              v-for="(photo, index) in recentPhotos"
               :key="photo.id"
-              style="margin-bottom: 10px"
+              class="photo-col"
             >
-              <el-image
-                :src="getPhotoUrl(photo.id)"
-                :preview-src-list="[getPhotoUrl(photo.id)]"
-                fit="cover"
-                style="width: 100%; height: 150px; border-radius: 4px; cursor: pointer"
+              <div
+                class="image-card animate-scale-in"
+                :style="{ animationDelay: `${index * 50}ms` }"
                 @click="gotoPhotoDetail(photo.id)"
-              />
+              >
+                <el-image
+                  :src="getPhotoUrl(photo.id)"
+                  :preview-src-list="[getPhotoUrl(photo.id)]"
+                  fit="cover"
+                  class="image-card-image"
+                  loading="lazy"
+                />
+                <div class="image-card-badge" v-if="photo.is_analyzed">
+                  <el-icon><Star /></el-icon>
+                  {{ photo.overall_score?.toFixed(1) }}
+                </div>
+                <div class="image-card-badge badge-info" v-else>
+                  <el-icon><QuestionFilled /></el-icon>
+                  未分析
+                </div>
+                <div class="image-card-overlay">
+                  <div class="overlay-content">
+                    <div class="photo-name">{{ getFileName(photo.file_path) }}</div>
+                    <div class="photo-date" v-if="photo.taken_at">
+                      {{ formatDate(photo.taken_at) }}
+                    </div>
+                  </div>
+                </div>
+              </div>
             </el-col>
           </el-row>
-          <el-empty v-else description="暂无照片" />
-        </el-card>
+          <el-empty v-else description="暂无照片" :image-size="100">
+            <el-button type="primary" @click="handleScan">
+              <el-icon><FolderOpened /></el-icon>
+              扫描照片
+            </el-button>
+          </el-empty>
+        </div>
       </el-col>
     </el-row>
   </div>
@@ -186,6 +252,25 @@ const getPhotoUrl = (photoId: number) => {
   return `${baseUrl}/photos/${photoId}/image`
 }
 
+// 获取文件名
+const getFileName = (filePath: string) => {
+  return filePath.split('/').pop() || filePath
+}
+
+// 格式化日期
+const formatDate = (dateStr: string) => {
+  try {
+    const date = new Date(dateStr)
+    return date.toLocaleDateString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    })
+  } catch {
+    return ''
+  }
+}
+
 // 加载最近照片
 const loadRecentPhotos = async () => {
   try {
@@ -235,6 +320,18 @@ const handleStartAnalysis = async () => {
   }
 }
 
+// 扫描照片
+const handleScan = async () => {
+  try {
+    const res = await photoApi.scan()
+    ElMessage.success(`扫描完成，新增 ${res.data?.new_count || 0} 张照片`)
+    await loadRecentPhotos()
+    await systemStore.fetchStats()
+  } catch (error: any) {
+    ElMessage.error(error.message || '扫描照片失败')
+  }
+}
+
 // 跳转到照片列表
 const gotoPhotos = () => {
   router.push('/photos')
@@ -253,40 +350,360 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* ============ Dashboard 容器 ============ */
 .dashboard {
-  padding: 20px;
+  padding: var(--spacing-xl);
+  background: var(--color-bg-secondary);
+  min-height: 100vh;
 }
 
-.card-header {
+/* ============ 页面标题 ============ */
+.page-header {
+  margin-bottom: var(--spacing-2xl);
+}
+
+.page-title {
+  font-size: var(--font-size-4xl);
+  font-weight: var(--font-weight-bold);
+  margin-bottom: var(--spacing-sm);
+  line-height: 1.2;
+}
+
+.page-subtitle {
+  font-size: var(--font-size-lg);
+  color: var(--color-text-secondary);
+}
+
+/* ============ 统计卡片行 ============ */
+.stats-row {
+  margin-bottom: var(--spacing-xl);
+}
+
+.stats-row .el-col {
+  margin-bottom: var(--spacing-md);
+}
+
+/* 存储值特殊样式 */
+.storage-value {
+  font-size: var(--font-size-3xl) !important;
+}
+
+.stat-highlight {
+  color: var(--color-success);
+  font-weight: var(--font-weight-bold);
+}
+
+/* ============ 进度卡片 ============ */
+.progress-row {
+  margin-bottom: var(--spacing-xl);
+}
+
+.progress-card {
+  padding: var(--spacing-2xl) !important;
+}
+
+.progress-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-xl);
+  flex-wrap: wrap;
+  gap: var(--spacing-md);
+}
+
+.progress-title {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  font-weight: bold;
+  gap: var(--spacing-md);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
 }
 
-.card-header .el-icon {
-  margin-right: 8px;
-  font-size: 20px;
+.progress-icon {
+  font-size: 28px;
+  color: var(--color-primary);
 }
 
-.stat-value {
-  font-size: 36px;
-  font-weight: bold;
-  color: #409eff;
-  text-align: center;
-  margin: 20px 0;
+.gradient-button {
+  background: var(--gradient-primary);
+  border: none;
+  color: white;
+  font-weight: var(--font-weight-medium);
+  padding: var(--spacing-md) var(--spacing-xl);
+  border-radius: var(--radius-lg);
+  transition: all var(--transition-base);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
 }
 
-.stat-subtitle {
-  text-align: center;
-  color: #909399;
-  font-size: 14px;
+.gradient-button:hover {
+  background: var(--gradient-primary-hover);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+}
+
+.gradient-button:active {
+  transform: translateY(0);
+}
+
+.progress-content {
+  margin-top: var(--spacing-xl);
+}
+
+.modern-progress {
+  margin-bottom: var(--spacing-xl);
+}
+
+/* 进度条状态颜色 */
+.modern-progress-bar.progress-success {
+  background: var(--gradient-success);
+}
+
+.modern-progress-bar.progress-warning {
+  background: var(--gradient-warning);
 }
 
 .progress-info {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--spacing-lg);
+  padding: var(--spacing-lg);
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-lg);
+}
+
+.progress-stat {
   display: flex;
-  justify-content: space-around;
-  margin-top: 20px;
-  color: #606266;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.progress-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  font-weight: var(--font-weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.progress-value {
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+}
+
+.progress-value.error {
+  color: var(--color-error);
+}
+
+/* ============ 照片卡片 ============ */
+.photos-row {
+  margin-bottom: var(--spacing-xl);
+}
+
+.photos-card {
+  padding: var(--spacing-2xl) !important;
+}
+
+.photos-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-xl);
+  flex-wrap: wrap;
+  gap: var(--spacing-md);
+}
+
+.photos-title {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.photos-icon {
+  font-size: 28px;
+  color: var(--color-primary);
+}
+
+.photos-count {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--spacing-xs) var(--spacing-md);
+  background: var(--gradient-primary);
+  color: white;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.view-all-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  font-weight: var(--font-weight-medium);
+  transition: all var(--transition-fast);
+}
+
+.view-all-btn:hover {
+  transform: translateX(4px);
+}
+
+.photos-grid {
+  margin-top: var(--spacing-xl);
+}
+
+.photo-col {
+  margin-bottom: var(--spacing-md);
+}
+
+/* 图片卡片增强 */
+.image-card {
+  height: 240px;
+  position: relative;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  cursor: pointer;
+  transition: all var(--transition-base);
+  background: var(--color-bg-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.image-card-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: all var(--transition-slow);
+}
+
+.image-card:hover .image-card-image {
+  transform: scale(1.1);
+  filter: brightness(0.7);
+}
+
+.image-card-badge {
+  position: absolute;
+  top: var(--spacing-sm);
+  right: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-md);
+  border-radius: var(--radius-full);
+  background: rgba(16, 185, 129, 0.9);
+  backdrop-filter: blur(10px);
+  color: white;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  z-index: 2;
+  transition: all var(--transition-base);
+}
+
+.image-card-badge.badge-info {
+  background: rgba(107, 114, 128, 0.9);
+}
+
+.image-card:hover .image-card-badge {
+  transform: scale(1.1);
+}
+
+.image-card-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.9), transparent);
+  padding: var(--spacing-lg);
+  transform: translateY(100%);
+  transition: transform var(--transition-base);
+  z-index: 1;
+}
+
+.image-card:hover .image-card-overlay {
+  transform: translateY(0);
+}
+
+.overlay-content {
+  color: white;
+}
+
+.photo-name {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  margin-bottom: var(--spacing-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.photo-date {
+  font-size: var(--font-size-xs);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+/* ============ 响应式设计 ============ */
+@media (max-width: 1200px) {
+  .dashboard {
+    padding: var(--spacing-lg);
+  }
+
+  .page-title {
+    font-size: var(--font-size-3xl);
+  }
+
+  .progress-info {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .dashboard {
+    padding: var(--spacing-md);
+  }
+
+  .page-title {
+    font-size: var(--font-size-2xl);
+  }
+
+  .page-subtitle {
+    font-size: var(--font-size-base);
+  }
+
+  .progress-card,
+  .photos-card {
+    padding: var(--spacing-lg) !important;
+  }
+
+  .progress-info {
+    grid-template-columns: 1fr;
+  }
+
+  .stats-row .el-col {
+    margin-bottom: var(--spacing-md);
+  }
+
+  .image-card {
+    height: 200px;
+  }
+}
+
+@media (max-width: 480px) {
+  .progress-title,
+  .photos-title {
+    font-size: var(--font-size-base);
+  }
+
+  .gradient-button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .image-card {
+    height: 180px;
+  }
 }
 </style>
