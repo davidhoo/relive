@@ -115,26 +115,23 @@ onMounted(() => {
 </script>
 
 <style scoped>
+<style scoped>
 /* ============ 主布局容器 ============ */
 .main-layout {
   height: 100vh;
   overflow: hidden;
 }
 
-/* ============ 侧边栏 - 深色玻璃态 ============ */
+/* ============ 侧边栏 - 浅色 ============ */
 .sidebar {
-  background: rgba(10, 10, 10, 0.8);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.1),
-    20px 0 40px rgba(0, 0, 0, 0.5);
+  background: #ffffff;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.06);
   z-index: 100;
   overflow-y: auto;
-  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  border-right: 1px solid var(--color-border);
 }
 
-/* Logo 区域 - 发光效果 */
+/* Logo 区域 */
 .logo {
   height: 80px;
   display: flex;
@@ -142,28 +139,13 @@ onMounted(() => {
   justify-content: center;
   gap: var(--spacing-md);
   padding: var(--spacing-lg);
-  background: rgba(255, 255, 255, 0.03);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  position: relative;
-  overflow: hidden;
+  background: #ffffff;
+  border-bottom: 1px solid var(--color-border);
   transition: all var(--transition-base);
 }
 
-.logo::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: var(--gradient-hero);
-  opacity: 0;
-  transition: opacity var(--transition-base);
-}
-
 .logo:hover {
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.logo:hover::before {
-  opacity: 0.15;
+  background: var(--color-bg-hover);
 }
 
 .logo-icon {
@@ -173,55 +155,24 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   font-size: 28px;
-  background: var(--gradient-hero);
-  border-radius: var(--radius-xl);
+  background: var(--color-primary);
+  border-radius: var(--radius-md);
   color: white;
-  box-shadow: var(--shadow-glow);
-  position: relative;
-  z-index: 1;
-  transition: all var(--transition-spring);
-}
-
-.logo::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 48px;
-  height: 48px;
-  background: var(--gradient-hero);
-  border-radius: var(--radius-xl);
-  opacity: 0;
-  filter: blur(30px);
-  transition: opacity var(--transition-base);
-  z-index: 0;
+  transition: all var(--transition-base);
 }
 
 .logo:hover .logo-icon {
-  transform: scale(1.2) rotate(10deg);
-  box-shadow: var(--shadow-glow-lg);
-}
-
-.logo:hover::after {
-  opacity: 0.8;
+  transform: scale(1.1);
 }
 
 .logo-text {
-  color: white;
+  color: var(--color-text-primary);
   margin: 0;
   font-size: var(--font-size-2xl);
-  font-weight: var(--font-weight-extrabold);
-  position: relative;
-  z-index: 1;
-  background: var(--gradient-hero);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  letter-spacing: -0.02em;
+  font-weight: var(--font-weight-bold);
 }
 
-/* 菜单样式 - 光晕效果 */
+/* 菜单样式 */
 .sidebar-menu {
   border-right: none;
   background: transparent;
@@ -232,86 +183,35 @@ onMounted(() => {
   height: 48px;
   line-height: 48px;
   margin-bottom: var(--spacing-sm);
-  border-radius: var(--radius-xl);
-  color: rgba(255, 255, 255, 0.6);
-  transition: all var(--transition-spring);
-  position: relative;
-  overflow: visible;
-  will-change: transform;
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  transition: all var(--transition-base);
 }
 
-.sidebar-menu :deep(.el-menu-item::before) {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 4px;
-  height: 0;
-  background: var(--gradient-hero);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  transition: height var(--transition-spring);
-  box-shadow: 0 0 10px rgba(102, 126, 234, 0.5);
-}
-
-.sidebar-menu :deep(.el-menu-item::after) {
-  content: '';
-  position: absolute;
-  inset: -2px;
-  border-radius: var(--radius-xl);
-  background: var(--gradient-hero);
-  opacity: 0;
-  filter: blur(15px);
-  z-index: -1;
-  transition: opacity var(--transition-base);
-}
-
-/* 磁性菜单效果 */
 .sidebar-menu :deep(.el-menu-item:hover) {
-  background: rgba(102, 126, 234, 0.15) !important;
-  color: white;
-  transform: translateX(8px);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
-}
-
-.sidebar-menu :deep(.el-menu-item:hover::before) {
-  height: 70%;
-}
-
-.sidebar-menu :deep(.el-menu-item:hover::after) {
-  opacity: 0.6;
+  background: var(--color-bg-hover) !important;
+  color: var(--color-text-primary);
 }
 
 .sidebar-menu :deep(.el-menu-item.is-active) {
-  background: var(--gradient-hero) !important;
-  color: white;
-  box-shadow: var(--shadow-glow);
-  transform: translateX(6px);
-}
-
-.sidebar-menu :deep(.el-menu-item.is-active::before) {
-  height: 70%;
-  background: white;
-}
-
-.sidebar-menu :deep(.el-menu-item.is-active::after) {
-  opacity: 0.8;
+  background: rgba(74, 144, 226, 0.1) !important;
+  color: var(--color-primary);
+  font-weight: var(--font-weight-semibold);
 }
 
 .menu-icon {
   font-size: 20px;
   margin-right: var(--spacing-sm);
-  transition: all var(--transition-spring);
-  will-change: transform;
+  transition: all var(--transition-base);
 }
 
 .sidebar-menu :deep(.el-menu-item:hover) .menu-icon,
 .sidebar-menu :deep(.el-menu-item.is-active) .menu-icon {
-  transform: scale(1.2) rotate(10deg);
+  transform: scale(1.1);
 }
 
 .menu-title {
-  font-weight: var(--font-weight-semibold);
+  font-weight: var(--font-weight-medium);
   font-size: var(--font-size-base);
 }
 
@@ -322,11 +222,9 @@ onMounted(() => {
 
 /* ============ 顶部栏 ============ */
 .header {
-  background: rgba(255, 255, 255, 0.03);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  background: #ffffff;
+  border-bottom: 1px solid var(--color-border);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
   display: flex;
   align-items: center;
   padding: 0 var(--spacing-xl);
@@ -380,6 +278,7 @@ onMounted(() => {
   background: var(--color-bg-secondary);
   border-radius: var(--radius-full);
   transition: all var(--transition-base);
+  border: 1px solid var(--color-border);
 }
 
 .status-badge:hover {
@@ -395,12 +294,10 @@ onMounted(() => {
 
 .status-healthy {
   background: var(--color-success);
-  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
 }
 
 .status-error {
   background: var(--color-error);
-  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.2);
 }
 
 .status-text {
@@ -484,15 +381,16 @@ onMounted(() => {
 }
 
 .sidebar::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--color-bg-secondary);
 }
 
 .sidebar::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--color-border-dark);
   border-radius: var(--radius-sm);
 }
 
 .sidebar::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.3);
+  background: var(--color-text-tertiary);
 }
 </style>
+

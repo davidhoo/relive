@@ -1,127 +1,58 @@
 /**
- * Design System 2026 - Linear/Vercel Style
- * 深色主题 + 渐变网格 + 玻璃态效果 + 边缘光晕
+ * Design System - 淡雅浅色主题
+ * 简洁 + 优雅 + 统一
  */
 
 :root {
-  /* ============ 2026 深色主题基础色 ============ */
-  /* 深色背景 - Linear/Vercel 风格 */
-  --color-bg-primary: #0a0a0a;
-  --color-bg-secondary: #111111;
-  --color-bg-tertiary: #18181b;
-  --color-bg-quaternary: #27272a;
-  --color-bg-hover: #2a2a2d;
-  --color-bg-active: #3a3a3d;
+  /* ============ 浅色主题基础色 ============ */
+  /* 背景色 - 极浅灰 */
+  --color-bg-primary: #fafafa;
+  --color-bg-secondary: #f8f9fa;
+  --color-bg-tertiary: #ffffff;
+  --color-bg-hover: #f5f5f5;
+  --color-bg-active: #f0f0f0;
 
-  /* 文字颜色 - 高对比度 */
-  --color-text-primary: #fafafa;
-  --color-text-secondary: #a1a1aa;
-  --color-text-tertiary: #71717a;
-  --color-text-disabled: #52525b;
-  --color-text-inverse: #18181b;
+  /* 文字颜色 */
+  --color-text-primary: #303133;
+  --color-text-secondary: #606266;
+  --color-text-tertiary: #909399;
+  --color-text-disabled: #c0c4cc;
 
-  /* 边框颜色 - 精细线条 */
-  --color-border: rgba(255, 255, 255, 0.1);
-  --color-border-light: rgba(255, 255, 255, 0.05);
-  --color-border-dark: rgba(255, 255, 255, 0.15);
+  /* 边框颜色 */
+  --color-border: #e4e7ed;
+  --color-border-light: #f0f0f0;
+  --color-border-dark: #dcdfe6;
 
-  /* 阴影颜色 - 深色主题专用 */
-  --color-shadow: rgba(0, 0, 0, 0.5);
-  --color-shadow-light: rgba(0, 0, 0, 0.3);
-  --color-shadow-dark: rgba(0, 0, 0, 0.8);
+  /* ============ 淡雅配色系统（低饱和度）============ */
+  /* 主色 - 柔和蓝 */
+  --color-primary: #4a90e2;
+  --color-primary-light: #6ca5eb;
+  --color-primary-lighter: #a8c9f2;
+  --color-primary-dark: #3d7ac7;
 
-  /* ============ 2026 流行渐变色 - 紫蓝系 ============ */
-  /* 品牌主色 - 紫色渐变（Linear 风格） */
-  --color-primary: #667eea;
-  --color-primary-light: #818cf8;
-  --color-primary-lighter: #a5b4fc;
-  --color-primary-dark: #5b6fd8;
-  --color-primary-darker: #4f5cc4;
+  /* 成功色 - 柔和绿 */
+  --color-success: #52c41a;
+  --color-success-light: #73d13d;
+  --color-success-lighter: #95de64;
+  --color-success-dark: #389e0d;
 
-  /* 辅助色 - 粉紫色 */
-  --color-secondary: #f093fb;
-  --color-secondary-light: #f5b8ff;
-  --color-secondary-lighter: #fae0ff;
-  --color-secondary-dark: #e06ff2;
-  --color-secondary-darker: #d056e8;
+  /* 警告色 - 柔和橙 */
+  --color-warning: #faad14;
+  --color-warning-light: #ffc53d;
+  --color-warning-lighter: #ffd666;
+  --color-warning-dark: #d48806;
 
-  /* 强调色 - 青色 */
-  --color-accent: #4facfe;
-  --color-accent-light: #7dc4ff;
-  --color-accent-lighter: #a8daff;
-  --color-accent-dark: #2b95f4;
-  --color-accent-darker: #1a7edb;
+  /* 错误色 - 柔和红 */
+  --color-error: #ff4d4f;
+  --color-error-light: #ff7875;
+  --color-error-lighter: #ffa39e;
+  --color-error-dark: #cf1322;
 
-  /* 成功色 */
-  --color-success: #10b981;
-  --color-success-light: #34d399;
-  --color-success-lighter: #6ee7b7;
-  --color-success-dark: #059669;
-
-  /* 警告色 */
-  --color-warning: #f59e0b;
-  --color-warning-light: #fbbf24;
-  --color-warning-lighter: #fcd34d;
-  --color-warning-dark: #d97706;
-
-  /* 错误色 */
-  --color-error: #ef4444;
-  --color-error-light: #f87171;
-  --color-error-lighter: #fca5a5;
-  --color-error-dark: #dc2626;
-
-  /* 信息色 */
-  --color-info: #3b82f6;
-  --color-info-light: #60a5fa;
-  --color-info-lighter: #93c5fd;
-  --color-info-dark: #2563eb;
-
-  /* ============ 2026 流行渐变 - 紫蓝粉系 ============ */
-  /* Linear 风格主渐变 - 紫到蓝 */
-  --gradient-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  --gradient-primary-hover: linear-gradient(135deg, #5b6fd8 0%, #6a3f91 100%);
-
-  /* Stripe 风格 - 多色渐变 */
-  --gradient-hero: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
-
-  /* 粉紫渐变 */
-  --gradient-secondary: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-
-  /* 青蓝渐变 */
-  --gradient-accent: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-
-  /* 状态渐变 */
-  --gradient-success: linear-gradient(135deg, #10b981 0%, #34d399 100%);
-  --gradient-warning: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
-  --gradient-error: linear-gradient(135deg, #ef4444 0%, #f87171 100%);
-  --gradient-info: linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%);
-
-  /* 玻璃态渐变 - 深色主题 */
-  --gradient-glass: linear-gradient(
-    135deg,
-    rgba(255, 255, 255, 0.08) 0%,
-    rgba(255, 255, 255, 0.03) 100%
-  );
-
-  /* 光晕渐变 */
-  --gradient-glow: radial-gradient(
-    circle at 50% 50%,
-    rgba(102, 126, 234, 0.15) 0%,
-    rgba(102, 126, 234, 0.05) 50%,
-    transparent 100%
-  );
-
-  /* 网格渐变背景 */
-  --gradient-mesh: radial-gradient(
-    ellipse at top,
-    rgba(102, 126, 234, 0.1) 0%,
-    transparent 50%
-  ),
-  radial-gradient(
-    ellipse at bottom,
-    rgba(240, 147, 251, 0.1) 0%,
-    transparent 50%
-  );
+  /* 信息色 - 中性灰 */
+  --color-info: #909399;
+  --color-info-light: #b1b3b8;
+  --color-info-lighter: #c8c9cc;
+  --color-info-dark: #73767a;
 
   /* ============ 间距系统 ============ */
   --spacing-xs: 4px;
@@ -132,55 +63,35 @@
   --spacing-2xl: 48px;
   --spacing-3xl: 64px;
 
-  /* ============ 圆角 - 更大的圆角 ============ */
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 20px;
-  --radius-2xl: 28px;
-  --radius-3xl: 40px;
+  /* ============ 圆角 - 适度 ============ */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
   --radius-full: 9999px;
 
-  /* ============ 阴影 - 深色主题优化 ============ */
-  --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.5);
-  --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.5),
-    0 1px 2px -1px rgba(0, 0, 0, 0.5);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.5),
-    0 2px 4px -2px rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.6),
-    0 4px 6px -4px rgba(0, 0, 0, 0.5);
-  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.7),
-    0 8px 10px -6px rgba(0, 0, 0, 0.6);
-  --shadow-2xl: 0 25px 50px -12px rgba(0, 0, 0, 0.8);
+  /* ============ 阴影 - 柔和 ============ */
+  --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.03);
+  --shadow-sm: 0 2px 4px 0 rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px 0 rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 8px 20px 0 rgba(0, 0, 0, 0.08);
+  --shadow-xl: 0 12px 28px 0 rgba(0, 0, 0, 0.10);
+  --shadow-2xl: 0 16px 36px 0 rgba(0, 0, 0, 0.12);
 
-  /* 光晕阴影 */
-  --shadow-glow: 0 0 20px rgba(102, 126, 234, 0.4),
-    0 0 40px rgba(102, 126, 234, 0.2);
-  --shadow-glow-lg: 0 0 30px rgba(102, 126, 234, 0.5),
-    0 0 60px rgba(102, 126, 234, 0.3),
-    0 0 90px rgba(102, 126, 234, 0.1);
+  /* ============ 过渡动画 - 简洁流畅 ============ */
+  --transition-fast: 150ms ease;
+  --transition-base: 300ms ease;
+  --transition-slow: 500ms ease;
 
-  /* 内阴影 */
-  --shadow-inner: inset 0 2px 4px 0 rgba(0, 0, 0, 0.5);
-
-  /* ============ 过渡动画 - 更流畅的动画 ============ */
-  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-base: 300ms cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-slow: 500ms cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-slower: 700ms cubic-bezier(0.4, 0, 0.2, 1);
-
-  /* 弹性动画 - Spring Physics */
-  --transition-bounce: 600ms cubic-bezier(0.68, -0.55, 0.265, 1.55);
-  --transition-spring: 500ms cubic-bezier(0.175, 0.885, 0.32, 1.275);
-
-  /* ============ 字体 - 现代字体栈 ============ */
+  /* ============ 字体 ============ */
   --font-family-base: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
     'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji',
     'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
   --font-family-mono: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono',
     Consolas, 'Courier New', monospace;
 
-  /* 字体大小 - 更大的标题 */
+  /* 字体大小 */
   --font-size-xs: 12px;
   --font-size-sm: 14px;
   --font-size-base: 16px;
@@ -189,17 +100,13 @@
   --font-size-2xl: 24px;
   --font-size-3xl: 32px;
   --font-size-4xl: 40px;
-  --font-size-5xl: 56px;
-  --font-size-6xl: 72px;
-  --font-size-7xl: 96px;
-  --font-size-8xl: 128px;
+  --font-size-5xl: 48px;
 
   /* 字体粗细 */
   --font-weight-normal: 400;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --font-weight-bold: 700;
-  --font-weight-extrabold: 800;
 
   /* 行高 */
   --line-height-tight: 1.25;
@@ -230,6 +137,3 @@
   --container-xl: 1280px;
   --container-2xl: 1536px;
 }
-
-/* ============ 移除深色主题媒体查询和类 ============ */
-/* 2026 设计默认就是深色主题，无需切换 */
