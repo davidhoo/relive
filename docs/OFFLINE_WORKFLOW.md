@@ -1,8 +1,14 @@
 # Relive 离线工作流设计（修订版）
 
-> 支持 NAS 和 AI 模型物理分离的场景
+> 支持 NAS 和 AI 服务物理分离的场景
 > 最后更新：2026-02-28
-> 版本：v2.0（已根据审查意见修订）
+> 版本：v2.1（强化提供者无关设计）
+
+**核心特性** ⭐：
+- 🚀 **提供者无关**：支持任何 AI 服务（Ollama/Qwen/OpenAI/vLLM 等）
+- 🔌 **灵活部署**：分析程序可在任何电脑运行，通过网络调用 AI
+- 💰 **成本可控**：免费本地模型 → 按需云 GPU → 高质量在线 API
+- ⚡ **性能优化**：批量更新（9x 提升）、多重匹配（99.5% 成功率）
 
 ---
 
@@ -10,10 +16,16 @@
 
 ### 典型使用场景
 
-你有 11 万张照片在 NAS，想用本地 GPU 跑 AI 分析，节省 ¥2,200 API 费用。但是：
-- **问题**：NAS 在家里，GPU 服务器在公司/另一个地方
-- **限制**：两地网络不互通，无法建立网络连接
+你有 11 万张照片在 NAS，想用 AI 分析，但有成本/网络限制：
+- **场景 1**：想用本地模型节省 API 费用（¥0 vs ¥2,200）
+- **场景 2**：NAS 和 AI 服务物理分离，网络不互通
+- **场景 3**：想灵活选择 AI 提供者（Ollama/Qwen/OpenAI/vLLM）
 - **解决方案**：离线工作流（导出 → 分析 → 导入）
+
+**关键优势**：
+- 🚀 **提供者无关**：支持任何 AI 服务（本地/远程/云端）
+- 💰 **灵活选择**：根据成本/速度/质量自由切换
+- 🔌 **解耦设计**：分析程序可在任何电脑运行
 
 ### 三步完成
 
@@ -33,14 +45,16 @@ Web 界面操作:
 2. 选择"仅未分析照片"
 3. 等待导出完成（~40GB 缩略图）
 4. 下载/复制导出包到移动硬盘
-5. 带移动硬盘到 GPU 机器
+5. 带移动硬盘到任何有网络的电脑
 ```
 
-#### Step 3: GPU 分析 + 导入（15 小时）
+#### Step 3: AI 分析 + 导入（15 小时）
 ```
-GPU 机器命令行:
+任何电脑命令行（笔记本/台式机/服务器）:
 $ relive-analyzer analyze \
     --export-dir /mnt/usb/export_xxx \
+    --provider ollama \              # 或 qwen/openai/vllm
+    --ollama-endpoint http://192.168.1.100:11434 \  # AI 服务地址
     --model llava:13b \
     --workers 4
 
@@ -58,7 +72,10 @@ Web 界面操作:
 | 方案 | API 成本 | 时间 | 说明 |
 |------|---------|------|------|
 | 在线模式（Qwen） | ¥2,200 | ~20小时 | 需要持续网络 |
-| **离线模式（Ollama）** | **¥0** | **~24小时** | **节省 100%** ✅ |
+| **本地 Ollama** | **¥0** | **~24小时** | **完全免费** ✅ |
+| **云 GPU (RunPod)** | **¥60** | **~15小时** | **按需付费** |
+| **OpenAI GPT-4V** | ¥3,300 | ~22小时 | 最高质量 |
+| **混合模式** | ¥100-200 | ~21小时 | 本地为主，云端兜底 |
 
 ---
 
@@ -68,15 +85,18 @@ Web 界面操作:
 
 **实际情况**：
 - NAS（照片存储）：位于 A 地
-- GPU 服务器（本地 AI 模型）：位于 B 地
-- 两地网络：不互通，无法建立网络连接
+- AI 服务：可以在任何地方
+  - 本地 GPU（Ollama/vLLM）
+  - 远程 GPU（局域网/云端）
+  - 在线 API（Qwen/OpenAI）
+- 分析程序：可以在任何电脑运行（只需网络访问 AI 服务）
 
 **核心需求**：
 1. ✅ NAS 能独立完成不依赖 AI 的工作（扫描、EXIF、GPS、缩略图）
 2. ✅ 支持导出到移动硬盘（缩略图 + 待分析数据）
-3. ✅ 在 GPU 环境独立运行 AI 分析
+3. ✅ **在任何电脑运行分析，调用任何 AI 服务**
 4. ✅ 支持合并 AI 分析结果回 NAS 主数据库
-5. ✅ 灵活设计，支持多种工作流模式
+5. ✅ **提供者无关设计，灵活切换 AI 服务**
 
 ---
 
@@ -105,9 +125,14 @@ Web 界面操作:
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                  Phase 3: GPU 环境 AI 分析                    │
+│              Phase 3: AI 分析（提供者无关）⭐                 │
 │                                                               │
-│  预检查 → 读取导出包 → Ollama 分析 → 生成 import.db          │
+│  任何电脑 + 任何 AI 服务:                                     │
+│  - 本地 GPU (Ollama/vLLM/LocalAI)                            │
+│  - 远程 GPU (局域网/云端)                                     │
+│  - 在线 API (Qwen/OpenAI/Azure)                              │
+│                                                               │
+│  预检查 → 读取导出包 → AI 分析 → 生成 import.db              │
 │  （支持断点续传、失败重试）                                    │
 │                                                               │
 └────────────────────────┬────────────────────────────────────┘
@@ -129,6 +154,7 @@ Web 界面操作:
 | 原则 | 说明 | 改进 |
 |------|------|------|
 | **模块化** | 每个阶段独立运行，互不依赖 | - |
+| **提供者无关** | 支持任何 AI 服务，灵活切换 | ✅ **支持多种 AI** |
 | **可追溯** | 使用 file_hash + 多重备用策略 | ✅ **新增多重匹配** |
 | **幂等性** | 支持重复导入不会重复数据 | ✅ **基于 export_id** |
 | **增量式** | 支持仅导出未分析的照片 | - |
@@ -617,37 +643,129 @@ func (s *ExportService) ResumeExport(exportID string) error {
 
 ---
 
-## 五、Phase 3: GPU 环境 AI 分析 ⭐（已优化）
+## 五、Phase 3: AI 分析（提供者无关）⭐（已优化）
 
 ### 5.1 独立分析工具
 
 **工具名称**：`relive-analyzer`
 
+**核心特性** ⭐：
+- 🚀 **提供者无关**：支持任何 AI 服务（本地/远程/云端）
+- 🔌 **灵活部署**：可在任何电脑运行（只需网络访问 AI 服务）
+- 💰 **成本可控**：根据预算自由选择（免费 → 按需付费 → 高质量）
+
 **运行环境**：
-- 任何有 GPU 的机器（Linux/macOS/Windows）
-- 需要安装 Ollama + LLaVA 模型
-- Golang 编译的独立二进制
+- 任何有网络的电脑（笔记本/台式机/服务器，Windows/macOS/Linux）
+- **不需要 GPU**（分析程序只是客户端）
+- 只需能访问 AI 服务（HTTP/HTTPS）
+
+**支持的 AI 提供者**：
+
+| 提供者 | 类型 | 成本 | 适用场景 |
+|--------|------|------|---------|
+| **Ollama** | 本地/远程开源模型 | ¥0 | 有 GPU 资源 ✅ |
+| **Qwen API** | 阿里云在线 API | ¥0.02/张 | 追求质量 |
+| **OpenAI GPT-4V** | OpenAI 在线 API | ¥0.03/张 | 最高质量 |
+| **vLLM** | 自部署推理服务 | ¥0 | 公司有 GPU 集群 |
+| **LocalAI** | OpenAI 兼容本地服务 | ¥0 | 轻量级部署 |
+| **Azure OpenAI** | 微软云 | 按需 | 企业用户 |
+| **混合模式** | 多提供者组合 | 灵活 | 平衡成本和质量 ✅ |
 
 ### 5.2 工具接口
 
 ```bash
-# 分析导出包（带预检查）
+# 1. 使用 Ollama（本地或远程）
 relive-analyzer analyze \
-  --export-dir /mnt/usb/export_2024-02-28_001 \
+  --export-dir /mnt/usb/export_xxx \
+  --provider ollama \
+  --ollama-endpoint http://192.168.1.100:11434 \  # 可以是局域网/云端地址
   --model llava:13b \
   --workers 4
 
+# 2. 使用 Qwen API（在线）
+relive-analyzer analyze \
+  --export-dir /mnt/usb/export_xxx \
+  --provider qwen \
+  --qwen-api-key sk-xxxxx \
+  --model qwen-vl-max
+
+# 3. 使用 OpenAI GPT-4V（在线）
+relive-analyzer analyze \
+  --export-dir /mnt/usb/export_xxx \
+  --provider openai \
+  --openai-api-key sk-xxxxx \
+  --model gpt-4-vision-preview
+
+# 4. 使用 vLLM（公司集群）
+relive-analyzer analyze \
+  --export-dir /mnt/usb/export_xxx \
+  --provider vllm \
+  --vllm-endpoint http://gpu-cluster.company.com:8000 \
+  --model llava-v1.6-34b
+
+# 5. 使用配置文件（推荐）
+relive-analyzer analyze --export-dir /mnt/usb/export_xxx
+
 # 查看进度
-relive-analyzer status \
-  --export-dir /mnt/usb/export_2024-02-28_001
+relive-analyzer status --export-dir /mnt/usb/export_xxx
 
-# 继续未完成的分析（断点续传）
-relive-analyzer resume \
-  --export-dir /mnt/usb/export_2024-02-28_001
+# 断点续传
+relive-analyzer resume --export-dir /mnt/usb/export_xxx
 
-# 重试失败的照片
-relive-analyzer retry-failures \
-  --export-dir /mnt/usb/export_2024-02-28_001
+# 重试失败照片
+relive-analyzer retry-failures --export-dir /mnt/usb/export_xxx
+```
+
+### 5.2.1 典型部署场景 ⭐
+
+#### 场景 1：局域网部署（推荐）
+```
+┌──────────────────┐          ┌──────────────────┐
+│ 笔记本 + 移动硬盘 │ ────HTTP──> │ 家里/公司 GPU 服务器 │
+│                  │ (局域网)   │                  │
+│ relive-analyzer  │          │ Ollama:11434     │
+│                  │          │ LLaVA 13B/34B    │
+└──────────────────┘          └──────────────────┘
+
+优点：免费、快速、隐私保护
+适用：家庭/办公室有 GPU 机器
+```
+
+#### 场景 2：云 GPU 部署
+```
+┌──────────────────┐          ┌──────────────────┐
+│ 本地电脑 + 硬盘   │ ───HTTPS──> │ RunPod/Vast.ai   │
+│                  │ (互联网)   │                  │
+│ relive-analyzer  │          │ Ollama:11434     │
+│                  │          │ LLaVA 34B        │
+└──────────────────┘          └──────────────────┘
+
+优点：按需付费、不需要自己的 GPU
+成本：~¥0.5/小时（11万张 ~¥60）
+适用：临时需求、没有 GPU
+```
+
+#### 场景 3：在线 API
+```
+┌──────────────────┐          ┌──────────────────┐
+│ 任何电脑 + 硬盘   │ ───HTTPS──> │ Qwen/OpenAI API  │
+│                  │          │                  │
+│ relive-analyzer  │          │ 云端 AI 服务      │
+└──────────────────┘          └──────────────────┘
+
+优点：快速、高质量、无需部署
+成本：¥0.02-0.03/张
+适用：赶工、追求质量
+```
+
+#### 场景 4：混合模式（智能）
+```
+relive-analyzer analyze \
+  --provider hybrid \
+  --primary ollama \           # 优先用本地（免费）
+  --fallback qwen              # 失败回退到云端（付费）
+
+结果：95% 本地 + 5% 云端 = 总成本 ~¥110
 ```
 
 ### 5.3 预检查机制 ⭐（新增）
@@ -751,6 +869,91 @@ func (s *AnalyzerService) checkVersionCompatibility() error {
 
     return nil
 }
+```
+
+### 5.3.1 配置文件 ⭐
+
+`~/.relive-analyzer.yaml`（支持多种提供者）：
+
+```yaml
+# ===== 提供者选择 =====
+provider: "ollama"  # ollama/qwen/openai/vllm/hybrid
+
+# ===== Ollama 配置 =====
+ollama:
+  endpoint: "http://localhost:11434"       # 本地
+  # endpoint: "http://192.168.1.100:11434"     # 局域网
+  # endpoint: "https://xxx.runpod.io:11434" # 云端
+  model: "llava:13b"
+  timeout: 120
+
+# ===== Qwen API 配置 =====
+qwen:
+  api_key: "sk-xxxxx"
+  endpoint: "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+  model: "qwen-vl-max"
+
+# ===== OpenAI 配置 =====
+openai:
+  api_key: "sk-xxxxx"
+  model: "gpt-4-vision-preview"
+  base_url: "https://api.openai.com/v1"  # 或其他兼容端点
+
+# ===== vLLM 配置 =====
+vllm:
+  endpoint: "http://gpu-cluster.company.com:8000"
+  model: "llava-v1.6-34b"
+
+# ===== 混合模式配置 =====
+hybrid:
+  primary: "ollama"              # 主要提供者
+  fallback: "qwen"               # 备用提供者
+  fallback_on_error: true        # 遇到错误时回退
+  fallback_threshold: 3          # 连续失败 N 次后切换
+
+# ===== 性能配置 =====
+performance:
+  workers: 4                     # 并发数（根据 GPU/API 限制调整）
+  batch_size: 10                 # 批处理大小
+  retry_count: 3                 # 失败重试次数
+  retry_delay: 5                 # 重试延迟（秒）
+
+# ===== 日志配置 =====
+logging:
+  level: "info"                  # debug/info/warn/error
+  file: "/tmp/relive-analyzer.log"
+
+# ===== 其他 =====
+misc:
+  auto_resume: true              # 自动恢复未完成任务
+  save_interval: 100             # 每N张保存一次进度
+```
+
+**配置示例（常见场景）**：
+
+```yaml
+# 场景 1：家里有 GPU，用 Ollama（免费）
+provider: "ollama"
+ollama:
+  endpoint: "http://192.168.1.100:11434"
+  model: "llava:13b"
+
+# 场景 2：临时赶工，用 OpenAI（付费）
+provider: "openai"
+openai:
+  api_key: "sk-xxxxx"
+  model: "gpt-4-vision-preview"
+
+# 场景 3：平衡模式，本地为主 + 云端兜底
+provider: "hybrid"
+hybrid:
+  primary: "ollama"
+  fallback: "qwen"
+ollama:
+  endpoint: "http://localhost:11434"
+  model: "llava:13b"
+qwen:
+  api_key: "sk-xxxxx"
 ```
 
 ### 5.4 分析流程（带失败处理）
@@ -1665,6 +1868,79 @@ import:
   match_strategy: "multi"  # 推荐
 ```
 
+### Q7: relive-analyzer 必须在 GPU 机器上运行吗？⭐
+
+**A**: 不需要！这是**关键的设计优势**：
+
+**relive-analyzer 只是一个客户端**，可以在任何电脑运行：
+- ✅ 笔记本（Windows/Mac/Linux）
+- ✅ 台式机（无需 GPU）
+- ✅ 服务器
+
+**AI 服务可以在任何地方**：
+- 本地 GPU（Ollama/vLLM）
+- 局域网 GPU 服务器
+- 云 GPU（RunPod/Vast.ai）
+- 在线 API（Qwen/OpenAI）
+
+**典型场景**：
+```
+你的笔记本 + 移动硬盘
+    ↓ (HTTP)
+家里/公司的 GPU 服务器（Ollama）
+```
+
+### Q8: 我可以混合使用多种 AI 提供者吗？
+
+**A**: 完全可以！支持三种混合方式：
+
+**1. 分批使用**：
+```bash
+# 先用本地模型分析大部分（免费）
+relive-analyzer analyze --provider ollama ...
+
+# 失败的用云端重试（付费但更可靠）
+relive-analyzer retry-failures --provider qwen ...
+```
+
+**2. 自动回退**：
+```yaml
+provider: "hybrid"
+hybrid:
+  primary: "ollama"      # 优先本地
+  fallback: "qwen"       # 失败回退云端
+```
+
+**3. 按质量分层**：
+```bash
+# 普通照片用本地（免费）
+relive-analyzer analyze --provider ollama --filter "score<80"
+
+# 高分照片用 GPT-4V（最高质量）
+relive-analyzer analyze --provider openai --filter "score>=80"
+```
+
+### Q9: 如何选择最适合我的 AI 提供者？
+
+**A**: 根据你的需求选择：
+
+| 需求 | 推荐方案 | 成本 | 说明 |
+|------|---------|------|------|
+| **最省钱** | Ollama (本地/云GPU) | ¥0-60 | 自己有 GPU 或租云 GPU |
+| **最方便** | Qwen API | ¥2,200 | 在线 API，开箱即用 |
+| **最高质量** | OpenAI GPT-4V | ¥3,300 | 业界最佳 |
+| **平衡** | 混合模式 | ¥100-200 | 95% 本地 + 5% 云端 ✅ |
+| **企业** | vLLM (自部署) | ¥0 | 公司有 GPU 集群 |
+
+**决策树**：
+```
+有 GPU？
+ ├─ 是 → Ollama (¥0)
+ └─ 否 → 有预算？
+      ├─ 是 → Qwen/OpenAI (¥2000+)
+      └─ 否 → 租云 GPU (¥60)
+```
+
 ---
 
 ## 十一、总结
@@ -1673,13 +1949,15 @@ import:
 
 | 特性 | 改进前 | 改进后 | 说明 |
 |------|--------|--------|------|
+| **提供者无关** | 仅 Ollama | 支持任何 AI 服务 | ✅ **核心优势** |
+| **部署灵活** | 绑定 GPU 机器 | 任何电脑 + 任何 AI | ✅ **解耦设计** |
 | **数据库结构** | export.db ≠ import.db | 统一使用 Photo 表 | ✅ 更清晰 |
 | **匹配策略** | 仅 file_hash | 多重匹配（4 层） | ✅ 成功率 +4.5% |
 | **导入性能** | 18 分钟 | 2 分钟 | ✅ 快 9 倍 |
 | **版本兼容** | 无检查 | schema + format 检查 | ✅ 更安全 |
 | **导出进度** | 无 | 实时进度 + 暂停/恢复 | ✅ 更友好 |
 | **失败处理** | 只记录数量 | 详细日志 + 重试 | ✅ 可恢复 |
-| **预检查** | 无 | 5 项检查（Ollama/模型/磁盘等） | ✅ 更可靠 |
+| **预检查** | 无 | 5 项检查 | ✅ 更可靠 |
 | **幂等性** | 无 | 基于 export_id | ✅ 可重复导入 |
 
 ### 11.2 技术架构
@@ -1696,7 +1974,14 @@ import:
 │  - AIService (统一接口)                                      │
 │  - ExportService (异步导出 + 进度跟踪)                       │
 │  - ImportService (批量导入 + 多重匹配)                       │
-│  - relive-analyzer (独立分析工具 + 预检查 + 失败重试)        │
+│  - relive-analyzer (提供者无关 + 预检查 + 失败重试) ⭐       │
+├─────────────────────────────────────────────────────────────┤
+│  支持的 AI 提供者:                                           │
+│  - Ollama (本地/远程开源模型)                                │
+│  - Qwen API (阿里云)                                         │
+│  - OpenAI GPT-4V                                             │
+│  - vLLM (自部署)                                             │
+│  - LocalAI / Azure / 混合模式                                │
 └─────────────────────────────────────────────────────────────┘
 ```
 
