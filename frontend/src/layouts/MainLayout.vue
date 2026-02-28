@@ -121,15 +121,20 @@ onMounted(() => {
   overflow: hidden;
 }
 
-/* ============ 侧边栏 ============ */
+/* ============ 侧边栏 - 深色玻璃态 ============ */
 .sidebar {
-  background: linear-gradient(180deg, #0f172a 0%, #020617 100%);
-  box-shadow: var(--shadow-lg);
+  background: rgba(10, 10, 10, 0.8);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.1),
+    20px 0 40px rgba(0, 0, 0, 0.5);
   z-index: 100;
   overflow-y: auto;
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-/* Logo 区域 */
+/* Logo 区域 - 发光效果 */
 .logo {
   height: 80px;
   display: flex;
@@ -137,62 +142,86 @@ onMounted(() => {
   justify-content: center;
   gap: var(--spacing-md);
   padding: var(--spacing-lg);
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(6, 182, 212, 0.15));
+  background: rgba(255, 255, 255, 0.03);
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   position: relative;
   overflow: hidden;
+  transition: all var(--transition-base);
 }
 
 .logo::before {
   content: '';
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: var(--gradient-primary);
+  inset: 0;
+  background: var(--gradient-hero);
   opacity: 0;
   transition: opacity var(--transition-base);
 }
 
+.logo:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
 .logo:hover::before {
-  opacity: 0.1;
+  opacity: 0.15;
 }
 
 .logo-icon {
-  width: 40px;
-  height: 40px;
+  width: 48px;
+  height: 48px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 24px;
-  background: var(--gradient-primary);
-  border-radius: var(--radius-lg);
+  font-size: 28px;
+  background: var(--gradient-hero);
+  border-radius: var(--radius-xl);
   color: white;
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-glow);
   position: relative;
   z-index: 1;
   transition: all var(--transition-spring);
 }
 
+.logo::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 48px;
+  height: 48px;
+  background: var(--gradient-hero);
+  border-radius: var(--radius-xl);
+  opacity: 0;
+  filter: blur(30px);
+  transition: opacity var(--transition-base);
+  z-index: 0;
+}
+
 .logo:hover .logo-icon {
-  transform: scale(1.15) rotate(5deg);
+  transform: scale(1.2) rotate(10deg);
+  box-shadow: var(--shadow-glow-lg);
+}
+
+.logo:hover::after {
+  opacity: 0.8;
 }
 
 .logo-text {
   color: white;
   margin: 0;
   font-size: var(--font-size-2xl);
-  font-weight: var(--font-weight-bold);
+  font-weight: var(--font-weight-extrabold);
   position: relative;
   z-index: 1;
-  background: linear-gradient(135deg, #ffffff, #10b981);
+  background: var(--gradient-hero);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+  letter-spacing: -0.02em;
 }
 
-/* 菜单样式 */
+/* 菜单样式 - 光晕效果 */
 .sidebar-menu {
   border-right: none;
   background: transparent;
@@ -203,11 +232,11 @@ onMounted(() => {
   height: 48px;
   line-height: 48px;
   margin-bottom: var(--spacing-sm);
-  border-radius: var(--radius-lg);
-  color: rgba(255, 255, 255, 0.7);
+  border-radius: var(--radius-xl);
+  color: rgba(255, 255, 255, 0.6);
   transition: all var(--transition-spring);
   position: relative;
-  overflow: hidden;
+  overflow: visible;
   will-change: transform;
 }
 
@@ -219,32 +248,54 @@ onMounted(() => {
   transform: translateY(-50%);
   width: 4px;
   height: 0;
-  background: var(--gradient-primary);
+  background: var(--gradient-hero);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   transition: height var(--transition-spring);
+  box-shadow: 0 0 10px rgba(102, 126, 234, 0.5);
+}
+
+.sidebar-menu :deep(.el-menu-item::after) {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: var(--radius-xl);
+  background: var(--gradient-hero);
+  opacity: 0;
+  filter: blur(15px);
+  z-index: -1;
+  transition: opacity var(--transition-base);
 }
 
 /* 磁性菜单效果 */
 .sidebar-menu :deep(.el-menu-item:hover) {
-  background: rgba(16, 185, 129, 0.15) !important;
+  background: rgba(102, 126, 234, 0.15) !important;
   color: white;
-  transform: translateX(6px);
+  transform: translateX(8px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
 }
 
 .sidebar-menu :deep(.el-menu-item:hover::before) {
-  height: 60%;
+  height: 70%;
+}
+
+.sidebar-menu :deep(.el-menu-item:hover::after) {
+  opacity: 0.6;
 }
 
 .sidebar-menu :deep(.el-menu-item.is-active) {
-  background: var(--gradient-primary) !important;
+  background: var(--gradient-hero) !important;
   color: white;
-  box-shadow: 0 8px 16px -4px rgba(16, 185, 129, 0.4);
-  transform: translateX(4px);
+  box-shadow: var(--shadow-glow);
+  transform: translateX(6px);
 }
 
 .sidebar-menu :deep(.el-menu-item.is-active::before) {
-  height: 60%;
+  height: 70%;
   background: white;
+}
+
+.sidebar-menu :deep(.el-menu-item.is-active::after) {
+  opacity: 0.8;
 }
 
 .menu-icon {
@@ -256,24 +307,26 @@ onMounted(() => {
 
 .sidebar-menu :deep(.el-menu-item:hover) .menu-icon,
 .sidebar-menu :deep(.el-menu-item.is-active) .menu-icon {
-  transform: scale(1.15) rotate(5deg);
+  transform: scale(1.2) rotate(10deg);
 }
 
 .menu-title {
-  font-weight: var(--font-weight-medium);
+  font-weight: var(--font-weight-semibold);
   font-size: var(--font-size-base);
 }
 
 /* ============ 主容器 ============ */
 .main-container {
-  background: var(--color-bg-secondary);
+  background: var(--color-bg-primary);
 }
 
 /* ============ 顶部栏 ============ */
 .header {
-  background: var(--color-bg-primary);
-  border-bottom: 1px solid var(--color-border);
-  box-shadow: var(--shadow-sm);
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   display: flex;
   align-items: center;
   padding: 0 var(--spacing-xl);
@@ -370,7 +423,7 @@ onMounted(() => {
   padding: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  background: var(--color-bg-secondary);
+  background: var(--color-bg-primary);
 }
 
 /* ============ 页面切换动画 ============ */

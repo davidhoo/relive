@@ -356,11 +356,12 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-/* ============ Dashboard 容器 ============ */
+/* ============ Dashboard 容器 - 深色主题 ============ */
 .dashboard {
   padding: 48px;
-  background: var(--color-bg-secondary);
+  background: var(--color-bg-primary);
   min-height: 100vh;
+  position: relative;
 }
 
 /* ============ 页面标题 ============ */
@@ -369,15 +370,17 @@ onMounted(async () => {
 }
 
 .page-title {
-  font-size: var(--font-size-4xl);
-  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-5xl);
+  font-weight: var(--font-weight-extrabold);
   margin-bottom: var(--spacing-sm);
-  line-height: 1.2;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
 }
 
 .page-subtitle {
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-xl);
   color: var(--color-text-secondary);
+  font-weight: var(--font-weight-normal);
 }
 
 /* ============ Bento Grid 布局 ============ */
@@ -392,30 +395,52 @@ onMounted(async () => {
 /* Bento 卡片基础样式 */
 .bento-card {
   position: relative;
-  border-radius: var(--radius-2xl);
+  border-radius: var(--radius-3xl);
   overflow: hidden;
   cursor: pointer;
-  transition: all var(--transition-base);
+  transition: all var(--transition-spring);
   will-change: transform;
 }
 
 .bento-card-bg {
   position: absolute;
   inset: 0;
-  background: var(--color-bg-primary);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-2xl);
-  transition: all var(--transition-base);
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-3xl);
+  transition: all var(--transition-spring);
   z-index: 0;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.bento-card::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: var(--radius-3xl);
+  background: linear-gradient(135deg, var(--color-primary), var(--color-accent));
+  opacity: 0;
+  z-index: -1;
+  filter: blur(30px);
+  transition: opacity var(--transition-base);
 }
 
 .bento-card:hover .bento-card-bg {
-  border-color: var(--color-primary);
-  box-shadow: 0 20px 40px -12px rgba(16, 185, 129, 0.3);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(102, 126, 234, 0.5);
+  box-shadow:
+    0 20px 48px rgba(0, 0, 0, 0.5),
+    var(--shadow-glow);
+}
+
+.bento-card:hover::before {
+  opacity: 0.6;
 }
 
 .bento-card:hover {
-  transform: translateY(-8px) scale(1.02);
+  transform: translateY(-12px) scale(1.02);
 }
 
 .bento-card-content {
@@ -434,27 +459,30 @@ onMounted(async () => {
 }
 
 .bento-card-large .stat-card-value-large {
-  font-size: 120px;
-  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-8xl);
+  font-weight: var(--font-weight-extrabold);
   line-height: 1;
-  background: var(--gradient-primary);
+  background: var(--gradient-hero);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
   margin-top: auto;
   margin-bottom: 16px;
   transition: all var(--transition-spring);
+  text-shadow: 0 0 40px rgba(102, 126, 234, 0.5);
 }
 
 .bento-card-large:hover .stat-card-value-large {
   transform: scale(1.05);
+  filter: drop-shadow(0 0 20px rgba(102, 126, 234, 0.8));
 }
 
 .bento-card-large .stat-card-title-large {
   font-size: var(--font-size-2xl);
-  font-weight: var(--font-weight-semibold);
+  font-weight: var(--font-weight-bold);
   color: var(--color-text-primary);
   margin-bottom: 8px;
+  letter-spacing: -0.01em;
 }
 
 /* 中等卡片 - 2x1 */
@@ -470,17 +498,20 @@ onMounted(async () => {
 }
 
 .bento-card-small .stat-card-value-small {
-  font-size: var(--font-size-4xl);
-  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-5xl);
+  font-weight: var(--font-weight-extrabold);
   color: var(--color-text-primary);
   margin: auto 0;
+  line-height: 1;
 }
 
 .bento-card-small .stat-card-title-small {
   font-size: var(--font-size-base);
-  font-weight: var(--font-weight-semibold);
+  font-weight: var(--font-weight-bold);
   color: var(--color-text-primary);
   margin-bottom: 4px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
 .bento-card-small .stat-card-subtitle-small {
@@ -499,38 +530,59 @@ onMounted(async () => {
 .stat-card-icon {
   width: 56px;
   height: 56px;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 28px;
   transition: all var(--transition-spring);
   will-change: transform;
+  position: relative;
+}
+
+.stat-card-icon::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: var(--radius-xl);
+  background: inherit;
+  opacity: 0;
+  filter: blur(15px);
+  transition: opacity var(--transition-base);
+  z-index: -1;
 }
 
 .bento-card:hover .stat-card-icon {
-  transform: scale(1.15) rotate(5deg);
+  transform: scale(1.2) rotate(10deg);
 }
 
-/* 配色方案 - 使用 Emerald/Rose/Amber/Cyan */
+.bento-card:hover .stat-card-icon::after {
+  opacity: 0.8;
+}
+
+/* 配色方案 - 紫蓝系 */
 .stat-icon-emerald {
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(52, 211, 153, 0.15));
-  color: var(--color-primary);
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.2), rgba(118, 75, 162, 0.2));
+  color: var(--color-primary-light);
+  box-shadow: 0 0 20px rgba(102, 126, 234, 0.4);
 }
 
 .stat-icon-cyan {
-  background: linear-gradient(135deg, rgba(6, 182, 212, 0.15), rgba(34, 211, 238, 0.15));
-  color: #06b6d4;
+  background: linear-gradient(135deg, rgba(79, 172, 254, 0.2), rgba(0, 242, 254, 0.2));
+  color: var(--color-accent-light);
+  box-shadow: 0 0 20px rgba(79, 172, 254, 0.4);
 }
 
 .stat-icon-amber {
-  background: linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(251, 191, 36, 0.15));
-  color: var(--color-warning);
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(251, 191, 36, 0.2));
+  color: var(--color-warning-light);
+  box-shadow: 0 0 20px rgba(245, 158, 11, 0.4);
 }
 
 .stat-icon-rose {
-  background: linear-gradient(135deg, rgba(244, 63, 94, 0.15), rgba(251, 113, 133, 0.15));
-  color: var(--color-secondary);
+  background: linear-gradient(135deg, rgba(240, 147, 251, 0.2), rgba(245, 87, 108, 0.2));
+  color: var(--color-secondary-light);
+  box-shadow: 0 0 20px rgba(240, 147, 251, 0.4);
 }
 
 .stat-card-title {
@@ -592,45 +644,62 @@ onMounted(async () => {
   box-shadow: 0 20px 48px 0 rgba(31, 38, 135, 0.25);
 }
 
-/* ============ 磁性按钮效果 ============ */
+/* ============ 磁性按钮效果 - 2026 风格 ============ */
 .magnetic-button {
   position: relative;
   padding: 16px 32px;
   border: none;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   font-size: var(--font-size-base);
   font-weight: var(--font-weight-semibold);
   cursor: pointer;
   overflow: hidden;
   transition: all var(--transition-spring);
   will-change: transform;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
 .magnetic-button:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
 .magnetic-button-bg {
   position: absolute;
   inset: 0;
-  background: var(--gradient-primary);
+  background: var(--gradient-hero);
   transition: all var(--transition-spring);
   z-index: 0;
 }
 
+.magnetic-button::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: var(--radius-xl);
+  background: var(--gradient-hero);
+  opacity: 0;
+  filter: blur(20px);
+  z-index: -1;
+  transition: opacity var(--transition-base);
+}
+
 .magnetic-button:hover:not(:disabled) .magnetic-button-bg {
-  background: var(--gradient-primary-hover);
-  transform: scale(1.1);
+  transform: scale(1.05);
+  filter: brightness(1.1);
+}
+
+.magnetic-button:hover:not(:disabled)::before {
+  opacity: 0.8;
 }
 
 .magnetic-button:hover:not(:disabled) {
-  transform: translateY(-3px);
-  box-shadow: 0 12px 24px -8px rgba(16, 185, 129, 0.5);
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-glow-lg);
 }
 
 .magnetic-button:active:not(:disabled) {
-  transform: translateY(-1px);
+  transform: translateY(-2px);
 }
 
 .magnetic-button-content {
@@ -768,31 +837,40 @@ onMounted(async () => {
   transition: all var(--transition-spring);
 }
 
-/* ============ 聚光灯边框卡片 ============ */
+/* ============ 聚光灯边框卡片 - Linear 风格 ============ */
 .spotlight-card {
   position: relative;
-  background: var(--color-bg-primary);
-  border-radius: var(--radius-2xl);
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-radius: var(--radius-3xl);
   padding: 40px;
   overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  transition: all var(--transition-base);
 }
 
 .spotlight-border {
   position: absolute;
-  inset: 0;
-  border-radius: var(--radius-2xl);
-  padding: 2px;
-  background: linear-gradient(135deg, transparent, var(--color-primary), transparent);
-  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
+  inset: -2px;
+  border-radius: var(--radius-3xl);
+  background: linear-gradient(135deg, var(--color-primary), var(--color-accent), var(--color-secondary));
   opacity: 0;
   transition: opacity var(--transition-base);
-  animation: rotate-border 6s linear infinite;
+  animation: rotate 6s linear infinite;
+  filter: blur(20px);
+  z-index: -1;
+}
+
+.spotlight-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(102, 126, 234, 0.3);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.5), var(--shadow-glow);
 }
 
 .spotlight-card:hover .spotlight-border {
-  opacity: 1;
+  opacity: 0.8;
 }
 
 @keyframes rotate-border {
@@ -884,9 +962,29 @@ onMounted(async () => {
   overflow: hidden;
   cursor: pointer;
   transition: all var(--transition-spring);
-  background: var(--color-bg-primary);
-  box-shadow: var(--shadow-sm);
+  background: var(--color-bg-tertiary);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
   will-change: transform;
+}
+
+.image-card::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: var(--radius-2xl);
+  background: linear-gradient(135deg, var(--color-primary), var(--color-accent));
+  opacity: 0;
+  z-index: -1;
+  filter: blur(20px);
+  transition: opacity var(--transition-base);
+}
+
+.image-card:hover::before {
+  opacity: 0.6;
+}
+
+.image-card:hover {
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6), var(--shadow-glow);
 }
 
 .image-card-image {
@@ -908,7 +1006,8 @@ onMounted(async () => {
   right: var(--spacing-sm);
   padding: 8px 16px;
   border-radius: var(--radius-full);
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
   color: white;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-bold);
@@ -917,11 +1016,13 @@ onMounted(async () => {
   gap: 6px;
   z-index: 2;
   transition: all var(--transition-spring);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
 .score-badge {
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.95), rgba(52, 211, 153, 0.95));
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.95), rgba(118, 75, 162, 0.95));
+  box-shadow: 0 0 20px rgba(102, 126, 234, 0.6);
 }
 
 .badge-info {
@@ -929,7 +1030,8 @@ onMounted(async () => {
 }
 
 .image-card:hover .image-card-badge {
-  transform: scale(1.15) translateY(-4px);
+  transform: scale(1.2) translateY(-6px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 30px rgba(102, 126, 234, 0.8);
 }
 
 .image-card-overlay {

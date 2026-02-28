@@ -267,11 +267,12 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* ============ Photos 页面容器 ============ */
+/* ============ Photos 页面容器 - 深色主题 ============ */
 .photos-page {
-  padding: var(--spacing-xl);
-  background: var(--color-bg-secondary);
+  padding: var(--spacing-2xl);
+  background: var(--color-bg-primary);
   min-height: 100vh;
+  position: relative;
 }
 
 /* ============ 页面标题 ============ */
@@ -280,15 +281,17 @@ onMounted(() => {
 }
 
 .page-title {
-  font-size: var(--font-size-4xl);
-  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-5xl);
+  font-weight: var(--font-weight-extrabold);
   margin-bottom: var(--spacing-sm);
-  line-height: 1.2;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
 }
 
 .page-subtitle {
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-xl);
   color: var(--color-text-secondary);
+  font-weight: var(--font-weight-normal);
 }
 
 /* ============ 工具栏 ============ */
@@ -336,18 +339,36 @@ onMounted(() => {
 
 .scan-button {
   width: 100%;
-  background: var(--gradient-primary);
+  background: var(--gradient-hero);
   border: none;
-  border-radius: var(--radius-lg);
-  font-weight: var(--font-weight-medium);
+  border-radius: var(--radius-xl);
+  font-weight: var(--font-weight-semibold);
   transition: all var(--transition-spring);
   will-change: transform;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  position: relative;
+  overflow: hidden;
+}
+
+.scan-button::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: var(--radius-xl);
+  background: var(--gradient-hero);
+  opacity: 0;
+  filter: blur(20px);
+  z-index: -1;
+  transition: opacity var(--transition-base);
 }
 
 .scan-button:hover {
-  background: var(--gradient-primary-hover);
-  transform: translateY(-3px);
-  box-shadow: 0 12px 24px -8px rgba(16, 185, 129, 0.5);
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-glow-lg);
+}
+
+.scan-button:hover::before {
+  opacity: 0.8;
 }
 
 /* ============ 照片网格卡片 ============ */
@@ -362,8 +383,9 @@ onMounted(() => {
   gap: var(--spacing-xl);
   margin-bottom: var(--spacing-xl);
   padding: var(--spacing-lg);
-  background: var(--color-bg-secondary);
-  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--radius-xl);
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .stat-item {
@@ -376,7 +398,7 @@ onMounted(() => {
 
 .stat-icon {
   font-size: 20px;
-  color: var(--color-primary);
+  color: var(--color-primary-light);
 }
 
 .stat-text strong {
@@ -417,13 +439,29 @@ onMounted(() => {
   border-radius: var(--radius-2xl);
   overflow: hidden;
   background: var(--color-bg-tertiary);
-  box-shadow: var(--shadow-sm);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
   transition: all var(--transition-spring);
   will-change: transform, box-shadow;
 }
 
+.photo-image-wrapper::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: var(--radius-2xl);
+  background: linear-gradient(135deg, var(--color-primary), var(--color-accent));
+  opacity: 0;
+  z-index: -1;
+  filter: blur(20px);
+  transition: opacity var(--transition-base);
+}
+
 .photo-card:hover .photo-image-wrapper {
-  box-shadow: 0 25px 50px -12px rgba(16, 185, 129, 0.3);
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.6), var(--shadow-glow);
+}
+
+.photo-card:hover .photo-image-wrapper::before {
+  opacity: 0.6;
 }
 
 .photo-image {
@@ -435,7 +473,7 @@ onMounted(() => {
 
 .photo-card:hover .photo-image {
   transform: scale(1.15);
-  filter: brightness(0.7);
+  filter: brightness(0.7) contrast(1.2);
 }
 
 /* 图片加载状态 */
@@ -464,7 +502,8 @@ onMounted(() => {
   right: var(--spacing-sm);
   padding: 8px 16px;
   border-radius: var(--radius-full);
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
   color: white;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-bold);
@@ -473,28 +512,34 @@ onMounted(() => {
   gap: 6px;
   z-index: 2;
   transition: all var(--transition-spring);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   will-change: transform;
+  border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
 .photo-card:hover .photo-badge {
-  transform: scale(1.15) translateY(-4px);
+  transform: scale(1.2) translateY(-6px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 30px rgba(102, 126, 234, 0.8);
 }
 
 .badge-excellent {
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.95), rgba(52, 211, 153, 0.95));
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.95), rgba(118, 75, 162, 0.95));
+  box-shadow: 0 0 20px rgba(102, 126, 234, 0.6);
 }
 
 .badge-good {
-  background: linear-gradient(135deg, rgba(6, 182, 212, 0.95), rgba(34, 211, 238, 0.95));
+  background: linear-gradient(135deg, rgba(79, 172, 254, 0.95), rgba(0, 242, 254, 0.95));
+  box-shadow: 0 0 20px rgba(79, 172, 254, 0.6);
 }
 
 .badge-medium {
   background: linear-gradient(135deg, rgba(245, 158, 11, 0.95), rgba(251, 191, 36, 0.95));
+  box-shadow: 0 0 20px rgba(245, 158, 11, 0.6);
 }
 
 .badge-low {
-  background: linear-gradient(135deg, rgba(244, 63, 94, 0.95), rgba(251, 113, 133, 0.95));
+  background: linear-gradient(135deg, rgba(240, 147, 251, 0.95), rgba(245, 87, 108, 0.95));
+  box-shadow: 0 0 20px rgba(240, 147, 251, 0.6);
 }
 
 .badge-unanalyzed {
@@ -507,7 +552,9 @@ onMounted(() => {
   bottom: 0;
   left: 0;
   right: 0;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.95), rgba(0, 0, 0, 0.5), transparent);
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.95), rgba(0, 0, 0, 0.6), transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   padding: var(--spacing-lg);
   transform: translateY(100%);
   transition: transform var(--transition-base);
@@ -564,12 +611,14 @@ onMounted(() => {
 }
 
 .pagination-wrapper :deep(.el-pager li:hover) {
-  background: var(--gradient-primary);
+  background: var(--gradient-hero);
   color: white;
+  box-shadow: var(--shadow-glow);
 }
 
 .pagination-wrapper :deep(.el-pager li.is-active) {
-  background: var(--gradient-primary);
+  background: var(--gradient-hero);
+  box-shadow: var(--shadow-glow);
 }
 
 /* ============ 响应式设计 ============ */
