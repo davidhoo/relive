@@ -12,6 +12,7 @@ type Services struct {
 	Display DisplayService
 	ESP32   ESP32Service
 	AI      AIService
+	Export  ExportService
 }
 
 // NewServices 创建所有服务
@@ -31,7 +32,8 @@ func NewServices(repos *repository.Repositories, cfg *config.Config) *Services {
 			repos.ESP32Device,
 			cfg,
 		),
-		ESP32: NewESP32Service(repos.ESP32Device, cfg),
-		AI:    aiService,
+		ESP32:  NewESP32Service(repos.ESP32Device, cfg),
+		AI:     aiService,
+		Export: NewExportService(repos.Photo),
 	}
 }

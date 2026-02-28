@@ -75,8 +75,12 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 			}
 		}
 
-		// TODO: 导出/导入、配置等路由
-		// export := v1.Group("/export")
+		// 导出/导入相关
+		v1.POST("/export", handlers.Export.Export)
+		v1.POST("/import", handlers.Export.Import)
+		v1.POST("/export/check", handlers.Export.CheckExport)
+
+		// TODO: 配置管理等路由
 		// config := v1.Group("/config")
 	}
 

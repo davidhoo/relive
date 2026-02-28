@@ -536,7 +536,7 @@ GET /api/v1/esp32/stats
 
 ## 5. AI 分析 API
 
-### 5.1 分析照片 📋
+### 5.1 分析照片 ✅
 
 对单张照片进行 AI 分析。
 
@@ -546,16 +546,26 @@ POST /api/v1/ai/analyze
 Content-Type: application/json
 
 {
-  "photo_id": 1234,
-  "provider": "ollama"
+  "photo_id": 1234
 }
 ```
 
-**状态**: 📋 计划中
+**响应**
+```json
+{
+  "success": true,
+  "message": "Photo analyzed successfully"
+}
+```
+
+**说明**
+- 使用配置文件中指定的 AI Provider
+- 分析完成后更新照片记录
+- 如果照片已分析，会跳过
 
 ---
 
-### 5.2 批量分析 📋
+### 5.2 批量分析 ✅
 
 批量分析未分析的照片。
 
@@ -565,29 +575,35 @@ POST /api/v1/ai/analyze/batch
 Content-Type: application/json
 
 {
-  "provider": "ollama",
-  "batch_size": 100
+  "limit": 100
 }
 ```
 
-**状态**: 📋 计划中
-
----
-
-### 5.3 获取分析队列 📋
-
-获取待分析照片队列。
-
-**请求**
-```http
-GET /api/v1/ai/queue?page=1&page_size=20
+**响应**
+```json
+{
+  "success": true,
+  "data": {
+    "total_count": 100,
+    "success_count": 98,
+    "failed_count": 2,
+    "total_cost": 0.392,
+    "duration": 234.5
+  },
+  "message": "Batch analysis completed"
+}
 ```
 
-**状态**: 📋 计划中
+**字段说明**
+- `total_count`: 总处理数量
+- `success_count`: 成功数量
+- `failed_count`: 失败数量
+- `total_cost`: 总成本（人民币）
+- `duration`: 耗时（秒）
 
 ---
 
-### 5.4 获取分析进度 📋
+### 5.3 获取分析进度 ✅
 
 获取 AI 分析的实时进度。
 
@@ -596,25 +612,77 @@ GET /api/v1/ai/queue?page=1&page_size=20
 GET /api/v1/ai/progress
 ```
 
-**状态**: 📋 计划中
-
----
-
-### 5.5 重新分析 📋
-
-重新分析已分析的照片。
-
-**请求**
-```http
-POST /api/v1/ai/reanalyze
-Content-Type: application/json
-
+**响应**
+```json
 {
-  "photo_id": 1234
+  "success": true,
+  "data": {
+    "total": 10000,
+    "analyzed": 7500,
+    "unanalyzed": 2500,
+    "progress": 75.0,
+    "estimated_cost": 10.0,
+    "provider": "ollama"
+  },
+  "message": "Progress retrieved successfully"
 }
 ```
 
-**状态**: 📋 计划中
+**字段说明**
+- `total`: 照片总数
+- `analyzed`: 已分析数量
+- `unanalyzed`: 未分析数量
+- `progress`: 进度百分比
+- `estimated_cost`: 预估剩余成本（人民币）
+- `provider`: 当前使用的 Provider
+
+---
+
+### 5.4 重新分析 ✅
+
+重新分析已分析的照片（覆盖原有结果）。
+
+**请求**
+```http
+POST /api/v1/ai/reanalyze/:id
+```
+
+**响应**
+```json
+{
+  "success": true,
+  "message": "Photo re-analyzed successfully"
+}
+```
+
+**说明**
+- 即使照片已分析也会重新分析
+- 新结果会覆盖原有分析结果
+
+---
+
+### 5.5 获取 Provider 信息 ✅
+
+获取当前使用的 AI Provider 信息。
+
+**请求**
+```http
+GET /api/v1/ai/provider
+```
+
+**响应**
+```json
+{
+  "success": true,
+  "data": {
+    "name": "ollama",
+    "cost_per_photo": 0.0,
+    "available": true,
+    "max_concurrency": 1
+  },
+  "message": "Provider info retrieved successfully"
+}
+```
 
 ---
 
