@@ -2,7 +2,7 @@
 
 > 完整的设计和开发文档导航
 > 最后更新：2026-02-28
-> 文档版本：v1.0
+> 文档版本：v1.1
 
 ---
 
@@ -12,6 +12,7 @@
 - [README.md](../README.md) - 项目概览和快速开始
 - [REQUIREMENTS.md](REQUIREMENTS.md) - 需求分析和功能说明
 - [ARCHITECTURE.md](ARCHITECTURE.md) - 系统架构概览
+- [BACKEND_API.md](BACKEND_API.md) - 后端 API 文档（已实现）
 
 ### 💡 核心创新
 - [AI_PROVIDERS.md](AI_PROVIDERS.md) ⭐ - 提供者无关架构
@@ -21,7 +22,14 @@
 ### 🔧 技术设计
 - [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) - 数据库设计（6张表）
 - [API_DESIGN.md](API_DESIGN.md) - API 接口设计（29个接口）
+- [BACKEND_API.md](BACKEND_API.md) - 后端 API 文档（15个已实现）✅
 - [EXIF_HANDLING.md](EXIF_HANDLING.md) - EXIF 处理策略
+
+### 🛠️ 开发和部署
+- [DEVELOPMENT.md](DEVELOPMENT.md) - 开发环境和规范
+- [TESTING.md](TESTING.md) - 测试策略和用例
+- [DEPLOYMENT.md](DEPLOYMENT.md) - 部署指南（Docker/NAS）
+- [ESP32_PROTOCOL.md](ESP32_PROTOCOL.md) - ESP32 通信协议
 
 ---
 
@@ -56,8 +64,9 @@
 
 | 文档 | 说明 | 行数 | 状态 |
 |------|------|------|------|
-| [API_DESIGN.md](API_DESIGN.md) | RESTful API 设计 | ~1,100 | ✅ |
-| [ESP32_PROTOCOL.md](ESP32_PROTOCOL.md) | ESP32 通信协议 | - | 📋 待创建 |
+| [API_DESIGN.md](API_DESIGN.md) | RESTful API 设计（29个接口） | ~1,100 | ✅ |
+| [BACKEND_API.md](BACKEND_API.md) | 后端 API 文档（15个已实现）| ~800 | ✅ |
+| [ESP32_PROTOCOL.md](ESP32_PROTOCOL.md) | ESP32 通信协议 | ~780 | ✅ |
 
 #### 5. 数据处理
 
@@ -70,10 +79,15 @@
 
 | 文档 | 说明 | 行数 | 状态 |
 |------|------|------|------|
-| [DEPLOYMENT.md](DEPLOYMENT.md) | 部署指南 | - | 📋 待创建 |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | 部署指南 | ~1,150 | ✅ |
 | OPERATIONS.md | 运维手册 | - | ⏸️ 后期 |
 
 #### 7. 开发和测试
+
+| 文档 | 说明 | 行数 | 状态 |
+|------|------|------|------|
+| [DEVELOPMENT.md](DEVELOPMENT.md) | 开发环境和规范 | ~920 | ✅ |
+| [TESTING.md](TESTING.md) | 测试策略和用例 | ~1,080 | ✅ |
 
 | 文档 | 说明 | 行数 | 状态 |
 |------|------|------|------|
@@ -89,7 +103,15 @@
 | [DAILY_SUMMARY_2026-02-28.md](DAILY_SUMMARY_2026-02-28.md) | 日报 | ~200 | ✅ |
 | [DAILY_SUMMARY_2026-02-28_DESIGN_COMPLETE.md](DAILY_SUMMARY_2026-02-28_DESIGN_COMPLETE.md) | 设计阶段完成总结 | ~300 | ✅ |
 | [QUICK_REFERENCE.md](QUICK_REFERENCE.md) | 快速参考 | ~150 | ✅ |
-| [CHANGELOG.md](../CHANGELOG.md) | 变更日志 | - | 📋 待创建 |
+| [CHANGELOG.md](../CHANGELOG.md) | 变更日志 | ~490 | ✅ |
+
+### 🚧 开发文档（进行中）
+
+#### 后端 API 文档
+
+| 文档 | 说明 | 状态 |
+|------|------|------|
+| [BACKEND_API.md](BACKEND_API.md) | 后端 API 文档（15个已实现）| ✅ v0.2.0 |
 
 ---
 
@@ -98,6 +120,7 @@
 ### 我想了解项目概况
 1. 阅读 [README.md](../README.md) - 5分钟了解项目
 2. 阅读 [REQUIREMENTS_SUMMARY.md](REQUIREMENTS_SUMMARY.md) - 快速了解需求
+3. 阅读 [CHANGELOG.md](../CHANGELOG.md) - 查看开发进度
 
 ### 我想理解核心创新
 1. 阅读 [AI_PROVIDERS.md](AI_PROVIDERS.md) - 提供者无关架构 ⭐
@@ -109,6 +132,7 @@
 2. 阅读 [ARCHITECTURE.md](ARCHITECTURE.md) - 系统架构
 3. 阅读 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) - 数据库设计
 4. 阅读 [API_DESIGN.md](API_DESIGN.md) - API 接口规范
+5. 阅读 [BACKEND_API.md](BACKEND_API.md) - 已实现的 API 文档
 
 ### 我想部署系统
 1. 阅读 [DEPLOYMENT.md](DEPLOYMENT.md) - 部署指南

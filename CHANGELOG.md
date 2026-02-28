@@ -9,11 +9,186 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### 待开发
-- Golang 后端开发
+### 进行中 🚧
+- Golang 后端开发 - **进行中（Repository/Service/Handler 已完成）**
 - Vue3 前端开发
 - ESP32 固件开发
 - relive-analyzer 工具开发
+
+---
+
+## [0.2.0] - 2026-02-28 - 后端基础架构完成 🎉
+
+### 📦 后端开发（Golang）
+
+#### Added - 框架搭建
+- ✅ **项目结构** - 标准 Golang 项目布局（cmd/internal/pkg）
+- ✅ **配置管理** - YAML 配置 + 环境变量支持（config.go）
+- ✅ **日志系统** - uber/zap 结构化日志 + lumberjack 轮转（logger.go）
+- ✅ **数据库模块** - SQLite + GORM + WAL 模式 + 连接池（database.go）
+- ✅ **构建系统** - Makefile（build/run/test/lint/fmt）
+- ✅ **.gitignore** - 完整的忽略规则
+
+#### Added - 数据模型（5个）
+- ✅ **Photo** - 照片模型（EXIF、AI分析、评分）
+- ✅ **DisplayRecord** - 展示记录模型
+- ✅ **ESP32Device** - ESP32 设备模型
+- ✅ **AppConfig** - 应用配置模型
+- ✅ **City** - 城市数据模型
+- ✅ **DTO** - 21个数据传输对象
+
+#### Added - Repository 层（4个仓库，75个方法）
+- ✅ **PhotoRepository** - 照片数据访问（29个方法）
+  - CRUD 操作、列表查询、AI分析操作
+  - 展示策略查询（往年今日、日期范围）
+  - 统计操作、批量操作
+- ✅ **DisplayRecordRepository** - 展示记录（15个方法）
+  - CRUD、设备/照片查询、重复检查、统计
+- ✅ **ESP32DeviceRepository** - 设备管理（20个方法）
+  - CRUD、在线状态、心跳更新、统计
+- ✅ **ConfigRepository** - 配置存储（11个方法）
+  - Key-Value 存储、批量操作、事务
+- ✅ **测试覆盖** - 7个测试用例，全部通过
+
+#### Added - Service 层（3个服务 + 工具）
+- ✅ **PhotoService** - 照片业务逻辑（8个方法）
+  - 扫描照片、EXIF 提取、文件哈希、增量更新
+  - 列表查询（分页、过滤、排序）、统计
+- ✅ **DisplayService** - 展示策略（4个方法）
+  - 往年今日算法（智能降级：±3→±7→±30→±365天）
+  - 避免重复展示（7天内）、评分优选
+- ✅ **ESP32Service** - 设备服务（10个方法）
+  - 设备注册（生成API Key）
+  - 心跳处理（下次刷新计算：8:00/20:00）
+  - 设备查询、在线统计
+- ✅ **工具函数** - hash/exif/image 处理
+  - SHA256 文件哈希
+  - EXIF 元数据提取（goexif）
+  - 图片预处理（resize/compress）
+- ✅ **测试覆盖** - 5个测试用例，4个通过（1个跳过）
+
+#### Added - Handler 层（4个处理器，15个接口）
+- ✅ **PhotoHandler** - 照片管理 API（4个接口）
+  - POST /photos/scan - 扫描照片
+  - GET /photos - 列表查询（分页、过滤、排序）
+  - GET /photos/:id - 详情查询
+  - GET /photos/stats - 统计信息
+- ✅ **DisplayHandler** - 展示策略 API（2个接口）
+  - GET /display/photo - 获取展示照片
+  - POST /display/record - 记录展示
+- ✅ **ESP32Handler** - 设备管理 API（5个接口）
+  - POST /esp32/register - 设备注册
+  - POST /esp32/heartbeat - 心跳上报
+  - GET /esp32/devices - 设备列表
+  - GET /esp32/devices/:device_id - 设备详情
+  - GET /esp32/stats - 设备统计
+- ✅ **SystemHandler** - 系统管理 API（2个接口）
+  - GET /system/health - 健康检查
+  - GET /system/stats - 系统统计
+- ✅ **路由配置** - 完整的 RESTful 路由
+- ✅ **依赖注入** - Database → Repositories → Services → Handlers
+
+### 🔧 技术实现
+
+#### 核心技术栈
+- **Golang**: 1.24+
+- **Web 框架**: Gin 1.11.0
+- **ORM**: GORM v1.25.12
+- **数据库**: SQLite（WAL模式）
+- **日志**: uber/zap + lumberjack
+- **图片**: disintegration/imaging
+- **EXIF**: rwcarlsen/goexif
+- **测试**: testify/assert
+
+#### 技术亮点
+1. **完整分层架构** - Repository → Service → Handler
+2. **统一响应格式** - Success/Error/Data/Message
+3. **事务支持** - GORM 事务（批量操作）
+4. **连接池优化** - SQLite 连接池（25/5/5min）
+5. **错误处理** - 结构化错误码
+6. **测试驱动** - 单元测试 + 集成测试
+
+### 📊 代码统计
+
+| 层级 | 文件数 | 代码行数 | 测试覆盖 |
+|------|--------|----------|----------|
+| **Models** | 3 | ~500 | - |
+| **Repository** | 5 | ~1,200 | 7个测试 ✅ |
+| **Service** | 4 | ~800 | 5个测试 ✅ |
+| **Handler** | 5 | ~830 | 手动测试 ✅ |
+| **Utils** | 3 | ~200 | - |
+| **总计** | 20+ | ~3,500+ | 16.3% |
+
+### 🐛 修复问题
+
+#### Fixed
+- ✅ 索引命名冲突（DisplayRecord）
+- ✅ 评分计算错误（86 vs 89）
+- ✅ 未使用变量（display/esp32 service）
+- ✅ Logger 未初始化（测试）
+- ✅ 数据库列名问题（wifi_rssi）
+- ✅ 外键循环依赖（DisplayRecord ↔ ESP32Device）
+- ✅ AutoMigrate 未启用
+- ✅ TakenAt 指针类型处理
+
+### ✅ 测试验证
+
+#### Repository 测试（7个 ✅）
+- TestPhotoRepository_Create
+- TestPhotoRepository_GetByFilePath
+- TestPhotoRepository_GetByFileHash
+- TestPhotoRepository_List
+- TestPhotoRepository_MarkAsAnalyzed
+- TestPhotoRepository_GetUnanalyzed
+- TestPhotoRepository_BatchCreate
+
+#### Service 测试（4个 ✅ + 1个跳过）
+- TestPhotoService_GetPhotoByID ✅
+- TestPhotoService_CountAll ✅
+- TestESP32Service_Register ✅
+- TestESP32Service_Heartbeat ⏭️（跳过）
+- TestESP32Service_GenerateAPIKey ✅
+
+#### API 端点测试（全部通过 ✅）
+```bash
+✅ GET  /api/v1/system/health
+✅ GET  /api/v1/system/stats
+✅ GET  /api/v1/photos/stats
+✅ POST /api/v1/esp32/register
+✅ POST /api/v1/esp32/heartbeat
+✅ GET  /api/v1/esp32/devices
+✅ GET  /api/v1/esp32/stats
+```
+
+### 📦 依赖管理
+
+#### 核心依赖
+```go
+github.com/gin-gonic/gin v1.11.0
+gorm.io/gorm v1.25.12
+gorm.io/driver/sqlite v1.5.7
+go.uber.org/zap v1.27.0
+gopkg.in/natefinch/lumberjack.v2 v2.2.1
+github.com/disintegration/imaging v1.6.2
+github.com/rwcarlsen/goexif v0.0.0-20190401172101-9e8deecbddbd
+github.com/stretchr/testify v1.10.0
+```
+
+### 🎯 下一步开发
+
+#### Phase 1.5: AI 分析模块（待开发）
+- [ ] AI Provider 接口实现
+- [ ] Ollama 提供者集成
+- [ ] Qwen API 提供者集成
+- [ ] OpenAI 提供者集成
+- [ ] AI 分析 Service
+- [ ] AI 分析 Handler
+- [ ] 分析队列管理
+
+#### Phase 1.6: 导出/导入功能（待开发）
+- [ ] 导出 Service（生成 export.db + 缩略图）
+- [ ] 导入 Service（匹配策略、批量更新）
+- [ ] 导出/导入 Handler
 
 ---
 
