@@ -1,0 +1,74 @@
+# Analyzer Configuration
+# Configuration for relive-analyzer offline analysis tool
+
+analyzer:
+  workers: 0              # Number of concurrent workers (0 = auto based on provider)
+  retry_count: 3          # Number of retries on failure
+  retry_delay: 5          # Delay between retries (seconds)
+
+# AI Provider Configuration
+ai:
+  provider: "ollama"      # ollama / qwen / openai / vllm / hybrid
+  timeout: 60             # Default timeout (seconds)
+  temperature: 0.7        # Temperature for AI generation (0.0-1.0)
+
+  # Ollama Configuration (local LLaVA model)
+  ollama:
+    endpoint: "http://localhost:11434"
+    model: "llava:13b"
+    temperature: 0.7
+    timeout: 120          # Longer timeout for local models
+
+  # Qwen Configuration (Alibaba Cloud)
+  qwen:
+    api_key: "${QWEN_API_KEY}"  # Use environment variable
+    endpoint: ""                 # Use default
+    model: "qwen-vl-max"
+    temperature: 0.7
+    timeout: 60
+
+  # OpenAI Configuration
+  openai:
+    api_key: "${OPENAI_API_KEY}"  # Use environment variable
+    endpoint: ""                   # Use default (https://api.openai.com/v1)
+    model: "gpt-4-vision-preview"
+    temperature: 0.7
+    max_tokens: 500
+    timeout: 60
+
+  # vLLM Configuration (self-hosted)
+  vllm:
+    endpoint: "http://localhost:8000"
+    model: "llava-v1.6-vicuna-13b"
+    temperature: 0.7
+    max_tokens: 500
+    timeout: 120
+
+  # Hybrid Configuration (primary + fallback)
+  hybrid:
+    primary: "ollama"     # Primary provider
+    fallback: "qwen"      # Fallback provider
+    retry_on_error: true  # Switch to fallback on error
+
+# Logging Configuration
+logging:
+  level: "info"           # debug / info / warn / error
+  console: true           # Output to console
+  file: "analyzer.log"    # Log file path
+  max_size: 100           # Max log file size (MB)
+  max_backups: 3          # Number of backup log files
+  max_age: 30             # Max age of log files (days)
+
+# Notes:
+# 1. Set API keys via environment variables:
+#    export QWEN_API_KEY="your-key"
+#    export OPENAI_API_KEY="your-key"
+#
+# 2. Worker count recommendations:
+#    - Ollama: 1 (GPU intensive)
+#    - Qwen/OpenAI: 5-10 (API rate limits)
+#    - vLLM: depends on your server capacity
+#
+# 3. For hybrid mode, make sure both providers are configured
+#
+# 4. Verbose mode (-verbose flag) enables detailed per-photo logging
