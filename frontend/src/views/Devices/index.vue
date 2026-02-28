@@ -72,7 +72,7 @@
         </el-table-column>
         <el-table-column label="操作" width="100" fixed="right">
           <template #default="{ row }">
-            <el-button type="primary" link @click="viewDevice(row.device_id)">
+            <el-button link @click="viewDevice(row.device_id)" style="color: var(--color-primary); font-weight: 500;">
               详情
             </el-button>
           </template>
