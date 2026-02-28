@@ -77,7 +77,7 @@
             class="photo-col"
           >
             <div
-              class="photo-card animate-scale-in"
+              class="photo-card photo-card-parallax animate-scale-in"
               :style="{ animationDelay: `${index * 30}ms` }"
               @click="gotoDetail(photo.id)"
             >
@@ -340,13 +340,14 @@ onMounted(() => {
   border: none;
   border-radius: var(--radius-lg);
   font-weight: var(--font-weight-medium);
-  transition: all var(--transition-base);
+  transition: all var(--transition-spring);
+  will-change: transform;
 }
 
 .scan-button:hover {
   background: var(--gradient-primary-hover);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-lg);
+  transform: translateY(-3px);
+  box-shadow: 0 12px 24px -8px rgba(16, 185, 129, 0.5);
 }
 
 /* ============ 照片网格卡片 ============ */
@@ -395,33 +396,45 @@ onMounted(() => {
 
 .photo-card {
   cursor: pointer;
-  transition: all var(--transition-base);
+  transition: all var(--transition-spring);
+  will-change: transform;
+}
+
+/* 视差 3D 倾斜效果 */
+.photo-card-parallax {
+  transform-style: preserve-3d;
+  perspective: 1000px;
+}
+
+.photo-card-parallax:hover {
+  transform: translateY(-12px) rotateX(5deg) rotateY(5deg) scale(1.02);
 }
 
 .photo-image-wrapper {
   position: relative;
   width: 100%;
   height: 280px;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-2xl);
   overflow: hidden;
   background: var(--color-bg-tertiary);
   box-shadow: var(--shadow-sm);
-  transition: all var(--transition-base);
+  transition: all var(--transition-spring);
+  will-change: transform, box-shadow;
 }
 
 .photo-card:hover .photo-image-wrapper {
-  box-shadow: var(--shadow-2xl);
-  transform: translateY(-8px);
+  box-shadow: 0 25px 50px -12px rgba(16, 185, 129, 0.3);
 }
 
 .photo-image {
   width: 100%;
   height: 100%;
   transition: all var(--transition-slow);
+  will-change: transform, filter;
 }
 
 .photo-card:hover .photo-image {
-  transform: scale(1.1);
+  transform: scale(1.15);
   filter: brightness(0.7);
 }
 
@@ -444,47 +457,48 @@ onMounted(() => {
   font-size: 48px;
 }
 
-/* 分析状态徽章 */
+/* 分析状态徽章 - 更精致的设计 */
 .photo-badge {
   position: absolute;
   top: var(--spacing-sm);
   right: var(--spacing-sm);
-  padding: var(--spacing-xs) var(--spacing-md);
+  padding: 8px 16px;
   border-radius: var(--radius-full);
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(12px);
   color: white;
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   z-index: 2;
-  transition: all var(--transition-base);
-  box-shadow: var(--shadow-md);
+  transition: all var(--transition-spring);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  will-change: transform;
 }
 
 .photo-card:hover .photo-badge {
-  transform: scale(1.1);
+  transform: scale(1.15) translateY(-4px);
 }
 
 .badge-excellent {
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.9), rgba(52, 211, 153, 0.9));
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.95), rgba(52, 211, 153, 0.95));
 }
 
 .badge-good {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.9), rgba(96, 165, 250, 0.9));
+  background: linear-gradient(135deg, rgba(6, 182, 212, 0.95), rgba(34, 211, 238, 0.95));
 }
 
 .badge-medium {
-  background: linear-gradient(135deg, rgba(245, 158, 11, 0.9), rgba(251, 191, 36, 0.9));
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.95), rgba(251, 191, 36, 0.95));
 }
 
 .badge-low {
-  background: linear-gradient(135deg, rgba(239, 68, 68, 0.9), rgba(248, 113, 113, 0.9));
+  background: linear-gradient(135deg, rgba(244, 63, 94, 0.95), rgba(251, 113, 133, 0.95));
 }
 
 .badge-unanalyzed {
-  background: rgba(107, 114, 128, 0.9);
+  background: rgba(107, 114, 128, 0.95);
 }
 
 /* 悬停信息遮罩 */

@@ -123,7 +123,7 @@ onMounted(() => {
 
 /* ============ 侧边栏 ============ */
 .sidebar {
-  background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+  background: linear-gradient(180deg, #0f172a 0%, #020617 100%);
   box-shadow: var(--shadow-lg);
   z-index: 100;
   overflow-y: auto;
@@ -137,7 +137,7 @@ onMounted(() => {
   justify-content: center;
   gap: var(--spacing-md);
   padding: var(--spacing-lg);
-  background: linear-gradient(135deg, rgba(91, 127, 255, 0.2), rgba(168, 85, 247, 0.2));
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(6, 182, 212, 0.15));
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   position: relative;
   overflow: hidden;
@@ -172,11 +172,11 @@ onMounted(() => {
   box-shadow: var(--shadow-md);
   position: relative;
   z-index: 1;
-  transition: all var(--transition-base);
+  transition: all var(--transition-spring);
 }
 
 .logo:hover .logo-icon {
-  transform: scale(1.1) rotate(5deg);
+  transform: scale(1.15) rotate(5deg);
 }
 
 .logo-text {
@@ -186,7 +186,7 @@ onMounted(() => {
   font-weight: var(--font-weight-bold);
   position: relative;
   z-index: 1;
-  background: linear-gradient(135deg, #ffffff, #e0e7ff);
+  background: linear-gradient(135deg, #ffffff, #10b981);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -205,9 +205,10 @@ onMounted(() => {
   margin-bottom: var(--spacing-sm);
   border-radius: var(--radius-lg);
   color: rgba(255, 255, 255, 0.7);
-  transition: all var(--transition-base);
+  transition: all var(--transition-spring);
   position: relative;
   overflow: hidden;
+  will-change: transform;
 }
 
 .sidebar-menu :deep(.el-menu-item::before) {
@@ -220,12 +221,14 @@ onMounted(() => {
   height: 0;
   background: var(--gradient-primary);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  transition: height var(--transition-base);
+  transition: height var(--transition-spring);
 }
 
+/* 磁性菜单效果 */
 .sidebar-menu :deep(.el-menu-item:hover) {
-  background: rgba(91, 127, 255, 0.15) !important;
+  background: rgba(16, 185, 129, 0.15) !important;
   color: white;
+  transform: translateX(6px);
 }
 
 .sidebar-menu :deep(.el-menu-item:hover::before) {
@@ -235,7 +238,8 @@ onMounted(() => {
 .sidebar-menu :deep(.el-menu-item.is-active) {
   background: var(--gradient-primary) !important;
   color: white;
-  box-shadow: var(--shadow-md);
+  box-shadow: 0 8px 16px -4px rgba(16, 185, 129, 0.4);
+  transform: translateX(4px);
 }
 
 .sidebar-menu :deep(.el-menu-item.is-active::before) {
@@ -246,12 +250,13 @@ onMounted(() => {
 .menu-icon {
   font-size: 20px;
   margin-right: var(--spacing-sm);
-  transition: all var(--transition-base);
+  transition: all var(--transition-spring);
+  will-change: transform;
 }
 
 .sidebar-menu :deep(.el-menu-item:hover) .menu-icon,
 .sidebar-menu :deep(.el-menu-item.is-active) .menu-icon {
-  transform: scale(1.1);
+  transform: scale(1.15) rotate(5deg);
 }
 
 .menu-title {

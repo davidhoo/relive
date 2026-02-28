@@ -5,19 +5,19 @@
 
 :root {
   /* ============ 主色调 ============ */
-  /* 品牌主色 - 蓝紫渐变系 */
-  --color-primary: #5b7fff;
-  --color-primary-light: #7a96ff;
-  --color-primary-lighter: #99afff;
-  --color-primary-dark: #4468ff;
-  --color-primary-darker: #2d51ff;
+  /* 品牌主色 - Emerald 翠绿色（避免 AI 紫蓝渐变） */
+  --color-primary: #10b981;
+  --color-primary-light: #34d399;
+  --color-primary-lighter: #6ee7b7;
+  --color-primary-dark: #059669;
+  --color-primary-darker: #047857;
 
-  /* 辅助色 - 紫色系 */
-  --color-secondary: #a855f7;
-  --color-secondary-light: #c084fc;
-  --color-secondary-lighter: #d8b4fe;
-  --color-secondary-dark: #9333ea;
-  --color-secondary-darker: #7e22ce;
+  /* 辅助色 - Rose 玫瑰红 */
+  --color-secondary: #f43f5e;
+  --color-secondary-light: #fb7185;
+  --color-secondary-lighter: #fda4af;
+  --color-secondary-dark: #e11d48;
+  --color-secondary-darker: #be123c;
 
   /* 成功色 */
   --color-success: #10b981;
@@ -69,16 +69,17 @@
   --color-shadow-dark: rgba(0, 0, 0, 0.2);
 
   /* ============ 渐变色 ============ */
-  --gradient-primary: linear-gradient(135deg, #5b7fff 0%, #a855f7 100%);
-  --gradient-primary-hover: linear-gradient(135deg, #4468ff 0%, #9333ea 100%);
+  /* 主渐变 - Emerald to Cyan（避免 AI 紫蓝） */
+  --gradient-primary: linear-gradient(135deg, #10b981 0%, #06b6d4 100%);
+  --gradient-primary-hover: linear-gradient(135deg, #059669 0%, #0891b2 100%);
   --gradient-success: linear-gradient(135deg, #10b981 0%, #34d399 100%);
   --gradient-warning: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
   --gradient-error: linear-gradient(135deg, #ef4444 0%, #f87171 100%);
-  --gradient-info: linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%);
-  --gradient-purple: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
-  --gradient-blue: linear-gradient(135deg, #3b82f6 0%, #06b6d4 100%);
+  --gradient-info: linear-gradient(135deg, #06b6d4 0%, #0ea5e9 100%);
+  --gradient-rose: linear-gradient(135deg, #f43f5e 0%, #ec4899 100%);
+  --gradient-amber: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
   --gradient-green: linear-gradient(135deg, #10b981 0%, #84cc16 100%);
-  --gradient-orange: linear-gradient(135deg, #f59e0b 0%, #f97316 100%);
+  --gradient-cyan: linear-gradient(135deg, #06b6d4 0%, #22d3ee 100%);
 
   /* 玻璃态效果渐变 */
   --gradient-glass: linear-gradient(
@@ -97,11 +98,12 @@
   --spacing-3xl: 64px;
 
   /* ============ 圆角 ============ */
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-2xl: 24px;
+  /* 使用更大的圆角（24px-40px） */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  --radius-2xl: 40px;
   --radius-full: 9999px;
 
   /* ============ 阴影 ============ */
@@ -120,13 +122,15 @@
   --shadow-inner: inset 0 2px 4px 0 var(--color-shadow-light);
 
   /* ============ 过渡动画 ============ */
+  /* 使用 Spring Physics 弹性缓动 */
   --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-base: 250ms cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-slow: 350ms cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-slower: 500ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-base: 350ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  --transition-slow: 500ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  --transition-slower: 700ms cubic-bezier(0.34, 1.56, 0.64, 1);
 
-  /* 弹性动画 */
-  --transition-bounce: 500ms cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  /* 弹性动画 - Spring Physics */
+  --transition-bounce: 600ms cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  --transition-spring: 500ms cubic-bezier(0.175, 0.885, 0.32, 1.275);
 
   /* ============ 字体 ============ */
   --font-family-base: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
