@@ -71,18 +71,15 @@ type GetDisplayPhotoRequest struct {
 
 // GetDisplayPhotoResponse 获取展示照片响应
 type GetDisplayPhotoResponse struct {
-	PhotoID      int       `json:"photo_id"`
+	PhotoID      uint      `json:"photo_id"`
 	FilePath     string    `json:"file_path"`
+	Width        int       `json:"width"`
+	Height       int       `json:"height"`
 	TakenAt      time.Time `json:"taken_at"`
-	Caption      string    `json:"caption"`
-	Description  string    `json:"description"`
+	Location     string    `json:"location"`
 	MemoryScore  int       `json:"memory_score"`
 	BeautyScore  int       `json:"beauty_score"`
-	Location     string    `json:"location"`
-	ImageURL     string    `json:"image_url"`
-	ImageWidth   int       `json:"image_width"`
-	ImageHeight  int       `json:"image_height"`
-	ImageSize    int64     `json:"image_size"`
+	OverallScore int       `json:"overall_score"`
 }
 
 // ESP32RegisterRequest ESP32 注册请求
@@ -120,13 +117,24 @@ type ESP32HeartbeatResponse struct {
 	HasNewFirmware      bool      `json:"has_new_firmware"`
 }
 
-// DisplayRecordRequest 上报展示记录请求
-type DisplayRecordRequest struct {
-	DeviceID        string    `json:"device_id" binding:"required"`
-	PhotoID         int       `json:"photo_id" binding:"required"`
-	DisplayedAt     time.Time `json:"displayed_at" binding:"required"`
-	DisplayDuration int       `json:"display_duration"`
-	TriggerType     string    `json:"trigger_type" binding:"required,oneof=scheduled manual boot"`
+// RecordDisplayRequest 上报展示记录请求
+type RecordDisplayRequest struct {
+	DeviceID  string `json:"device_id" binding:"required"`
+	PhotoID   uint   `json:"photo_id" binding:"required"`
+	Algorithm string `json:"algorithm"`
+}
+
+// PhotoStatsResponse 照片统计响应
+type PhotoStatsResponse struct {
+	Total      int64 `json:"total"`
+	Analyzed   int64 `json:"analyzed"`
+	Unanalyzed int64 `json:"unanalyzed"`
+}
+
+// ESP32StatsResponse ESP32 设备统计响应
+type ESP32StatsResponse struct {
+	Total  int64 `json:"total"`
+	Online int64 `json:"online"`
 }
 
 // ExportRequest 导出请求

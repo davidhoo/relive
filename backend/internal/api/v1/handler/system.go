@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
-	"github.com/davidhoo/relive/pkg/config"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -13,16 +12,14 @@ import (
 // SystemHandler 系统处理器
 type SystemHandler struct {
 	db        *gorm.DB
-	cfg       *config.Config
 	startTime time.Time
 }
 
 // NewSystemHandler 创建系统处理器
-func NewSystemHandler(db *gorm.DB, cfg *config.Config, startTime time.Time) *SystemHandler {
+func NewSystemHandler(db *gorm.DB, services interface{}) *SystemHandler {
 	return &SystemHandler{
 		db:        db,
-		cfg:       cfg,
-		startTime: startTime,
+		startTime: time.Now(),
 	}
 }
 

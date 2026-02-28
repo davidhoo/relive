@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/pkg/config"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -78,22 +79,17 @@ func Init(cfg config.DatabaseConfig) (*gorm.DB, error) {
 
 // AutoMigrate 自动迁移数据库表
 func AutoMigrate(db *gorm.DB) error {
-	// 导入模型包
-	// 注意：这里需要在实际使用时导入 model 包
-	// import "github.com/davidhoo/relive/internal/model"
+	models := []interface{}{
+		&model.Photo{},
+		&model.DisplayRecord{},
+		&model.ESP32Device{},
+		&model.AppConfig{},
+		&model.City{},
+	}
 
-	// 目前先返回 nil，等待模型完善后再启用
-	// models := []interface{}{
-	// 	&model.Photo{},
-	// 	&model.DisplayRecord{},
-	// 	&model.ESP32Device{},
-	// 	&model.AppConfig{},
-	// 	&model.City{},
-	// }
-
-	// if err := db.AutoMigrate(models...); err != nil {
-	// 	return err
-	// }
+	if err := db.AutoMigrate(models...); err != nil {
+		return err
+	}
 
 	return nil
 }

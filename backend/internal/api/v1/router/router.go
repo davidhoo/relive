@@ -1,15 +1,13 @@
 package router
 
 import (
-	"time"
-
 	"github.com/davidhoo/relive/internal/api/v1/handler"
+	"github.com/davidhoo/relive/internal/repository"
+	"github.com/davidhoo/relive/internal/service"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
-
-var startTime = time.Now()
 
 // Setup 设置路由
 func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
@@ -20,8 +18,14 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 	r.Use(gin.Recovery())
 	// TODO: 添加 CORS、认证等中间件
 
-	// 初始化处理器
-	systemHandler := handler.NewSystemHandler(db, cfg, startTime)
+	// 初始化 Repositories
+	repos := repository.NewRepositories(db)
+
+	// 初始化 Services
+	services := service.NewServices(repos, cfg)
+
+	// 初始化 Handlers
+	handlers := handler.NewHandlers(db, services)
 
 	// API 路由组
 	v1 := r.Group("/api/v1")
@@ -29,15 +33,38 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 		// 系统相关
 		system := v1.Group("/system")
 		{
-			system.GET("/health", systemHandler.Health)
-			system.GET("/stats", systemHandler.Stats)
+			system.GET("/health", handlers.System.Health)
+			system.GET("/stats", handlers.System.Stats)
 		}
 
-		// TODO: 其他路由组
-		// photos := v1.Group("/photos")
+		// 照片相关
+		photos := v1.Group("/photos")
+		{
+			photos.POST("/scan", handlers.Photo.ScanPhotos)
+			photos.GET("/stats", handlers.Photo.GetPhotoStats) // 具体路径要在参数路径之前
+			photos.GET("", handlers.Photo.GetPhotos)
+			photos.GET("/:id", handlers.Photo.GetPhotoByID)
+		}
+
+		// 展示相关
+		display := v1.Group("/display")
+		{
+			display.GET("/photo", handlers.Display.GetDisplayPhoto)
+			display.POST("/record", handlers.Display.RecordDisplay)
+		}
+
+		// ESP32 设备相关
+		esp32 := v1.Group("/esp32")
+		{
+			esp32.POST("/register", handlers.ESP32.Register)
+			esp32.POST("/heartbeat", handlers.ESP32.Heartbeat)
+			esp32.GET("/stats", handlers.ESP32.GetDeviceStats) // 具体路径要在参数路径之前
+			esp32.GET("/devices", handlers.ESP32.GetDevices)
+			esp32.GET("/devices/:device_id", handlers.ESP32.GetDeviceByID)
+		}
+
+		// TODO: AI 分析、导出、配置等路由
 		// ai := v1.Group("/ai")
-		// display := v1.Group("/display")
-		// esp32 := v1.Group("/esp32")
 		// export := v1.Group("/export")
 		// config := v1.Group("/config")
 	}

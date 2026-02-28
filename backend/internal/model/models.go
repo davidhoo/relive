@@ -14,15 +14,13 @@ type DisplayRecord struct {
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 
 	// 关联信息
-	PhotoID  uint   `gorm:"not null;index" json:"photo_id"`         // 照片 ID
-	DeviceID uint   `gorm:"not null;index" json:"device_id"`       // 设备 ID
-	Photo    *Photo `gorm:"foreignKey:PhotoID;references:ID" json:"photo,omitempty"`
-	Device   *ESP32Device `gorm:"foreignKey:DeviceID;references:ID" json:"device,omitempty"`
+	PhotoID  uint `gorm:"not null;index" json:"photo_id"`  // 照片 ID
+	DeviceID uint `gorm:"not null;index" json:"device_id"` // 设备 ID
 
 	// 展示信息
-	DisplayedAt     time.Time `gorm:"not null;index" json:"displayed_at"` // 展示时间
-	DisplayDuration int       `gorm:"default:0" json:"display_duration"`                   // 展示时长（秒）
-	TriggerType     string    `gorm:"type:varchar(20);not null" json:"trigger_type"`       // 触发类型（scheduled/manual/boot）
+	DisplayedAt     time.Time `gorm:"not null;index" json:"displayed_at"`            // 展示时间
+	DisplayDuration int       `gorm:"default:0" json:"display_duration"`             // 展示时长（秒）
+	TriggerType     string    `gorm:"type:varchar(20);not null" json:"trigger_type"` // 触发类型（scheduled/manual/boot）
 }
 
 // TableName 指定表名
@@ -50,10 +48,10 @@ type ESP32Device struct {
 	MACAddress      string `gorm:"type:varchar(20)" json:"mac_address"`           // MAC 地址
 
 	// 状态信息
-	Online        bool       `gorm:"default:false" json:"online"`              // 是否在线
-	LastHeartbeat *time.Time `gorm:"index:idx_last_heartbeat" json:"last_heartbeat"` // 最后心跳时间
-	BatteryLevel  int        `gorm:"default:0" json:"battery_level"`           // 电池电量（0-100）
-	WiFiRSSI      int        `gorm:"default:0" json:"wifi_rssi"`               // WiFi 信号强度（dBm）
+	Online        bool       `gorm:"default:false" json:"online"`                        // 是否在线
+	LastHeartbeat *time.Time `gorm:"index:idx_last_heartbeat" json:"last_heartbeat"`     // 最后心跳时间
+	BatteryLevel  int        `gorm:"default:0" json:"battery_level"`                     // 电池电量（0-100）
+	WiFiRSSI      int        `gorm:"column:wifi_rssi;default:0" json:"wifi_rssi"`        // WiFi 信号强度（dBm）
 
 	// 配置信息
 	Config string `gorm:"type:text" json:"config"` // 设备配置（JSON）
