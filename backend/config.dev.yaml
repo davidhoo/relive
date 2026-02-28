@@ -1,0 +1,68 @@
+# 服务配置
+server:
+  host: "0.0.0.0"
+  port: 8080
+  mode: "debug"  # debug / release
+
+# 数据库配置
+database:
+  type: "sqlite"
+  path: "./data/relive.db"
+  auto_migrate: true
+  log_mode: true  # 开发环境打印 SQL
+
+# 照片目录
+photos:
+  root_path: "./data/photos"  # 开发环境使用测试照片
+  exclude_dirs:
+    - ".sync"
+    - "@eaDir"
+    - "#recycle"
+    - ".DS_Store"
+  supported_formats:
+    - ".jpg"
+    - ".jpeg"
+    - ".png"
+    - ".heic"
+
+# AI 配置
+ai:
+  provider: ""  # 初始为空，稍后配置
+  timeout: 60
+
+  ollama:
+    endpoint: "http://localhost:11434"
+    model: "llava:13b"
+    timeout: 120
+
+  qwen:
+    api_key: ""
+    endpoint: "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+    model: "qwen-vl-max"
+    timeout: 60
+
+  openai:
+    api_key: ""
+    endpoint: "https://api.openai.com/v1/chat/completions"
+    model: "gpt-4-vision-preview"
+    timeout: 60
+
+# 展示策略
+display:
+  algorithm: "on_this_day"
+  fallback_days: [3, 7, 30, 365]
+  avoid_repeat_days: 7
+
+# 日志配置
+logging:
+  level: "debug"
+  file: "./data/logs/relive.log"
+  max_size: 100  # MB
+  max_backups: 10
+  max_age: 30  # days
+  console: true  # 输出到控制台
+
+# 安全配置
+security:
+  jwt_secret: "dev-secret-change-in-production"
+  api_key_prefix: "sk-esp32-"

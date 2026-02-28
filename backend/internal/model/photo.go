@@ -1,0 +1,85 @@
+package model
+
+import (
+	"time"
+
+	"gorm.io/gorm"
+)
+
+// Photo 照片模型
+type Photo struct {
+	ID        uint           `gorm:"primarykey" json:"id"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+
+	// 文件信息
+	FilePath string `gorm:"type:text;not null;uniqueIndex:idx_file_path" json:"file_path"` // 文件路径
+	FileName string `gorm:"type:varchar(255);not null" json:"file_name"`                    // 文件名
+	FileSize int64  `gorm:"not null" json:"file_size"`                                      // 文件大小（字节）
+	FileHash string `gorm:"type:varchar(64);index:idx_file_hash" json:"file_hash"`          // 文件哈希（SHA256）
+
+	// EXIF 信息
+	TakenAt      *time.Time `gorm:"index:idx_taken_at" json:"taken_at"`               // 拍摄时间
+	CameraModel  string     `gorm:"type:varchar(100)" json:"camera_model"`            // 相机型号
+	Width        int        `gorm:"not null" json:"width"`                            // 宽度
+	Height       int        `gorm:"not null" json:"height"`                           // 高度
+	Orientation  int        `gorm:"default:1" json:"orientation"`                     // 方向（1-8）
+	GPSLatitude  *float64   `json:"gps_latitude"`                                     // GPS 纬度
+	GPSLongitude *float64   `json:"gps_longitude"`                                    // GPS 经度
+	Location     string     `gorm:"type:varchar(200);index:idx_location" json:"location"` // 位置（城市）
+
+	// AI 分析结果
+	AIAnalyzed   bool       `gorm:"default:false;index:idx_ai_analyzed" json:"ai_analyzed"` // 是否已分析
+	AnalyzedAt   *time.Time `json:"analyzed_at"`                                            // 分析时间
+	Description  string     `gorm:"type:text" json:"description"`                           // 详细描述（80-200字）
+	Caption      string     `gorm:"type:varchar(100)" json:"caption"`                       // 精美短句（8-30字）
+	MemoryScore  int        `gorm:"default:0;index:idx_memory_score" json:"memory_score"`   // 回忆价值评分（0-100）
+	BeautyScore  int        `gorm:"default:0;index:idx_beauty_score" json:"beauty_score"`   // 美观度评分（0-100）
+	OverallScore int        `gorm:"default:0;index:idx_overall_score" json:"overall_score"` // 综合评分（0-100）
+
+	// 分类标签
+	MainCategory string `gorm:"type:varchar(50);index:idx_main_category" json:"main_category"` // 主分类
+	Tags         string `gorm:"type:text" json:"tags"`                                         // 标签（JSON数组）
+
+	// 关联
+	DisplayRecords []DisplayRecord `gorm:"foreignKey:PhotoID" json:"-"` // 展示记录
+}
+
+// TableName 指定表名
+func (Photo) TableName() string {
+	return "photos"
+}
+
+// BeforeCreate GORM 钩子：创建前
+func (p *Photo) BeforeCreate(tx *gorm.DB) error {
+	// 计算综合评分
+	if p.MemoryScore > 0 || p.BeautyScore > 0 {
+		p.CalculateOverallScore()
+	}
+	return nil
+}
+
+// BeforeUpdate GORM 钩子：更新前
+func (p *Photo) BeforeUpdate(tx *gorm.DB) error {
+	// 重新计算综合评分
+	if p.MemoryScore > 0 || p.BeautyScore > 0 {
+		p.CalculateOverallScore()
+	}
+	return nil
+}
+
+// CalculateOverallScore 计算综合评分（70% 回忆 + 30% 美观）
+func (p *Photo) CalculateOverallScore() {
+	p.OverallScore = int(float64(p.MemoryScore)*0.7 + float64(p.BeautyScore)*0.3)
+}
+
+// IsAnalyzed 是否已分析
+func (p *Photo) IsAnalyzed() bool {
+	return p.AIAnalyzed && p.AnalyzedAt != nil
+}
+
+// HasGPS 是否有 GPS 信息
+func (p *Photo) HasGPS() bool {
+	return p.GPSLatitude != nil && p.GPSLongitude != nil
+}
