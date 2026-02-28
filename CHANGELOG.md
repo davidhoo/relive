@@ -15,6 +15,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.2] - 2026-02-28 - 前端错误处理优化 🔧
+
+### 🔧 Bug 修复
+
+#### Fixed - 前端 503 错误提示
+- ✅ **问题**: Dashboard 页面加载时弹窗提示"请求失败: 503"
+  - 原因: Dashboard 调用 AI 进度接口时，后端返回 503（AI 服务未配置）
+  - 前端 Axios 拦截器捕获所有 503 错误并显示弹窗
+  - 但 AI 服务返回 503 是预期行为，不应该显示错误
+- ✅ **修复**: 优化前端错误处理
+  - 在响应拦截器中检查 503 错误是否为 AI 服务不可用
+  - 如果是预期的服务不可用（error.code === 'SERVICE_UNAVAILABLE'），不显示错误提示
+  - Dashboard 页面优雅降级，显示"暂无分析任务"
+
+#### 修改文件
+- `frontend/src/utils/request.ts` - 响应拦截器增强
+  - 检查 503 错误的 error.code
+  - 对预期的 SERVICE_UNAVAILABLE 不显示提示
+  - 添加 503 错误的 case 处理
+- `frontend/src/views/Dashboard/index.vue` - 错误处理优化
+  - loadAIProgress 函数优雅处理 503 错误
+  - AI 服务不可用时设置 aiProgress 为 null
+
+### ✨ 改进效果
+- ✅ **用户体验提升** - 不再有误导性的错误提示
+- ✅ **优雅降级** - AI 服务未配置时页面正常显示
+- ✅ **错误区分** - 预期的服务不可用 vs 真实错误
+- ✅ **保持功能** - 其他 API 错误仍然正常提示
+
+---
+
 ## [0.4.1] - 2026-02-28 - 集成测试和修复 🔧
 
 ### 🎉 重大里程碑

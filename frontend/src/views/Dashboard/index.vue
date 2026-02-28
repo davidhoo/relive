@@ -201,8 +201,14 @@ const loadAIProgress = async () => {
   try {
     const res = await aiApi.getProgress()
     aiProgress.value = res.data || null
-  } catch (error) {
-    console.error('Failed to load AI progress:', error)
+  } catch (error: any) {
+    // AI 服务未配置时返回 503，这是正常情况，不需要显示错误
+    if (error?.response?.status === 503) {
+      console.log('AI service is not configured')
+      aiProgress.value = null
+    } else {
+      console.error('Failed to load AI progress:', error)
+    }
   }
 }
 

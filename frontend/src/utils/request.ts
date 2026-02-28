@@ -48,6 +48,15 @@ request.interceptors.response.use(
     // 处理 HTTP 错误
     if (error.response) {
       const status = error.response.status
+      const data = error.response.data
+
+      // 对于 503 Service Unavailable，检查是否是 AI 服务未配置
+      // 这是预期的情况，不需要显示错误提示
+      if (status === 503 && data?.error?.code === 'SERVICE_UNAVAILABLE') {
+        console.log('Service unavailable (expected):', data.message)
+        return Promise.reject(error)
+      }
+
       switch (status) {
         case 400:
           ElMessage.error('请求参数错误')
@@ -63,6 +72,9 @@ request.interceptors.response.use(
           break
         case 500:
           ElMessage.error('服务器错误')
+          break
+        case 503:
+          ElMessage.error('服务暂时不可用')
           break
         default:
           ElMessage.error(`请求失败: ${status}`)
