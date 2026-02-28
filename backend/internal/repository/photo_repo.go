@@ -1,0 +1,312 @@
+package repository
+
+import (
+	"time"
+
+	"github.com/davidhoo/relive/internal/model"
+	"gorm.io/gorm"
+)
+
+// PhotoRepository 照片仓库接口
+type PhotoRepository interface {
+	// 基础 CRUD
+	Create(photo *model.Photo) error
+	Update(photo *model.Photo) error
+	Delete(id uint) error
+	GetByID(id uint) (*model.Photo, error)
+	GetByFilePath(filePath string) (*model.Photo, error)
+	GetByFileHash(fileHash string) (*model.Photo, error)
+	Exists(id uint) (bool, error)
+	ExistsByFilePath(filePath string) (bool, error)
+
+	// 列表查询
+	List(page, pageSize int, analyzed *bool, location string, sortBy string, sortDesc bool) ([]*model.Photo, int64, error)
+	ListAll() ([]*model.Photo, error)
+	ListByIDs(ids []uint) ([]*model.Photo, error)
+
+	// AI 分析相关
+	GetUnanalyzed(limit int) ([]*model.Photo, error)
+	MarkAsAnalyzed(id uint, result *model.AIAnalyzeResponse) error
+	CountAnalyzed() (int64, error)
+	CountUnanalyzed() (int64, error)
+
+	// 展示策略相关
+	GetByDateRange(start, end time.Time) ([]*model.Photo, error)
+	GetTopByScore(limit int, excludePhotoIDs []uint) ([]*model.Photo, error)
+	GetByLocation(location string, limit int) ([]*model.Photo, error)
+
+	// 统计
+	Count() (int64, error)
+	CountByLocation() (map[string]int64, error)
+
+	// 批量操作
+	BatchCreate(photos []*model.Photo, batchSize int) error
+	BatchUpdate(photos []*model.Photo, batchSize int) error
+}
+
+// photoRepository 照片仓库实现
+type photoRepository struct {
+	db *gorm.DB
+}
+
+// NewPhotoRepository 创建照片仓库
+func NewPhotoRepository(db *gorm.DB) PhotoRepository {
+	return &photoRepository{db: db}
+}
+
+// Create 创建照片
+func (r *photoRepository) Create(photo *model.Photo) error {
+	return r.db.Create(photo).Error
+}
+
+// Update 更新照片
+func (r *photoRepository) Update(photo *model.Photo) error {
+	return r.db.Save(photo).Error
+}
+
+// Delete 删除照片（软删除）
+func (r *photoRepository) Delete(id uint) error {
+	return r.db.Delete(&model.Photo{}, id).Error
+}
+
+// GetByID 根据 ID 获取照片
+func (r *photoRepository) GetByID(id uint) (*model.Photo, error) {
+	var photo model.Photo
+	err := r.db.First(&photo, id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &photo, nil
+}
+
+// GetByFilePath 根据文件路径获取照片
+func (r *photoRepository) GetByFilePath(filePath string) (*model.Photo, error) {
+	var photo model.Photo
+	err := r.db.Where("file_path = ?", filePath).First(&photo).Error
+	if err != nil {
+		return nil, err
+	}
+	return &photo, nil
+}
+
+// GetByFileHash 根据文件哈希获取照片
+func (r *photoRepository) GetByFileHash(fileHash string) (*model.Photo, error) {
+	var photo model.Photo
+	err := r.db.Where("file_hash = ?", fileHash).First(&photo).Error
+	if err != nil {
+		return nil, err
+	}
+	return &photo, nil
+}
+
+// Exists 检查照片是否存在
+func (r *photoRepository) Exists(id uint) (bool, error) {
+	var count int64
+	err := r.db.Model(&model.Photo{}).Where("id = ?", id).Count(&count).Error
+	return count > 0, err
+}
+
+// ExistsByFilePath 检查文件路径是否存在
+func (r *photoRepository) ExistsByFilePath(filePath string) (bool, error) {
+	var count int64
+	err := r.db.Model(&model.Photo{}).Where("file_path = ?", filePath).Count(&count).Error
+	return count > 0, err
+}
+
+// List 分页列表查询
+func (r *photoRepository) List(page, pageSize int, analyzed *bool, location string, sortBy string, sortDesc bool) ([]*model.Photo, int64, error) {
+	var photos []*model.Photo
+	var total int64
+
+	// 构建查询
+	query := r.db.Model(&model.Photo{})
+
+	// 筛选条件
+	if analyzed != nil {
+		query = query.Where("ai_analyzed = ?", *analyzed)
+	}
+	if location != "" {
+		query = query.Where("location LIKE ?", "%"+location+"%")
+	}
+
+	// 统计总数
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// 排序
+	if sortBy == "" {
+		sortBy = "taken_at"
+	}
+	orderClause := sortBy
+	if sortDesc {
+		orderClause += " DESC"
+	} else {
+		orderClause += " ASC"
+	}
+	query = query.Order(orderClause)
+
+	// 分页
+	offset := (page - 1) * pageSize
+	if err := query.Offset(offset).Limit(pageSize).Find(&photos).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return photos, total, nil
+}
+
+// ListAll 获取所有照片
+func (r *photoRepository) ListAll() ([]*model.Photo, error) {
+	var photos []*model.Photo
+	err := r.db.Find(&photos).Error
+	return photos, err
+}
+
+// ListByIDs 根据 ID 列表获取照片
+func (r *photoRepository) ListByIDs(ids []uint) ([]*model.Photo, error) {
+	var photos []*model.Photo
+	err := r.db.Where("id IN ?", ids).Find(&photos).Error
+	return photos, err
+}
+
+// GetUnanalyzed 获取未分析的照片
+func (r *photoRepository) GetUnanalyzed(limit int) ([]*model.Photo, error) {
+	var photos []*model.Photo
+	err := r.db.Where("ai_analyzed = ?", false).
+		Order("taken_at DESC").
+		Limit(limit).
+		Find(&photos).Error
+	return photos, err
+}
+
+// MarkAsAnalyzed 标记为已分析
+func (r *photoRepository) MarkAsAnalyzed(id uint, result *model.AIAnalyzeResponse) error {
+	now := time.Now()
+	return r.db.Model(&model.Photo{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"ai_analyzed":    true,
+		"analyzed_at":    now,
+		"description":    result.Description,
+		"caption":        result.Caption,
+		"memory_score":   result.MemoryScore,
+		"beauty_score":   result.BeautyScore,
+		"overall_score":  result.OverallScore,
+		"main_category":  result.MainCategory,
+		"tags":           result.Tags,
+	}).Error
+}
+
+// CountAnalyzed 统计已分析照片数
+func (r *photoRepository) CountAnalyzed() (int64, error) {
+	var count int64
+	err := r.db.Model(&model.Photo{}).Where("ai_analyzed = ?", true).Count(&count).Error
+	return count, err
+}
+
+// CountUnanalyzed 统计未分析照片数
+func (r *photoRepository) CountUnanalyzed() (int64, error) {
+	var count int64
+	err := r.db.Model(&model.Photo{}).Where("ai_analyzed = ?", false).Count(&count).Error
+	return count, err
+}
+
+// GetByDateRange 根据日期范围获取照片
+func (r *photoRepository) GetByDateRange(start, end time.Time) ([]*model.Photo, error) {
+	var photos []*model.Photo
+	err := r.db.Where("taken_at BETWEEN ? AND ?", start, end).
+		Order("taken_at DESC").
+		Find(&photos).Error
+	return photos, err
+}
+
+// GetTopByScore 获取评分最高的照片
+func (r *photoRepository) GetTopByScore(limit int, excludePhotoIDs []uint) ([]*model.Photo, error) {
+	var photos []*model.Photo
+	query := r.db.Where("ai_analyzed = ?", true).
+		Order("overall_score DESC, taken_at DESC")
+
+	if len(excludePhotoIDs) > 0 {
+		query = query.Where("id NOT IN ?", excludePhotoIDs)
+	}
+
+	err := query.Limit(limit).Find(&photos).Error
+	return photos, err
+}
+
+// GetByLocation 根据位置获取照片
+func (r *photoRepository) GetByLocation(location string, limit int) ([]*model.Photo, error) {
+	var photos []*model.Photo
+	err := r.db.Where("location LIKE ?", "%"+location+"%").
+		Order("taken_at DESC").
+		Limit(limit).
+		Find(&photos).Error
+	return photos, err
+}
+
+// Count 统计照片总数
+func (r *photoRepository) Count() (int64, error) {
+	var count int64
+	err := r.db.Model(&model.Photo{}).Count(&count).Error
+	return count, err
+}
+
+// CountByLocation 统计各位置的照片数
+func (r *photoRepository) CountByLocation() (map[string]int64, error) {
+	type Result struct {
+		Location string
+		Count    int64
+	}
+
+	var results []Result
+	err := r.db.Model(&model.Photo{}).
+		Select("location, COUNT(*) as count").
+		Where("location != ''").
+		Group("location").
+		Order("count DESC").
+		Find(&results).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	// 转换为 map
+	locationMap := make(map[string]int64)
+	for _, result := range results {
+		locationMap[result.Location] = result.Count
+	}
+
+	return locationMap, nil
+}
+
+// BatchCreate 批量创建照片
+func (r *photoRepository) BatchCreate(photos []*model.Photo, batchSize int) error {
+	return r.db.CreateInBatches(photos, batchSize).Error
+}
+
+// BatchUpdate 批量更新照片
+func (r *photoRepository) BatchUpdate(photos []*model.Photo, batchSize int) error {
+	// GORM 不支持直接批量更新，需要分批处理
+	for i := 0; i < len(photos); i += batchSize {
+		end := i + batchSize
+		if end > len(photos) {
+			end = len(photos)
+		}
+
+		batch := photos[i:end]
+
+		// 使用事务批量更新
+		err := r.db.Transaction(func(tx *gorm.DB) error {
+			for _, photo := range batch {
+				if err := tx.Save(photo).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
