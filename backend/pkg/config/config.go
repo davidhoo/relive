@@ -84,6 +84,7 @@ type VLLMConfig struct {
 	Endpoint    string  `yaml:"endpoint"`
 	Model       string  `yaml:"model"`
 	Temperature float64 `yaml:"temperature"`
+	MaxTokens   int     `yaml:"max_tokens"`
 	Timeout     int     `yaml:"timeout"`
 }
 

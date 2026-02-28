@@ -3,6 +3,8 @@ package provider
 import (
 	"fmt"
 	"time"
+
+	"github.com/davidhoo/relive/pkg/logger"
 )
 
 // HybridConfig 混合模式配置
@@ -85,7 +87,7 @@ func (p *HybridProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error
 			return result, nil
 		}
 		// 主 provider 失败，记录错误
-		fmt.Printf("Primary provider %s failed: %v, trying fallback\n", p.primary.Name(), err)
+		logger.Warnf("Primary provider %s failed: %v, trying fallback", p.primary.Name(), err)
 	}
 
 	// 主 provider 不可用或失败，使用备用 provider

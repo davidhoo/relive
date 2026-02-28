@@ -60,6 +60,7 @@ ai:
     endpoint: "http://localhost:8000"
     model: "llava-v1.6-vicuna-13b"
     temperature: 0.7
+    max_tokens: 800
     timeout: 120
 
   # Hybrid 混合模式配置

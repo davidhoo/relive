@@ -146,27 +146,28 @@ func TestPhotoRepository_MarkAsAnalyzed(t *testing.T) {
 	repo.Create(photo)
 
 	// 标记为已分析
-	result := &model.AIAnalyzeResponse{
-		PhotoID:      int(photo.ID),
-		Description:  "这是一张美丽的风景照片",
-		Caption:      "日落时分的海滩",
-		MemoryScore:  95,
-		BeautyScore:  88,
-		OverallScore: 93,
-		MainCategory: "landscape",
-		Tags:         `["sunset","beach","ocean"]`,
-	}
+	description := "这是一张美丽的风景照片"
+	caption := "日落时分的海滩"
+	mainCategory := "landscape"
+	tags := "sunset,beach,ocean"
+	memoryScore := 95
+	beautyScore := 88
 
-	err := repo.MarkAsAnalyzed(photo.ID, result)
+	err := repo.MarkAsAnalyzed(photo.ID, description, caption, mainCategory, tags, memoryScore, beautyScore)
 	assert.NoError(t, err)
 
 	// 验证
 	updated, _ := repo.GetByID(photo.ID)
 	assert.True(t, updated.AIAnalyzed)
 	assert.NotNil(t, updated.AnalyzedAt)
-	assert.Equal(t, "这是一张美丽的风景照片", updated.Description)
-	assert.Equal(t, 95, updated.MemoryScore)
-	assert.Equal(t, 88, updated.BeautyScore)
+	assert.Equal(t, description, updated.Description)
+	assert.Equal(t, memoryScore, updated.MemoryScore)
+	assert.Equal(t, beautyScore, updated.BeautyScore)
+	assert.Equal(t, mainCategory, updated.MainCategory)
+	assert.Equal(t, tags, updated.Tags)
+	// 验证综合评分计算：70% memory + 30% beauty
+	expectedOverallScore := int(float64(memoryScore)*0.7 + float64(beautyScore)*0.3)
+	assert.Equal(t, expectedOverallScore, updated.OverallScore)
 }
 
 func TestPhotoRepository_GetUnanalyzed(t *testing.T) {

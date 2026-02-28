@@ -92,11 +92,31 @@ func (s *aiService) initProvider() error {
 			Endpoint:    s.config.AI.VLLM.Endpoint,
 			Model:       s.config.AI.VLLM.Model,
 			Temperature: s.config.AI.VLLM.Temperature,
+			MaxTokens:   s.config.AI.VLLM.MaxTokens,
 			Timeout:     s.config.AI.VLLM.Timeout,
 		})
 	case "hybrid":
-		// TODO: 实现 hybrid 模式的初始化
-		return fmt.Errorf("hybrid provider not fully implemented yet")
+		// 构建 hybrid provider 配置
+		primaryConfig, err := s.getProviderConfig(s.config.AI.Hybrid.Primary)
+		if err != nil {
+			return fmt.Errorf("get primary provider config: %w", err)
+		}
+
+		var fallbackConfig interface{}
+		if s.config.AI.Hybrid.Fallback != "" {
+			fallbackConfig, err = s.getProviderConfig(s.config.AI.Hybrid.Fallback)
+			if err != nil {
+				logger.Warnf("Failed to get fallback provider config: %v", err)
+				fallbackConfig = nil
+			}
+		}
+
+		p, err = provider.NewHybridProvider(&provider.HybridConfig{
+			Primary:        s.config.AI.Hybrid.Primary,
+			Fallback:       s.config.AI.Hybrid.Fallback,
+			PrimaryConfig:  primaryConfig,
+			FallbackConfig: fallbackConfig,
+		})
 	default:
 		return fmt.Errorf("unknown AI provider: %s", s.config.AI.Provider)
 	}
@@ -114,6 +134,46 @@ func (s *aiService) initProvider() error {
 	logger.Infof("AI provider initialized: %s (cost=¥%.4f per photo)", p.Name(), p.Cost())
 
 	return nil
+}
+
+// getProviderConfig 获取指定 provider 的配置
+func (s *aiService) getProviderConfig(providerName string) (interface{}, error) {
+	switch providerName {
+	case "ollama":
+		return &provider.OllamaConfig{
+			Endpoint:    s.config.AI.Ollama.Endpoint,
+			Model:       s.config.AI.Ollama.Model,
+			Temperature: s.config.AI.Ollama.Temperature,
+			Timeout:     s.config.AI.Ollama.Timeout,
+		}, nil
+	case "qwen":
+		return &provider.QwenConfig{
+			APIKey:      s.config.AI.Qwen.APIKey,
+			Endpoint:    s.config.AI.Qwen.Endpoint,
+			Model:       s.config.AI.Qwen.Model,
+			Temperature: s.config.AI.Qwen.Temperature,
+			Timeout:     s.config.AI.Qwen.Timeout,
+		}, nil
+	case "openai":
+		return &provider.OpenAIConfig{
+			APIKey:      s.config.AI.OpenAI.APIKey,
+			Endpoint:    s.config.AI.OpenAI.Endpoint,
+			Model:       s.config.AI.OpenAI.Model,
+			Temperature: s.config.AI.OpenAI.Temperature,
+			MaxTokens:   s.config.AI.OpenAI.MaxTokens,
+			Timeout:     s.config.AI.OpenAI.Timeout,
+		}, nil
+	case "vllm":
+		return &provider.VLLMConfig{
+			Endpoint:    s.config.AI.VLLM.Endpoint,
+			Model:       s.config.AI.VLLM.Model,
+			Temperature: s.config.AI.VLLM.Temperature,
+			MaxTokens:   s.config.AI.VLLM.MaxTokens,
+			Timeout:     s.config.AI.VLLM.Timeout,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unknown provider: %s", providerName)
+	}
 }
 
 // GetProvider 获取当前使用的 provider
