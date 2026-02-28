@@ -42,43 +42,49 @@ type PhotosConfig struct {
 
 // AIConfig AI 配置
 type AIConfig struct {
-	Provider string              `yaml:"provider"` // ollama / qwen / openai / vllm / hybrid
-	Timeout  int                 `yaml:"timeout"`  // 超时时间（秒）
-	Ollama   OllamaConfig        `yaml:"ollama"`
-	Qwen     QwenConfig          `yaml:"qwen"`
-	OpenAI   OpenAIConfig        `yaml:"openai"`
-	VLLM     VLLMConfig          `yaml:"vllm"`
-	Hybrid   HybridProviderConfig `yaml:"hybrid"`
+	Provider    string               `yaml:"provider"`    // ollama / qwen / openai / vllm / hybrid
+	Timeout     int                  `yaml:"timeout"`     // 超时时间（秒）
+	Temperature float64              `yaml:"temperature"` // 温度参数
+	Ollama      OllamaConfig         `yaml:"ollama"`
+	Qwen        QwenConfig           `yaml:"qwen"`
+	OpenAI      OpenAIConfig         `yaml:"openai"`
+	VLLM        VLLMConfig           `yaml:"vllm"`
+	Hybrid      HybridProviderConfig `yaml:"hybrid"`
 }
 
 // OllamaConfig Ollama 配置
 type OllamaConfig struct {
-	Endpoint string `yaml:"endpoint"`
-	Model    string `yaml:"model"`
-	Timeout  int    `yaml:"timeout"`
+	Endpoint    string  `yaml:"endpoint"`
+	Model       string  `yaml:"model"`
+	Temperature float64 `yaml:"temperature"`
+	Timeout     int     `yaml:"timeout"`
 }
 
 // QwenConfig Qwen API 配置
 type QwenConfig struct {
-	APIKey   string `yaml:"api_key"`
-	Endpoint string `yaml:"endpoint"`
-	Model    string `yaml:"model"`
-	Timeout  int    `yaml:"timeout"`
+	APIKey      string  `yaml:"api_key"`
+	Endpoint    string  `yaml:"endpoint"`
+	Model       string  `yaml:"model"`
+	Temperature float64 `yaml:"temperature"`
+	Timeout     int     `yaml:"timeout"`
 }
 
 // OpenAIConfig OpenAI API 配置
 type OpenAIConfig struct {
-	APIKey   string `yaml:"api_key"`
-	Endpoint string `yaml:"endpoint"`
-	Model    string `yaml:"model"`
-	Timeout  int    `yaml:"timeout"`
+	APIKey      string  `yaml:"api_key"`
+	Endpoint    string  `yaml:"endpoint"`
+	Model       string  `yaml:"model"`
+	Temperature float64 `yaml:"temperature"`
+	MaxTokens   int     `yaml:"max_tokens"`
+	Timeout     int     `yaml:"timeout"`
 }
 
 // VLLMConfig vLLM 配置
 type VLLMConfig struct {
-	Endpoint string `yaml:"endpoint"`
-	Model    string `yaml:"model"`
-	Timeout  int    `yaml:"timeout"`
+	Endpoint    string  `yaml:"endpoint"`
+	Model       string  `yaml:"model"`
+	Temperature float64 `yaml:"temperature"`
+	Timeout     int     `yaml:"timeout"`
 }
 
 // HybridProviderConfig 混合模式配置

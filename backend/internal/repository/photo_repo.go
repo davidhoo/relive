@@ -26,7 +26,7 @@ type PhotoRepository interface {
 
 	// AI 分析相关
 	GetUnanalyzed(limit int) ([]*model.Photo, error)
-	MarkAsAnalyzed(id uint, result *model.AIAnalyzeResponse) error
+	MarkAsAnalyzed(id uint, description, caption, mainCategory, tags string, memoryScore, beautyScore int) error
 	CountAnalyzed() (int64, error)
 	CountUnanalyzed() (int64, error)
 
@@ -180,18 +180,19 @@ func (r *photoRepository) GetUnanalyzed(limit int) ([]*model.Photo, error) {
 }
 
 // MarkAsAnalyzed 标记为已分析
-func (r *photoRepository) MarkAsAnalyzed(id uint, result *model.AIAnalyzeResponse) error {
+func (r *photoRepository) MarkAsAnalyzed(id uint, description, caption, mainCategory, tags string, memoryScore, beautyScore int) error {
 	now := time.Now()
+	overallScore := int(float64(memoryScore)*0.7 + float64(beautyScore)*0.3)
 	return r.db.Model(&model.Photo{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"ai_analyzed":    true,
-		"analyzed_at":    now,
-		"description":    result.Description,
-		"caption":        result.Caption,
-		"memory_score":   result.MemoryScore,
-		"beauty_score":   result.BeautyScore,
-		"overall_score":  result.OverallScore,
-		"main_category":  result.MainCategory,
-		"tags":           result.Tags,
+		"ai_analyzed":   true,
+		"analyzed_at":   now,
+		"description":   description,
+		"caption":       caption,
+		"memory_score":  memoryScore,
+		"beauty_score":  beautyScore,
+		"overall_score": overallScore,
+		"main_category": mainCategory,
+		"tags":          tags,
 	}).Error
 }
 

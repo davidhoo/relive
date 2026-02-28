@@ -47,23 +47,6 @@ type GetPhotosRequest struct {
 	SortDesc bool   `form:"sort_desc"` // 是否降序
 }
 
-// AIAnalyzeRequest AI 分析请求
-type AIAnalyzeRequest struct {
-	PhotoID int `json:"photo_id" binding:"required"` // 照片 ID
-}
-
-// AIAnalyzeResponse AI 分析响应
-type AIAnalyzeResponse struct {
-	PhotoID      int    `json:"photo_id"`
-	Description  string `json:"description"`
-	Caption      string `json:"caption"`
-	MemoryScore  int    `json:"memory_score"`
-	BeautyScore  int    `json:"beauty_score"`
-	OverallScore int    `json:"overall_score"`
-	MainCategory string `json:"main_category"`
-	Tags         string `json:"tags"`
-}
-
 // GetDisplayPhotoRequest 获取展示照片请求
 type GetDisplayPhotoRequest struct {
 	DeviceID string `form:"device_id"` // 设备 ID（可选）
@@ -135,6 +118,35 @@ type PhotoStatsResponse struct {
 type ESP32StatsResponse struct {
 	Total  int64 `json:"total"`
 	Online int64 `json:"online"`
+}
+
+// AIAnalyzeRequest AI 分析请求
+type AIAnalyzeRequest struct {
+	PhotoID uint `json:"photo_id" binding:"required"` // 照片 ID
+}
+
+// AIAnalyzeBatchRequest AI 批量分析请求
+type AIAnalyzeBatchRequest struct {
+	Limit int `json:"limit"` // 分析数量限制（默认100）
+}
+
+// AIAnalyzeBatchResponse AI 批量分析响应
+type AIAnalyzeBatchResponse struct {
+	TotalCount   int     `json:"total_count"`   // 总数
+	SuccessCount int     `json:"success_count"` // 成功数
+	FailedCount  int     `json:"failed_count"`  // 失败数
+	TotalCost    float64 `json:"total_cost"`    // 总成本（人民币）
+	Duration     float64 `json:"duration"`      // 耗时（秒）
+}
+
+// AIAnalyzeProgressResponse AI 分析进度响应
+type AIAnalyzeProgressResponse struct {
+	Total         int64   `json:"total"`          // 照片总数
+	Analyzed      int64   `json:"analyzed"`       // 已分析数
+	Unanalyzed    int64   `json:"unanalyzed"`     // 未分析数
+	Progress      float64 `json:"progress"`       // 进度百分比
+	EstimatedCost float64 `json:"estimated_cost"` // 预估剩余成本
+	Provider      string  `json:"provider"`       // 当前使用的 provider
 }
 
 // ExportRequest 导出请求

@@ -27,25 +27,45 @@ photos:
 
 # AI 配置
 ai:
-  provider: ""  # 初始为空，稍后配置
+  provider: "ollama"  # ollama / qwen / openai / vllm / hybrid
   timeout: 60
+  temperature: 0.7
 
+  # Ollama 配置（本地/远程开源模型）
   ollama:
     endpoint: "http://localhost:11434"
     model: "llava:13b"
+    temperature: 0.7
     timeout: 120
 
+  # Qwen 配置（阿里云在线 API）
   qwen:
-    api_key: ""
+    api_key: ""  # 需要填写真实的 API Key
     endpoint: "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
     model: "qwen-vl-max"
+    temperature: 0.7
     timeout: 60
 
+  # OpenAI 配置（OpenAI 在线 API）
   openai:
-    api_key: ""
+    api_key: ""  # 需要填写真实的 API Key
     endpoint: "https://api.openai.com/v1/chat/completions"
     model: "gpt-4-vision-preview"
+    temperature: 0.7
+    max_tokens: 1000
     timeout: 60
+
+  # VLLM 配置（自部署推理服务）
+  vllm:
+    endpoint: "http://localhost:8000"
+    model: "llava-v1.6-vicuna-13b"
+    temperature: 0.7
+    timeout: 120
+
+  # Hybrid 混合模式配置
+  hybrid:
+    primary: "ollama"    # 主要 provider
+    fallback: "qwen"     # 备用 provider（当主 provider 失败时使用）
 
 # 展示策略
 display:

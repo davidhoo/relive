@@ -63,8 +63,19 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 			esp32.GET("/devices/:device_id", handlers.ESP32.GetDeviceByID)
 		}
 
-		// TODO: AI 分析、导出、配置等路由
-		// ai := v1.Group("/ai")
+		// AI 分析相关
+		if handlers.AI != nil {
+			ai := v1.Group("/ai")
+			{
+				ai.POST("/analyze", handlers.AI.Analyze)
+				ai.POST("/analyze/batch", handlers.AI.AnalyzeBatch)
+				ai.GET("/progress", handlers.AI.GetProgress)
+				ai.POST("/reanalyze/:id", handlers.AI.ReAnalyze)
+				ai.GET("/provider", handlers.AI.GetProviderInfo)
+			}
+		}
+
+		// TODO: 导出/导入、配置等路由
 		// export := v1.Group("/export")
 		// config := v1.Group("/config")
 	}

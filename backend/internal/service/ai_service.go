@@ -1,0 +1,313 @@
+package service
+
+import (
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/davidhoo/relive/internal/model"
+	"github.com/davidhoo/relive/internal/provider"
+	"github.com/davidhoo/relive/internal/repository"
+	"github.com/davidhoo/relive/internal/util"
+	"github.com/davidhoo/relive/pkg/config"
+	"github.com/davidhoo/relive/pkg/logger"
+)
+
+// AIService AI 分析服务接口
+type AIService interface {
+	// AnalyzePhoto 分析单张照片
+	AnalyzePhoto(photoID uint) error
+
+	// AnalyzeBatch 批量分析照片
+	AnalyzeBatch(limit int) (*model.AIAnalyzeBatchResponse, error)
+
+	// GetAnalyzeProgress 获取分析进度
+	GetAnalyzeProgress() (*model.AIAnalyzeProgressResponse, error)
+
+	// GetProvider 获取当前使用的 provider
+	GetProvider() (provider.AIProvider, error)
+}
+
+// aiService AI 分析服务实现
+type aiService struct {
+	photoRepo repository.PhotoRepository
+	config    *config.Config
+	provider  provider.AIProvider
+}
+
+// NewAIService 创建 AI 分析服务
+func NewAIService(photoRepo repository.PhotoRepository, cfg *config.Config) (AIService, error) {
+	svc := &aiService{
+		photoRepo: photoRepo,
+		config:    cfg,
+	}
+
+	// 初始化 provider
+	if err := svc.initProvider(); err != nil {
+		return nil, fmt.Errorf("init provider: %w", err)
+	}
+
+	return svc, nil
+}
+
+// initProvider 初始化 AI provider
+func (s *aiService) initProvider() error {
+	if s.config.AI.Provider == "" {
+		logger.Warn("AI provider not configured, AI analysis will not be available")
+		return nil
+	}
+
+	var (
+		p   provider.AIProvider
+		err error
+	)
+
+	switch s.config.AI.Provider {
+	case "ollama":
+		p, err = provider.NewOllamaProvider(&provider.OllamaConfig{
+			Endpoint:    s.config.AI.Ollama.Endpoint,
+			Model:       s.config.AI.Ollama.Model,
+			Temperature: s.config.AI.Ollama.Temperature,
+			Timeout:     s.config.AI.Ollama.Timeout,
+		})
+	case "qwen":
+		p, err = provider.NewQwenProvider(&provider.QwenConfig{
+			APIKey:      s.config.AI.Qwen.APIKey,
+			Endpoint:    s.config.AI.Qwen.Endpoint,
+			Model:       s.config.AI.Qwen.Model,
+			Temperature: s.config.AI.Qwen.Temperature,
+			Timeout:     s.config.AI.Qwen.Timeout,
+		})
+	case "openai":
+		p, err = provider.NewOpenAIProvider(&provider.OpenAIConfig{
+			APIKey:      s.config.AI.OpenAI.APIKey,
+			Endpoint:    s.config.AI.OpenAI.Endpoint,
+			Model:       s.config.AI.OpenAI.Model,
+			Temperature: s.config.AI.OpenAI.Temperature,
+			MaxTokens:   s.config.AI.OpenAI.MaxTokens,
+			Timeout:     s.config.AI.OpenAI.Timeout,
+		})
+	case "vllm":
+		p, err = provider.NewVLLMProvider(&provider.VLLMConfig{
+			Endpoint:    s.config.AI.VLLM.Endpoint,
+			Model:       s.config.AI.VLLM.Model,
+			Temperature: s.config.AI.VLLM.Temperature,
+			Timeout:     s.config.AI.VLLM.Timeout,
+		})
+	case "hybrid":
+		// TODO: 实现 hybrid 模式的初始化
+		return fmt.Errorf("hybrid provider not fully implemented yet")
+	default:
+		return fmt.Errorf("unknown AI provider: %s", s.config.AI.Provider)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	// 检查 provider 是否可用
+	if !p.IsAvailable() {
+		return fmt.Errorf("AI provider %s is not available", s.config.AI.Provider)
+	}
+
+	s.provider = p
+	logger.Infof("AI provider initialized: %s (cost=¥%.4f per photo)", p.Name(), p.Cost())
+
+	return nil
+}
+
+// GetProvider 获取当前使用的 provider
+func (s *aiService) GetProvider() (provider.AIProvider, error) {
+	if s.provider == nil {
+		return nil, fmt.Errorf("AI provider not configured")
+	}
+	return s.provider, nil
+}
+
+// AnalyzePhoto 分析单张照片
+func (s *aiService) AnalyzePhoto(photoID uint) error {
+	if s.provider == nil {
+		return fmt.Errorf("AI provider not configured")
+	}
+
+	// 获取照片信息
+	photo, err := s.photoRepo.GetByID(photoID)
+	if err != nil {
+		return fmt.Errorf("get photo: %w", err)
+	}
+
+	// 检查是否已分析
+	if photo.AIAnalyzed {
+		logger.Warnf("Photo %d already analyzed, skipping", photoID)
+		return nil
+	}
+
+	// 读取照片文件
+	imageData, err := os.ReadFile(photo.FilePath)
+	if err != nil {
+		return fmt.Errorf("read image file: %w", err)
+	}
+
+	// 预处理图片（压缩）
+	processor := &util.ImageProcessor{
+		MaxLongSide: 1024,
+		JPEGQuality: 85,
+	}
+	processedData, err := processor.ProcessForAI(photo.FilePath)
+	if err != nil {
+		logger.Warnf("Image preprocessing failed, using original: %v", err)
+		processedData = imageData
+	}
+
+	// 构建分析请求
+	req := &provider.AnalyzeRequest{
+		ImageData: processedData,
+		ImagePath: photo.FilePath,
+		ExifInfo: &provider.ExifInfo{
+			DateTime: formatDateTime(photo.TakenAt),
+			City:     photo.Location,
+			Model:    photo.CameraModel,
+		},
+		Options: &provider.AnalyzeOptions{
+			Temperature: s.config.AI.Temperature,
+			Timeout:     time.Duration(s.config.AI.Timeout) * time.Second,
+		},
+	}
+
+	// 调用 AI 分析
+	logger.Infof("Analyzing photo %d with provider %s...", photoID, s.provider.Name())
+	result, err := s.provider.Analyze(req)
+	if err != nil {
+		return fmt.Errorf("analyze photo: %w", err)
+	}
+
+	// 更新照片记录
+	now := time.Now()
+	photo.AIAnalyzed = true
+	photo.Description = result.Description
+	photo.Caption = result.Caption
+	photo.MainCategory = result.MainCategory
+	photo.Tags = result.Tags
+	photo.MemoryScore = int(result.MemoryScore)
+	photo.BeautyScore = int(result.BeautyScore)
+	photo.AnalyzedAt = &now
+
+	// 计算综合评分
+	photo.OverallScore = int(float64(photo.MemoryScore)*0.7 + float64(photo.BeautyScore)*0.3)
+
+	if err := s.photoRepo.Update(photo); err != nil {
+		return fmt.Errorf("update photo: %w", err)
+	}
+
+	logger.Infof("Photo %d analyzed successfully: memory=%d, beauty=%d, overall=%d, duration=%v",
+		photoID, photo.MemoryScore, photo.BeautyScore, photo.OverallScore, result.Duration)
+
+	return nil
+}
+
+// AnalyzeBatch 批量分析照片
+func (s *aiService) AnalyzeBatch(limit int) (*model.AIAnalyzeBatchResponse, error) {
+	if s.provider == nil {
+		return nil, fmt.Errorf("AI provider not configured")
+	}
+
+	// 获取未分析的照片
+	photos, err := s.photoRepo.GetUnanalyzed(limit)
+	if err != nil {
+		return nil, fmt.Errorf("get unanalyzed photos: %w", err)
+	}
+
+	if len(photos) == 0 {
+		return &model.AIAnalyzeBatchResponse{
+			TotalCount:   0,
+			SuccessCount: 0,
+			FailedCount:  0,
+			TotalCost:    0,
+		}, nil
+	}
+
+	logger.Infof("Starting batch analysis: %d photos", len(photos))
+
+	successCount := 0
+	failedCount := 0
+	totalCost := 0.0
+	startTime := time.Now()
+
+	// 逐个分析（后续可优化为并发）
+	for i, photo := range photos {
+		logger.Infof("Analyzing photo %d/%d: id=%d, path=%s", i+1, len(photos), photo.ID, photo.FileName)
+
+		err := s.AnalyzePhoto(photo.ID)
+		if err != nil {
+			logger.Errorf("Failed to analyze photo %d: %v", photo.ID, err)
+			failedCount++
+			continue
+		}
+
+		successCount++
+		totalCost += s.provider.Cost()
+	}
+
+	duration := time.Since(startTime)
+
+	logger.Infof("Batch analysis completed: total=%d, success=%d, failed=%d, cost=¥%.2f, duration=%v",
+		len(photos), successCount, failedCount, totalCost, duration)
+
+	return &model.AIAnalyzeBatchResponse{
+		TotalCount:   len(photos),
+		SuccessCount: successCount,
+		FailedCount:  failedCount,
+		TotalCost:    totalCost,
+		Duration:     duration.Seconds(),
+	}, nil
+}
+
+// GetAnalyzeProgress 获取分析进度
+func (s *aiService) GetAnalyzeProgress() (*model.AIAnalyzeProgressResponse, error) {
+	// 统计总数
+	total, err := s.photoRepo.Count()
+	if err != nil {
+		return nil, fmt.Errorf("count total: %w", err)
+	}
+
+	// 统计已分析数
+	analyzed, err := s.photoRepo.CountAnalyzed()
+	if err != nil {
+		return nil, fmt.Errorf("count analyzed: %w", err)
+	}
+
+	// 统计未分析数
+	unanalyzed, err := s.photoRepo.CountUnanalyzed()
+	if err != nil {
+		return nil, fmt.Errorf("count unanalyzed: %w", err)
+	}
+
+	// 计算进度百分比
+	progress := 0.0
+	if total > 0 {
+		progress = float64(analyzed) / float64(total) * 100
+	}
+
+	// 估算剩余成本（如果 provider 可用）
+	estimatedCost := 0.0
+	if s.provider != nil {
+		estimatedCost = float64(unanalyzed) * s.provider.Cost()
+	}
+
+	return &model.AIAnalyzeProgressResponse{
+		Total:         total,
+		Analyzed:      analyzed,
+		Unanalyzed:    unanalyzed,
+		Progress:      progress,
+		EstimatedCost: estimatedCost,
+		Provider:      s.config.AI.Provider,
+	}, nil
+}
+
+// formatDateTime 格式化日期时间
+func formatDateTime(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.Format("2006-01-02 15:04:05")
+}
