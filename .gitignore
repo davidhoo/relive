@@ -39,9 +39,9 @@ ENV/
 *.sqlite
 *.sqlite3
 
-# Cache
-cache/
-backend/data/cache/
+# Thumbnails
+thumbnails/
+backend/data/thumbnails/
 
 # Logs
 logs/

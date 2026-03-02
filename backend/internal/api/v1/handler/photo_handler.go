@@ -588,21 +588,21 @@ func (h *PhotoHandler) GetPhotoImage(c *gin.Context) {
 	ext := strings.ToLower(filepath.Ext(photo.FilePath))
 	if ext == ".heic" || ext == ".heif" {
 		// 尝试使用 sips 转换 HEIC 到 JPEG（macOS 自带工具）
-		// 使用配置的缓存路径
-		cachePath := h.cfg.Photos.CachePath
-		if cachePath == "" {
-			cachePath = "./data/cache"
+		// 使用配置的缩略图路径
+		thumbnailPath := h.cfg.Photos.ThumbnailPath
+		if thumbnailPath == "" {
+			thumbnailPath = "./data/thumbnails"
 		}
 
-		// 确保缓存目录存在
-		if err := os.MkdirAll(cachePath, 0755); err != nil {
-			logger.Warnf("Failed to create cache directory: %v, trying direct serve", err)
+		// 确保缩略图目录存在
+		if err := os.MkdirAll(thumbnailPath, 0755); err != nil {
+			logger.Warnf("Failed to create thumbnail directory: %v, trying direct serve", err)
 			c.File(photo.FilePath)
 			return
 		}
 
-		// 创建缓存文件路径
-		tempJpeg := filepath.Join(cachePath, "relive_heic_"+idStr+".jpg")
+		// 创建缩略图文件路径
+		tempJpeg := filepath.Join(thumbnailPath, "relive_heic_"+idStr+".jpg")
 
 		// 如果缓存文件已存在，直接返回
 		if _, err := os.Stat(tempJpeg); err == nil {
