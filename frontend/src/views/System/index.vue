@@ -159,6 +159,17 @@
 
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
+import {
+  SuccessFilled,
+  WarningFilled,
+  Platform,
+  DocumentCopy,
+  Timer,
+  DataAnalysis,
+  FolderOpened,
+  PictureFilled,
+  Database
+} from '@element-plus/icons-vue'
 import { useSystemStore } from '@/stores/system'
 import dayjs from 'dayjs'
 import duration from 'dayjs/plugin/duration'
