@@ -14,6 +14,7 @@ database:
 # 照片目录
 photos:
   root_path: "/app/photos"  # Docker 挂载的照片目录
+  cache_path: "/app/data/cache"  # 缩略图/HEIC转换缓存路径
   exclude_dirs:
     - ".sync"
     - "@eaDir"

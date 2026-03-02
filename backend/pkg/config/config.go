@@ -37,6 +37,7 @@ type DatabaseConfig struct {
 // PhotosConfig 照片目录配置
 type PhotosConfig struct {
 	RootPath         string   `yaml:"root_path"`
+	CachePath        string   `yaml:"cache_path"` // 缩略图/转换文件缓存路径
 	ExcludeDirs      []string `yaml:"exclude_dirs"`
 	SupportedFormats []string `yaml:"supported_formats"`
 }

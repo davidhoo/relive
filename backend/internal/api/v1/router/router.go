@@ -45,7 +45,7 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 	services := service.NewServices(repos, cfg, db)
 
 	// 初始化 Handlers
-	handlers := handler.NewHandlers(db, services)
+	handlers := handler.NewHandlers(db, services, cfg)
 
 	// API 路由组
 	v1 := r.Group("/api/v1")

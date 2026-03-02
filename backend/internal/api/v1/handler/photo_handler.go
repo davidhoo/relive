@@ -13,6 +13,7 @@ import (
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/service"
+	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/logger"
 	"github.com/gin-gonic/gin"
 )
@@ -21,13 +22,15 @@ import (
 type PhotoHandler struct {
 	photoService  service.PhotoService
 	configService service.ConfigService
+	cfg           *config.Config
 }
 
 // NewPhotoHandler 创建照片处理器
-func NewPhotoHandler(photoService service.PhotoService, configService service.ConfigService) *PhotoHandler {
+func NewPhotoHandler(photoService service.PhotoService, configService service.ConfigService, cfg *config.Config) *PhotoHandler {
 	return &PhotoHandler{
 		photoService:  photoService,
 		configService: configService,
+		cfg:           cfg,
 	}
 }
 
@@ -585,8 +588,28 @@ func (h *PhotoHandler) GetPhotoImage(c *gin.Context) {
 	ext := strings.ToLower(filepath.Ext(photo.FilePath))
 	if ext == ".heic" || ext == ".heif" {
 		// 尝试使用 sips 转换 HEIC 到 JPEG（macOS 自带工具）
-		// 创建临时文件路径
-		tempJpeg := "/tmp/relive_" + idStr + ".jpg"
+		// 使用配置的缓存路径
+		cachePath := h.cfg.Photos.CachePath
+		if cachePath == "" {
+			cachePath = "./data/cache"
+		}
+
+		// 确保缓存目录存在
+		if err := os.MkdirAll(cachePath, 0755); err != nil {
+			logger.Warnf("Failed to create cache directory: %v, trying direct serve", err)
+			c.File(photo.FilePath)
+			return
+		}
+
+		// 创建缓存文件路径
+		tempJpeg := filepath.Join(cachePath, "relive_heic_"+idStr+".jpg")
+
+		// 如果缓存文件已存在，直接返回
+		if _, err := os.Stat(tempJpeg); err == nil {
+			c.Header("Content-Type", "image/jpeg")
+			c.File(tempJpeg)
+			return
+		}
 
 		// 使用 sips 转换
 		cmd := exec.Command("sips", "-s", "format", "jpeg", photo.FilePath, "--out", tempJpeg)

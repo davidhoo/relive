@@ -2,6 +2,7 @@ package handler
 
 import (
 	"github.com/davidhoo/relive/internal/service"
+	"github.com/davidhoo/relive/pkg/config"
 	"gorm.io/gorm"
 )
 
@@ -17,10 +18,10 @@ type Handlers struct {
 }
 
 // NewHandlers 创建所有处理器
-func NewHandlers(db *gorm.DB, services *service.Services) *Handlers {
+func NewHandlers(db *gorm.DB, services *service.Services, cfg *config.Config) *Handlers {
 	handlers := &Handlers{
 		System:  NewSystemHandler(db, services),
-		Photo:   NewPhotoHandler(services.Photo, services.Config),
+		Photo:   NewPhotoHandler(services.Photo, services.Config, cfg),
 		Display: NewDisplayHandler(services.Display, services.ESP32),
 		ESP32:   NewESP32Handler(services.ESP32),
 		Export:  NewExportHandler(services.Export),

@@ -14,6 +14,7 @@ database:
 # 照片目录
 photos:
   root_path: "./data/photos"  # 开发环境使用测试照片
+  cache_path: "./data/cache"  # 缩略图/HEIC转换缓存路径
   exclude_dirs:
     - ".sync"
     - "@eaDir"
