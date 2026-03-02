@@ -22,7 +22,7 @@ type PhotoRepository interface {
 	ExistsByFilePath(filePath string) (bool, error)
 
 	// 列表查询
-	List(page, pageSize int, analyzed *bool, location string, search string, sortBy string, sortDesc bool) ([]*model.Photo, int64, error)
+	List(page, pageSize int, analyzed *bool, location string, search string, sortBy string, sortDesc bool, enabledPaths []string) ([]*model.Photo, int64, error)
 	ListAll() ([]*model.Photo, error)
 	ListByIDs(ids []uint) ([]*model.Photo, error)
 
@@ -130,12 +130,24 @@ func (r *photoRepository) ExistsByFilePath(filePath string) (bool, error) {
 }
 
 // List 分页列表查询
-func (r *photoRepository) List(page, pageSize int, analyzed *bool, location string, search string, sortBy string, sortDesc bool) ([]*model.Photo, int64, error) {
+func (r *photoRepository) List(page, pageSize int, analyzed *bool, location string, search string, sortBy string, sortDesc bool, enabledPaths []string) ([]*model.Photo, int64, error) {
 	var photos []*model.Photo
 	var total int64
 
 	// 构建查询
 	query := r.db.Model(&model.Photo{})
+
+	// 筛选启用的路径
+	if len(enabledPaths) > 0 {
+		// 构建 OR 条件：file_path LIKE 'path1%' OR file_path LIKE 'path2%' ...
+		var pathConditions []string
+		var pathValues []interface{}
+		for _, path := range enabledPaths {
+			pathConditions = append(pathConditions, "file_path LIKE ?")
+			pathValues = append(pathValues, path+"%")
+		}
+		query = query.Where(strings.Join(pathConditions, " OR "), pathValues...)
+	}
 
 	// 筛选条件
 	if analyzed != nil {

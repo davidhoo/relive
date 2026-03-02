@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,18 +51,20 @@ type PhotoService interface {
 type photoService struct {
 	repo               repository.PhotoRepository
 	config             *config.Config
+	configService      ConfigService
 	geocodeService     GeocodeService
 	thumbnailGenerator *util.ThumbnailGenerator
 }
 
 // NewPhotoService 创建照片服务
-func NewPhotoService(repo repository.PhotoRepository, cfg *config.Config, geocodeService GeocodeService) PhotoService {
+func NewPhotoService(repo repository.PhotoRepository, cfg *config.Config, configService ConfigService, geocodeService GeocodeService) PhotoService {
 	// 初始化缩略图生成器（1024px，兼顾展示和 AI 理解）
 	thumbnailGenerator := util.NewThumbnailGenerator(1024, 1024, 90, cfg.Photos.ThumbnailPath)
 
 	return &photoService{
 		repo:               repo,
 		config:             cfg,
+		configService:      configService,
 		geocodeService:     geocodeService,
 		thumbnailGenerator: thumbnailGenerator,
 	}
@@ -447,8 +450,16 @@ func (s *photoService) GetPhotos(req *model.GetPhotosRequest) ([]*model.Photo, i
 		req.PageSize = 100
 	}
 
+	// 获取启用的扫描路径
+	enabledPaths, err := s.getEnabledScanPaths()
+	if err != nil {
+		logger.Warnf("Failed to get enabled scan paths: %v", err)
+		// 如果获取失败，仍然返回结果，但不过滤路径
+		enabledPaths = []string{}
+	}
+
 	// 调用 Repository
-	return s.repo.List(req.Page, req.PageSize, req.Analyzed, req.Location, req.Search, req.SortBy, req.SortDesc)
+	return s.repo.List(req.Page, req.PageSize, req.Analyzed, req.Location, req.Search, req.SortBy, req.SortDesc, enabledPaths)
 }
 
 // CountAll 统计照片总数
@@ -559,4 +570,36 @@ func (s *photoService) CountPhotosByPathPrefix(pathPrefix string) (int64, error)
 		return 0, fmt.Errorf("count photos by path prefix: %w", err)
 	}
 	return count, nil
+}
+
+// getEnabledScanPaths 获取启用的扫描路径列表
+func (s *photoService) getEnabledScanPaths() ([]string, error) {
+	configValue, err := s.configService.GetWithDefault("photos.scan_paths", "")
+	if err != nil {
+		return nil, fmt.Errorf("get scan paths config: %w", err)
+	}
+
+	if configValue == "" {
+		return []string{}, nil
+	}
+
+	var scanPathsConfig struct {
+		Paths []struct {
+			Path    string `json:"path"`
+			Enabled bool   `json:"enabled"`
+		} `json:"paths"`
+	}
+
+	if err := json.Unmarshal([]byte(configValue), &scanPathsConfig); err != nil {
+		return nil, fmt.Errorf("parse scan paths config: %w", err)
+	}
+
+	var enabledPaths []string
+	for _, p := range scanPathsConfig.Paths {
+		if p.Enabled {
+			enabledPaths = append(enabledPaths, p.Path)
+		}
+	}
+
+	return enabledPaths, nil
 }

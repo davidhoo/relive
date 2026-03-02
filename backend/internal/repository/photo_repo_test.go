@@ -113,7 +113,7 @@ func TestPhotoRepository_List(t *testing.T) {
 	}
 
 	// 测试分页
-	photos, total, err := repo.List(1, 10, nil, "", "overall_score", true)
+	photos, total, err := repo.List(1, 10, nil, "", "", "overall_score", true, nil)
 
 	// 验证
 	assert.NoError(t, err)
@@ -122,7 +122,7 @@ func TestPhotoRepository_List(t *testing.T) {
 
 	// 测试筛选已分析
 	analyzed := true
-	photos, total, err = repo.List(1, 10, &analyzed, "", "overall_score", true)
+	photos, total, err = repo.List(1, 10, &analyzed, "", "", "overall_score", true, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(8), total) // 8 个已分析（0,2,4,6,8,10,12,14）
 }

@@ -65,17 +65,9 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="照片数" width="90" align="center">
+        <el-table-column label="照片数" width="80" align="center">
           <template #default="{ row }">
-            <el-tag
-              :type="pathPhotoCounts[row.path] > 0 ? 'primary' : 'info'"
-              size="small"
-              effect="light"
-              class="photo-count-tag"
-            >
-              <el-icon><Picture /></el-icon>
-              <span>{{ pathPhotoCounts[row.path] || 0 }}</span>
-            </el-tag>
+            <span class="photo-count">{{ pathPhotoCounts[row.path] || 0 }}</span>
           </template>
         </el-table-column>
 
@@ -871,16 +863,10 @@ defineExpose({
   color: var(--color-text-secondary);
 }
 
-/* 照片数量标签 */
-.photo-count-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-weight: var(--font-weight-semibold);
-}
-
-.photo-count-tag .el-icon {
-  font-size: 12px;
+/* 照片数量 */
+.photo-count {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
 }
 
 /* 按钮组间隙 */

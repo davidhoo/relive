@@ -38,7 +38,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	}
 
 	return &Services{
-		Photo: NewPhotoService(repos.Photo, cfg, geocodeService),
+		Photo: NewPhotoService(repos.Photo, cfg, configService, geocodeService),
 		Display: NewDisplayService(
 			repos.Photo,
 			repos.DisplayRecord,
