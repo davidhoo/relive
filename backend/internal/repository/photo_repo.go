@@ -141,12 +141,12 @@ func (r *photoRepository) List(page, pageSize int, analyzed *bool, location stri
 	if location != "" {
 		query = query.Where("location LIKE ?", "%"+location+"%")
 	}
-	// 搜索关键词（搜索路径、文件名、标签、描述、标题、位置）
+	// 搜索关键词（搜索路径、文件名、分类、标签、描述、标题、位置）
 	if search != "" {
 		searchPattern := "%" + search + "%"
 		query = query.Where(
-			"file_path LIKE ? OR file_name LIKE ? OR tags LIKE ? OR description LIKE ? OR caption LIKE ? OR location LIKE ?",
-			searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern,
+			"file_path LIKE ? OR file_name LIKE ? OR main_category LIKE ? OR tags LIKE ? OR description LIKE ? OR caption LIKE ? OR location LIKE ?",
+			searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern,
 		)
 	}
 
