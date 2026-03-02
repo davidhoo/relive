@@ -414,6 +414,7 @@ func (h *PhotoHandler) ValidatePath(c *gin.Context) {
 // @Param page_size query int false "每页数量" default(20)
 // @Param analyzed query bool false "是否已分析"
 // @Param location query string false "位置过滤"
+// @Param search query string false "搜索关键词（路径、设备ID、标签）"
 // @Param sort_by query string false "排序字段" default(taken_at)
 // @Param sort_desc query bool false "降序排序" default(true)
 // @Success 200 {object} model.Response{data=model.PagedResponse{items=[]model.Photo}}
@@ -432,6 +433,7 @@ func (h *PhotoHandler) GetPhotos(c *gin.Context) {
 	}
 
 	location := c.Query("location")
+	search := c.Query("search")
 	sortBy := c.DefaultQuery("sort_by", "taken_at")
 	sortDesc := c.DefaultQuery("sort_desc", "true") == "true"
 
@@ -441,6 +443,7 @@ func (h *PhotoHandler) GetPhotos(c *gin.Context) {
 		PageSize: pageSize,
 		Analyzed: analyzed,
 		Location: location,
+		Search:   search,
 		SortBy:   sortBy,
 		SortDesc: sortDesc,
 	}

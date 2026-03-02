@@ -58,6 +58,7 @@ type GetPhotosRequest struct {
 	PageSize int    `form:"page_size" binding:"omitempty,min=1,max=100"`
 	Analyzed *bool  `form:"analyzed"` // 是否已分析（可选）
 	Location string `form:"location"` // 位置筛选（可选）
+	Search   string `form:"search"`   // 搜索关键词（可选，搜索路径、设备ID、标签）
 	SortBy   string `form:"sort_by"`  // 排序字段（taken_at/overall_score）
 	SortDesc bool   `form:"sort_desc"` // 是否降序
 }

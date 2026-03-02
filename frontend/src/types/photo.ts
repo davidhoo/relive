@@ -46,6 +46,7 @@ export interface PhotoListParams {
   page_size?: number
   analyzed?: boolean
   location?: string
+  search?: string
   sort_by?: string
   sort_desc?: boolean
 }

@@ -120,11 +120,20 @@
 
     <!-- 照片网格 -->
     <div class="photos-grid-card modern-card animate-fade-in" v-loading="loading">
-      <!-- 空状态 -->
-      <el-empty v-if="!photos.length && !loading" description="暂无照片" :image-size="120">
+      <!-- 空状态：系统中没有照片 -->
+      <el-empty v-if="!photos.length && !loading && systemTotal === 0" description="暂无照片" :image-size="120">
         <el-button type="primary" @click="goToConfig">
           <el-icon><Setting /></el-icon>
           前往配置添加路径
+        </el-button>
+      </el-empty>
+
+      <!-- 空状态：搜索结果为空 -->
+      <el-empty v-else-if="!photos.length && !loading && systemTotal > 0" description="未找到匹配的照片" :image-size="120">
+        <p class="empty-hint">系统中共有 {{ systemTotal }} 张照片，但没有符合当前搜索条件的结果</p>
+        <el-button type="primary" @click="resetSearch">
+          <el-icon><Refresh /></el-icon>
+          清除搜索条件
         </el-button>
       </el-empty>
 
@@ -268,6 +277,7 @@ const loading = ref(false)
 const currentPage = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
+const systemTotal = ref(0) // 系统中所有照片的总数（不带筛选）
 const searchQuery = ref('')
 const filterAnalyzed = ref('')
 const scanPaths = ref<ScanPathConfig[]>([])
@@ -353,6 +363,24 @@ const formatRelativeTime = (dateStr: string) => {
 // 前往配置页面
 const goToConfig = () => {
   router.push('/config')
+}
+
+// 加载系统总照片数（不带任何筛选）
+const loadSystemTotal = async () => {
+  try {
+    const res = await photoApi.getList({ page_size: 1 })
+    systemTotal.value = res.data?.total || 0
+  } catch (error: any) {
+    console.error('Failed to load system total:', error)
+  }
+}
+
+// 重置搜索条件
+const resetSearch = () => {
+  searchQuery.value = ''
+  filterAnalyzed.value = ''
+  currentPage.value = 1
+  loadPhotos()
 }
 
 // 加载照片列表
@@ -503,6 +531,9 @@ const gotoDetail = (photoId: number) => {
 onMounted(() => {
   // Load scan paths first
   loadScanPaths()
+
+  // 加载系统总照片数
+  loadSystemTotal()
 
   // 从 URL 参数恢复状态
   const query = router.currentRoute.value.query
@@ -726,6 +757,14 @@ defineExpose({
 /* ============ 照片网格卡片 ============ */
 .photos-grid-card {
   padding: var(--spacing-xl) !important;
+}
+
+/* 空状态提示 */
+.empty-hint {
+  margin: var(--spacing-md) 0 var(--spacing-lg);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  text-align: center;
 }
 
 /* 搜索区域 */

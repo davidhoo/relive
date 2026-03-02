@@ -12,6 +12,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 进行中 🚧
 - ESP32 固件开发 - **最后阶段**
 
+### 2026-03-02 - 搜索功能修复和空状态优化 🆕
+
+#### Bug 修复
+
+**照片搜索功能**
+- ✅ **修复搜索不可用问题**
+  - 前端发送 `search` 参数，但后端未处理
+  - 后端 `GetPhotosRequest` model 添加 `Search` 字段
+  - Handler 解析 `search` 查询参数
+  - Repository 实现多字段模糊搜索（路径、文件名、标签、描述、标题、位置）
+  - 修复数据库列名问题（移除不存在的 `esp32_device_id`）
+
+**空状态优化**
+- ✅ **区分两种空状态**
+  - 系统中没有照片 → 显示"前往配置添加路径"
+  - 搜索结果为空 → 显示"未找到匹配的照片" + "清除搜索条件"按钮
+  - 添加 `systemTotal` 变量跟踪系统总照片数
+  - 添加 `resetSearch` 方法重置搜索条件
+
+#### API 变更
+- 更新 `GetPhotosRequest` - 新增 `search` 字段
+- 更新 `PhotoListParams` - 新增 `search` 字段
+- 更新 `List` 方法签名 - 添加 `search` 参数
+
+#### 修改文件
+- `backend/internal/model/dto.go` - 添加 Search 字段
+- `backend/internal/api/v1/handler/photo_handler.go` - 解析 search 参数
+- `backend/internal/service/photo_service.go` - 传递 search 参数
+- `backend/internal/repository/photo_repo.go` - 实现搜索逻辑
+- `frontend/src/types/photo.ts` - 添加 search 字段
+- `frontend/src/views/Photos/index.vue` - 优化空状态显示
+
+---
+
 ### 2026-03-02 - 照片重建与清理功能 🆕
 
 #### 新增功能
