@@ -16,10 +16,24 @@
           <span>扫描路径</span>
           <el-tag type="info" size="small" effect="plain" class="count-tag">{{ scanPaths.length }}</el-tag>
         </div>
-        <el-link type="primary" @click="goToConfig" class="manage-link">
-          <el-icon><Setting /></el-icon>
-          管理路径
-        </el-link>
+        <div class="scan-paths-actions">
+          <el-button
+            type="danger"
+            size="small"
+            plain
+            :loading="cleaningUp"
+            @click="handleCleanup"
+            class="cleanup-btn"
+            title="清理数据库中所有文件已不存在的照片记录"
+          >
+            <el-icon><Delete /></el-icon>
+            清理
+          </el-button>
+          <el-link type="primary" @click="goToConfig" class="manage-link">
+            <el-icon><Setting /></el-icon>
+            管理路径
+          </el-link>
+        </div>
       </div>
 
       <el-table
@@ -83,13 +97,13 @@
                 type="warning"
                 size="small"
                 plain
-                :disabled="!row.enabled || rescanningPathId === row.id"
-                :loading="rescanningPathId === row.id"
-                @click="handleRescanPath(row)"
-                class="rescan-btn"
-                title="强制重新扫描，更新所有照片信息"
+                :disabled="!row.enabled || rebuildingPathId === row.id"
+                :loading="rebuildingPathId === row.id"
+                @click="handleRebuildPath(row)"
+                class="rebuild-btn"
+                title="重建照片：重新扫描文件、提取 EXIF、计算哈希、地理编码（保留 AI 分析结果）"
               >
-                重扫
+                重建
               </el-button>
             </el-button-group>
           </template>
@@ -259,7 +273,8 @@ const filterAnalyzed = ref('')
 const scanPaths = ref<ScanPathConfig[]>([])
 const scanPathLoading = ref(false)
 const scanningPathId = ref<string>('')
-const rescanningPathId = ref<string>('')
+const rebuildingPathId = ref<string>('')
+const cleaningUp = ref(false)
 
 // 获取照片 URL
 const getPhotoUrl = (photoId: number) => {
@@ -414,27 +429,51 @@ const handleScanPath = async (path: ScanPathConfig) => {
   }
 }
 
-// 重新扫描指定路径（强制更新）
-const handleRescanPath = async (path: ScanPathConfig) => {
+// 重建指定路径
+const handleRebuildPath = async (path: ScanPathConfig) => {
   if (!path.enabled) {
-    ElMessage.warning('该路径已禁用，无法扫描')
+    ElMessage.warning('该路径已禁用，无法重建')
     return
   }
 
   try {
-    rescanningPathId.value = path.id
-    const res = await photoApi.rescan({ path: path.path })
+    rebuildingPathId.value = path.id
+    const res = await photoApi.rebuild({ path: path.path })
     ElMessage.success(
-      `「${path.name}」重新扫描完成，新增 ${res.data?.new_count || 0} 张，更新 ${res.data?.updated_count || 0} 张`
+      `「${path.name}」重建完成：新增 ${res.data?.new_count || 0} 张，更新 ${res.data?.updated_count || 0} 张，删除 ${res.data?.deleted_count || 0} 张`
     )
 
     // Reload photos and scan paths (to update last_scanned_at)
     await loadPhotos()
     await loadScanPaths()
   } catch (error: any) {
-    ElMessage.error(error.message || '重新扫描照片失败')
+    ElMessage.error(error.message || '重建照片失败')
   } finally {
-    rescanningPathId.value = ''
+    rebuildingPathId.value = ''
+  }
+}
+
+// 清理不存在文件的照片
+const handleCleanup = async () => {
+  try {
+    cleaningUp.value = true
+    const res = await photoApi.cleanup()
+    const { total_count, deleted_count, skipped_count } = res.data || {}
+
+    if (deleted_count > 0) {
+      ElMessage.success(
+        `清理完成：检查了 ${total_count} 张照片，删除了 ${deleted_count} 个不存在文件的记录${skipped_count > 0 ? `，跳过 ${skipped_count} 个` : ''}`
+      )
+    } else {
+      ElMessage.info('清理完成：没有发现文件不存在的照片')
+    }
+
+    // Reload photos to update the list
+    await loadPhotos()
+  } catch (error: any) {
+    ElMessage.error(error.message || '清理照片失败')
+  } finally {
+    cleaningUp.value = false
   }
 }
 
@@ -579,6 +618,31 @@ defineExpose({
   font-size: var(--font-size-sm);
 }
 
+.scan-paths-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+/* 清理按钮样式 */
+.cleanup-btn {
+  background-color: #fff1f0 !important;
+  border-color: #ffa39e !important;
+  color: #cf1322 !important;
+}
+
+.cleanup-btn:hover:not(:disabled) {
+  background-color: #ffccc7 !important;
+  border-color: #ff7875 !important;
+  color: #a8071a !important;
+}
+
+.cleanup-btn:disabled {
+  background-color: #f5f5f5 !important;
+  border-color: #d9d9d9 !important;
+  color: #999 !important;
+}
+
 .scan-path-table {
   border-radius: var(--radius-sm);
   overflow: hidden;
@@ -640,20 +704,20 @@ defineExpose({
   color: #999 !important;
 }
 
-/* 重新扫描按钮样式 */
-.rescan-btn {
+/* 重建按钮样式 */
+.rebuild-btn {
   background-color: #fff7e6 !important;
   border-color: #ffd591 !important;
   color: #d46b08 !important;
 }
 
-.rescan-btn:hover:not(:disabled) {
+.rebuild-btn:hover:not(:disabled) {
   background-color: #ffe7ba !important;
   border-color: #ffc53d !important;
   color: #ad4e00 !important;
 }
 
-.rescan-btn:disabled {
+.rebuild-btn:disabled {
   background-color: #f5f5f5 !important;
   border-color: #d9d9d9 !important;
   color: #999 !important;

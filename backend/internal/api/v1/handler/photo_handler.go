@@ -123,9 +123,9 @@ func (h *PhotoHandler) ScanPhotos(c *gin.Context) {
 	})
 }
 
-// RescanPhotos 重新扫描照片（强制更新所有信息）
-// @Summary 重新扫描照片
-// @Description 强制重新扫描指定目录的照片，更新所有已存在的照片信息（EXIF、地理位置等）
+// RebuildPhotos 重建照片（重新扫描文件、提取 EXIF、计算哈希、地理编码、生成缩略图）
+// @Summary 重建照片
+// @Description 重建指定目录的照片，包括：重新扫描文件、提取 EXIF、计算文件哈希、地理编码、生成缩略图（保留 AI 分析结果）
 // @Tags photos
 // @Accept json
 // @Produce json
@@ -133,8 +133,8 @@ func (h *PhotoHandler) ScanPhotos(c *gin.Context) {
 // @Success 200 {object} model.Response{data=model.ScanPhotosResponse}
 // @Failure 400 {object} model.Response
 // @Failure 500 {object} model.Response
-// @Router /api/v1/photos/rescan [post]
-func (h *PhotoHandler) RescanPhotos(c *gin.Context) {
+// @Router /api/v1/photos/rebuild [post]
+func (h *PhotoHandler) RebuildPhotos(c *gin.Context) {
 	var req model.ScanPhotosRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.Warnf("Invalid request: %v", err)
@@ -186,15 +186,15 @@ func (h *PhotoHandler) RescanPhotos(c *gin.Context) {
 		return
 	}
 
-	// 重新扫描照片（强制更新）
-	resp, err := h.photoService.RescanPhotos(scanPath)
+	// 重建照片
+	resp, err := h.photoService.RebuildPhotos(scanPath)
 	if err != nil {
-		logger.Errorf("Rescan photos failed: %v", err)
+		logger.Errorf("Rebuild photos failed: %v", err)
 		c.JSON(http.StatusInternalServerError, model.Response{
 			Success: false,
 			Error: &model.ErrorInfo{
-				Code:    "SCAN_FAILED",
-				Message: "Failed to rescan photos: " + err.Error(),
+				Code:    "REBUILD_FAILED",
+				Message: "Failed to rebuild photos: " + err.Error(),
 			},
 		})
 		return
@@ -206,6 +206,39 @@ func (h *PhotoHandler) RescanPhotos(c *gin.Context) {
 			logger.Warnf("Failed to update last scanned timestamp: %v", err)
 			// Don't fail the scan, just log warning
 		}
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "Success",
+		Data:    resp,
+	})
+}
+
+// CleanupPhotos 清理数据库中所有文件已不存在的照片
+// @Summary 清理不存在文件的照片
+// @Description 遍历整个数据库，检查每个照片文件是否还存在，不存在的则软删除
+// @Tags photos
+// @Accept json
+// @Produce json
+// @Success 200 {object} model.Response{data=model.CleanupPhotosResponse}
+// @Failure 500 {object} model.Response
+// @Router /api/v1/photos/cleanup [post]
+func (h *PhotoHandler) CleanupPhotos(c *gin.Context) {
+	logger.Info("Cleanup photos request received")
+
+	// 清理不存在文件的照片
+	resp, err := h.photoService.CleanupNonExistentPhotos()
+	if err != nil {
+		logger.Errorf("Cleanup photos failed: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "CLEANUP_FAILED",
+				Message: "Failed to cleanup photos: " + err.Error(),
+			},
+		})
+		return
 	}
 
 	c.JSON(http.StatusOK, model.Response{

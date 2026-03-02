@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
@@ -18,7 +19,8 @@ type PhotoService interface {
 	// 扫描
 	ScanPhotos(path string) (*model.ScanPhotosResponse, error)
 	ScanDirectory(dir string) ([]*model.Photo, error)
-	RescanPhotos(path string) (*model.ScanPhotosResponse, error) // 强制重新扫描
+	RebuildPhotos(path string) (*model.RebuildPhotosResponse, error) // 重建照片（重新扫描文件、提取 EXIF、计算哈希、地理编码）
+	CleanupNonExistentPhotos() (*model.CleanupPhotosResponse, error) // 清理数据库中所有不存在的照片
 
 	// 查询
 	GetPhotoByID(id uint) (*model.Photo, error)
@@ -114,28 +116,45 @@ func (s *photoService) ScanPhotos(path string) (*model.ScanPhotosResponse, error
 	}, nil
 }
 
-// RescanPhotos 强制重新扫描照片，更新所有已存在的照片信息
-func (s *photoService) RescanPhotos(path string) (*model.ScanPhotosResponse, error) {
-	logger.Infof("Starting photo rescan: %s", path)
+// RebuildPhotos 重建照片，包括：重新扫描文件、提取 EXIF、计算哈希、地理编码
+// 会删除数据库中已不存在的文件记录，保留 AI 分析结果
+func (s *photoService) RebuildPhotos(path string) (*model.RebuildPhotosResponse, error) {
+	logger.Infof("Starting photo rebuild: %s", path)
 
 	// 检查路径是否存在
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, fmt.Errorf("path does not exist: %s", path)
 	}
 
-	// 扫描目录
-	photos, err := s.ScanDirectory(path)
+	// 1. 获取数据库中该路径下的所有现有照片
+	existingPhotos, err := s.repo.ListByPathPrefix(path)
+	if err != nil {
+		return nil, fmt.Errorf("list existing photos: %w", err)
+	}
+
+	// 构建现有照片的文件路径映射（用于后续对比）
+	existingPathMap := make(map[string]*model.Photo)
+	for _, photo := range existingPhotos {
+		existingPathMap[photo.FilePath] = photo
+	}
+
+	// 2. 扫描目录获取文件系统上的所有照片
+	scannedPhotos, err := s.ScanDirectory(path)
 	if err != nil {
 		return nil, fmt.Errorf("scan directory: %w", err)
 	}
 
 	// 统计结果
-	scannedCount := len(photos)
+	scannedCount := len(scannedPhotos)
 	newCount := 0
 	updatedCount := 0
+	deletedCount := 0
 
-	// 处理每张照片 - 强制更新
-	for _, photo := range photos {
+	// 3. 处理每张照片 - 强制重建
+	scannedPathMap := make(map[string]bool)
+	for _, photo := range scannedPhotos {
+		scannedPathMap[photo.FilePath] = true
+
 		// 检查是否已存在（根据文件路径）
 		exists, err := s.repo.ExistsByFilePath(photo.FilePath)
 		if err != nil {
@@ -151,7 +170,7 @@ func (s *photoService) RescanPhotos(path string) (*model.ScanPhotosResponse, err
 			}
 			newCount++
 		} else {
-			// 已存在，强制更新所有信息
+			// 已存在，强制重建（重新提取所有信息，但保留 AI 分析结果）
 			existing, err := s.repo.GetByFilePath(photo.FilePath)
 			if err != nil {
 				logger.Errorf("Get existing photo failed: %v", err)
@@ -179,12 +198,78 @@ func (s *photoService) RescanPhotos(path string) (*model.ScanPhotosResponse, err
 		}
 	}
 
-	logger.Infof("Photo rescan completed: scanned=%d, new=%d, force_updated=%d", scannedCount, newCount, updatedCount)
+	// 4. 找出已删除的文件（在数据库中但文件已不存在于文件系统）并软删除
+	// 不仅检查扫描结果，还要实际检查文件是否存在（处理移动或删除的情况）
+	for filePath, photo := range existingPathMap {
+		// 如果不在扫描结果中，或者文件实际不存在
+		if !scannedPathMap[filePath] {
+			// 双重确认：检查文件是否真的不存在
+			if _, err := os.Stat(filePath); os.IsNotExist(err) {
+				// 文件已不存在，软删除数据库记录
+				if err := s.repo.Delete(photo.ID); err != nil {
+					logger.Errorf("Soft delete photo failed: id=%d, path=%s, error=%v", photo.ID, filePath, err)
+					continue
+				}
+				deletedCount++
+				logger.Infof("Soft deleted photo (file not exists): id=%d, path=%s", photo.ID, filePath)
+			} else {
+				// 文件存在但不在扫描结果中（可能是格式不支持或其他原因）
+				logger.Debugf("Photo file exists but not in scan result: id=%d, path=%s", photo.ID, filePath)
+			}
+		}
+	}
 
-	return &model.ScanPhotosResponse{
+	logger.Infof("Photo rebuild completed: scanned=%d, new=%d, updated=%d, deleted=%d", scannedCount, newCount, updatedCount, deletedCount)
+
+	return &model.RebuildPhotosResponse{
 		ScannedCount: scannedCount,
 		NewCount:     newCount,
 		UpdatedCount: updatedCount,
+		DeletedCount: deletedCount,
+	}, nil
+}
+
+// CleanupNonExistentPhotos 清理数据库中所有文件已不存在的照片
+// 遍历整个数据库，检查每个照片文件是否还存在，不存在的则软删除
+func (s *photoService) CleanupNonExistentPhotos() (*model.CleanupPhotosResponse, error) {
+	logger.Info("Starting cleanup of non-existent photos")
+
+	// 1. 获取数据库中的所有照片
+	allPhotos, err := s.repo.ListAll()
+	if err != nil {
+		return nil, fmt.Errorf("list all photos: %w", err)
+	}
+
+	totalCount := len(allPhotos)
+	deletedCount := 0
+	skippedCount := 0
+
+	logger.Infof("Found %d photos in database to check", totalCount)
+
+	// 2. 检查每张照片的文件是否存在
+	for _, photo := range allPhotos {
+		// 检查文件是否存在
+		if _, err := os.Stat(photo.FilePath); os.IsNotExist(err) {
+			// 文件已不存在，软删除数据库记录
+			if err := s.repo.Delete(photo.ID); err != nil {
+				logger.Errorf("Soft delete photo failed: id=%d, path=%s, error=%v", photo.ID, photo.FilePath, err)
+				continue
+			}
+			deletedCount++
+			logger.Infof("Soft deleted photo (file not exists): id=%d, path=%s", photo.ID, photo.FilePath)
+		} else if err != nil {
+			// 其他错误（如权限问题），记录警告但不删除
+			logger.Warnf("Cannot access photo file: id=%d, path=%s, error=%v", photo.ID, photo.FilePath, err)
+			skippedCount++
+		}
+	}
+
+	logger.Infof("Photo cleanup completed: total=%d, deleted=%d, skipped=%d", totalCount, deletedCount, skippedCount)
+
+	return &model.CleanupPhotosResponse{
+		TotalCount:   totalCount,
+		DeletedCount: deletedCount,
+		SkippedCount: skippedCount,
 	}, nil
 }
 
@@ -259,6 +344,7 @@ func (s *photoService) processPhoto(filePath string, info os.FileInfo) (*model.P
 	}
 
 	// 构建 Photo 对象
+	now := time.Now()
 	photo := &model.Photo{
 		FilePath:     filePath,
 		FileName:     filepath.Base(filePath),
@@ -271,6 +357,8 @@ func (s *photoService) processPhoto(filePath string, info os.FileInfo) (*model.P
 		Orientation:  exifData.Orientation,
 		GPSLatitude:  exifData.GPSLatitude,
 		GPSLongitude: exifData.GPSLongitude,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 
 	// 如果有 GPS 坐标，尝试进行地理编码

@@ -42,7 +42,7 @@ func NewQwenProvider(config *QwenConfig) (*QwenProvider, error) {
 		config.Temperature = 0.7
 	}
 	if config.Timeout == 0 {
-		config.Timeout = 60
+		config.Timeout = 120  // 默认 120 秒，支持 qwen3.5-plus 等复杂模型
 	}
 
 	return &QwenProvider{

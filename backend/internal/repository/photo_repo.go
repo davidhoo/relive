@@ -45,6 +45,10 @@ type PhotoRepository interface {
 
 	// 地理编码
 	UpdateLocation(id uint, location string) error
+
+	// 重建相关
+	ListByPathPrefix(prefix string) ([]*model.Photo, error)
+	SoftDeleteByPathPrefix(prefix string) error
 }
 
 // photoRepository 照片仓库实现
@@ -320,4 +324,16 @@ func (r *photoRepository) UpdateLocation(id uint, location string) error {
 	return r.db.Model(&model.Photo{}).
 		Where("id = ?", id).
 		Update("location", location).Error
+}
+
+// ListByPathPrefix 根据路径前缀获取所有照片（用于重建时找出已删除的文件）
+func (r *photoRepository) ListByPathPrefix(prefix string) ([]*model.Photo, error) {
+	var photos []*model.Photo
+	err := r.db.Where("file_path LIKE ?", prefix+"%").Find(&photos).Error
+	return photos, err
+}
+
+// SoftDeleteByPathPrefix 软删除指定路径前缀的所有照片
+func (r *photoRepository) SoftDeleteByPathPrefix(prefix string) error {
+	return r.db.Where("file_path LIKE ?", prefix+"%").Delete(&model.Photo{}).Error
 }
