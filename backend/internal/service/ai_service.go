@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -30,16 +31,58 @@ type AIService interface {
 
 // aiService AI 分析服务实现
 type aiService struct {
-	photoRepo repository.PhotoRepository
-	config    *config.Config
-	provider  provider.AIProvider
+	photoRepo    repository.PhotoRepository
+	config       *config.Config
+	configService ConfigService
+	provider     provider.AIProvider
+}
+
+// AIConfigFromDB 数据库中存储的 AI 配置结构
+type AIConfigFromDB struct {
+	Provider    string  `json:"provider"`
+	Temperature float64 `json:"temperature"`
+	Timeout     int     `json:"timeout"`
+
+	// Ollama
+	OllamaEndpoint    string  `json:"ollama_endpoint"`
+	OllamaModel       string  `json:"ollama_model"`
+	OllamaTemperature float64 `json:"ollama_temperature"`
+	OllamaTimeout     int     `json:"ollama_timeout"`
+
+	// Qwen
+	QwenAPIKey      string  `json:"qwen_api_key"`
+	QwenEndpoint    string  `json:"qwen_endpoint"`
+	QwenModel       string  `json:"qwen_model"`
+	QwenTemperature float64 `json:"qwen_temperature"`
+	QwenTimeout     int     `json:"qwen_timeout"`
+
+	// OpenAI
+	OpenAIAPIKey      string  `json:"openai_api_key"`
+	OpenAIEndpoint    string  `json:"openai_endpoint"`
+	OpenAIModel       string  `json:"openai_model"`
+	OpenAITemperature float64 `json:"openai_temperature"`
+	OpenAIMaxTokens   int     `json:"openai_max_tokens"`
+	OpenAITimeout     int     `json:"openai_timeout"`
+
+	// VLLM
+	VLLMEndpoint    string  `json:"vllm_endpoint"`
+	VLLMModel       string  `json:"vllm_model"`
+	VLLMTemperature float64 `json:"vllm_temperature"`
+	VLLMMaxTokens   int     `json:"vllm_max_tokens"`
+	VLLMTimeout     int     `json:"vllm_timeout"`
+
+	// Hybrid
+	HybridPrimary      string `json:"hybrid_primary"`
+	HybridFallback     string `json:"hybrid_fallback"`
+	HybridRetryOnError bool   `json:"hybrid_retry_on_error"`
 }
 
 // NewAIService 创建 AI 分析服务
-func NewAIService(photoRepo repository.PhotoRepository, cfg *config.Config) (AIService, error) {
+func NewAIService(photoRepo repository.PhotoRepository, cfg *config.Config, configService ConfigService) (AIService, error) {
 	svc := &aiService{
-		photoRepo: photoRepo,
-		config:    cfg,
+		photoRepo:    photoRepo,
+		config:       cfg,
+		configService: configService,
 	}
 
 	// 初始化 provider
@@ -52,7 +95,10 @@ func NewAIService(photoRepo repository.PhotoRepository, cfg *config.Config) (AIS
 
 // initProvider 初始化 AI provider
 func (s *aiService) initProvider() error {
-	if s.config.AI.Provider == "" {
+	// 尝试从数据库加载 AI 配置
+	aiConfig := s.loadAIConfig()
+
+	if aiConfig.Provider == "" {
 		logger.Warn("AI provider not configured, AI analysis will not be available")
 		return nil
 	}
@@ -62,49 +108,49 @@ func (s *aiService) initProvider() error {
 		err error
 	)
 
-	switch s.config.AI.Provider {
+	switch aiConfig.Provider {
 	case "ollama":
 		p, err = provider.NewOllamaProvider(&provider.OllamaConfig{
-			Endpoint:    s.config.AI.Ollama.Endpoint,
-			Model:       s.config.AI.Ollama.Model,
-			Temperature: s.config.AI.Ollama.Temperature,
-			Timeout:     s.config.AI.Ollama.Timeout,
+			Endpoint:    aiConfig.OllamaEndpoint,
+			Model:       aiConfig.OllamaModel,
+			Temperature: aiConfig.OllamaTemperature,
+			Timeout:     aiConfig.OllamaTimeout,
 		})
 	case "qwen":
 		p, err = provider.NewQwenProvider(&provider.QwenConfig{
-			APIKey:      s.config.AI.Qwen.APIKey,
-			Endpoint:    s.config.AI.Qwen.Endpoint,
-			Model:       s.config.AI.Qwen.Model,
-			Temperature: s.config.AI.Qwen.Temperature,
-			Timeout:     s.config.AI.Qwen.Timeout,
+			APIKey:      aiConfig.QwenAPIKey,
+			Endpoint:    aiConfig.QwenEndpoint,
+			Model:       aiConfig.QwenModel,
+			Temperature: aiConfig.QwenTemperature,
+			Timeout:     aiConfig.QwenTimeout,
 		})
 	case "openai":
 		p, err = provider.NewOpenAIProvider(&provider.OpenAIConfig{
-			APIKey:      s.config.AI.OpenAI.APIKey,
-			Endpoint:    s.config.AI.OpenAI.Endpoint,
-			Model:       s.config.AI.OpenAI.Model,
-			Temperature: s.config.AI.OpenAI.Temperature,
-			MaxTokens:   s.config.AI.OpenAI.MaxTokens,
-			Timeout:     s.config.AI.OpenAI.Timeout,
+			APIKey:      aiConfig.OpenAIAPIKey,
+			Endpoint:    aiConfig.OpenAIEndpoint,
+			Model:       aiConfig.OpenAIModel,
+			Temperature: aiConfig.OpenAITemperature,
+			MaxTokens:   aiConfig.OpenAIMaxTokens,
+			Timeout:     aiConfig.OpenAITimeout,
 		})
 	case "vllm":
 		p, err = provider.NewVLLMProvider(&provider.VLLMConfig{
-			Endpoint:    s.config.AI.VLLM.Endpoint,
-			Model:       s.config.AI.VLLM.Model,
-			Temperature: s.config.AI.VLLM.Temperature,
-			MaxTokens:   s.config.AI.VLLM.MaxTokens,
-			Timeout:     s.config.AI.VLLM.Timeout,
+			Endpoint:    aiConfig.VLLMEndpoint,
+			Model:       aiConfig.VLLMModel,
+			Temperature: aiConfig.VLLMTemperature,
+			MaxTokens:   aiConfig.VLLMMaxTokens,
+			Timeout:     aiConfig.VLLMTimeout,
 		})
 	case "hybrid":
 		// 构建 hybrid provider 配置
-		primaryConfig, err := s.getProviderConfig(s.config.AI.Hybrid.Primary)
+		primaryConfig, err := s.getProviderConfigFromDB(aiConfig.HybridPrimary, aiConfig)
 		if err != nil {
 			return fmt.Errorf("get primary provider config: %w", err)
 		}
 
 		var fallbackConfig interface{}
-		if s.config.AI.Hybrid.Fallback != "" {
-			fallbackConfig, err = s.getProviderConfig(s.config.AI.Hybrid.Fallback)
+		if aiConfig.HybridFallback != "" {
+			fallbackConfig, err = s.getProviderConfigFromDB(aiConfig.HybridFallback, aiConfig)
 			if err != nil {
 				logger.Warnf("Failed to get fallback provider config: %v", err)
 				fallbackConfig = nil
@@ -112,13 +158,13 @@ func (s *aiService) initProvider() error {
 		}
 
 		p, err = provider.NewHybridProvider(&provider.HybridConfig{
-			Primary:        s.config.AI.Hybrid.Primary,
-			Fallback:       s.config.AI.Hybrid.Fallback,
+			Primary:        aiConfig.HybridPrimary,
+			Fallback:       aiConfig.HybridFallback,
 			PrimaryConfig:  primaryConfig,
 			FallbackConfig: fallbackConfig,
 		})
 	default:
-		return fmt.Errorf("unknown AI provider: %s", s.config.AI.Provider)
+		return fmt.Errorf("unknown AI provider: %s", aiConfig.Provider)
 	}
 
 	if err != nil {
@@ -127,13 +173,114 @@ func (s *aiService) initProvider() error {
 
 	// 检查 provider 是否可用
 	if !p.IsAvailable() {
-		return fmt.Errorf("AI provider %s is not available", s.config.AI.Provider)
+		return fmt.Errorf("AI provider %s is not available", aiConfig.Provider)
 	}
 
 	s.provider = p
 	logger.Infof("AI provider initialized: %s (cost=¥%.4f per photo)", p.Name(), p.Cost())
 
 	return nil
+}
+
+// loadAIConfig 加载 AI 配置（优先从数据库，其次从 YAML）
+func (s *aiService) loadAIConfig() *AIConfigFromDB {
+	aiConfig := &AIConfigFromDB{
+		// 默认值从 YAML 配置读取
+		Provider:    s.config.AI.Provider,
+		Temperature: s.config.AI.Temperature,
+		Timeout:     s.config.AI.Timeout,
+
+		OllamaEndpoint:    s.config.AI.Ollama.Endpoint,
+		OllamaModel:       s.config.AI.Ollama.Model,
+		OllamaTemperature: s.config.AI.Ollama.Temperature,
+		OllamaTimeout:     s.config.AI.Ollama.Timeout,
+
+		QwenAPIKey:      s.config.AI.Qwen.APIKey,
+		QwenEndpoint:    s.config.AI.Qwen.Endpoint,
+		QwenModel:       s.config.AI.Qwen.Model,
+		QwenTemperature: s.config.AI.Qwen.Temperature,
+		QwenTimeout:     s.config.AI.Qwen.Timeout,
+
+		OpenAIAPIKey:      s.config.AI.OpenAI.APIKey,
+		OpenAIEndpoint:    s.config.AI.OpenAI.Endpoint,
+		OpenAIModel:       s.config.AI.OpenAI.Model,
+		OpenAITemperature: s.config.AI.OpenAI.Temperature,
+		OpenAIMaxTokens:   s.config.AI.OpenAI.MaxTokens,
+		OpenAITimeout:     s.config.AI.OpenAI.Timeout,
+
+		VLLMEndpoint:    s.config.AI.VLLM.Endpoint,
+		VLLMModel:       s.config.AI.VLLM.Model,
+		VLLMTemperature: s.config.AI.VLLM.Temperature,
+		VLLMMaxTokens:   s.config.AI.VLLM.MaxTokens,
+		VLLMTimeout:     s.config.AI.VLLM.Timeout,
+
+		HybridPrimary:      s.config.AI.Hybrid.Primary,
+		HybridFallback:     s.config.AI.Hybrid.Fallback,
+		HybridRetryOnError: s.config.AI.Hybrid.RetryOnError,
+	}
+
+	// 尝试从数据库读取配置
+	if s.configService != nil {
+		dbConfig, err := s.configService.Get("ai")
+		if err == nil && dbConfig != nil && dbConfig.Value != "" {
+			var dbAIConfig AIConfigFromDB
+			if err := json.Unmarshal([]byte(dbConfig.Value), &dbAIConfig); err == nil {
+				// 数据库配置覆盖 YAML 配置
+				logger.Info("Loading AI config from database")
+				aiConfig = &dbAIConfig
+			}
+		}
+	}
+
+	// 设置默认值
+	if aiConfig.Temperature == 0 {
+		aiConfig.Temperature = 0.7
+	}
+	if aiConfig.Timeout == 0 {
+		aiConfig.Timeout = 60
+	}
+
+	return aiConfig
+}
+
+// getProviderConfigFromDB 从数据库配置获取指定 provider 的配置
+func (s *aiService) getProviderConfigFromDB(providerName string, aiConfig *AIConfigFromDB) (interface{}, error) {
+	switch providerName {
+	case "ollama":
+		return &provider.OllamaConfig{
+			Endpoint:    aiConfig.OllamaEndpoint,
+			Model:       aiConfig.OllamaModel,
+			Temperature: aiConfig.OllamaTemperature,
+			Timeout:     aiConfig.OllamaTimeout,
+		}, nil
+	case "qwen":
+		return &provider.QwenConfig{
+			APIKey:      aiConfig.QwenAPIKey,
+			Endpoint:    aiConfig.QwenEndpoint,
+			Model:       aiConfig.QwenModel,
+			Temperature: aiConfig.QwenTemperature,
+			Timeout:     aiConfig.QwenTimeout,
+		}, nil
+	case "openai":
+		return &provider.OpenAIConfig{
+			APIKey:      aiConfig.OpenAIAPIKey,
+			Endpoint:    aiConfig.OpenAIEndpoint,
+			Model:       aiConfig.OpenAIModel,
+			Temperature: aiConfig.OpenAITemperature,
+			MaxTokens:   aiConfig.OpenAIMaxTokens,
+			Timeout:     aiConfig.OpenAITimeout,
+		}, nil
+	case "vllm":
+		return &provider.VLLMConfig{
+			Endpoint:    aiConfig.VLLMEndpoint,
+			Model:       aiConfig.VLLMModel,
+			Temperature: aiConfig.VLLMTemperature,
+			MaxTokens:   aiConfig.VLLMMaxTokens,
+			Timeout:     aiConfig.VLLMTimeout,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unknown provider: %s", providerName)
+	}
 }
 
 // getProviderConfig 获取指定 provider 的配置

@@ -242,6 +242,255 @@
       </div>
     </el-card>
 
+    <!-- AI Provider Configuration Card -->
+    <el-card shadow="never" class="ai-card">
+      <template #header>
+        <div class="card-header">
+          <div>
+            <el-icon class="header-icon"><Cpu /></el-icon>
+            <span class="header-title">AI 分析服务配置</span>
+          </div>
+          <el-button type="primary" @click="handleSaveAIConfig" :loading="savingAI">
+            <el-icon><Check /></el-icon>
+            保存配置
+          </el-button>
+        </div>
+      </template>
+
+      <div v-loading="loadingAI">
+        <el-form :model="aiConfig" label-width="140px" class="ai-form">
+          <!-- Provider Selection -->
+          <el-form-item label="主要提供商">
+            <el-select v-model="aiConfig.provider" placeholder="选择 AI 提供商" style="width: 100%">
+              <el-option value="" label="未配置">
+                <div class="provider-option">
+                  <span>未配置</span>
+                  <el-tag size="small" type="info">禁用 AI</el-tag>
+                </div>
+              </el-option>
+              <el-option value="qwen" label="通义千问 (Qwen)">
+                <div class="provider-option">
+                  <span>通义千问 (Qwen)</span>
+                  <el-tag size="small" type="success">推荐</el-tag>
+                </div>
+              </el-option>
+              <el-option value="openai" label="OpenAI (GPT-4V)">
+                <div class="provider-option">
+                  <span>OpenAI (GPT-4V)</span>
+                  <el-tag size="small">高质量</el-tag>
+                </div>
+              </el-option>
+              <el-option value="ollama" label="Ollama (本地)">
+                <div class="provider-option">
+                  <span>Ollama (本地)</span>
+                  <el-tag size="small" type="warning">免费</el-tag>
+                </div>
+              </el-option>
+              <el-option value="vllm" label="vLLM (自部署)">
+                <div class="provider-option">
+                  <span>vLLM (自部署)</span>
+                  <el-tag size="small" type="warning">自部署</el-tag>
+                </div>
+              </el-option>
+              <el-option value="hybrid" label="混合模式">
+                <div class="provider-option">
+                  <span>混合模式</span>
+                  <el-tag size="small" type="info">主备切换</el-tag>
+                </div>
+              </el-option>
+            </el-select>
+            <div class="form-hint">
+              AI 提供商用于照片内容分析和标签生成
+            </div>
+          </el-form-item>
+
+          <!-- Global Settings -->
+          <el-divider content-position="left">全局设置</el-divider>
+
+          <el-form-item label="温度参数">
+            <el-slider v-model="aiConfig.temperature" :min="0" :max="1" :step="0.1" show-input style="max-width: 400px" />
+            <div class="form-hint">
+              较低的值产生更一致的结果，较高的值产生更多样化的结果
+            </div>
+          </el-form-item>
+
+          <el-form-item label="超时时间">
+            <el-input-number v-model="aiConfig.timeout" :min="10" :max="300" style="width: 150px" />
+            <span style="margin-left: 12px">秒</span>
+          </el-form-item>
+
+          <!-- Qwen Configuration -->
+          <el-divider content-position="left">
+            <el-icon><Cpu /></el-icon>
+            通义千问 (Qwen) 配置
+          </el-divider>
+
+          <el-form-item label="API Key">
+            <el-input
+              v-model="aiConfig.qwen_api_key"
+              placeholder="请输入通义千问 API Key"
+              type="password"
+              show-password
+            >
+              <template #append>
+                <el-button @click="openQwenDocs">
+                  <el-icon><Link /></el-icon>
+                  申请
+                </el-button>
+              </template>
+            </el-input>
+            <div class="form-hint">
+              访问 <a href="https://dashscope.console.aliyun.com/" target="_blank">阿里云 DashScope</a> 申请 API Key
+            </div>
+          </el-form-item>
+
+          <el-form-item label="API 端点">
+            <el-input v-model="aiConfig.qwen_endpoint" placeholder="默认使用阿里云端点" />
+          </el-form-item>
+
+          <el-form-item label="模型">
+            <el-select v-model="aiConfig.qwen_model" style="width: 100%">
+              <el-option value="qwen-vl-max" label="qwen-vl-max (推荐)" />
+              <el-option value="qwen-vl-plus" label="qwen-vl-plus (经济)" />
+            </el-select>
+          </el-form-item>
+
+          <!-- OpenAI Configuration -->
+          <el-divider content-position="left">
+            <el-icon><Cpu /></el-icon>
+            OpenAI 配置
+          </el-divider>
+
+          <el-form-item label="API Key">
+            <el-input
+              v-model="aiConfig.openai_api_key"
+              placeholder="请输入 OpenAI API Key"
+              type="password"
+              show-password
+            >
+              <template #append>
+                <el-button @click="openOpenAIDocs">
+                  <el-icon><Link /></el-icon>
+                  申请
+                </el-button>
+              </template>
+            </el-input>
+            <div class="form-hint">
+              访问 <a href="https://platform.openai.com/api-keys" target="_blank">OpenAI Platform</a> 申请 API Key
+            </div>
+          </el-form-item>
+
+          <el-form-item label="API 端点">
+            <el-input v-model="aiConfig.openai_endpoint" placeholder="默认使用 OpenAI 端点，可配置代理" />
+          </el-form-item>
+
+          <el-form-item label="模型">
+            <el-select v-model="aiConfig.openai_model" style="width: 100%">
+              <el-option value="gpt-4-vision-preview" label="GPT-4 Vision (推荐)" />
+              <el-option value="gpt-4o" label="GPT-4o" />
+              <el-option value="gpt-4o-mini" label="GPT-4o Mini (经济)" />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item label="最大 Tokens">
+            <el-input-number v-model="aiConfig.openai_max_tokens" :min="100" :max="4000" style="width: 150px" />
+          </el-form-item>
+
+          <!-- Ollama Configuration -->
+          <el-divider content-position="left">
+            <el-icon><Cpu /></el-icon>
+            Ollama (本地) 配置
+          </el-divider>
+
+          <el-form-item label="API 端点">
+            <el-input v-model="aiConfig.ollama_endpoint" placeholder="http://localhost:11434/api/generate" />
+            <div class="form-hint">
+              确保已安装并运行 Ollama，且已下载视觉模型 (如 llava)
+            </div>
+          </el-form-item>
+
+          <el-form-item label="模型">
+            <el-input v-model="aiConfig.ollama_model" placeholder="llava" />
+            <div class="form-hint">
+              推荐模型: llava, bakllava, moondream
+            </div>
+          </el-form-item>
+
+          <!-- vLLM Configuration -->
+          <el-divider content-position="left">
+            <el-icon><Cpu /></el-icon>
+            vLLM (自部署) 配置
+          </el-divider>
+
+          <el-form-item label="API 端点">
+            <el-input v-model="aiConfig.vllm_endpoint" placeholder="http://localhost:8000/v1/chat/completions" />
+            <div class="form-hint">
+              自部署的 vLLM 服务端点
+            </div>
+          </el-form-item>
+
+          <el-form-item label="模型名称">
+            <el-input v-model="aiConfig.vllm_model" placeholder="模型标识符" />
+          </el-form-item>
+
+          <el-form-item label="最大 Tokens">
+            <el-input-number v-model="aiConfig.vllm_max_tokens" :min="100" :max="4000" style="width: 150px" />
+          </el-form-item>
+
+          <!-- Hybrid Configuration -->
+          <el-divider content-position="left">
+            <el-icon><Cpu /></el-icon>
+            混合模式配置
+          </el-divider>
+
+          <el-form-item label="主提供商">
+            <el-select v-model="aiConfig.hybrid_primary" placeholder="选择主提供商" style="width: 100%">
+              <el-option value="qwen" label="通义千问 (Qwen)" />
+              <el-option value="openai" label="OpenAI" />
+              <el-option value="ollama" label="Ollama" />
+              <el-option value="vllm" label="vLLM" />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item label="备用提供商">
+            <el-select v-model="aiConfig.hybrid_fallback" placeholder="选择备用提供商" style="width: 100%">
+              <el-option value="" label="无备用" />
+              <el-option value="qwen" label="通义千问 (Qwen)" />
+              <el-option value="openai" label="OpenAI" />
+              <el-option value="ollama" label="Ollama" />
+              <el-option value="vllm" label="vLLM" />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item label="失败自动切换">
+            <el-switch v-model="aiConfig.hybrid_retry_on_error" />
+            <div class="form-hint">
+              主提供商失败时自动切换到备用提供商
+            </div>
+          </el-form-item>
+
+          <el-alert
+            title="配置提示"
+            type="info"
+            :closable="false"
+            style="margin-top: 16px"
+          >
+            <template #default>
+              <div>AI 配置保存后需要重启服务才能生效。</div>
+              <div style="margin-top: 8px">
+                <strong>推荐配置：</strong>
+                <ul style="margin: 4px 0; padding-left: 20px">
+                  <li>日常使用：通义千问 (性价比高，¥0.004/张)</li>
+                  <li>高质量分析：OpenAI GPT-4V (¥0.07/张)</li>
+                  <li>免费方案：Ollama + llava (本地运行)</li>
+                </ul>
+              </div>
+            </template>
+          </el-alert>
+        </el-form>
+      </div>
+    </el-card>
+
     <!-- Add/Edit Path Dialog -->
     <el-dialog
       v-model="dialogVisible"
@@ -280,7 +529,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { configApi, type ScanPathConfig, type GeocodeConfig } from '@/api/config'
+import { configApi, type ScanPathConfig, type GeocodeConfig, type AIConfig } from '@/api/config'
 import dayjs from 'dayjs'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -314,6 +563,11 @@ const geocodeConfig = ref<GeocodeConfig>({
 })
 const loadingGeocode = ref(false)
 const savingGeocode = ref(false)
+
+// AI configuration state
+const aiConfig = ref<AIConfig>(configApi.getDefaultAIConfig())
+const loadingAI = ref(false)
+const savingAI = ref(false)
 
 const formatTime = (time?: string) => {
   if (!time) return '-'
@@ -492,9 +746,43 @@ const openAmapDocs = () => {
   window.open('https://lbs.amap.com/', '_blank')
 }
 
+// AI configuration functions
+const loadAIConfig = async () => {
+  loadingAI.value = true
+  try {
+    const config = await configApi.getAIConfig()
+    aiConfig.value = config
+  } catch (error: any) {
+    ElMessage.error('加载 AI 配置失败')
+  } finally {
+    loadingAI.value = false
+  }
+}
+
+const handleSaveAIConfig = async () => {
+  savingAI.value = true
+  try {
+    await configApi.updateAIConfig(aiConfig.value)
+    ElMessage.success('AI 配置保存成功，重启服务后生效')
+  } catch (error: any) {
+    ElMessage.error('保存失败: ' + (error.message || '未知错误'))
+  } finally {
+    savingAI.value = false
+  }
+}
+
+const openQwenDocs = () => {
+  window.open('https://dashscope.console.aliyun.com/', '_blank')
+}
+
+const openOpenAIDocs = () => {
+  window.open('https://platform.openai.com/api-keys', '_blank')
+}
+
 onMounted(() => {
   loadScanPaths()
   loadGeocodeConfig()
+  loadAIConfig()
 })
 </script>
 
@@ -507,7 +795,8 @@ onMounted(() => {
 }
 
 .scan-paths-card,
-.geocode-card {
+.geocode-card,
+.ai-card {
   max-width: 1200px;
 }
 
@@ -605,7 +894,8 @@ onMounted(() => {
 }
 
 /* Geocode configuration styles */
-.geocode-form {
+.geocode-form,
+.ai-form {
   max-width: 800px;
 }
 

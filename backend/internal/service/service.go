@@ -20,8 +20,11 @@ type Services struct {
 
 // NewServices 创建所有服务
 func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB) *Services {
+	// 首先创建 Config 服务（其他服务可能需要访问配置）
+	configService := NewConfigService(repos.Config)
+
 	// 创建 AI 服务（可能失败，不阻塞其他服务）
-	aiService, err := NewAIService(repos.Photo, cfg)
+	aiService, err := NewAIService(repos.Photo, cfg, configService)
 	if err != nil {
 		logger.Warnf("Failed to initialize AI service: %v", err)
 		aiService = nil
@@ -45,7 +48,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		ESP32:   NewESP32Service(repos.ESP32Device, cfg),
 		AI:      aiService,
 		Export:  NewExportService(repos.Photo),
-		Config:  NewConfigService(repos.Config),
+		Config:  configService,
 		Geocode: geocodeService,
 	}
 }
