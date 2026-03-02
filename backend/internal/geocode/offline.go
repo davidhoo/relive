@@ -59,12 +59,60 @@ var countryNames = map[string]string{
 	"PE": "秘鲁",
 }
 
+// 中国省份代码到名称的映射（基于 GeoNames 的 admin1 代码）
+var chinaProvinceNames = map[string]string{
+	"01": "北京市",
+	"02": "天津市",
+	"03": "河北省",
+	"04": "山西省",
+	"05": "内蒙古自治区",
+	"06": "辽宁省",
+	"07": "吉林省",
+	"08": "黑龙江省",
+	"09": "上海市",
+	"10": "江苏省",
+	"11": "浙江省",
+	"12": "安徽省",
+	"13": "福建省",
+	"14": "江西省",
+	"15": "山东省",
+	"16": "河南省",
+	"17": "湖北省",
+	"18": "湖南省",
+	"19": "广东省",
+	"20": "广西壮族自治区",
+	"21": "海南省",
+	"22": "北京市", // 北京特殊，有时用 22
+	"23": "四川省",
+	"24": "贵州省",
+	"25": "云南省",
+	"26": "西藏自治区",
+	"27": "陕西省",
+	"28": "甘肃省",
+	"29": "青海省",
+	"30": "宁夏回族自治区",
+	"31": "新疆维吾尔自治区",
+	"32": "台湾省",
+	"33": "香港特别行政区",
+	"34": "澳门特别行政区",
+}
+
 // getCountryName 获取国家全称
 func getCountryName(code string) string {
 	if name, ok := countryNames[code]; ok {
 		return name
 	}
 	return code // 返回代码作为后备
+}
+
+// getProvinceName 获取省份名称
+func getProvinceName(country, adminCode string) string {
+	if country == "CN" {
+		if name, ok := chinaProvinceNames[adminCode]; ok {
+			return name
+		}
+	}
+	return adminCode
 }
 
 // OfflineProvider 离线地理编码提供商（基于城市数据库）
@@ -144,11 +192,19 @@ func (p *OfflineProvider) ReverseGeocode(lat, lon float64) (*Location, error) {
 		return nil, fmt.Errorf("nearest city is %.2f km away (max: %.0f km)", minDist, p.maxDistance)
 	}
 
+	// 转换省份代码为名称
+	countryName := getCountryName(nearestCity.Country)
+	provinceName := getProvinceName(nearestCity.Country, nearestCity.AdminName)
+
+	// 构建完整地址（使用逗号分隔）
+	// 格式：国家，省份，城市
+	fullName := fmt.Sprintf("%s，%s，%s", countryName, provinceName, nearestCity.Name)
+
 	location := &Location{
 		City:      nearestCity.Name,
-		Country:   getCountryName(nearestCity.Country),
-		Province:  nearestCity.AdminName, // TODO: 映射省份代码为名称
-		FullName:  fmt.Sprintf("%s %s %s", getCountryName(nearestCity.Country), nearestCity.AdminName, nearestCity.Name),
+		Country:   countryName,
+		Province:  provinceName,
+		FullName:  fullName,
 		Latitude:  lat,
 		Longitude: lon,
 		Provider:  p.Name(),
