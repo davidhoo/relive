@@ -59,9 +59,23 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="path" label="路径" min-width="200" show-overflow-tooltip>
+        <el-table-column prop="path" label="路径" min-width="180" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="path-text" :title="row.path">{{ row.path }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="照片数" width="90" align="center">
+          <template #default="{ row }">
+            <el-tag
+              :type="pathPhotoCounts[row.path] > 0 ? 'primary' : 'info'"
+              size="small"
+              effect="light"
+              class="photo-count-tag"
+            >
+              <el-icon><Picture /></el-icon>
+              <span>{{ pathPhotoCounts[row.path] || 0 }}</span>
+            </el-tag>
           </template>
         </el-table-column>
 
@@ -308,7 +322,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { photoApi } from '@/api/photo'
@@ -332,6 +346,17 @@ const rebuildingPathId = ref<string>('')
 const cleaningUp = ref(false)
 const categories = ref<string[]>([])
 const tags = ref<string[]>([])
+
+// 计算每个路径的照片数量
+const pathPhotoCounts = computed(() => {
+  const counts: Record<string, number> = {}
+  scanPaths.value.forEach(path => {
+    counts[path.path] = photos.value.filter(photo =>
+      photo.file_path?.startsWith(path.path)
+    ).length
+  })
+  return counts
+})
 
 // 获取照片缩略图 URL
 const getPhotoThumbnailUrl = (photoId: number) => {
@@ -831,6 +856,18 @@ defineExpose({
 .scan-time {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
+}
+
+/* 照片数量标签 */
+.photo-count-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: var(--font-weight-semibold);
+}
+
+.photo-count-tag .el-icon {
+  font-size: 12px;
 }
 
 /* 按钮组间隙 */
