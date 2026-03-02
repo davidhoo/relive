@@ -76,6 +76,21 @@ func (p *HybridProvider) MaxConcurrency() int {
 	return p.primary.MaxConcurrency()
 }
 
+// SupportsBatch 是否支持批量分析
+func (p *HybridProvider) SupportsBatch() bool {
+	return p.primary.SupportsBatch()
+}
+
+// MaxBatchSize 最大批量大小
+func (p *HybridProvider) MaxBatchSize() int {
+	return p.primary.MaxBatchSize()
+}
+
+// BatchCost 批量处理成本
+func (p *HybridProvider) BatchCost() float64 {
+	return p.primary.BatchCost()
+}
+
 // Analyze 分析照片
 func (p *HybridProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error) {
 	startTime := time.Now()
@@ -103,4 +118,35 @@ func (p *HybridProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error
 	}
 
 	return nil, fmt.Errorf("no available provider")
+}
+
+// AnalyzeBatch 批量分析照片
+func (p *HybridProvider) AnalyzeBatch(requests []*AnalyzeRequest) ([]*AnalyzeResult, error) {
+	startTime := time.Now()
+
+	// 尝试使用主 provider
+	if p.primary.IsAvailable() && p.primary.SupportsBatch() {
+		results, err := p.primary.AnalyzeBatch(requests)
+		if err == nil {
+			return results, nil
+		}
+		// 主 provider 失败，记录错误
+		logger.Warnf("Primary provider %s batch failed: %v, trying fallback", p.primary.Name(), err)
+	}
+
+	// 主 provider 不可用或不支持批量，使用备用 provider
+	if p.fallback != nil && p.fallback.IsAvailable() {
+		results, err := p.fallback.AnalyzeBatch(requests)
+		if err == nil {
+			// 标记使用了 fallback
+			for _, result := range results {
+				result.Provider = fmt.Sprintf("hybrid(%s->%s)", p.primary.Name(), p.fallback.Name())
+				result.Duration = time.Since(startTime) / time.Duration(len(requests))
+			}
+			return results, nil
+		}
+		return nil, fmt.Errorf("fallback provider %s also failed: %w", p.fallback.Name(), err)
+	}
+
+	return nil, fmt.Errorf("no available provider for batch analysis")
 }

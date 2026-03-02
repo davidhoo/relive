@@ -18,8 +18,12 @@ const (
 
 // AIProvider 统一的 AI 提供商接口
 type AIProvider interface {
-	// Analyze 分析照片
+	// Analyze 分析单张照片
 	Analyze(request *AnalyzeRequest) (*AnalyzeResult, error)
+
+	// AnalyzeBatch 批量分析照片（如果 provider 支持）
+	// 返回的结果顺序与 requests 顺序一致
+	AnalyzeBatch(requests []*AnalyzeRequest) ([]*AnalyzeResult, error)
 
 	// Name 返回 provider 名称
 	Name() string
@@ -27,11 +31,20 @@ type AIProvider interface {
 	// Cost 返回单次调用成本（人民币）
 	Cost() float64
 
+	// BatchCost 返回批量调用时每张照片的成本（可能更低）
+	BatchCost() float64
+
 	// IsAvailable 检查服务是否可用
 	IsAvailable() bool
 
 	// MaxConcurrency 最大并发数（防止过载）
 	MaxConcurrency() int
+
+	// SupportsBatch 是否支持批量分析
+	SupportsBatch() bool
+
+	// MaxBatchSize 最大批量大小
+	MaxBatchSize() int
 }
 
 // AnalyzeRequest 分析请求

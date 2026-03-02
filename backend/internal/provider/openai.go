@@ -79,6 +79,35 @@ func (p *OpenAIProvider) MaxConcurrency() int {
 	return 5 // OpenAI API 有速率限制
 }
 
+// SupportsBatch 是否支持批量分析
+func (p *OpenAIProvider) SupportsBatch() bool {
+	return false // OpenAI Vision 不支持多图批量分析
+}
+
+// MaxBatchSize 最大批量大小
+func (p *OpenAIProvider) MaxBatchSize() int {
+	return 1
+}
+
+// AnalyzeBatch 批量分析照片（OpenAI 不支持多图，逐个处理）
+func (p *OpenAIProvider) AnalyzeBatch(requests []*AnalyzeRequest) ([]*AnalyzeResult, error) {
+	results := make([]*AnalyzeResult, 0, len(requests))
+	for _, req := range requests {
+		result, err := p.Analyze(req)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, result)
+	}
+	return results, nil
+}
+
+// BatchCost 批量处理成本
+func (p *OpenAIProvider) BatchCost() float64 {
+	// OpenAI 批量处理没有折扣
+	return p.Cost()
+}
+
 // Analyze 分析照片
 func (p *OpenAIProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error) {
 	startTime := time.Now()

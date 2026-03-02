@@ -90,6 +90,34 @@ func (p *VLLMProvider) MaxConcurrency() int {
 	return 4 // VLLM 支持较高并发
 }
 
+// SupportsBatch 是否支持批量分析
+func (p *VLLMProvider) SupportsBatch() bool {
+	return false // VLLM 不支持多图批量分析
+}
+
+// MaxBatchSize 最大批量大小
+func (p *VLLMProvider) MaxBatchSize() int {
+	return 1
+}
+
+// AnalyzeBatch 批量分析照片（VLLM 不支持，逐个处理）
+func (p *VLLMProvider) AnalyzeBatch(requests []*AnalyzeRequest) ([]*AnalyzeResult, error) {
+	results := make([]*AnalyzeResult, 0, len(requests))
+	for _, req := range requests {
+		result, err := p.Analyze(req)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, result)
+	}
+	return results, nil
+}
+
+// BatchCost 批量处理成本
+func (p *VLLMProvider) BatchCost() float64 {
+	return 0.0
+}
+
 // Analyze 分析照片
 func (p *VLLMProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error) {
 	startTime := time.Now()

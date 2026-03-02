@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -77,14 +78,14 @@ func (h *AIHandler) Analyze(c *gin.Context) {
 	})
 }
 
-// AnalyzeBatch 批量分析照片
-// @Summary 批量分析照片
-// @Description 批量分析未分析的照片
+// AnalyzeBatch 批量分析照片（异步）
+// @Summary 批量分析照片（异步）
+// @Description 异步启动批量分析任务，立即返回任务ID
 // @Tags ai
 // @Accept json
 // @Produce json
 // @Param request body model.AIAnalyzeBatchRequest true "批量分析请求"
-// @Success 200 {object} model.Response{data=model.AIAnalyzeBatchResponse}
+// @Success 200 {object} model.Response{data=map[string]interface{}}
 // @Failure 400 {object} model.Response
 // @Failure 500 {object} model.Response
 // @Router /api/v1/ai/analyze/batch [post]
@@ -121,15 +122,15 @@ func (h *AIHandler) AnalyzeBatch(c *gin.Context) {
 		req.Limit = 1000
 	}
 
-	// 批量分析
-	result, err := h.aiService.AnalyzeBatch(req.Limit)
+	// 异步启动批量分析
+	task, err := h.aiService.AnalyzeBatch(req.Limit)
 	if err != nil {
 		logger.Errorf("Batch analyze failed: %v", err)
 		c.JSON(http.StatusInternalServerError, model.Response{
 			Success: false,
 			Error: &model.ErrorInfo{
 				Code:    "ANALYZE_FAILED",
-				Message: "Failed to batch analyze: " + err.Error(),
+				Message: "Failed to start batch analyze: " + err.Error(),
 			},
 		})
 		return
@@ -137,18 +138,23 @@ func (h *AIHandler) AnalyzeBatch(c *gin.Context) {
 
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
-		Message: "Batch analysis completed",
-		Data:    result,
+		Message: "Batch analysis task started",
+		Data: map[string]interface{}{
+			"task_id":     task.ID,
+			"status":      task.Status,
+			"total_count": task.TotalCount,
+			"queued":      task.TotalCount,
+		},
 	})
 }
 
 // GetProgress 获取分析进度
 // @Summary 获取分析进度
-// @Description 获取 AI 分析的进度和统计信息
+// @Description 获取 AI 分析的进度和统计信息（包含任务状态）
 // @Tags ai
 // @Accept json
 // @Produce json
-// @Success 200 {object} model.Response{data=model.AIAnalyzeProgressResponse}
+// @Success 200 {object} model.Response{data=map[string]interface{}}
 // @Failure 500 {object} model.Response
 // @Router /api/v1/ai/progress [get]
 func (h *AIHandler) GetProgress(c *gin.Context) {
@@ -163,7 +169,7 @@ func (h *AIHandler) GetProgress(c *gin.Context) {
 		return
 	}
 
-	// 获取进度
+	// 获取总体进度
 	progress, err := h.aiService.GetAnalyzeProgress()
 	if err != nil {
 		logger.Errorf("Get progress failed: %v", err)
@@ -177,10 +183,73 @@ func (h *AIHandler) GetProgress(c *gin.Context) {
 		return
 	}
 
+	// 获取当前任务状态
+	task := h.aiService.GetTaskStatus()
+
+	// 构建响应，兼容前端期望的格式
+	responseData := map[string]interface{}{
+		"total":          progress.Total,
+		"completed":      progress.Analyzed,
+		"failed":         0, // 从任务状态获取
+		"is_running":     false,
+		"current_photo_id": nil,
+		"started_at":     nil,
+		"provider":       progress.Provider,
+		"estimated_cost": progress.EstimatedCost,
+	}
+
+	if task != nil {
+		responseData["failed"] = task.FailedCount
+		responseData["is_running"] = task.IsRunning()
+		responseData["started_at"] = task.StartedAt
+		// 当前处理的照片ID可以从task推断
+		if task.IsRunning() && task.CurrentIndex > 0 && task.CurrentIndex <= task.TotalCount {
+			// 这里简化处理，实际可能需要更精确的状态
+		}
+	}
+
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
 		Message: "Success",
-		Data:    progress,
+		Data:    responseData,
+	})
+}
+
+// GetTaskStatus 获取当前任务状态
+// @Summary 获取当前任务状态
+// @Description 获取正在运行的批量分析任务状态
+// @Tags ai
+// @Accept json
+// @Produce json
+// @Success 200 {object} model.Response{data=service.AnalyzeTask}
+// @Failure 500 {object} model.Response
+// @Router /api/v1/ai/task [get]
+func (h *AIHandler) GetTaskStatus(c *gin.Context) {
+	if h.aiService == nil {
+		c.JSON(http.StatusServiceUnavailable, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "SERVICE_UNAVAILABLE",
+				Message: "AI service not configured",
+			},
+		})
+		return
+	}
+
+	task := h.aiService.GetTaskStatus()
+	if task == nil {
+		c.JSON(http.StatusOK, model.Response{
+			Success: true,
+			Message: "No active task",
+			Data:    nil,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "Success",
+		Data:    task,
 	})
 }
 
@@ -277,7 +346,18 @@ func (h *AIHandler) GetProviderInfo(c *gin.Context) {
 		"name":            provider.Name(),
 		"cost":            provider.Cost(),
 		"available":       provider.IsAvailable(),
+		"is_available":    provider.IsAvailable(), // 兼容前端字段名
 		"max_concurrency": provider.MaxConcurrency(),
+		"supports_batch":  provider.SupportsBatch(),
+		"max_batch_size":  provider.MaxBatchSize(),
+	}
+
+	// 计算预估成本
+	progress, _ := h.aiService.GetAnalyzeProgress()
+	if progress != nil && progress.EstimatedCost > 0 {
+		info["estimated_cost"] = fmt.Sprintf("¥%.2f", progress.EstimatedCost)
+	} else {
+		info["estimated_cost"] = "免费"
 	}
 
 	c.JSON(http.StatusOK, model.Response{

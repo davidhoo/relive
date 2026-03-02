@@ -1,5 +1,5 @@
 import { http } from '@/utils/request'
-import type { AIAnalyzeProgress, AIAnalyzeBatchResponse, AIProviderInfo } from '@/types/ai'
+import type { AIAnalyzeProgress, AIAnalyzeBatchResponse, AIAnalyzeTask, AIProviderInfo } from '@/types/ai'
 
 export const aiApi = {
   // 分析单张照片
@@ -25,5 +25,10 @@ export const aiApi = {
   // 获取 Provider 信息
   getProviderInfo() {
     return http.get<AIProviderInfo>('/ai/provider')
+  },
+
+  // 获取任务状态
+  getTaskStatus() {
+    return http.get<AIAnalyzeTask>('/ai/task')
   },
 }

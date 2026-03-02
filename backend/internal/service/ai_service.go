@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
@@ -14,16 +15,37 @@ import (
 	"github.com/davidhoo/relive/pkg/logger"
 )
 
+// AnalyzeTask 分析任务状态
+type AnalyzeTask struct {
+	ID            string    `json:"id"`
+	Status        string    `json:"status"` // pending, running, completed, failed
+	TotalCount    int       `json:"total_count"`
+	SuccessCount  int       `json:"success_count"`
+	FailedCount   int       `json:"failed_count"`
+	CurrentIndex  int       `json:"current_index"`
+	StartedAt     time.Time `json:"started_at"`
+	CompletedAt   *time.Time `json:"completed_at,omitempty"`
+	ErrorMessage  string    `json:"error_message,omitempty"`
+}
+
+// IsRunning 检查任务是否运行中
+func (t *AnalyzeTask) IsRunning() bool {
+	return t.Status == "running"
+}
+
 // AIService AI 分析服务接口
 type AIService interface {
 	// AnalyzePhoto 分析单张照片
 	AnalyzePhoto(photoID uint) error
 
-	// AnalyzeBatch 批量分析照片
-	AnalyzeBatch(limit int) (*model.AIAnalyzeBatchResponse, error)
+	// AnalyzeBatch 批量分析照片（异步启动）
+	AnalyzeBatch(limit int) (*AnalyzeTask, error)
 
 	// GetAnalyzeProgress 获取分析进度
 	GetAnalyzeProgress() (*model.AIAnalyzeProgressResponse, error)
+
+	// GetTaskStatus 获取任务状态
+	GetTaskStatus() *AnalyzeTask
 
 	// GetProvider 获取当前使用的 provider
 	GetProvider() (provider.AIProvider, error)
@@ -34,10 +56,12 @@ type AIService interface {
 
 // aiService AI 分析服务实现
 type aiService struct {
-	photoRepo    repository.PhotoRepository
-	config       *config.Config
+	photoRepo     repository.PhotoRepository
+	config        *config.Config
 	configService ConfigService
-	provider     provider.AIProvider
+	provider      provider.AIProvider
+	currentTask   *AnalyzeTask
+	taskMutex     sync.RWMutex
 }
 
 // AIConfigFromDB 数据库中存储的 AI 配置结构
@@ -438,61 +462,232 @@ func (s *aiService) AnalyzePhoto(photoID uint) error {
 	return nil
 }
 
-// AnalyzeBatch 批量分析照片
-func (s *aiService) AnalyzeBatch(limit int) (*model.AIAnalyzeBatchResponse, error) {
+// GetTaskStatus 获取当前任务状态
+func (s *aiService) GetTaskStatus() *AnalyzeTask {
+	s.taskMutex.RLock()
+	defer s.taskMutex.RUnlock()
+	return s.currentTask
+}
+
+// AnalyzeBatch 批量分析照片（异步启动）
+func (s *aiService) AnalyzeBatch(limit int) (*AnalyzeTask, error) {
 	if s.provider == nil {
 		return nil, fmt.Errorf("AI provider not configured")
+	}
+
+	// 检查是否已有运行中的任务
+	s.taskMutex.Lock()
+	if s.currentTask != nil && s.currentTask.IsRunning() {
+		s.taskMutex.Unlock()
+		return nil, fmt.Errorf("analysis task already running")
 	}
 
 	// 获取未分析的照片
 	photos, err := s.photoRepo.GetUnanalyzed(limit)
 	if err != nil {
+		s.taskMutex.Unlock()
 		return nil, fmt.Errorf("get unanalyzed photos: %w", err)
 	}
 
 	if len(photos) == 0 {
-		return &model.AIAnalyzeBatchResponse{
-			TotalCount:   0,
-			SuccessCount: 0,
-			FailedCount:  0,
-			TotalCost:    0,
-		}, nil
+		s.taskMutex.Unlock()
+		return nil, fmt.Errorf("no unanalyzed photos found")
 	}
 
-	logger.Infof("Starting batch analysis: %d photos", len(photos))
+	// 创建新任务
+	task := &AnalyzeTask{
+		ID:           fmt.Sprintf("task_%d", time.Now().Unix()),
+		Status:       "running",
+		TotalCount:   len(photos),
+		SuccessCount: 0,
+		FailedCount:  0,
+		CurrentIndex: 0,
+		StartedAt:    time.Now(),
+	}
+	s.currentTask = task
+	s.taskMutex.Unlock()
 
-	successCount := 0
-	failedCount := 0
-	totalCost := 0.0
-	startTime := time.Now()
+	logger.Infof("Starting async batch analysis: %d photos, task_id=%s, provider supports batch: %v, batch size: %d",
+		len(photos), task.ID, s.provider.SupportsBatch(), s.provider.MaxBatchSize())
 
-	// 逐个分析（后续可优化为并发）
+	// 异步执行分析
+	go s.runBatchAnalysis(task, photos)
+
+	return task, nil
+}
+
+// runBatchAnalysis 后台执行批量分析
+func (s *aiService) runBatchAnalysis(task *AnalyzeTask, photos []*model.Photo) {
+	successCount, failedCount, _ := 0, 0, 0.0
+
+	// 如果 provider 支持批量分析，使用批量模式
+	if s.provider.SupportsBatch() && s.provider.MaxBatchSize() > 1 {
+		successCount, failedCount, _ = s.analyzeInBatchesAsync(task, photos)
+	} else {
+		// 否则逐个分析
+		successCount, failedCount, _ = s.analyzeOneByOneAsync(task, photos)
+	}
+
+	// 更新任务完成状态
+	s.taskMutex.Lock()
+	task.Status = "completed"
+	task.SuccessCount = successCount
+	task.FailedCount = failedCount
+	now := time.Now()
+	task.CompletedAt = &now
+	s.taskMutex.Unlock()
+
+	logger.Infof("Batch analysis task %s completed: total=%d, success=%d, failed=%d",
+		task.ID, task.TotalCount, successCount, failedCount)
+}
+
+// analyzeOneByOneAsync 逐个分析照片（异步更新进度）
+func (s *aiService) analyzeOneByOneAsync(task *AnalyzeTask, photos []*model.Photo) (successCount, failedCount int, totalCost float64) {
 	for i, photo := range photos {
-		logger.Infof("Analyzing photo %d/%d: id=%d, path=%s", i+1, len(photos), photo.ID, photo.FileName)
+		// 更新当前索引
+		s.taskMutex.Lock()
+		task.CurrentIndex = i + 1
+		s.taskMutex.Unlock()
+
+		logger.Infof("[Task %s] Analyzing photo %d/%d: id=%d, path=%s", task.ID, i+1, len(photos), photo.ID, photo.FileName)
 
 		err := s.AnalyzePhoto(photo.ID)
 		if err != nil {
-			logger.Errorf("Failed to analyze photo %d: %v", photo.ID, err)
+			logger.Errorf("[Task %s] Failed to analyze photo %d: %v", task.ID, photo.ID, err)
 			failedCount++
+		} else {
+			successCount++
+			totalCost += s.provider.Cost()
+		}
+
+		// 更新任务进度
+		s.taskMutex.Lock()
+		task.SuccessCount = successCount
+		task.FailedCount = failedCount
+		s.taskMutex.Unlock()
+	}
+	return successCount, failedCount, totalCost
+}
+
+// analyzeInBatchesAsync 分批批量分析照片（异步更新进度）
+func (s *aiService) analyzeInBatchesAsync(task *AnalyzeTask, photos []*model.Photo) (successCount, failedCount int, totalCost float64) {
+	batchSize := s.provider.MaxBatchSize()
+
+	// 将照片分批
+	for i := 0; i < len(photos); i += batchSize {
+		end := i + batchSize
+		if end > len(photos) {
+			end = len(photos)
+		}
+		batch := photos[i:end]
+
+		// 更新当前索引
+		s.taskMutex.Lock()
+		task.CurrentIndex = end
+		s.taskMutex.Unlock()
+
+		logger.Infof("[Task %s] Processing batch %d/%d: photos %d-%d", task.ID, i/batchSize+1, (len(photos)+batchSize-1)/batchSize, i+1, end)
+
+		// 准备批量请求
+		requests := make([]*provider.AnalyzeRequest, 0, len(batch))
+		photoMap := make(map[int]*model.Photo)
+
+		for j, photo := range batch {
+			if photo.AIAnalyzed {
+				continue
+			}
+
+			imageData, err := os.ReadFile(photo.FilePath)
+			if err != nil {
+				logger.Errorf("[Task %s] Failed to read photo %d: %v", task.ID, photo.ID, err)
+				failedCount++
+				continue
+			}
+
+			processor := &util.ImageProcessor{
+				MaxLongSide: 768,
+				JPEGQuality: 80,
+			}
+			processedData, err := processor.ProcessForAI(photo.FilePath)
+			if err != nil {
+				processedData = imageData
+			}
+
+			req := &provider.AnalyzeRequest{
+				ImageData: processedData,
+				ImagePath: photo.FilePath,
+				ExifInfo: &provider.ExifInfo{
+					DateTime: formatDateTime(photo.TakenAt),
+					City:     photo.Location,
+					Model:    photo.CameraModel,
+				},
+				Options: &provider.AnalyzeOptions{
+					Temperature: s.config.AI.Temperature,
+					Timeout:     time.Duration(s.config.AI.Timeout) * time.Second,
+				},
+			}
+
+			requests = append(requests, req)
+			photoMap[len(requests)-1] = batch[j]
+		}
+
+		if len(requests) == 0 {
 			continue
 		}
 
-		successCount++
-		totalCost += s.provider.Cost()
+		// 调用批量分析
+		results, err := s.provider.AnalyzeBatch(requests)
+		if err != nil {
+			logger.Errorf("[Task %s] Batch analysis failed: %v", task.ID, err)
+			// 批量失败，回退到逐个分析
+			for idx := range photoMap {
+				photo := photoMap[idx]
+				if err := s.AnalyzePhoto(photo.ID); err != nil {
+					logger.Errorf("[Task %s] Failed to analyze photo %d: %v", task.ID, photo.ID, err)
+					failedCount++
+				} else {
+					successCount++
+					totalCost += s.provider.Cost()
+				}
+			}
+		} else {
+			// 保存结果
+			for idx, result := range results {
+				photo, ok := photoMap[idx]
+				if !ok {
+					continue
+				}
+
+				now := time.Now()
+				photo.AIAnalyzed = true
+				photo.AIProvider = result.Provider
+				photo.Description = result.Description
+				photo.Caption = result.Caption
+				photo.MainCategory = result.MainCategory
+				photo.Tags = result.Tags
+				photo.MemoryScore = int(result.MemoryScore)
+				photo.BeautyScore = int(result.BeautyScore)
+				photo.AnalyzedAt = &now
+				photo.OverallScore = int(float64(photo.MemoryScore)*0.7 + float64(photo.BeautyScore)*0.3)
+
+				if err := s.photoRepo.Update(photo); err != nil {
+					logger.Errorf("[Task %s] Failed to update photo %d: %v", task.ID, photo.ID, err)
+					failedCount++
+				} else {
+					successCount++
+					totalCost += s.provider.BatchCost()
+				}
+			}
+		}
+
+		// 更新任务进度
+		s.taskMutex.Lock()
+		task.SuccessCount = successCount
+		task.FailedCount = failedCount
+		s.taskMutex.Unlock()
 	}
 
-	duration := time.Since(startTime)
-
-	logger.Infof("Batch analysis completed: total=%d, success=%d, failed=%d, cost=¥%.2f, duration=%v",
-		len(photos), successCount, failedCount, totalCost, duration)
-
-	return &model.AIAnalyzeBatchResponse{
-		TotalCount:   len(photos),
-		SuccessCount: successCount,
-		FailedCount:  failedCount,
-		TotalCost:    totalCost,
-		Duration:     duration.Seconds(),
-	}, nil
+	return successCount, failedCount, totalCost
 }
 
 // GetAnalyzeProgress 获取分析进度
@@ -524,7 +719,8 @@ func (s *aiService) GetAnalyzeProgress() (*model.AIAnalyzeProgressResponse, erro
 	// 估算剩余成本（如果 provider 可用）
 	estimatedCost := 0.0
 	if s.provider != nil {
-		estimatedCost = float64(unanalyzed) * s.provider.Cost()
+		// 使用批量成本估算
+		estimatedCost = float64(unanalyzed) * s.provider.BatchCost()
 	}
 
 	return &model.AIAnalyzeProgressResponse{

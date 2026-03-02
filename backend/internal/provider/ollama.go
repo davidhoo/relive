@@ -85,6 +85,34 @@ func (p *OllamaProvider) MaxConcurrency() int {
 	return 1 // Ollama 本地运行，建议单线程
 }
 
+// SupportsBatch 是否支持批量分析
+func (p *OllamaProvider) SupportsBatch() bool {
+	return false // Ollama 不支持批量分析
+}
+
+// MaxBatchSize 最大批量大小
+func (p *OllamaProvider) MaxBatchSize() int {
+	return 1
+}
+
+// AnalyzeBatch 批量分析照片（Ollama 不支持，逐个处理）
+func (p *OllamaProvider) AnalyzeBatch(requests []*AnalyzeRequest) ([]*AnalyzeResult, error) {
+	results := make([]*AnalyzeResult, 0, len(requests))
+	for _, req := range requests {
+		result, err := p.Analyze(req)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, result)
+	}
+	return results, nil
+}
+
+// BatchCost 批量处理成本（Ollama 免费）
+func (p *OllamaProvider) BatchCost() float64 {
+	return 0.0
+}
+
 // Analyze 分析照片
 func (p *OllamaProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error) {
 	startTime := time.Now()

@@ -96,6 +96,7 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 				ai.POST("/analyze", handlers.AI.Analyze)
 				ai.POST("/analyze/batch", handlers.AI.AnalyzeBatch)
 				ai.GET("/progress", handlers.AI.GetProgress)
+				ai.GET("/task", handlers.AI.GetTaskStatus)
 				ai.POST("/reanalyze/:id", handlers.AI.ReAnalyze)
 				ai.GET("/provider", handlers.AI.GetProviderInfo)
 			} else {
@@ -113,6 +114,7 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 				ai.POST("/analyze", aiNotAvailable)
 				ai.POST("/analyze/batch", aiNotAvailable)
 				ai.GET("/progress", aiNotAvailable)
+				ai.GET("/task", aiNotAvailable)
 				ai.POST("/reanalyze/:id", aiNotAvailable)
 				ai.GET("/provider", aiNotAvailable)
 			}
