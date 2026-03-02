@@ -139,7 +139,7 @@
                 @click="gotoPhotoDetail(photo.id)"
               >
                 <el-image
-                  :src="getPhotoUrl(photo.id)"
+                  :src="getPhotoThumbnailUrl(photo.id)"
                   :preview-src-list="[getPhotoUrl(photo.id)]"
                   fit="cover"
                   class="image-card-image"
@@ -227,7 +227,13 @@ const progressStatus = computed(() => {
   return 'success'
 })
 
-// 获取照片 URL
+// 获取照片缩略图 URL
+const getPhotoThumbnailUrl = (photoId: number) => {
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
+  return `${baseUrl}/photos/${photoId}/thumbnail`
+}
+
+// 获取照片原图 URL（用于预览）
 const getPhotoUrl = (photoId: number) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
   return `${baseUrl}/photos/${photoId}/image`

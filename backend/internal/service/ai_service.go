@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -379,6 +380,28 @@ func (s *aiService) ReloadProvider() error {
 	return nil
 }
 
+// getImageDataForAI 获取用于 AI 分析的图片数据
+// 优先使用已生成的缩略图，如果不存在则使用原图
+func (s *aiService) getImageDataForAI(photo *model.Photo) ([]byte, string, error) {
+	// 优先使用缩略图（1024px，质量更好且已预处理）
+	if photo.ThumbnailPath != "" {
+		thumbnailPath := filepath.Join(s.config.Photos.ThumbnailPath, photo.ThumbnailPath)
+		if data, err := os.ReadFile(thumbnailPath); err == nil {
+			logger.Debugf("Using thumbnail for photo %d: %s", photo.ID, thumbnailPath)
+			return data, thumbnailPath, nil
+		} else {
+			logger.Warnf("Thumbnail not found for photo %d, falling back to original: %v", photo.ID, err)
+		}
+	}
+
+	// 回退到原图
+	data, err := os.ReadFile(photo.FilePath)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, photo.FilePath, nil
+}
+
 // AnalyzePhoto 分析单张照片
 func (s *aiService) AnalyzePhoto(photoID uint) error {
 	if s.provider == nil {
@@ -397,28 +420,31 @@ func (s *aiService) AnalyzePhoto(photoID uint) error {
 		return nil
 	}
 
-	// 读取照片文件
-	imageData, err := os.ReadFile(photo.FilePath)
+	// 获取图片数据（优先使用缩略图）
+	imageData, imagePath, err := s.getImageDataForAI(photo)
 	if err != nil {
 		return fmt.Errorf("read image file: %w", err)
 	}
 
-	// 预处理图片（压缩）
-	// 对于较大的模型（如 qwen3.5-plus），减小图片大小可以加快处理速度
-	processor := &util.ImageProcessor{
-		MaxLongSide: 768,  // 减小到 768px 以加快上传和处理速度
-		JPEGQuality: 80,   // 稍微降低质量以减小文件大小
+	// 如果使用的是原图（缩略图不存在），需要预处理
+	if imagePath == photo.FilePath {
+		processor := &util.ImageProcessor{
+			MaxLongSide: 768,
+			JPEGQuality: 80,
+		}
+		processedData, err := processor.ProcessForAI(photo.FilePath)
+		if err != nil {
+			logger.Warnf("Image preprocessing failed, using original: %v", err)
+			processedData = imageData
+		}
+		imageData = processedData
 	}
-	processedData, err := processor.ProcessForAI(photo.FilePath)
-	if err != nil {
-		logger.Warnf("Image preprocessing failed, using original: %v", err)
-		processedData = imageData
-	}
+	// 如果使用的是缩略图（1024px，质量90），直接使用即可
 
 	// 构建分析请求
 	req := &provider.AnalyzeRequest{
-		ImageData: processedData,
-		ImagePath: photo.FilePath,
+		ImageData: imageData,
+		ImagePath: imagePath,
 		ExifInfo: &provider.ExifInfo{
 			DateTime: formatDateTime(photo.TakenAt),
 			City:     photo.Location,
@@ -569,6 +595,25 @@ func (s *aiService) analyzeOneByOneAsync(task *AnalyzeTask, photos []*model.Phot
 	return successCount, failedCount, totalCost
 }
 
+// getImageDataForBatch 获取批量分析用的图片数据
+// 优先使用缩略图，如果不存在则使用原图并压缩
+func (s *aiService) getImageDataForBatch(photo *model.Photo) ([]byte, error) {
+	// 优先使用已生成的缩略图（1024px，质量90）
+	if photo.ThumbnailPath != "" {
+		thumbnailPath := filepath.Join(s.config.Photos.ThumbnailPath, photo.ThumbnailPath)
+		if data, err := os.ReadFile(thumbnailPath); err == nil {
+			return data, nil
+		}
+	}
+
+	// 回退到原图并压缩
+	processor := &util.ImageProcessor{
+		MaxLongSide: 768,
+		JPEGQuality: 80,
+	}
+	return processor.ProcessForAI(photo.FilePath)
+}
+
 // analyzeInBatchesAsync 分批批量分析照片（异步更新进度）
 func (s *aiService) analyzeInBatchesAsync(task *AnalyzeTask, photos []*model.Photo) (successCount, failedCount int, totalCost float64) {
 	batchSize := s.provider.MaxBatchSize()
@@ -597,24 +642,16 @@ func (s *aiService) analyzeInBatchesAsync(task *AnalyzeTask, photos []*model.Pho
 				continue
 			}
 
-			imageData, err := os.ReadFile(photo.FilePath)
+			// 获取图片数据（优先使用缩略图）
+			imageData, err := s.getImageDataForBatch(photo)
 			if err != nil {
-				logger.Errorf("[Task %s] Failed to read photo %d: %v", task.ID, photo.ID, err)
+				logger.Errorf("[Task %s] Failed to get image data for photo %d: %v", task.ID, photo.ID, err)
 				failedCount++
 				continue
 			}
 
-			processor := &util.ImageProcessor{
-				MaxLongSide: 768,
-				JPEGQuality: 80,
-			}
-			processedData, err := processor.ProcessForAI(photo.FilePath)
-			if err != nil {
-				processedData = imageData
-			}
-
 			req := &provider.AnalyzeRequest{
-				ImageData: processedData,
+				ImageData: imageData,
 				ImagePath: photo.FilePath,
 				ExifInfo: &provider.ExifInfo{
 					DateTime: formatDateTime(photo.TakenAt),

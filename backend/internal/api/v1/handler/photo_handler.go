@@ -636,6 +636,63 @@ func (h *PhotoHandler) GetPhotoImage(c *gin.Context) {
 	c.File(photo.FilePath)
 }
 
+// GetPhotoThumbnail 获取照片缩略图
+// @Summary 获取照片缩略图
+// @Description 返回预生成的缩略图，如果没有则返回原图
+// @Tags photos
+// @Accept json
+// @Produce image/jpeg
+// @Param id path int true "照片 ID"
+// @Success 200 {file} binary
+// @Failure 400 {object} model.Response
+// @Failure 404 {object} model.Response
+// @Failure 500 {object} model.Response
+// @Router /api/v1/photos/{id}/thumbnail [get]
+func (h *PhotoHandler) GetPhotoThumbnail(c *gin.Context) {
+	// 解析 ID
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INVALID_REQUEST",
+				Message: "Invalid photo ID",
+			},
+		})
+		return
+	}
+
+	// 查询照片
+	photo, err := h.photoService.GetPhotoByID(uint(id))
+	if err != nil {
+		logger.Errorf("Get photo by ID failed: %v", err)
+		c.JSON(http.StatusNotFound, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "NOT_FOUND",
+				Message: "Photo not found",
+			},
+		})
+		return
+	}
+
+	// 如果有预生成的缩略图，直接返回
+	if photo.ThumbnailPath != "" {
+		thumbnailFullPath := filepath.Join(h.cfg.Photos.ThumbnailPath, photo.ThumbnailPath)
+		if _, err := os.Stat(thumbnailFullPath); err == nil {
+			c.Header("Content-Type", "image/jpeg")
+			c.File(thumbnailFullPath)
+			return
+		}
+		// 缩略图文件不存在，记录警告并回退到原图
+		logger.Warnf("Thumbnail file not found: %s, falling back to original", thumbnailFullPath)
+	}
+
+	// 没有缩略图或缩略图不存在，返回原图
+	c.File(photo.FilePath)
+}
+
 // GetPhotoStats 获取照片统计
 // @Summary 获取照片统计
 // @Description 获取照片总数、已分析数、未分析数等统计信息

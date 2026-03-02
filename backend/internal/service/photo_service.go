@@ -45,17 +45,22 @@ type PhotoService interface {
 
 // photoService 照片服务实现
 type photoService struct {
-	repo           repository.PhotoRepository
-	config         *config.Config
-	geocodeService GeocodeService
+	repo               repository.PhotoRepository
+	config             *config.Config
+	geocodeService     GeocodeService
+	thumbnailGenerator *util.ThumbnailGenerator
 }
 
 // NewPhotoService 创建照片服务
 func NewPhotoService(repo repository.PhotoRepository, cfg *config.Config, geocodeService GeocodeService) PhotoService {
+	// 初始化缩略图生成器（1024px，兼顾展示和 AI 理解）
+	thumbnailGenerator := util.NewThumbnailGenerator(1024, 1024, 90, cfg.Photos.ThumbnailPath)
+
 	return &photoService{
-		repo:           repo,
-		config:         cfg,
-		geocodeService: geocodeService,
+		repo:               repo,
+		config:             cfg,
+		geocodeService:     geocodeService,
+		thumbnailGenerator: thumbnailGenerator,
 	}
 }
 
@@ -383,6 +388,17 @@ func (s *photoService) processPhoto(filePath string, info os.FileInfo) (*model.P
 			// 设置位置信息 - 使用完整格式（国家 省 市 区）
 			photo.Location = location.FormatFull()
 			logger.Debugf("Geocoded: (%f, %f) -> %s", *photo.GPSLatitude, *photo.GPSLongitude, photo.Location)
+		}
+	}
+
+	// 生成缩略图（如果尚未存在）
+	if s.thumbnailGenerator != nil {
+		thumbnailPath, err := s.thumbnailGenerator.GenerateThumbnailIfNotExists(filePath)
+		if err != nil {
+			logger.Warnf("Generate thumbnail failed: %s, error: %v", filePath, err)
+		} else {
+			photo.ThumbnailPath = thumbnailPath
+			logger.Debugf("Thumbnail generated: %s -> %s", filePath, thumbnailPath)
 		}
 	}
 

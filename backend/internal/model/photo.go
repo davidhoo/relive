@@ -21,6 +21,9 @@ type Photo struct {
 	FileModTime  *time.Time `json:"file_mod_time"`                                                  // 文件修改时间（来自文件系统）
 	FileCreateTime *time.Time `json:"file_create_time"`                                             // 文件创建时间（来自文件系统，可能为空）
 
+	// 缩略图
+	ThumbnailPath string `gorm:"type:varchar(500)" json:"thumbnail_path"` // 缩略图路径（相对于缩略图根目录）
+
 	// EXIF 信息
 	TakenAt      *time.Time `gorm:"index:idx_taken_at" json:"taken_at"`               // 拍摄时间
 	CameraModel  string     `gorm:"type:varchar(100)" json:"camera_model"`            // 相机型号

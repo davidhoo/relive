@@ -70,6 +70,7 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 			photos.GET("", handlers.Photo.GetPhotos)
 			photos.GET("/:id", handlers.Photo.GetPhotoByID)
 			photos.GET("/:id/image", handlers.Photo.GetPhotoImage)
+		photos.GET("/:id/thumbnail", handlers.Photo.GetPhotoThumbnail)
 		}
 
 		// 展示相关
