@@ -352,7 +352,21 @@
             <el-select v-model="aiConfig.qwen_model" style="width: 100%">
               <el-option value="qwen-vl-max" label="qwen-vl-max (推荐)" />
               <el-option value="qwen-vl-plus" label="qwen-vl-plus (经济)" />
+              <el-option value="qwen3.5-plus" label="qwen3.5-plus (最新，需更长超时)" />
             </el-select>
+          </el-form-item>
+
+          <el-form-item label="超时时间(秒)">
+            <el-input-number
+              v-model="aiConfig.qwen_timeout"
+              :min="30"
+              :max="300"
+              :step="10"
+              style="width: 100%"
+            />
+            <div class="form-hint">
+              默认 60 秒，使用 qwen3.5-plus 建议设置为 120 秒或更长
+            </div>
           </el-form-item>
 
           <!-- OpenAI Configuration -->

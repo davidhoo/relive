@@ -240,7 +240,7 @@ func (s *aiService) loadAIConfig() *AIConfigFromDB {
 		aiConfig.Temperature = 0.7
 	}
 	if aiConfig.Timeout == 0 {
-		aiConfig.Timeout = 60
+		aiConfig.Timeout = 120  // 默认 120 秒，支持更复杂的模型如 qwen3.5-plus
 	}
 
 	return aiConfig
@@ -380,9 +380,10 @@ func (s *aiService) AnalyzePhoto(photoID uint) error {
 	}
 
 	// 预处理图片（压缩）
+	// 对于较大的模型（如 qwen3.5-plus），减小图片大小可以加快处理速度
 	processor := &util.ImageProcessor{
-		MaxLongSide: 1024,
-		JPEGQuality: 85,
+		MaxLongSide: 768,  // 减小到 768px 以加快上传和处理速度
+		JPEGQuality: 80,   // 稍微降低质量以减小文件大小
 	}
 	processedData, err := processor.ProcessForAI(photo.FilePath)
 	if err != nil {

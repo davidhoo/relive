@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
@@ -343,6 +344,7 @@ func (s *photoService) processPhoto(filePath string, info os.FileInfo) (*model.P
 	}
 
 	// 构建 Photo 对象
+	now := time.Now()
 	photo := &model.Photo{
 		FilePath:     filePath,
 		FileName:     filepath.Base(filePath),
@@ -355,6 +357,8 @@ func (s *photoService) processPhoto(filePath string, info os.FileInfo) (*model.P
 		Orientation:  exifData.Orientation,
 		GPSLatitude:  exifData.GPSLatitude,
 		GPSLongitude: exifData.GPSLongitude,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 
 	// 如果有 GPS 坐标，尝试进行地理编码
