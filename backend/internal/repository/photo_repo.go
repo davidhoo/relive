@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
@@ -38,6 +40,10 @@ type PhotoRepository interface {
 	// 统计
 	Count() (int64, error)
 	CountByLocation() (map[string]int64, error)
+
+	// 分类和标签
+	GetCategories() ([]string, error)
+	GetTags() ([]string, error)
 
 	// 批量操作
 	BatchCreate(photos []*model.Photo, batchSize int) error
@@ -344,4 +350,50 @@ func (r *photoRepository) ListByPathPrefix(prefix string) ([]*model.Photo, error
 // SoftDeleteByPathPrefix 软删除指定路径前缀的所有照片
 func (r *photoRepository) SoftDeleteByPathPrefix(prefix string) error {
 	return r.db.Where("file_path LIKE ?", prefix+"%").Delete(&model.Photo{}).Error
+}
+
+// GetCategories 获取所有分类
+func (r *photoRepository) GetCategories() ([]string, error) {
+	var categories []string
+	err := r.db.Model(&model.Photo{}).
+		Where("main_category != ? AND main_category IS NOT NULL", "").
+		Distinct("main_category").
+		Pluck("main_category", &categories).Error
+	return categories, err
+}
+
+// GetTags 获取所有标签
+func (r *photoRepository) GetTags() ([]string, error) {
+	var tagRows []struct {
+		Tags string
+	}
+	err := r.db.Model(&model.Photo{}).
+		Where("tags != ? AND tags IS NOT NULL", "").
+		Pluck("tags", &tagRows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	// 解析所有标签并去重
+	tagMap := make(map[string]bool)
+	for _, row := range tagRows {
+		tags := strings.Split(row.Tags, ",")
+		for _, tag := range tags {
+			tag = strings.TrimSpace(tag)
+			if tag != "" {
+				tagMap[tag] = true
+			}
+		}
+	}
+
+	// 转换为切片
+	var result []string
+	for tag := range tagMap {
+		result = append(result, tag)
+	}
+
+	// 排序
+	sort.Strings(result)
+
+	return result, nil
 }

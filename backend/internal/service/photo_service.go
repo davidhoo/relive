@@ -31,6 +31,10 @@ type PhotoService interface {
 	CountAnalyzed() (int64, error)
 	CountUnanalyzed() (int64, error)
 
+	// 分类和标签
+	GetCategories() ([]string, error)
+	GetTags() ([]string, error)
+
 	// 地理编码
 	GeocodePhotoIfNeeded(photo *model.Photo) error
 }
@@ -478,4 +482,14 @@ func (s *photoService) GeocodePhotoIfNeeded(photo *model.Photo) error {
 	}()
 
 	return nil
+}
+
+// GetCategories 获取所有分类
+func (s *photoService) GetCategories() ([]string, error) {
+	return s.repo.GetCategories()
+}
+
+// GetTags 获取所有标签
+func (s *photoService) GetTags() ([]string, error) {
+	return s.repo.GetTags()
 }

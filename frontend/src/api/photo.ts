@@ -32,4 +32,14 @@ export const photoApi = {
   getStats() {
     return http.get<PhotoStats>('/photos/stats')
   },
+
+  // 获取所有分类
+  getCategories() {
+    return http.get<string[]>('/photos/categories')
+  },
+
+  // 获取所有标签
+  getTags() {
+    return http.get<string[]>('/photos/tags')
+  },
 }

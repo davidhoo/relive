@@ -669,3 +669,63 @@ func (h *PhotoHandler) GetPhotoStats(c *gin.Context) {
 		Data:    stats,
 	})
 }
+
+// GetCategories 获取所有照片分类
+// @Summary 获取所有照片分类
+// @Description 获取系统中所有不重复的照片分类
+// @Tags photos
+// @Accept json
+// @Produce json
+// @Success 200 {object} model.Response{data=[]string}
+// @Failure 500 {object} model.Response
+// @Router /api/v1/photos/categories [get]
+func (h *PhotoHandler) GetCategories(c *gin.Context) {
+	categories, err := h.photoService.GetCategories()
+	if err != nil {
+		logger.Errorf("Get categories failed: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "QUERY_FAILED",
+				Message: "Failed to get categories",
+			},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "Success",
+		Data:    categories,
+	})
+}
+
+// GetTags 获取所有照片标签
+// @Summary 获取所有照片标签
+// @Description 获取系统中所有不重复的照片标签
+// @Tags photos
+// @Accept json
+// @Produce json
+// @Success 200 {object} model.Response{data=[]string}
+// @Failure 500 {object} model.Response
+// @Router /api/v1/photos/tags [get]
+func (h *PhotoHandler) GetTags(c *gin.Context) {
+	tags, err := h.photoService.GetTags()
+	if err != nil {
+		logger.Errorf("Get tags failed: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "QUERY_FAILED",
+				Message: "Failed to get tags",
+			},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "Success",
+		Data:    tags,
+	})
+}

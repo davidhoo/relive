@@ -158,6 +158,44 @@
           </el-button>
         </div>
 
+        <!-- 分类筛选 -->
+        <div class="filter-section" v-if="categories.length > 0">
+          <div class="filter-label">
+            <el-icon><Collection /></el-icon>
+            <span>分类</span>
+          </div>
+          <div class="filter-tags">
+            <el-tag
+              v-for="category in categories"
+              :key="category"
+              :type="searchQuery === category ? 'primary' : 'info'"
+              class="filter-tag"
+              @click="handleFilterClick(category)"
+            >
+              {{ category }}
+            </el-tag>
+          </div>
+        </div>
+
+        <!-- 标签筛选 -->
+        <div class="filter-section" v-if="tags.length > 0">
+          <div class="filter-label">
+            <el-icon><PriceTag /></el-icon>
+            <span>标签</span>
+          </div>
+          <div class="filter-tags">
+            <el-tag
+              v-for="tag in tags"
+              :key="tag"
+              :type="searchQuery === tag ? 'primary' : 'info'"
+              class="filter-tag"
+              @click="handleFilterClick(tag)"
+            >
+              {{ tag }}
+            </el-tag>
+          </div>
+        </div>
+
         <!-- 统计信息和筛选 -->
         <div class="photos-stats">
           <div class="stats-left">
@@ -285,6 +323,8 @@ const scanPathLoading = ref(false)
 const scanningPathId = ref<string>('')
 const rebuildingPathId = ref<string>('')
 const cleaningUp = ref(false)
+const categories = ref<string[]>([])
+const tags = ref<string[]>([])
 
 // 获取照片 URL
 const getPhotoUrl = (photoId: number) => {
@@ -435,6 +475,32 @@ const loadScanPaths = async () => {
   }
 }
 
+// 加载分类和标签
+const loadCategoriesAndTags = async () => {
+  try {
+    const [categoriesRes, tagsRes] = await Promise.all([
+      photoApi.getCategories(),
+      photoApi.getTags()
+    ])
+    categories.value = categoriesRes.data || []
+    tags.value = tagsRes.data || []
+  } catch (error: any) {
+    console.error('Failed to load categories and tags:', error)
+  }
+}
+
+// 点击分类/标签筛选
+const handleFilterClick = (value: string) => {
+  if (searchQuery.value === value) {
+    // 如果已经选中了，取消筛选
+    searchQuery.value = ''
+  } else {
+    searchQuery.value = value
+  }
+  currentPage.value = 1
+  loadPhotos()
+}
+
 // 扫描指定路径
 const handleScanPath = async (path: ScanPathConfig) => {
   if (!path.enabled) {
@@ -534,6 +600,9 @@ onMounted(() => {
 
   // 加载系统总照片数
   loadSystemTotal()
+
+  // 加载分类和标签
+  loadCategoriesAndTags()
 
   // 从 URL 参数恢复状态
   const query = router.currentRoute.value.query
@@ -1146,6 +1215,44 @@ defineExpose({
   .photo-grid {
     grid-template-columns: repeat(2, 1fr);
   }
+}
+
+/* 分类和标签筛选 */
+.filter-section {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+  padding: var(--spacing-md) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.filter-label {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  padding-top: 6px;
+}
+
+.filter-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+  flex: 1;
+}
+
+.filter-tag {
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.filter-tag:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
 }
 
 </style>
