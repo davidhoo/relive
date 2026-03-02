@@ -77,9 +77,9 @@ func (r *photoRepository) Update(photo *model.Photo) error {
 	return r.db.Save(photo).Error
 }
 
-// Delete 删除照片（软删除）
+// Delete 删除照片（硬删除）
 func (r *photoRepository) Delete(id uint) error {
-	return r.db.Delete(&model.Photo{}, id).Error
+	return r.db.Unscoped().Delete(&model.Photo{}, "id = ?", id).Error
 }
 
 // GetByID 根据 ID 获取照片
