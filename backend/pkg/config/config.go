@@ -14,6 +14,7 @@ type Config struct {
 	Photos   PhotosConfig   `yaml:"photos"`
 	AI       AIConfig       `yaml:"ai"`
 	Display  DisplayConfig  `yaml:"display"`
+	Geocode  GeocodeConfig  `yaml:"geocode"`  // 新增：地理编码配置
 	Logging  LoggingConfig  `yaml:"logging"`
 	Security SecurityConfig `yaml:"security"`
 }
@@ -117,6 +118,26 @@ type SecurityConfig struct {
 	JWTSecret    string `yaml:"jwt_secret"`     // JWT 密钥
 	APIKeyPrefix string `yaml:"api_key_prefix"` // API Key 前缀
 }
+
+// GeocodeConfig 地理编码配置
+type GeocodeConfig struct {
+	Provider     string `yaml:"provider"`      // 主要提供商：amap / nominatim / offline
+	Fallback     string `yaml:"fallback"`      // 备用提供商
+	CacheEnabled bool   `yaml:"cache_enabled"` // 是否启用缓存
+	CacheTTL     int    `yaml:"cache_ttl"`     // 缓存有效期（秒）
+
+	// AMap 高德地图
+	AMapAPIKey  string `yaml:"amap_api_key"`
+	AMapTimeout int    `yaml:"amap_timeout"`
+
+	// Nominatim (OpenStreetMap)
+	NominatimEndpoint string `yaml:"nominatim_endpoint"`
+	NominatimTimeout  int    `yaml:"nominatim_timeout"`
+
+	// Offline
+	OfflineMaxDistance float64 `yaml:"offline_max_distance"` // 最大搜索距离（km）
+}
+
 
 // Load 加载配置文件
 func Load(path string) (*Config, error) {

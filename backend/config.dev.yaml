@@ -27,7 +27,7 @@ photos:
 
 # AI 配置
 ai:
-  provider: "ollama"  # ollama / qwen / openai / vllm / hybrid
+  provider: "qwen"  # ollama / qwen / openai / vllm / hybrid
   timeout: 60
   temperature: 0.7
 
@@ -67,6 +67,24 @@ ai:
   hybrid:
     primary: "ollama"    # 主要 provider
     fallback: "qwen"     # 备用 provider（当主 provider 失败时使用）
+
+# 地理编码配置
+geocode:
+  provider: "offline"  # offline / amap / nominatim
+  fallback: "nominatim"  # 备用提供商
+  cache_enabled: true
+  cache_ttl: 86400  # 缓存有效期（秒），默认 24 小时
+
+  # 高德地图配置
+  amap_api_key: ""  # 需要填写真实的 API Key（申请地址：https://lbs.amap.com/）
+  amap_timeout: 10  # 超时时间（秒）
+
+  # Nominatim (OpenStreetMap) 配置
+  nominatim_endpoint: "https://nominatim.openstreetmap.org/reverse"
+  nominatim_timeout: 10
+
+  # 离线数据库配置
+  offline_max_distance: 100  # 最大搜索距离（km）
 
 # 展示策略
 display:

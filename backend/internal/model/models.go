@@ -91,12 +91,13 @@ func (AppConfig) TableName() string {
 
 // City 城市信息（用于 GPS 转城市名）
 type City struct {
-	ID        uint   `gorm:"primarykey" json:"id"`
-	GeonameID int    `gorm:"not null;uniqueIndex:idx_geoname_id" json:"geoname_id"` // GeoNames ID
-	Name      string `gorm:"type:varchar(200);not null;index:idx_name" json:"name"` // 城市名
-	Country   string `gorm:"type:varchar(100);not null" json:"country"`             // 国家
-	Latitude  float64 `gorm:"not null;index:idx_lat" json:"latitude"`               // 纬度
-	Longitude float64 `gorm:"not null;index:idx_lon" json:"longitude"`              // 经度
+	ID        uint    `gorm:"primarykey" json:"id"`
+	GeonameID int     `gorm:"not null;uniqueIndex:idx_geoname_id" json:"geoname_id"` // GeoNames ID
+	Name      string  `gorm:"type:varchar(200);not null;index:idx_name" json:"name"` // 城市名
+	AdminName string  `gorm:"type:varchar(200)" json:"admin_name"`                    // 省/州名
+	Country   string  `gorm:"type:varchar(100);not null" json:"country"`              // 国家
+	Latitude  float64 `gorm:"not null;index:idx_lat" json:"latitude"`                 // 纬度
+	Longitude float64 `gorm:"not null;index:idx_lon" json:"longitude"`                // 经度
 }
 
 // TableName 指定表名

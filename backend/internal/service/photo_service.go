@@ -31,15 +31,17 @@ type PhotoService interface {
 
 // photoService 照片服务实现
 type photoService struct {
-	repo   repository.PhotoRepository
-	config *config.Config
+	repo           repository.PhotoRepository
+	config         *config.Config
+	geocodeService GeocodeService
 }
 
 // NewPhotoService 创建照片服务
-func NewPhotoService(repo repository.PhotoRepository, cfg *config.Config) PhotoService {
+func NewPhotoService(repo repository.PhotoRepository, cfg *config.Config, geocodeService GeocodeService) PhotoService {
 	return &photoService{
-		repo:   repo,
-		config: cfg,
+		repo:           repo,
+		config:         cfg,
+		geocodeService: geocodeService,
 	}
 }
 
@@ -191,6 +193,18 @@ func (s *photoService) processPhoto(filePath string, info os.FileInfo) (*model.P
 		Orientation:  exifData.Orientation,
 		GPSLatitude:  exifData.GPSLatitude,
 		GPSLongitude: exifData.GPSLongitude,
+	}
+
+	// 如果有 GPS 坐标，尝试进行地理编码
+	if photo.GPSLatitude != nil && photo.GPSLongitude != nil && s.geocodeService != nil {
+		location, err := s.geocodeService.ReverseGeocode(*photo.GPSLatitude, *photo.GPSLongitude)
+		if err != nil {
+			logger.Warnf("Geocode failed for (%f, %f): %v", *photo.GPSLatitude, *photo.GPSLongitude, err)
+		} else {
+			// 设置位置信息
+			photo.Location = location.FormatShort()
+			logger.Debugf("Geocoded: (%f, %f) -> %s", *photo.GPSLatitude, *photo.GPSLongitude, photo.Location)
+		}
 	}
 
 	return photo, nil

@@ -42,7 +42,7 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 	repos := repository.NewRepositories(db)
 
 	// 初始化 Services
-	services := service.NewServices(repos, cfg)
+	services := service.NewServices(repos, cfg, db)
 
 	// 初始化 Handlers
 	handlers := handler.NewHandlers(db, services)
@@ -61,9 +61,11 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 		photos := v1.Group("/photos")
 		{
 			photos.POST("/scan", handlers.Photo.ScanPhotos)
+			photos.POST("/validate-path", handlers.Photo.ValidatePath)
 			photos.GET("/stats", handlers.Photo.GetPhotoStats) // 具体路径要在参数路径之前
 			photos.GET("", handlers.Photo.GetPhotos)
 			photos.GET("/:id", handlers.Photo.GetPhotoByID)
+			photos.GET("/:id/image", handlers.Photo.GetPhotoImage)
 		}
 
 		// 展示相关
