@@ -104,6 +104,12 @@ export const configApi = {
     await http.put('/config/photos.scan_paths', { value })
   },
 
+  // Delete scan path and associated data
+  deleteScanPath: async (pathId: string): Promise<{ success: boolean; message: string }> => {
+    const response = await http.delete<{ success: boolean; message: string }>(`/config/scan-paths/${pathId}`)
+    return response.data || { success: false, message: 'Unknown error' }
+  },
+
   // Validate a scan path
   validatePath: async (path: string): Promise<{ valid: boolean; error?: string }> => {
     const response = await http.post<{ valid: boolean; error?: string }>('/photos/validate-path', { path })

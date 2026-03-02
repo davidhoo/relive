@@ -54,7 +54,7 @@
             <el-button link @click="handleEditPath(path)" style="color: var(--color-primary)">
               编辑
             </el-button>
-            <el-button link @click="handleDeletePath(path.id)" style="color: var(--color-error)">
+            <el-button link @click="handleDeletePath(path)" style="color: var(--color-error)">
               删除
             </el-button>
           </div>
@@ -690,19 +690,39 @@ const handleSavePath = async () => {
   }
 }
 
-const handleDeletePath = async (pathId: string) => {
+const handleDeletePath = async (path: ScanPathConfig) => {
   try {
-    await ElMessageBox.confirm('确定要删除此路径吗？', '确认删除', {
+    // 查找路径对应的照片数量
+    const photoCount = await getPhotoCountByPath(path.path)
+
+    let message = `确定要删除扫描路径「${path.name}」吗？`
+    if (photoCount > 0) {
+      message += `<br><br><strong style="color: var(--color-error)">警告：该路径下有 ${photoCount} 张照片，删除路径将同时删除这些照片的数据库记录和缩略图！</strong>`
+    }
+
+    await ElMessageBox.confirm(message, '确认删除', {
       type: 'warning',
+      dangerouslyUseHTMLString: true,
+      confirmButtonText: '确认删除',
+      cancelButtonText: '取消',
     })
 
-    const newPaths = scanPaths.value.filter(p => p.id !== pathId)
-    await configApi.updateScanPaths({ paths: newPaths })
-    ElMessage.success('删除成功')
+    // 调用新 API 删除路径及其关联数据
+    const result = await configApi.deleteScanPath(path.id)
+    ElMessage.success(result.message || '删除成功')
     await loadScanPaths()
-  } catch {
-    // User cancelled
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.message || '删除失败')
+    }
   }
+}
+
+// 获取路径下的照片数量（用于提示）
+const getPhotoCountByPath = async (path: string): Promise<number> => {
+  // 这里可以通过 API 获取，暂时返回 0，让后端处理
+  // 也可以添加一个新 API 来查询路径下的照片数量
+  return 0
 }
 
 const handleSetDefault = async (path: ScanPathConfig) => {

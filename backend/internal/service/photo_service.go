@@ -37,6 +37,10 @@ type PhotoService interface {
 
 	// 地理编码
 	GeocodePhotoIfNeeded(photo *model.Photo) error
+
+	// 删除路径相关
+	DeletePhotosByPathPrefix(pathPrefix string) (int64, error)
+	GetPhotoIDsByPathPrefix(pathPrefix string) ([]uint, error)
 }
 
 // photoService 照片服务实现
@@ -492,4 +496,39 @@ func (s *photoService) GetCategories() ([]string, error) {
 // GetTags 获取所有标签
 func (s *photoService) GetTags() ([]string, error) {
 	return s.repo.GetTags()
+}
+
+// DeletePhotosByPathPrefix 根据路径前缀删除照片
+func (s *photoService) DeletePhotosByPathPrefix(pathPrefix string) (int64, error) {
+	photos, err := s.repo.ListByPathPrefix(pathPrefix)
+	if err != nil {
+		return 0, fmt.Errorf("list photos by path prefix: %w", err)
+	}
+
+	count := int64(0)
+	for _, photo := range photos {
+		if err := s.repo.Delete(photo.ID); err != nil {
+			logger.Warnf("Failed to delete photo %d: %v", photo.ID, err)
+			continue
+		}
+		count++
+	}
+
+	logger.Infof("Deleted %d photos with path prefix: %s", count, pathPrefix)
+	return count, nil
+}
+
+// GetPhotoIDsByPathPrefix 根据路径前缀获取照片ID列表
+func (s *photoService) GetPhotoIDsByPathPrefix(pathPrefix string) ([]uint, error) {
+	photos, err := s.repo.ListByPathPrefix(pathPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("list photos by path prefix: %w", err)
+	}
+
+	ids := make([]uint, 0, len(photos))
+	for _, photo := range photos {
+		ids = append(ids, photo.ID)
+	}
+
+	return ids, nil
 }

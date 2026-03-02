@@ -1,25 +1,35 @@
 package handler
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/service"
+	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/logger"
 	"github.com/gin-gonic/gin"
 )
 
 // ConfigHandler 配置处理器
 type ConfigHandler struct {
-	service     service.ConfigService
-	aiService   service.AIService
+	service       service.ConfigService
+	aiService     service.AIService
+	photoService  service.PhotoService
+	cfg           *config.Config
 }
 
 // NewConfigHandler 创建配置处理器
-func NewConfigHandler(service service.ConfigService, aiService service.AIService) *ConfigHandler {
+func NewConfigHandler(service service.ConfigService, aiService service.AIService, photoService service.PhotoService, cfg *config.Config) *ConfigHandler {
 	return &ConfigHandler{
-		service:   service,
-		aiService: aiService,
+		service:      service,
+		aiService:    aiService,
+		photoService: photoService,
+		cfg:          cfg,
 	}
 }
 
@@ -277,5 +287,167 @@ func (h *ConfigHandler) SetBatchConfigs(c *gin.Context) {
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
 		Message: "Configs updated successfully",
+	})
+}
+
+// ScanPathConfig 扫描路径配置（用于解析）
+type ScanPathConfig struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Path          string `json:"path"`
+	IsDefault     bool   `json:"is_default"`
+	Enabled       bool   `json:"enabled"`
+	CreatedAt     string `json:"created_at"`
+	LastScannedAt string `json:"last_scanned_at,omitempty"`
+}
+
+// ScanPathsConfig 扫描路径配置集合
+type ScanPathsConfig struct {
+	Paths []ScanPathConfig `json:"paths"`
+}
+
+// DeleteScanPath 删除扫描路径及其关联数据
+// @Summary 删除扫描路径及其关联数据
+// @Description 删除指定的扫描路径配置，同时删除该路径下所有照片的数据库记录和缩略图文件
+// @Tags Config
+// @Produce json
+// @Param id path string true "路径 ID"
+// @Success 200 {object} model.Response
+// @Failure 400 {object} model.Response
+// @Failure 404 {object} model.Response
+// @Failure 500 {object} model.Response
+// @Router /api/v1/config/scan-paths/{id} [delete]
+func (h *ConfigHandler) DeleteScanPath(c *gin.Context) {
+	pathID := c.Param("id")
+	if pathID == "" {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INVALID_ID",
+				Message: "Path ID is required",
+			},
+		})
+		return
+	}
+
+	// 获取当前扫描路径配置
+	configValue, err := h.service.GetWithDefault("photos.scan_paths", "")
+	if err != nil {
+		logger.Errorf("Failed to get scan paths config: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "GET_CONFIG_FAILED",
+				Message: "Failed to get scan paths configuration",
+			},
+		})
+		return
+	}
+
+	var scanPathsConfig ScanPathsConfig
+	if err := json.Unmarshal([]byte(configValue), &scanPathsConfig); err != nil {
+		logger.Errorf("Failed to parse scan paths config: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "PARSE_CONFIG_FAILED",
+				Message: "Failed to parse scan paths configuration",
+			},
+		})
+		return
+	}
+
+	// 查找要删除的路径
+	var targetPath string
+	var newPaths []ScanPathConfig
+	found := false
+	for _, path := range scanPathsConfig.Paths {
+		if path.ID == pathID {
+			targetPath = path.Path
+			found = true
+			continue
+		}
+		newPaths = append(newPaths, path)
+	}
+
+	if !found {
+		c.JSON(http.StatusNotFound, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "PATH_NOT_FOUND",
+				Message: "Scan path not found",
+			},
+		})
+		return
+	}
+
+	// 删除该路径下的所有照片记录
+	deletedCount, err := h.photoService.DeletePhotosByPathPrefix(targetPath)
+	if err != nil {
+		logger.Errorf("Failed to delete photos for path %s: %v", targetPath, err)
+		// 继续执行，不中断流程
+	}
+
+	// 删除缩略图文件
+	thumbnailPath := h.cfg.Photos.ThumbnailPath
+	if thumbnailPath == "" {
+		thumbnailPath = "./data/thumbnails"
+	}
+
+	// 遍历缩略图目录，删除与该路径相关的缩略图
+	// 由于缩略图是以 photo ID 命名的，我们需要先获取该路径下的所有照片 ID
+	// 然后通过 photoService 来获取这些 ID
+	photoIDs, err := h.photoService.GetPhotoIDsByPathPrefix(targetPath)
+	if err != nil {
+		logger.Warnf("Failed to get photo IDs for path %s: %v", targetPath, err)
+	} else {
+		for _, id := range photoIDs {
+			// 删除缩略图文件
+			hexStr := fmt.Sprintf("%04x", id)
+			subDir1 := hexStr[0:2]
+			subDir2 := hexStr[2:4]
+			thumbnailFile := filepath.Join(thumbnailPath, subDir1, subDir2, strconv.FormatUint(uint64(id), 10)+".jpg")
+			if err := os.Remove(thumbnailFile); err != nil && !os.IsNotExist(err) {
+				logger.Warnf("Failed to remove thumbnail for photo %d: %v", id, err)
+			}
+		}
+	}
+
+	// 更新扫描路径配置
+	scanPathsConfig.Paths = newPaths
+	newConfigValue, err := json.Marshal(scanPathsConfig)
+	if err != nil {
+		logger.Errorf("Failed to marshal scan paths config: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "MARSHAL_CONFIG_FAILED",
+				Message: "Failed to serialize scan paths configuration",
+			},
+		})
+		return
+	}
+
+	if err := h.service.Set("photos.scan_paths", string(newConfigValue)); err != nil {
+		logger.Errorf("Failed to save scan paths config: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "SAVE_CONFIG_FAILED",
+				Message: "Failed to save scan paths configuration",
+			},
+		})
+		return
+	}
+
+	message := "Scan path deleted successfully"
+	if deletedCount > 0 {
+		message = fmt.Sprintf("Scan path deleted successfully. Removed %d photos and their thumbnails.", deletedCount)
+	}
+
+	logger.Infof("Scan path %s (%s) deleted. Removed %d photos.", pathID, targetPath, deletedCount)
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: message,
 	})
 }
