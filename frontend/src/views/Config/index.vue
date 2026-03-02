@@ -968,10 +968,12 @@ onMounted(() => {
   display: flex;
   gap: 12px;
   align-items: center;
+  width: 100%;
 }
 
 .input-with-button .el-input {
   flex: 1;
+  min-width: 0;
 }
 
 .input-with-button .el-button {
