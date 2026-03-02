@@ -46,7 +46,14 @@
           <template #default="{ row }">
             <div class="path-name-cell">
               <el-icon class="path-icon"><Folder /></el-icon>
-              <span class="path-name">{{ row.name }}</span>
+              <span
+                class="path-name clickable"
+                :class="{ active: searchQuery === row.path }"
+                @click="handlePathClick(row)"
+                :title="`点击搜索: ${row.path}`"
+              >
+                {{ row.name }}
+              </span>
               <el-tag v-if="row.is_default" type="success" size="small" effect="light">默认</el-tag>
             </div>
           </template>
@@ -507,6 +514,18 @@ const handleFilterClick = (value: string) => {
   loadPhotos()
 }
 
+// 点击路径名称搜索
+const handlePathClick = (row: ScanPathConfig) => {
+  if (searchQuery.value === row.path) {
+    // 如果已经选中了，取消筛选
+    searchQuery.value = ''
+  } else {
+    searchQuery.value = row.path
+  }
+  currentPage.value = 1
+  loadPhotos()
+}
+
 // 扫描指定路径
 const handleScanPath = async (path: ScanPathConfig) => {
   if (!path.enabled) {
@@ -773,6 +792,23 @@ defineExpose({
 .path-name {
   font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
+}
+
+.path-name.clickable {
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.path-name.clickable:hover {
+  color: var(--color-primary);
+  background-color: var(--color-bg-secondary);
+}
+
+.path-name.clickable.active {
+  color: var(--color-primary);
+  background-color: var(--color-primary-light);
 }
 
 .path-text {
