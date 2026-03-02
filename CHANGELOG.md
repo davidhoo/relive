@@ -12,6 +12,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 进行中 🚧
 - ESP32 固件开发 - **最后阶段**
 
+### 2026-03-02 - 照片管理功能增强 🆕
+
+#### 新增功能
+
+**分类和标签筛选**
+- ✅ **照片列表页分类/标签云**
+  - 新增 `/photos/categories` API - 获取所有照片分类
+  - 新增 `/photos/tags` API - 获取所有照片标签
+  - 列表页显示分类和标签云，点击即可筛选
+  - 再次点击取消筛选
+
+- ✅ **照片详情页可点击标签**
+  - 分类和标签变为可点击样式
+  - 点击后跳转到列表页并自动筛选
+  - 悬停时有上浮阴影效果
+
+**HEIC 缩略图优化**
+- ✅ **缩略图持久化存储**
+  - 从 `/tmp` 改为项目目录 `./data/thumbnails`
+  - 添加 `thumbnail_path` 配置项
+  - 缩略图现在会持久保存，重启后仍可复用
+
+- ✅ **分目录存储结构**
+  - 使用照片ID的十六进制前4位生成两级目录
+  - 例如：ID 12345 → `thumbnails/30/39/12345.jpg`
+  - 支持数百万照片而不会导致单目录性能问题
+
+#### Bug 修复
+
+- ✅ **分类搜索修复** - 搜索功能添加 `main_category` 字段匹配
+- ✅ **按钮间隙修复** - 修复筛选器和按钮组之间的间隙问题
+
+#### API 变更
+- 新增 `GET /photos/categories` - 获取所有分类
+- 新增 `GET /photos/tags` - 获取所有标签
+- 更新 `PhotosConfig` - 新增 `thumbnail_path` 字段
+
+#### 修改文件
+- `backend/internal/repository/photo_repo.go` - 分类/标签查询、搜索逻辑
+- `backend/internal/service/photo_service.go` - 分类/标签服务方法
+- `backend/internal/api/v1/handler/photo_handler.go` - 新API端点、缩略图存储
+- `backend/internal/api/v1/router/router.go` - 路由注册
+- `backend/pkg/config/config.go` - 配置项
+- `frontend/src/api/photo.ts` - API 客户端
+- `frontend/src/views/Photos/index.vue` - 分类/标签筛选UI
+- `frontend/src/views/Photos/Detail.vue` - 可点击标签
+
+---
+
 ### 2026-03-02 - 搜索功能修复和空状态优化 🆕
 
 #### Bug 修复
