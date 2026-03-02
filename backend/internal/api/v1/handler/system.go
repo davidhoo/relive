@@ -2,6 +2,8 @@ package handler
 
 import (
 	"net/http"
+	"os"
+	"runtime"
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
@@ -61,10 +63,10 @@ func (h *SystemHandler) Health(c *gin.Context) {
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
 		Data: model.SystemHealthResponse{
-			Status:  "healthy",
-			Version: "0.1.0", // TODO: 从编译时注入
-			Uptime:  uptime,
-			Time:    time.Now(),
+			Status:    "healthy",
+			Version:   "1.0.0",
+			Uptime:    uptime,
+			Timestamp: time.Now(),
 		},
 		Message: "System is healthy",
 	})
@@ -100,6 +102,26 @@ func (h *SystemHandler) Stats(c *gin.Context) {
 
 	// 统计展示记录总数
 	h.db.Model(&model.DisplayRecord{}).Count(&stats.TotalDisplays)
+
+	// 统计存储空间（所有照片文件大小之和）
+	var totalSize int64
+	h.db.Model(&model.Photo{}).Select("COALESCE(SUM(file_size), 0)").Scan(&totalSize)
+	stats.StorageSize = totalSize
+
+	// 获取数据库文件大小
+	dbPath := "./data/relive.db"
+	if fileInfo, err := os.Stat(dbPath); err == nil {
+		stats.DatabaseSize = fileInfo.Size()
+	}
+
+	// 获取 Go 版本
+	stats.GoVersion = runtime.Version()
+
+	// 获取运行时长
+	stats.Uptime = int64(time.Since(h.startTime).Seconds())
+
+	// 统计时间
+	stats.Timestamp = time.Now()
 
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,

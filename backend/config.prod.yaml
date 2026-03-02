@@ -1,0 +1,101 @@
+# 生产环境配置
+server:
+  host: "0.0.0.0"
+  port: 8080
+  mode: "release"  # 生产模式
+
+# 数据库配置
+database:
+  type: "sqlite"
+  path: "/app/data/relive.db"
+  auto_migrate: true
+  log_mode: false  # 生产环境不打印 SQL
+
+# 照片目录
+photos:
+  root_path: "/app/photos"  # Docker 挂载的照片目录
+  exclude_dirs:
+    - ".sync"
+    - "@eaDir"
+    - "#recycle"
+    - ".DS_Store"
+    - "Thumbs.db"
+    - ".Trashes"
+  supported_formats:
+    - ".jpg"
+    - ".jpeg"
+    - ".png"
+    - ".heic"
+    - ".HEIC"
+    - ".JPG"
+    - ".JPEG"
+    - ".PNG"
+
+# AI 配置
+ai:
+  provider: "ollama"  # 默认使用 ollama，可通过配置管理 API 动态修改
+  timeout: 120
+  temperature: 0.7
+
+  # Ollama 配置（本地/远程开源模型）
+  ollama:
+    endpoint: "http://host.docker.internal:11434"  # Docker 访问宿主机
+    model: "llava:13b"
+    temperature: 0.7
+    timeout: 120
+
+  # Qwen 配置（阿里云在线 API）
+  qwen:
+    api_key: "${QWEN_API_KEY}"  # 从环境变量读取
+    endpoint: "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+    model: "qwen-vl-max"
+    temperature: 0.7
+    timeout: 60
+
+  # OpenAI 配置（OpenAI 在线 API）
+  openai:
+    api_key: "${OPENAI_API_KEY}"  # 从环境变量读取
+    endpoint: "https://api.openai.com/v1/chat/completions"
+    model: "gpt-4-vision-preview"
+    temperature: 0.7
+    max_tokens: 1000
+    timeout: 60
+
+  # VLLM 配置（自部署推理服务）
+  vllm:
+    endpoint: "http://host.docker.internal:8000"
+    model: "llava-v1.6-vicuna-13b"
+    temperature: 0.7
+    max_tokens: 800
+    timeout: 120
+
+  # Hybrid 混合模式配置
+  hybrid:
+    primary: "ollama"    # 主要 provider
+    fallback: "qwen"     # 备用 provider
+
+# 展示策略
+display:
+  algorithm: "on_this_day"
+  fallback_days: [3, 7, 30, 365]
+  avoid_repeat_days: 7
+
+# 日志配置
+logging:
+  level: "info"  # 生产环境使用 info
+  file: "/app/data/logs/relive.log"
+  max_size: 100  # MB
+  max_backups: 10
+  max_age: 30  # days
+  console: true
+
+# 安全配置
+security:
+  jwt_secret: "${JWT_SECRET:-relive-production-secret-change-me}"
+  api_key_prefix: "sk-esp32-"
+
+# 性能配置
+performance:
+  max_scan_workers: 10  # 扫描照片的并发数
+  max_analyze_workers: 5  # AI 分析的并发数
+  cache_size: 1000  # 缓存的照片数量

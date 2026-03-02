@@ -27,6 +27,9 @@ type PhotoService interface {
 	CountAll() (int64, error)
 	CountAnalyzed() (int64, error)
 	CountUnanalyzed() (int64, error)
+
+	// 地理编码
+	GeocodePhotoIfNeeded(photo *model.Photo) error
 }
 
 // photoService 照片服务实现
@@ -201,8 +204,8 @@ func (s *photoService) processPhoto(filePath string, info os.FileInfo) (*model.P
 		if err != nil {
 			logger.Warnf("Geocode failed for (%f, %f): %v", *photo.GPSLatitude, *photo.GPSLongitude, err)
 		} else {
-			// 设置位置信息
-			photo.Location = location.FormatShort()
+			// 设置位置信息 - 使用完整格式（国家 省 市 区）
+			photo.Location = location.FormatFull()
 			logger.Debugf("Geocoded: (%f, %f) -> %s", *photo.GPSLatitude, *photo.GPSLongitude, photo.Location)
 		}
 	}
@@ -266,4 +269,45 @@ func (s *photoService) CountAnalyzed() (int64, error) {
 // CountUnanalyzed 统计未分析照片数
 func (s *photoService) CountUnanalyzed() (int64, error) {
 	return s.repo.CountUnanalyzed()
+}
+
+// GeocodePhotoIfNeeded 如果照片有GPS但没有location，则进行地理编码
+// 这个方法会实时获取位置并异步回写到数据库
+func (s *photoService) GeocodePhotoIfNeeded(photo *model.Photo) error {
+	// 检查是否需要地理编码
+	if photo.GPSLatitude == nil || photo.GPSLongitude == nil {
+		return nil // 没有GPS坐标
+	}
+
+	if photo.Location != "" {
+		return nil // 已经有位置信息
+	}
+
+	if s.geocodeService == nil {
+		logger.Debug("Geocode service not available")
+		return nil // 地理编码服务不可用
+	}
+
+	// 实时进行地理编码
+	location, err := s.geocodeService.ReverseGeocode(*photo.GPSLatitude, *photo.GPSLongitude)
+	if err != nil {
+		logger.Warnf("Real-time geocode failed for photo %d: %v", photo.ID, err)
+		return nil // 不返回错误，允许继续显示照片
+	}
+
+	// 设置位置信息（立即返回给前端）- 使用完整格式
+	photo.Location = location.FormatFull()
+	logger.Debugf("Real-time geocoded photo %d: (%f, %f) -> %s",
+		photo.ID, *photo.GPSLatitude, *photo.GPSLongitude, photo.Location)
+
+	// 异步回写到数据库
+	go func() {
+		if err := s.repo.UpdateLocation(photo.ID, photo.Location); err != nil {
+			logger.Errorf("Failed to update location for photo %d: %v", photo.ID, err)
+		} else {
+			logger.Debugf("Location saved to database for photo %d: %s", photo.ID, photo.Location)
+		}
+	}()
+
+	return nil
 }

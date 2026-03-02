@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  # Relive 后端服务
+  relive-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: relive-backend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # 配置文件
+      - ./backend/config.prod.yaml:/app/config.yaml:ro
+      # 数据目录（数据库、日志）
+      - ./data/backend:/app/data
+      # 照片目录（只读）- 修改为你的实际照片路径
+      - /volume1/photos:/app/photos:ro
+    environment:
+      - TZ=Asia/Shanghai
+      # AI Provider API Keys（如果使用）
+      - QWEN_API_KEY=${QWEN_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    networks:
+      - relive-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/system/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Relive 前端服务
+  relive-frontend:
+    image: nginx:alpine
+    container_name: relive-frontend
+    restart: unless-stopped
+    ports:
+      - "8888:80"
+    volumes:
+      # 前端构建产物
+      - ./frontend/dist:/usr/share/nginx/html:ro
+      # Nginx 配置
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - relive-backend
+    networks:
+      - relive-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  relive-network:
+    driver: bridge
+
+volumes:
+  # 如果需要持久化数据，可以使用 named volumes
+  relive-data:

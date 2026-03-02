@@ -15,7 +15,7 @@ import (
 
 var (
 	// 版本信息（编译时注入）
-	Version   = "dev"
+	Version   = "1.0.0"
 	BuildTime = "unknown"
 )
 

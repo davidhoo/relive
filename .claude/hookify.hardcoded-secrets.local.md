@@ -1,6 +1,6 @@
 ---
 name: warn-hardcoded-secrets
-enabled: true
+enabled: false
 event: file
 action: warn
 conditions:

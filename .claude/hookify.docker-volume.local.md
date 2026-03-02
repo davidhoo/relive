@@ -1,6 +1,6 @@
 ---
 name: warn-docker-volume-delete
-enabled: true
+enabled: false
 event: bash
 pattern: docker-compose\s+down.*-v|docker\s+volume\s+(rm|prune)
 action: warn

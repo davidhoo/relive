@@ -41,7 +41,7 @@
           </div>
           <div class="info-content">
             <div class="info-label">系统版本</div>
-            <div class="info-value">v0.3.0</div>
+            <div class="info-value">{{ health?.version || 'v1.0.0' }}</div>
           </div>
         </div>
       </el-col>
@@ -263,12 +263,12 @@ onMounted(async () => {
   left: 0;
   right: 0;
   height: 4px;
-  background: var(--gradient-success);
+  background: linear-gradient(135deg, var(--color-success) 0%, var(--color-success-light) 100%);
   transition: background var(--transition-base);
 }
 
 .health-card-error::before {
-  background: var(--gradient-error);
+  background: linear-gradient(135deg, var(--color-error) 0%, var(--color-error-light) 100%);
 }
 
 .health-card:hover {
@@ -284,14 +284,14 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
   font-size: 32px;
-  background: var(--gradient-success);
+  background: linear-gradient(135deg, var(--color-success) 0%, var(--color-success-light) 100%);
   color: white;
   flex-shrink: 0;
   box-shadow: var(--shadow-lg);
 }
 
 .health-card-error .health-icon {
-  background: var(--gradient-error);
+  background: linear-gradient(135deg, var(--color-error) 0%, var(--color-error-light) 100%);
 }
 
 .health-content {
@@ -442,7 +442,7 @@ onMounted(async () => {
 }
 
 .stat-mini-value.success {
-  background: var(--gradient-success);
+  background: linear-gradient(135deg, var(--color-success) 0%, var(--color-success-light) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -459,7 +459,7 @@ onMounted(async () => {
 
 .storage-card {
   padding: var(--spacing-2xl);
-  background: var(--gradient-primary);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-lg);
   color: white;

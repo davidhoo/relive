@@ -27,7 +27,7 @@ type PagedResponse struct {
 
 // ScanPhotosRequest 扫描照片请求
 type ScanPhotosRequest struct {
-	Path string `json:"path" binding:"required"` // 扫描路径
+	Path string `json:"path" binding:"omitempty"` // 扫描路径 (optional, uses config default if empty)
 }
 
 // ScanPhotosResponse 扫描照片响应
@@ -176,18 +176,50 @@ type ImportResponse struct {
 
 // SystemHealthResponse 系统健康检查响应
 type SystemHealthResponse struct {
-	Status  string    `json:"status"`  // healthy / unhealthy
-	Version string    `json:"version"`
-	Uptime  int64     `json:"uptime"` // 运行时间（秒）
-	Time    time.Time `json:"time"`
+	Status    string    `json:"status"`    // healthy / unhealthy
+	Version   string    `json:"version"`
+	Uptime    int64     `json:"uptime"`    // 运行时间（秒）
+	Timestamp time.Time `json:"timestamp"` // 检查时间
 }
 
 // SystemStatsResponse 系统统计响应
 type SystemStatsResponse struct {
-	TotalPhotos      int64 `json:"total_photos"`
-	AnalyzedPhotos   int64 `json:"analyzed_photos"`
-	UnanalyzedPhotos int64 `json:"unanalyzed_photos"`
-	TotalDevices     int64 `json:"total_devices"`
-	OnlineDevices    int64 `json:"online_devices"`
-	TotalDisplays    int64 `json:"total_displays"`
+	TotalPhotos      int64     `json:"total_photos"`
+	AnalyzedPhotos   int64     `json:"analyzed_photos"`
+	UnanalyzedPhotos int64     `json:"unanalyzed_photos"`
+	TotalDevices     int64     `json:"total_devices"`
+	OnlineDevices    int64     `json:"online_devices"`
+	TotalDisplays    int64     `json:"total_displays"`
+	StorageSize      int64     `json:"storage_size"`   // 存储空间（字节）
+	DatabaseSize     int64     `json:"database_size"`  // 数据库大小（字节）
+	GoVersion        string    `json:"go_version"`     // Go 版本
+	Uptime           int64     `json:"uptime"`         // 运行时长（秒）
+	Timestamp        time.Time `json:"timestamp"`      // 统计时间
+}
+
+// ScanPathConfig represents a single scan path configuration
+type ScanPathConfig struct {
+	ID            string     `json:"id"`                         // UUID
+	Name          string     `json:"name"`                       // User-friendly name
+	Path          string     `json:"path"`                       // Absolute file path
+	IsDefault     bool       `json:"is_default"`                 // Only one can be true
+	Enabled       bool       `json:"enabled"`                    // Can be scanned
+	CreatedAt     time.Time  `json:"created_at"`
+	LastScannedAt *time.Time `json:"last_scanned_at,omitempty"` // Updated after each scan
+}
+
+// ScanPathsConfig represents the complete scan paths configuration
+type ScanPathsConfig struct {
+	Paths []ScanPathConfig `json:"paths"`
+}
+
+// ValidatePathRequest validates a scan path
+type ValidatePathRequest struct {
+	Path string `json:"path" binding:"required"`
+}
+
+// ValidatePathResponse returns validation result
+type ValidatePathResponse struct {
+	Valid bool   `json:"valid"`
+	Error string `json:"error,omitempty"`
 }

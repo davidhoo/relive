@@ -42,6 +42,9 @@ type PhotoRepository interface {
 	// 批量操作
 	BatchCreate(photos []*model.Photo, batchSize int) error
 	BatchUpdate(photos []*model.Photo, batchSize int) error
+
+	// 地理编码
+	UpdateLocation(id uint, location string) error
 }
 
 // photoRepository 照片仓库实现
@@ -310,4 +313,11 @@ func (r *photoRepository) BatchUpdate(photos []*model.Photo, batchSize int) erro
 	}
 
 	return nil
+}
+
+// UpdateLocation 更新照片的位置信息
+func (r *photoRepository) UpdateLocation(id uint, location string) error {
+	return r.db.Model(&model.Photo{}).
+		Where("id = ?", id).
+		Update("location", location).Error
 }

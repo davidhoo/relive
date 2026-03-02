@@ -32,6 +32,7 @@ type Photo struct {
 	// AI 分析结果
 	AIAnalyzed   bool       `gorm:"default:false;index:idx_ai_analyzed" json:"ai_analyzed"` // 是否已分析
 	AnalyzedAt   *time.Time `json:"analyzed_at"`                                            // 分析时间
+	AIProvider   string     `gorm:"type:varchar(50)" json:"ai_provider"`                    // AI 提供商（qwen/openai/ollama等）
 	Description  string     `gorm:"type:text" json:"description"`                           // 详细描述（80-200字）
 	Caption      string     `gorm:"type:varchar(100)" json:"caption"`                       // 精美短句（8-30字）
 	MemoryScore  int        `gorm:"default:0;index:idx_memory_score" json:"memory_score"`   // 回忆价值评分（0-100）

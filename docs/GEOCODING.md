@@ -196,14 +196,31 @@ CREATE INDEX idx_lon ON cities(longitude);
 
 For the offline provider to work, you need to populate the `cities` table. Options:
 
-### Option 1: GeoNames Dataset
-1. Download from http://www.geonames.org/
-2. Use `cities15000.txt` (cities with 15000+ population)
-3. Import script example:
+### Option 1: GeoNames Dataset (推荐)
+1. Download cities500.zip (cities with 500+ population - better coverage)
    ```bash
-   # TODO: Create importer tool
-   go run cmd/import-cities/main.go --file cities15000.txt
+   wget https://download.geonames.org/export/dump/cities500.zip
+   unzip cities500.zip
    ```
+
+2. Import to database
+   ```bash
+   cd backend
+   go run cmd/import-cities/main.go --file cities500.txt
+   ```
+
+3. Verify import
+   ```bash
+   sqlite3 data/relive.db "SELECT COUNT(*) FROM cities;"
+   ```
+
+**Dataset Info:**
+- **cities500.txt**: ~200,000 cities (population > 500) - 推荐使用
+- **cities1000.txt**: ~140,000 cities (population > 1000)
+- **cities5000.txt**: ~50,000 cities (population > 5000)
+- **cities15000.txt**: ~25,000 cities (population > 15000)
+
+更多数据选择请访问: https://download.geonames.org/export/dump/
 
 ### Option 2: Custom City List
 - Add your own curated list of important cities

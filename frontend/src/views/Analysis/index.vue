@@ -5,6 +5,24 @@
       <template #header>
         <span><el-icon><Setting /></el-icon> AI Provider 配置</span>
       </template>
+
+      <!-- AI 未配置提示 -->
+      <el-alert
+        v-if="!providerInfo"
+        type="warning"
+        title="AI 服务未配置"
+        description="请先在配置管理中配置 AI Provider (Ollama/Qwen/OpenAI) 才能使用 AI 分析功能"
+        show-icon
+        :closable="false"
+        style="margin-bottom: 20px"
+      >
+        <template #default>
+          <el-button type="primary" size="small" @click="$router.push('/config')">
+            前往配置
+          </el-button>
+        </template>
+      </el-alert>
+
       <el-descriptions :column="2" border v-if="providerInfo">
         <el-descriptions-item label="当前 Provider">
           <el-tag type="primary" size="large">{{ providerInfo.name }}</el-tag>
@@ -43,9 +61,13 @@
                 size="large"
                 @click="handleBatchAnalyze"
                 :loading="analyzing"
+                :disabled="!providerInfo"
               >
                 {{ analyzing ? '分析中...' : '开始批量分析' }}
               </el-button>
+              <el-text v-if="!providerInfo" type="info" style="margin-left: 10px">
+                请先配置 AI Provider
+              </el-text>
             </el-form-item>
           </el-form>
         </el-col>
@@ -166,6 +188,11 @@ const loadProgress = async () => {
 
 // 批量分析
 const handleBatchAnalyze = async () => {
+  if (!providerInfo.value) {
+    ElMessage.warning('请先配置 AI Provider')
+    return
+  }
+
   try {
     analyzing.value = true
     const res = await aiApi.analyzeBatch(batchLimit.value)
@@ -174,7 +201,15 @@ const handleBatchAnalyze = async () => {
     // 开始轮询进度
     startProgressPolling()
   } catch (error: any) {
-    ElMessage.error(error.message || '批量分析失败')
+    // 特殊处理 AI 服务未配置的情况
+    if (error.response?.status === 503) {
+      ElMessage.warning({
+        message: 'AI 服务未配置或不可用，请先在配置管理中配置 AI Provider',
+        duration: 5000
+      })
+    } else {
+      ElMessage.error(error.message || '批量分析失败')
+    }
     analyzing.value = false
   }
 }

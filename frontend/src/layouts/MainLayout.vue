@@ -16,7 +16,7 @@
         <el-menu-item
           v-for="route in menuRoutes"
           :key="route.path"
-          :index="route.path"
+          :index="`/${route.path}`"
           class="menu-item"
         >
           <el-icon v-if="route.meta?.icon" class="menu-icon">

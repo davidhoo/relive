@@ -20,7 +20,7 @@ type Handlers struct {
 func NewHandlers(db *gorm.DB, services *service.Services) *Handlers {
 	handlers := &Handlers{
 		System:  NewSystemHandler(db, services),
-		Photo:   NewPhotoHandler(services.Photo),
+		Photo:   NewPhotoHandler(services.Photo, services.Config),
 		Display: NewDisplayHandler(services.Display, services.ESP32),
 		ESP32:   NewESP32Handler(services.ESP32),
 		Export:  NewExportHandler(services.Export),

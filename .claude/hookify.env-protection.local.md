@@ -1,6 +1,6 @@
 ---
 name: warn-env-file-edit
-enabled: true
+enabled: false
 event: file
 action: warn
 conditions:

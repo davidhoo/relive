@@ -5,22 +5,35 @@ export interface Photo {
   file_name?: string
   file_size?: number
   file_hash: string
+
+  // EXIF 信息
+  taken_at?: string
+  camera_model?: string
   width?: number
   height?: number
-  taken_at?: string
+  orientation?: number
+  gps_latitude?: number
+  gps_longitude?: number
   location?: string
-  camera_model?: string
+
+  // 设备信息
   esp32_device_id?: string
-  is_analyzed: boolean
-  analysis_result?: string
+
+  // AI 分析结果
+  ai_analyzed: boolean
+  analyzed_at?: string
+  ai_provider?: string
+  description?: string
+  caption?: string
   memory_score?: number
   beauty_score?: number
   emotion_score?: number
   technical_score?: number
   overall_score?: number
-  tags?: string[]
-  ai_provider?: string
-  analyzed_at?: string
+  main_category?: string
+  tags?: string
+
+  // 时间戳
   created_at: string
   updated_at: string
 }
@@ -44,7 +57,7 @@ export interface PhotoStats {
 
 // 扫描照片请求
 export interface ScanPhotosRequest {
-  path: string
+  path?: string  // Optional - uses default from config if not provided
 }
 
 // 扫描照片响应

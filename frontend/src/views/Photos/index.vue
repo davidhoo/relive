@@ -34,10 +34,38 @@
           </el-radio-group>
         </el-col>
         <el-col :xs="24" :sm="24" :md="6" class="action-col">
-          <el-button type="primary" size="large" @click="handleScan" :loading="loading" class="scan-button">
-            <el-icon><FolderOpened /></el-icon>
-            扫描照片
-          </el-button>
+          <div class="scan-controls">
+            <el-select
+              v-model="selectedScanPathId"
+              placeholder="选择扫描路径"
+              style="width: 100%; margin-bottom: 8px"
+              size="large"
+            >
+              <el-option
+                v-for="path in scanPaths"
+                :key="path.id"
+                :label="path.name"
+                :value="path.id"
+              >
+                <div class="path-option">
+                  <span>{{ path.name }}</span>
+                  <el-tag v-if="path.is_default" type="success" size="small">默认</el-tag>
+                </div>
+              </el-option>
+            </el-select>
+            <el-button
+              type="primary"
+              size="large"
+              @click="handleScan"
+              :loading="loading"
+              :disabled="!selectedScanPathId"
+              class="scan-button"
+              style="width: 100%"
+            >
+              <el-icon><FolderOpened /></el-icon>
+              扫描照片
+            </el-button>
+          </div>
         </el-col>
       </el-row>
     </div>
@@ -103,7 +131,7 @@
                 </el-image>
 
                 <!-- 分析状态徽章 -->
-                <div class="photo-badge" v-if="photo.is_analyzed" :class="getScoreClass(photo.overall_score)">
+                <div class="photo-badge" v-if="photo.ai_analyzed" :class="getScoreClass(photo.overall_score)">
                   <el-icon><Star /></el-icon>
                   <span>{{ photo.overall_score?.toFixed(1) }}</span>
                 </div>
@@ -158,6 +186,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { photoApi } from '@/api/photo'
+import { configApi, type ScanPathConfig } from '@/api/config'
 import type { Photo } from '@/types/photo'
 
 const router = useRouter()
@@ -169,6 +198,8 @@ const pageSize = ref(20)
 const total = ref(0)
 const searchQuery = ref('')
 const filterAnalyzed = ref('')
+const scanPaths = ref<ScanPathConfig[]>([])
+const selectedScanPathId = ref<string>('')
 
 // 获取照片 URL
 const getPhotoUrl = (photoId: number) => {
@@ -218,7 +249,7 @@ const loadPhotos = async () => {
     }
 
     if (filterAnalyzed.value) {
-      params.is_analyzed = filterAnalyzed.value === 'true'
+      params.analyzed = filterAnalyzed.value === 'true'
     }
 
     const res = await photoApi.getList(params)
@@ -242,13 +273,42 @@ const handlePageChange = () => {
   loadPhotos()
 }
 
+// 加载扫描路径
+const loadScanPaths = async () => {
+  try {
+    const config = await configApi.getScanPaths()
+    scanPaths.value = config.paths.filter(p => p.enabled)
+
+    // Select default or first enabled path
+    const defaultPath = scanPaths.value.find(p => p.is_default)
+    if (defaultPath) {
+      selectedScanPathId.value = defaultPath.id
+    } else if (scanPaths.value.length > 0) {
+      selectedScanPathId.value = scanPaths.value[0]?.id || ''
+    }
+  } catch (error: any) {
+    console.error('Failed to load scan paths:', error)
+  }
+}
+
 // 扫描照片
 const handleScan = async () => {
+  if (!selectedScanPathId.value) {
+    ElMessage.warning('请先在配置页面添加扫描路径')
+    return
+  }
+
   try {
     loading.value = true
-    const res = await photoApi.scan()
+    const selectedPath = scanPaths.value.find(p => p.id === selectedScanPathId.value)
+
+    // Call API with path (or omit to use default)
+    const res = await photoApi.scan({ path: selectedPath?.path })
     ElMessage.success(`扫描完成，新增 ${res.data?.new_count || 0} 张照片`)
+
+    // Reload photos and scan paths (to update last_scanned_at)
     await loadPhotos()
+    await loadScanPaths()
   } catch (error: any) {
     ElMessage.error(error.message || '扫描照片失败')
   } finally {
@@ -258,10 +318,52 @@ const handleScan = async () => {
 
 // 跳转到详情页
 const gotoDetail = (photoId: number) => {
-  router.push(`/photos/${photoId}`)
+  const query: any = {
+    page: currentPage.value,
+    pageSize: pageSize.value
+  }
+
+  // 保存筛选条件
+  if (filterAnalyzed.value) {
+    query.analyzed = filterAnalyzed.value
+  }
+
+  // 保存搜索关键词
+  if (searchQuery.value) {
+    query.search = searchQuery.value
+  }
+
+  router.push({
+    path: `/photos/${photoId}`,
+    query
+  })
 }
 
 onMounted(() => {
+  // Load scan paths first
+  loadScanPaths()
+
+  // 从 URL 参数恢复状态
+  const query = router.currentRoute.value.query
+
+  // 恢复分页参数
+  if (query.page) {
+    currentPage.value = Number(query.page)
+  }
+  if (query.pageSize) {
+    pageSize.value = Number(query.pageSize)
+  }
+
+  // 恢复筛选条件
+  if (query.analyzed) {
+    filterAnalyzed.value = String(query.analyzed)
+  }
+
+  // 恢复搜索关键词
+  if (query.search) {
+    searchQuery.value = String(query.search)
+  }
+
   loadPhotos()
 })
 </script>
@@ -337,6 +439,17 @@ onMounted(() => {
 .action-col {
   display: flex;
   justify-content: flex-end;
+}
+
+.scan-controls {
+  width: 100%;
+}
+
+.path-option {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
 }
 
 .scan-button {

@@ -10,6 +10,63 @@ import (
 	"gorm.io/gorm"
 )
 
+// 国家代码到名称的映射
+var countryNames = map[string]string{
+	"CN": "中国",
+	"US": "美国",
+	"JP": "日本",
+	"KR": "韩国",
+	"GB": "英国",
+	"FR": "法国",
+	"DE": "德国",
+	"IT": "意大利",
+	"ES": "西班牙",
+	"CA": "加拿大",
+	"AU": "澳大利亚",
+	"RU": "俄罗斯",
+	"IN": "印度",
+	"BR": "巴西",
+	"MX": "墨西哥",
+	"TH": "泰国",
+	"SG": "新加坡",
+	"MY": "马来西亚",
+	"ID": "印度尼西亚",
+	"VN": "越南",
+	"PH": "菲律宾",
+	"NZ": "新西兰",
+	"CH": "瑞士",
+	"AT": "奥地利",
+	"BE": "比利时",
+	"NL": "荷兰",
+	"SE": "瑞典",
+	"NO": "挪威",
+	"DK": "丹麦",
+	"FI": "芬兰",
+	"PL": "波兰",
+	"CZ": "捷克",
+	"HU": "匈牙利",
+	"GR": "希腊",
+	"PT": "葡萄牙",
+	"TR": "土耳其",
+	"IL": "以色列",
+	"AE": "阿联酋",
+	"SA": "沙特阿拉伯",
+	"EG": "埃及",
+	"ZA": "南非",
+	"AR": "阿根廷",
+	"CL": "智利",
+	"CO": "哥伦比亚",
+	"PE": "秘鲁",
+}
+
+// getCountryName 获取国家全称
+func getCountryName(code string) string {
+	if name, ok := countryNames[code]; ok {
+		return name
+	}
+	return code // 返回代码作为后备
+}
+
 // OfflineProvider 离线地理编码提供商（基于城市数据库）
 type OfflineProvider struct {
 	db          *gorm.DB
@@ -89,14 +146,21 @@ func (p *OfflineProvider) ReverseGeocode(lat, lon float64) (*Location, error) {
 
 	location := &Location{
 		City:      nearestCity.Name,
-		Country:   nearestCity.Country,
-		Province:  nearestCity.AdminName, // 如果数据库有这个字段
-		FullName:  fmt.Sprintf("%s, %s", nearestCity.Name, nearestCity.Country),
+		Country:   getCountryName(nearestCity.Country),
+		Province:  nearestCity.AdminName, // TODO: 映射省份代码为名称
+		FullName:  fmt.Sprintf("%s %s %s", getCountryName(nearestCity.Country), nearestCity.AdminName, nearestCity.Name),
 		Latitude:  lat,
 		Longitude: lon,
 		Provider:  p.Name(),
 		Duration:  time.Since(startTime),
 	}
+
+	logger.Debugf("Offline geocode result: City=%s, Province=%s, Country=%s, FullName=%s",
+		location.City, location.Province, location.Country, location.FullName)
+
+	// Temporary: force INFO level
+	logger.Infof("[GEOCODE-DEBUG] Location constructed: City=%s, Province=%s, Country=%s, FullName=%s",
+		location.City, location.Province, location.Country, location.FullName)
 
 	logger.Debugf("Offline geocode: (%.6f,%.6f) -> %s (%.2f km, took %v)",
 		lat, lon, location.FormatShort(), minDist, location.Duration)

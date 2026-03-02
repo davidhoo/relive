@@ -118,7 +118,7 @@
               <span>最近照片</span>
               <span class="photos-count">{{ recentPhotos.length }} 张</span>
             </div>
-            <el-button type="primary" size="default" link @click="gotoPhotos" class="view-all-btn">
+            <el-button link @click="gotoPhotos" class="view-all-btn" style="color: var(--color-primary); font-weight: 500;">
               查看全部
               <el-icon><ArrowRight /></el-icon>
             </el-button>
@@ -145,7 +145,7 @@
                   class="image-card-image"
                   loading="lazy"
                 />
-                <div class="image-card-badge score-badge" v-if="photo.is_analyzed">
+                <div class="image-card-badge score-badge" v-if="photo.ai_analyzed">
                   <el-icon><Star /></el-icon>
                   {{ photo.overall_score?.toFixed(1) }}
                 </div>
@@ -304,7 +304,9 @@ const handleStartAnalysis = async () => {
 // 扫描照片
 const handleScan = async () => {
   try {
-    const res = await photoApi.scan()
+    // 使用环境变量中配置的照片路径
+    const photoPath = '/Volumes/home/Photos/MobileBackup/iPhone/2025/11'
+    const res = await photoApi.scan({ path: photoPath })
     ElMessage.success(`扫描完成，新增 ${res.data?.new_count || 0} 张照片`)
     await loadRecentPhotos()
     await systemStore.fetchStats()

@@ -244,6 +244,7 @@ func (s *aiService) AnalyzePhoto(photoID uint) error {
 	// 更新照片记录
 	now := time.Now()
 	photo.AIAnalyzed = true
+	photo.AIProvider = s.provider.Name() // 保存 AI 提供商名称
 	photo.Description = result.Description
 	photo.Caption = result.Caption
 	photo.MainCategory = result.MainCategory

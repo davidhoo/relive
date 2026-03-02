@@ -51,7 +51,7 @@ func (l *Location) FormatShort() string {
 	return ""
 }
 
-// FormatFull 返回完整的位置名称
+// FormatFull 返回完整的位置名称（国家 省 市 区）
 func (l *Location) FormatFull() string {
 	if l.FullName != "" {
 		return l.FullName

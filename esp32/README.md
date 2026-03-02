@@ -1,0 +1,165 @@
+# Relive ESP32 固件
+
+## 概述
+
+ESP32 固件用于驱动墨水屏相框，从 Relive 后端获取照片并展示。
+
+## 硬件要求
+
+- **主控**：ESP32-S3（PSRAM ≥ 384KB）
+- **显示屏**：7.3 寸彩色墨水屏 GDEP073E01
+- **电源**：2×18650 锂电池（可选）或 USB-C 供电
+
+## 开发环境
+
+### 使用 PlatformIO
+
+```bash
+# 安装 PlatformIO
+pip install platformio
+
+# 初始化项目
+cd esp32
+pio init --board esp32-s3-devkitc-1
+
+# 编译
+pio run
+
+# 上传
+pio run --target upload
+
+# 串口监控
+pio device monitor
+```
+
+## 项目结构
+
+```
+esp32/
+├── src/
+│   └── main.cpp              # 主程序入口
+├── lib/
+│   ├── display/              # 墨水屏驱动
+│   ├── network/              # 网络通信
+│   ├── power/                # 电源管理
+│   └── config/               # 配置管理
+├── include/
+│   └── config.h              # 配置头文件
+├── platformio.ini            # PlatformIO 配置
+└── README.md                 # 本文件
+```
+
+## 核心功能
+
+### 1. 硬件初始化
+- ESP32-S3 配置
+- PSRAM 初始化
+- WiFi 配置
+- 时间同步（NTP）
+
+### 2. 墨水屏驱动
+- 7.3 寸彩色墨水屏初始化
+- 图片渲染和显示
+- 局部刷新（可选）
+
+### 3. API 通信
+- 设备注册：`POST /esp32/register`
+- 心跳上报：`POST /esp32/heartbeat`
+- 获取照片：`GET /display/photo`
+- 记录展示：`POST /display/record`
+
+### 4. 电源管理
+- 深度睡眠模式
+- 定时唤醒（每天 8:00）
+- 低电量保护
+
+### 5. 用户交互
+- 按钮手动刷新
+- LED 状态指示
+
+## 通信协议
+
+详见：`../docs/ESP32_PROTOCOL.md`
+
+## 配置
+
+### WiFi 配置
+
+首次使用时，设备会创建 AP（热点）：
+- SSID: `Relive-XXXXXX`
+- Password: `12345678`
+
+连接后访问 `http://192.168.4.1` 配置 WiFi。
+
+### API 配置
+
+在配置页面设置：
+- API 地址：`http://192.168.1.100:8080`
+- API Key：从 Relive 后端获取
+
+## 开发计划
+
+### Phase 1：基础功能（1 周）
+- [ ] 项目初始化（PlatformIO）
+- [ ] WiFi 连接管理
+- [ ] HTTP 客户端封装
+- [ ] 设备注册和心跳
+
+### Phase 2：显示功能（3-4 天）
+- [ ] 墨水屏驱动集成
+- [ ] 图片下载和缓存
+- [ ] 图片渲染和显示
+- [ ] 错误处理和状态显示
+
+### Phase 3：电源管理（2-3 天）
+- [ ] 深度睡眠实现
+- [ ] 定时唤醒
+- [ ] 电池电量监控
+- [ ] 低电量保护
+
+### Phase 4：优化和测试（2-3 天）
+- [ ] 性能优化
+- [ ] 稳定性测试
+- [ ] 内存优化
+- [ ] OTA 固件升级（可选）
+
+## 依赖库
+
+```ini
+[env:esp32-s3-devkitc-1]
+platform = espressif32
+board = esp32-s3-devkitc-1
+framework = arduino
+lib_deps =
+    GxEPD2              # 墨水屏驱动
+    ArduinoJson         # JSON 解析
+    WiFiManager         # WiFi 配置
+    HTTPClient          # HTTP 客户端
+```
+
+## 参考资源
+
+- [ESP32_PROTOCOL.md](../docs/ESP32_PROTOCOL.md) - 通信协议设计
+- [InkTime ESP32 代码](https://github.com/dai-hongtao/InkTime) - 参考实现
+- [GxEPD2 文档](https://github.com/ZinggJM/GxEPD2) - 墨水屏驱动库
+
+## 故障排除
+
+### WiFi 连接失败
+- 检查 WiFi 配置是否正确
+- 确认信号强度
+- 重启设备重新配置
+
+### 显示异常
+- 检查墨水屏连接
+- 确认 PSRAM 足够
+- 查看串口日志
+
+### API 通信失败
+- 检查 API 地址配置
+- 确认网络连接
+- 验证 API Key
+
+## License
+
+MIT License
