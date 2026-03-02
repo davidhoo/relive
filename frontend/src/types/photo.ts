@@ -66,3 +66,23 @@ export interface ScanPhotosResponse {
   new_count: number
   updated_count: number
 }
+
+// 重建照片请求
+export interface RebuildPhotosRequest {
+  path?: string  // Optional - uses default from config if not provided
+}
+
+// 重建照片响应
+export interface RebuildPhotosResponse {
+  scanned_count: number
+  new_count: number
+  updated_count: number
+  deleted_count: number
+}
+
+// 清理照片响应
+export interface CleanupPhotosResponse {
+  total_count: number
+  deleted_count: number
+  skipped_count: number
+}

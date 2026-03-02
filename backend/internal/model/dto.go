@@ -37,6 +37,21 @@ type ScanPhotosResponse struct {
 	UpdatedCount int `json:"updated_count"` // 更新数量
 }
 
+// RebuildPhotosResponse 重建照片响应
+type RebuildPhotosResponse struct {
+	ScannedCount int `json:"scanned_count"` // 扫描数量
+	NewCount     int `json:"new_count"`     // 新增数量
+	UpdatedCount int `json:"updated_count"` // 更新数量
+	DeletedCount int `json:"deleted_count"` // 删除数量（数据库中已不存在于文件系统的照片）
+}
+
+// CleanupPhotosResponse 清理照片响应
+type CleanupPhotosResponse struct {
+	TotalCount   int `json:"total_count"`   // 检查总数
+	DeletedCount int `json:"deleted_count"` // 删除数量
+	SkippedCount int `json:"skipped_count"` // 跳过数量（无法访问的文件）
+}
+
 // GetPhotosRequest 获取照片列表请求
 type GetPhotosRequest struct {
 	Page     int    `form:"page" binding:"omitempty,min=1"`
