@@ -105,7 +105,14 @@
             <!-- 分类 -->
             <div style="margin-top: 20px" v-if="photo.main_category">
               <h4>分类</h4>
-              <el-tag type="primary" size="large">{{ photo.main_category }}</el-tag>
+              <el-tag
+                type="primary"
+                size="large"
+                class="clickable-tag"
+                @click="handleTagClick(photo.main_category!)"
+              >
+                {{ photo.main_category }}
+              </el-tag>
             </div>
 
             <!-- 标签 -->
@@ -114,7 +121,9 @@
               <el-tag
                 v-for="tag in photo.tags.split(',')"
                 :key="tag"
+                class="clickable-tag"
                 style="margin-right: 8px; margin-top: 8px"
+                @click="handleTagClick(tag)"
               >
                 {{ tag }}
               </el-tag>
@@ -241,6 +250,17 @@ const handleAnalyze = async () => {
   }
 }
 
+// 点击标签/分类跳转列表页
+const handleTagClick = (tag: string) => {
+  router.push({
+    path: '/photos',
+    query: {
+      search: tag.trim(),
+      page: '1'
+    }
+  })
+}
+
 // 返回
 const goBack = () => {
   const query = route.query
@@ -292,5 +312,16 @@ h3 {
 h4 {
   font-size: 16px;
   font-weight: 600;
+}
+
+/* 可点击标签样式 */
+.clickable-tag {
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.clickable-tag:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
 }
 </style>
