@@ -8,98 +8,156 @@
       <p class="page-subtitle">浏览和管理您的照片集合</p>
     </div>
 
-    <!-- 工具栏 -->
-    <div class="toolbar-card modern-card animate-fade-in">
-      <el-row :gutter="20" align="middle">
-        <el-col :xs="24" :sm="12" :md="10">
-          <el-input
-            v-model="searchQuery"
-            placeholder="搜索照片 (路径、设备ID、标签...)"
-            clearable
-            size="large"
-            @clear="handleSearch"
-            @keyup.enter="handleSearch"
-            class="search-input"
-          >
-            <template #prefix>
-              <el-icon><Search /></el-icon>
-            </template>
-          </el-input>
-        </el-col>
-        <el-col :xs="24" :sm="12" :md="8">
-          <el-radio-group v-model="filterAnalyzed" @change="handleSearch" size="large" class="filter-group">
-            <el-radio-button label="">全部</el-radio-button>
-            <el-radio-button label="true">已分析</el-radio-button>
-            <el-radio-button label="false">未分析</el-radio-button>
-          </el-radio-group>
-        </el-col>
-        <el-col :xs="24" :sm="24" :md="6" class="action-col">
-          <div class="scan-controls">
-            <el-select
-              v-model="selectedScanPathId"
-              placeholder="选择扫描路径"
-              style="width: 100%; margin-bottom: 8px"
-              size="large"
-            >
-              <el-option
-                v-for="path in scanPaths"
-                :key="path.id"
-                :label="path.name"
-                :value="path.id"
+    <!-- 扫描路径列表 -->
+    <div class="scan-paths-card modern-card animate-fade-in" v-loading="scanPathLoading">
+      <div class="scan-paths-header">
+        <div class="scan-paths-title">
+          <el-icon class="title-icon"><FolderOpened /></el-icon>
+          <span>扫描路径</span>
+          <el-tag type="info" size="small" effect="plain" class="count-tag">{{ scanPaths.length }}</el-tag>
+        </div>
+        <el-link type="primary" @click="goToConfig" class="manage-link">
+          <el-icon><Setting /></el-icon>
+          管理路径
+        </el-link>
+      </div>
+
+      <el-table
+        :data="scanPaths"
+        style="width: 100%"
+        class="scan-path-table"
+        size="small"
+      >
+        <el-table-column prop="name" label="路径名称" min-width="120">
+          <template #default="{ row }">
+            <div class="path-name-cell">
+              <el-icon class="path-icon"><Folder /></el-icon>
+              <span class="path-name">{{ row.name }}</span>
+              <el-tag v-if="row.is_default" type="success" size="small" effect="light">默认</el-tag>
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column prop="path" label="路径" min-width="200" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span class="path-text" :title="row.path">{{ row.path }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column prop="enabled" label="状态" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.enabled ? 'success' : 'info'" size="small" effect="light">
+              {{ row.enabled ? '启用' : '禁用' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+
+        <el-table-column prop="last_scanned_at" label="上次扫描" width="140" align="center">
+          <template #default="{ row }">
+            <div class="scan-time-cell">
+              <template v-if="row.last_scanned_at">
+                <el-tooltip :content="formatDateTime(row.last_scanned_at)" placement="top">
+                  <span class="scan-time">{{ formatRelativeTime(row.last_scanned_at) }}</span>
+                </el-tooltip>
+              </template>
+              <el-tag v-else type="warning" size="small" effect="light">未扫描</el-tag>
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="操作" width="150" align="center">
+          <template #default="{ row }">
+            <el-button-group>
+              <el-button
+                type="primary"
+                size="small"
+                plain
+                :disabled="!row.enabled || scanningPathId === row.id"
+                :loading="scanningPathId === row.id"
+                @click="handleScanPath(row)"
+                class="scan-btn"
               >
-                <div class="path-option">
-                  <span>{{ path.name }}</span>
-                  <el-tag v-if="path.is_default" type="success" size="small">默认</el-tag>
-                </div>
-              </el-option>
-            </el-select>
-            <el-button
-              type="primary"
-              size="large"
-              @click="handleScan"
-              :loading="loading"
-              :disabled="!selectedScanPathId"
-              class="scan-button"
-              style="width: 100%"
-            >
-              <el-icon><FolderOpened /></el-icon>
-              扫描照片
-            </el-button>
-          </div>
-        </el-col>
-      </el-row>
+                扫描
+              </el-button>
+              <el-button
+                type="warning"
+                size="small"
+                plain
+                :disabled="!row.enabled || rescanningPathId === row.id"
+                :loading="rescanningPathId === row.id"
+                @click="handleRescanPath(row)"
+                class="rescan-btn"
+                title="强制重新扫描，更新所有照片信息"
+              >
+                重扫
+              </el-button>
+            </el-button-group>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <el-empty v-if="scanPaths.length === 0 && !scanPathLoading" description="暂无扫描路径" :image-size="80">
+        <el-button type="primary" @click="goToConfig">
+          <el-icon><Setting /></el-icon>
+          前往配置
+        </el-button>
+      </el-empty>
     </div>
 
     <!-- 照片网格 -->
     <div class="photos-grid-card modern-card animate-fade-in" v-loading="loading">
       <!-- 空状态 -->
       <el-empty v-if="!photos.length && !loading" description="暂无照片" :image-size="120">
-        <el-button type="primary" @click="handleScan" :loading="loading">
-          <el-icon><FolderOpened /></el-icon>
-          扫描照片
+        <el-button type="primary" @click="goToConfig">
+          <el-icon><Setting /></el-icon>
+          前往配置添加路径
         </el-button>
       </el-empty>
 
       <!-- 照片网格 -->
       <div v-else>
-        <!-- 统计信息 -->
+        <!-- 搜索区域 -->
+        <div class="search-section">
+          <el-input
+            v-model="searchQuery"
+            placeholder="搜索照片 (路径、设备ID、标签...)"
+            clearable
+            @clear="handleSearch"
+            @keyup.enter="handleSearch"
+            class="search-input-with-btn"
+          >
+            <template #prefix>
+              <el-icon><Search /></el-icon>
+            </template>
+          </el-input>
+          <el-button type="primary" @click="handleSearch" class="search-btn">
+            搜索
+          </el-button>
+        </div>
+
+        <!-- 统计信息和筛选 -->
         <div class="photos-stats">
-          <div class="stat-item">
-            <el-icon class="stat-icon"><Picture /></el-icon>
-            <span class="stat-text">共 <strong>{{ total }}</strong> 张照片</span>
+          <div class="stats-left">
+            <div class="stat-item">
+              <el-icon class="stat-icon"><Picture /></el-icon>
+              <span class="stat-text">共 <strong>{{ total }}</strong> 张照片</span>
+            </div>
+            <div class="stat-item" v-if="filterAnalyzed">
+              <el-icon class="stat-icon"><Filter /></el-icon>
+              <span class="stat-text">筛选结果</span>
+            </div>
           </div>
-          <div class="stat-item" v-if="filterAnalyzed">
-            <el-icon class="stat-icon"><Filter /></el-icon>
-            <span class="stat-text">筛选结果</span>
+          <div class="stats-right">
+            <el-radio-group v-model="filterAnalyzed" @change="handleSearch" size="default" class="filter-group">
+              <el-radio-button label="">全部</el-radio-button>
+              <el-radio-button label="true">已分析</el-radio-button>
+              <el-radio-button label="false">未分析</el-radio-button>
+            </el-radio-group>
           </div>
         </div>
 
-        <el-row :gutter="16" class="photo-grid">
-          <el-col
-            :xs="12"
-            :sm="8"
-            :md="6"
-            :lg="4"
+        <div class="photo-grid">
+          <div
             v-for="(photo, index) in photos"
             :key="photo.id"
             class="photo-col"
@@ -160,8 +218,8 @@
                 </div>
               </div>
             </div>
-          </el-col>
-        </el-row>
+          </div>
+        </div>
 
         <!-- 分页 -->
         <div class="pagination-wrapper">
@@ -199,7 +257,9 @@ const total = ref(0)
 const searchQuery = ref('')
 const filterAnalyzed = ref('')
 const scanPaths = ref<ScanPathConfig[]>([])
-const selectedScanPathId = ref<string>('')
+const scanPathLoading = ref(false)
+const scanningPathId = ref<string>('')
+const rescanningPathId = ref<string>('')
 
 // 获取照片 URL
 const getPhotoUrl = (photoId: number) => {
@@ -233,6 +293,51 @@ const getScoreClass = (score?: number) => {
   if (score >= 6) return 'badge-good'
   if (score >= 4) return 'badge-medium'
   return 'badge-low'
+}
+
+// 格式化完整日期时间
+const formatDateTime = (dateStr: string) => {
+  try {
+    const date = new Date(dateStr)
+    return date.toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    })
+  } catch {
+    return ''
+  }
+}
+
+// 格式化相对时间
+const formatRelativeTime = (dateStr: string) => {
+  try {
+    const date = new Date(dateStr)
+    const now = new Date()
+    const diff = now.getTime() - date.getTime()
+    const seconds = Math.floor(diff / 1000)
+    const minutes = Math.floor(seconds / 60)
+    const hours = Math.floor(minutes / 60)
+    const days = Math.floor(hours / 24)
+
+    if (seconds < 60) return '刚刚'
+    if (minutes < 60) return `${minutes}分钟前`
+    if (hours < 24) return `${hours}小时前`
+    if (days < 7) return `${days}天前`
+    if (days < 30) return `${Math.floor(days / 7)}周前`
+    if (days < 365) return `${Math.floor(days / 30)}个月前`
+    return `${Math.floor(days / 365)}年前`
+  } catch {
+    return ''
+  }
+}
+
+// 前往配置页面
+const goToConfig = () => {
+  router.push('/config')
 }
 
 // 加载照片列表
@@ -275,36 +380,29 @@ const handlePageChange = () => {
 
 // 加载扫描路径
 const loadScanPaths = async () => {
+  scanPathLoading.value = true
   try {
     const config = await configApi.getScanPaths()
-    scanPaths.value = config.paths.filter(p => p.enabled)
-
-    // Select default or first enabled path
-    const defaultPath = scanPaths.value.find(p => p.is_default)
-    if (defaultPath) {
-      selectedScanPathId.value = defaultPath.id
-    } else if (scanPaths.value.length > 0) {
-      selectedScanPathId.value = scanPaths.value[0]?.id || ''
-    }
+    scanPaths.value = config.paths || []
   } catch (error: any) {
     console.error('Failed to load scan paths:', error)
+    ElMessage.error('加载扫描路径失败')
+  } finally {
+    scanPathLoading.value = false
   }
 }
 
-// 扫描照片
-const handleScan = async () => {
-  if (!selectedScanPathId.value) {
-    ElMessage.warning('请先在配置页面添加扫描路径')
+// 扫描指定路径
+const handleScanPath = async (path: ScanPathConfig) => {
+  if (!path.enabled) {
+    ElMessage.warning('该路径已禁用，无法扫描')
     return
   }
 
   try {
-    loading.value = true
-    const selectedPath = scanPaths.value.find(p => p.id === selectedScanPathId.value)
-
-    // Call API with path (or omit to use default)
-    const res = await photoApi.scan({ path: selectedPath?.path })
-    ElMessage.success(`扫描完成，新增 ${res.data?.new_count || 0} 张照片`)
+    scanningPathId.value = path.id
+    const res = await photoApi.scan({ path: path.path })
+    ElMessage.success(`「${path.name}」扫描完成，新增 ${res.data?.new_count || 0} 张照片`)
 
     // Reload photos and scan paths (to update last_scanned_at)
     await loadPhotos()
@@ -312,7 +410,31 @@ const handleScan = async () => {
   } catch (error: any) {
     ElMessage.error(error.message || '扫描照片失败')
   } finally {
-    loading.value = false
+    scanningPathId.value = ''
+  }
+}
+
+// 重新扫描指定路径（强制更新）
+const handleRescanPath = async (path: ScanPathConfig) => {
+  if (!path.enabled) {
+    ElMessage.warning('该路径已禁用，无法扫描')
+    return
+  }
+
+  try {
+    rescanningPathId.value = path.id
+    const res = await photoApi.rescan({ path: path.path })
+    ElMessage.success(
+      `「${path.name}」重新扫描完成，新增 ${res.data?.new_count || 0} 张，更新 ${res.data?.updated_count || 0} 张`
+    )
+
+    // Reload photos and scan paths (to update last_scanned_at)
+    await loadPhotos()
+    await loadScanPaths()
+  } catch (error: any) {
+    ElMessage.error(error.message || '重新扫描照片失败')
+  } finally {
+    rescanningPathId.value = ''
   }
 }
 
@@ -366,6 +488,11 @@ onMounted(() => {
 
   loadPhotos()
 })
+
+// 暴露刷新方法供外部调用
+defineExpose({
+  refresh: loadPhotos
+})
 </script>
 
 <style scoped>
@@ -404,67 +531,132 @@ onMounted(() => {
   padding: var(--spacing-xl) !important;
 }
 
-.search-input {
-  border-radius: var(--radius-sm);
-}
-
-.search-input :deep(.el-input__wrapper) {
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-sm);
-  transition: all var(--transition-base);
-}
-
-.search-input :deep(.el-input__wrapper:hover) {
-  box-shadow: var(--shadow-md);
-}
-
-.search-input :deep(.el-input__wrapper.is-focus) {
-  box-shadow: 0 0 0 2px rgba(0, 184, 148, 0.2);
-}
-
 .filter-group {
-  width: 100%;
   display: flex;
-}
-
-.filter-group :deep(.el-radio-button) {
-  flex: 1;
 }
 
 .filter-group :deep(.el-radio-button__inner) {
-  width: 100%;
   border-radius: var(--radius-sm);
 }
 
-.action-col {
-  display: flex;
-  justify-content: flex-end;
+/* ============ 扫描路径卡片 ============ */
+.scan-paths-card {
+  margin-bottom: var(--spacing-xl);
+  padding: var(--spacing-lg) !important;
 }
 
-.scan-controls {
-  width: 100%;
-}
-
-.path-option {
+.scan-paths-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  width: 100%;
+  justify-content: space-between;
+  margin-bottom: var(--spacing-md);
+  padding-bottom: var(--spacing-md);
+  border-bottom: 1px solid var(--color-border);
 }
 
-.scan-button {
-  width: 100%;
-  background: var(--color-primary);
-  border: none;
-  border-radius: var(--radius-sm);
+.scan-paths-title {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  font-size: var(--font-size-lg);
   font-weight: var(--font-weight-semibold);
-  transition: all var(--transition-base);
-  box-shadow: var(--shadow-sm);
+  color: var(--color-text-primary);
 }
 
-.scan-button:hover {
-  background: var(--color-primary-dark);
-  box-shadow: var(--shadow-md);
+.scan-paths-title .title-icon {
+  font-size: 20px;
+  color: var(--color-primary);
+}
+
+.count-tag {
+  margin-left: var(--spacing-xs);
+}
+
+.manage-link {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  font-size: var(--font-size-sm);
+}
+
+.scan-path-table {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.scan-path-table :deep(.el-table__header) {
+  background: var(--color-bg-secondary);
+}
+
+.path-name-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.path-icon {
+  font-size: 16px;
+  color: var(--color-primary);
+}
+
+.path-name {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+
+.path-text {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  font-family: monospace;
+}
+
+.scan-time-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scan-time {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* 扫描按钮浅色样式 */
+.scan-btn {
+  background-color: #f0f9f4 !important;
+  border-color: #a8d5ba !important;
+  color: #0d8a4f !important;
+}
+
+.scan-btn:hover:not(:disabled) {
+  background-color: #e0f2e9 !important;
+  border-color: #7bc49a !important;
+  color: #0a6b3d !important;
+}
+
+.scan-btn:disabled {
+  background-color: #f5f5f5 !important;
+  border-color: #d9d9d9 !important;
+  color: #999 !important;
+}
+
+/* 重新扫描按钮样式 */
+.rescan-btn {
+  background-color: #fff7e6 !important;
+  border-color: #ffd591 !important;
+  color: #d46b08 !important;
+}
+
+.rescan-btn:hover:not(:disabled) {
+  background-color: #ffe7ba !important;
+  border-color: #ffc53d !important;
+  color: #ad4e00 !important;
+}
+
+.rescan-btn:disabled {
+  background-color: #f5f5f5 !important;
+  border-color: #d9d9d9 !important;
+  color: #999 !important;
 }
 
 /* ============ 照片网格卡片 ============ */
@@ -472,15 +664,68 @@ onMounted(() => {
   padding: var(--spacing-xl) !important;
 }
 
+/* 搜索区域 */
+.search-section {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-lg);
+  padding-bottom: var(--spacing-lg);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.search-input-with-btn {
+  flex: 1;
+}
+
+.search-input-with-btn :deep(.el-input__wrapper) {
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+}
+
+.search-input-with-btn :deep(.el-input__wrapper:hover) {
+  box-shadow: var(--shadow-md);
+}
+
+.search-input-with-btn :deep(.el-input__wrapper.is-focus) {
+  box-shadow: 0 0 0 2px rgba(0, 184, 148, 0.2);
+}
+
+.search-btn {
+  background: var(--color-primary);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-weight: var(--font-weight-semibold);
+  padding-left: var(--spacing-xl);
+  padding-right: var(--spacing-xl);
+}
+
+.search-btn:hover {
+  background: var(--color-primary-dark);
+}
+
 /* 统计信息 */
 .photos-stats {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--spacing-xl);
   margin-bottom: var(--spacing-lg);
   padding: var(--spacing-md);
   background: var(--color-bg-secondary);
   border-radius: var(--radius-sm);
+  flex-wrap: wrap;
+}
+
+.stats-left {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xl);
+}
+
+.stats-right {
+  display: flex;
+  align-items: center;
 }
 
 .stat-item {
@@ -505,10 +750,13 @@ onMounted(() => {
 /* ============ 照片网格 ============ */
 .photo-grid {
   margin-top: var(--spacing-lg);
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: var(--spacing-md);
 }
 
 .photo-col {
-  margin-bottom: var(--spacing-lg);
+  margin-bottom: 0;
 }
 
 .photo-card {
@@ -523,7 +771,7 @@ onMounted(() => {
 .photo-image-wrapper {
   position: relative;
   width: 100%;
-  height: 280px;
+  aspect-ratio: 1;
   border-radius: var(--radius-md);
   overflow: hidden;
   background: var(--color-bg-secondary);
@@ -687,13 +935,25 @@ onMounted(() => {
 }
 
 /* ============ 响应式设计 ============ */
+@media (max-width: 1400px) {
+  .photo-grid {
+    grid-template-columns: repeat(8, 1fr);
+  }
+}
+
 @media (max-width: 1200px) {
   .photos-page {
     padding: var(--spacing-lg);
   }
 
-  .photo-image-wrapper {
-    height: 240px;
+  .photo-grid {
+    grid-template-columns: repeat(6, 1fr);
+  }
+}
+
+@media (max-width: 992px) {
+  .photo-grid {
+    grid-template-columns: repeat(5, 1fr);
   }
 }
 
@@ -706,30 +966,60 @@ onMounted(() => {
     font-size: var(--font-size-2xl);
   }
 
-  .toolbar-card {
-    padding: var(--spacing-lg) !important;
+  .scan-paths-card {
+    padding: var(--spacing-md) !important;
   }
 
-  .toolbar-card .el-col {
-    margin-bottom: var(--spacing-md);
-  }
-
-  .action-col {
-    justify-content: stretch;
+  .scan-paths-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--spacing-sm);
   }
 
   .photos-grid-card {
     padding: var(--spacing-lg) !important;
   }
 
+  .search-section {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .search-btn {
+    width: 100%;
+  }
+
   .photos-stats {
     flex-direction: column;
     align-items: flex-start;
-    gap: var(--spacing-sm);
+    gap: var(--spacing-md);
   }
 
-  .photo-image-wrapper {
-    height: 200px;
+  .stats-left {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--spacing-sm);
+    width: 100%;
+  }
+
+  .stats-right {
+    width: 100%;
+  }
+
+  .filter-group {
+    width: 100%;
+  }
+
+  .filter-group :deep(.el-radio-button) {
+    flex: 1;
+  }
+
+  .filter-group :deep(.el-radio-button__inner) {
+    width: 100%;
+  }
+
+  .photo-grid {
+    grid-template-columns: repeat(3, 1fr);
   }
 
   .pagination-wrapper {
@@ -750,9 +1040,9 @@ onMounted(() => {
     font-size: var(--font-size-base);
   }
 
-  .photo-image-wrapper {
-    height: 180px;
+  .photo-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
-</style>
 
+</style>

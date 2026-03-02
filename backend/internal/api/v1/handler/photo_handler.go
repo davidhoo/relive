@@ -76,6 +76,9 @@ func (h *PhotoHandler) ScanPhotos(c *gin.Context) {
 		}
 		scanPath = pathConfig
 		scanPathID = pathID
+	} else {
+		// Find pathID by path
+		scanPathID = h.findPathIDByPath(c, scanPath)
 	}
 
 	// Validate path
@@ -118,6 +121,122 @@ func (h *PhotoHandler) ScanPhotos(c *gin.Context) {
 		Message: "Success",
 		Data:    resp,
 	})
+}
+
+// RescanPhotos 重新扫描照片（强制更新所有信息）
+// @Summary 重新扫描照片
+// @Description 强制重新扫描指定目录的照片，更新所有已存在的照片信息（EXIF、地理位置等）
+// @Tags photos
+// @Accept json
+// @Produce json
+// @Param request body model.ScanPhotosRequest true "扫描请求"
+// @Success 200 {object} model.Response{data=model.ScanPhotosResponse}
+// @Failure 400 {object} model.Response
+// @Failure 500 {object} model.Response
+// @Router /api/v1/photos/rescan [post]
+func (h *PhotoHandler) RescanPhotos(c *gin.Context) {
+	var req model.ScanPhotosRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		logger.Warnf("Invalid request: %v", err)
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INVALID_REQUEST",
+				Message: "Invalid request",
+			},
+		})
+		return
+	}
+
+	// If no path provided, load from config
+	scanPath := req.Path
+	var scanPathID string
+
+	if scanPath == "" {
+		// Load scan paths from config
+		pathConfig, pathID, err := h.getDefaultScanPath(c)
+		if err != nil {
+			logger.Errorf("Failed to get default scan path: %v", err)
+			c.JSON(http.StatusBadRequest, model.Response{
+				Success: false,
+				Error: &model.ErrorInfo{
+					Code:    "NO_DEFAULT_PATH",
+					Message: err.Error(),
+				},
+			})
+			return
+		}
+		scanPath = pathConfig
+		scanPathID = pathID
+	} else {
+		// Find pathID by path
+		scanPathID = h.findPathIDByPath(c, scanPath)
+	}
+
+	// Validate path
+	if err := validateScanPath(scanPath); err != nil {
+		logger.Errorf("Invalid scan path: %v", err)
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INVALID_PATH",
+				Message: "Invalid scan path: " + err.Error(),
+			},
+		})
+		return
+	}
+
+	// 重新扫描照片（强制更新）
+	resp, err := h.photoService.RescanPhotos(scanPath)
+	if err != nil {
+		logger.Errorf("Rescan photos failed: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "SCAN_FAILED",
+				Message: "Failed to rescan photos: " + err.Error(),
+			},
+		})
+		return
+	}
+
+	// Update last scanned timestamp if using config path
+	if scanPathID != "" {
+		if err := h.updateLastScannedAt(c, scanPathID); err != nil {
+			logger.Warnf("Failed to update last scanned timestamp: %v", err)
+			// Don't fail the scan, just log warning
+		}
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "Success",
+		Data:    resp,
+	})
+}
+
+// findPathIDByPath finds pathID by path string
+func (h *PhotoHandler) findPathIDByPath(c *gin.Context, path string) string {
+	// Get config
+	configValue, err := h.configService.Get("photos.scan_paths")
+	if err != nil {
+		return ""
+	}
+
+	// Parse JSON
+	var pathsConfig model.ScanPathsConfig
+	if err := json.Unmarshal([]byte(configValue.Value), &pathsConfig); err != nil {
+		return ""
+	}
+
+	// Find path by path string
+	for _, p := range pathsConfig.Paths {
+		if p.Path == path {
+			return p.ID
+		}
+	}
+
+	return ""
 }
 
 // getDefaultScanPath retrieves the default scan path from config

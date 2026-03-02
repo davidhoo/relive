@@ -18,6 +18,7 @@ type PhotoService interface {
 	// 扫描
 	ScanPhotos(path string) (*model.ScanPhotosResponse, error)
 	ScanDirectory(dir string) ([]*model.Photo, error)
+	RescanPhotos(path string) (*model.ScanPhotosResponse, error) // 强制重新扫描
 
 	// 查询
 	GetPhotoByID(id uint) (*model.Photo, error)
@@ -105,6 +106,80 @@ func (s *photoService) ScanPhotos(path string) (*model.ScanPhotosResponse, error
 	}
 
 	logger.Infof("Photo scan completed: scanned=%d, new=%d, updated=%d", scannedCount, newCount, updatedCount)
+
+	return &model.ScanPhotosResponse{
+		ScannedCount: scannedCount,
+		NewCount:     newCount,
+		UpdatedCount: updatedCount,
+	}, nil
+}
+
+// RescanPhotos 强制重新扫描照片，更新所有已存在的照片信息
+func (s *photoService) RescanPhotos(path string) (*model.ScanPhotosResponse, error) {
+	logger.Infof("Starting photo rescan: %s", path)
+
+	// 检查路径是否存在
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil, fmt.Errorf("path does not exist: %s", path)
+	}
+
+	// 扫描目录
+	photos, err := s.ScanDirectory(path)
+	if err != nil {
+		return nil, fmt.Errorf("scan directory: %w", err)
+	}
+
+	// 统计结果
+	scannedCount := len(photos)
+	newCount := 0
+	updatedCount := 0
+
+	// 处理每张照片 - 强制更新
+	for _, photo := range photos {
+		// 检查是否已存在（根据文件路径）
+		exists, err := s.repo.ExistsByFilePath(photo.FilePath)
+		if err != nil {
+			logger.Errorf("Check photo exists failed: %v", err)
+			continue
+		}
+
+		if !exists {
+			// 新照片，创建
+			if err := s.repo.Create(photo); err != nil {
+				logger.Errorf("Create photo failed: %v", err)
+				continue
+			}
+			newCount++
+		} else {
+			// 已存在，强制更新所有信息
+			existing, err := s.repo.GetByFilePath(photo.FilePath)
+			if err != nil {
+				logger.Errorf("Get existing photo failed: %v", err)
+				continue
+			}
+
+			// 保留原有 ID 和 AI 分析相关字段
+			photo.ID = existing.ID
+			photo.AIAnalyzed = existing.AIAnalyzed
+			photo.AnalyzedAt = existing.AnalyzedAt
+			photo.AIProvider = existing.AIProvider
+			photo.Description = existing.Description
+			photo.Caption = existing.Caption
+			photo.MemoryScore = existing.MemoryScore
+			photo.BeautyScore = existing.BeautyScore
+			photo.OverallScore = existing.OverallScore
+			photo.MainCategory = existing.MainCategory
+			photo.Tags = existing.Tags
+
+			if err := s.repo.Update(photo); err != nil {
+				logger.Errorf("Update photo failed: %v", err)
+				continue
+			}
+			updatedCount++
+		}
+	}
+
+	logger.Infof("Photo rescan completed: scanned=%d, new=%d, force_updated=%d", scannedCount, newCount, updatedCount)
 
 	return &model.ScanPhotosResponse{
 		ScannedCount: scannedCount,

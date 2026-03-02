@@ -61,6 +61,7 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 		photos := v1.Group("/photos")
 		{
 			photos.POST("/scan", handlers.Photo.ScanPhotos)
+			photos.POST("/rescan", handlers.Photo.RescanPhotos)
 			photos.POST("/validate-path", handlers.Photo.ValidatePath)
 			photos.GET("/stats", handlers.Photo.GetPhotoStats) // 具体路径要在参数路径之前
 			photos.GET("", handlers.Photo.GetPhotos)

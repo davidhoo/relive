@@ -18,6 +18,11 @@ export const photoApi = {
     return http.post<ScanPhotosResponse>('/photos/scan', data || {})
   },
 
+  // 重新扫描照片（强制更新所有信息）
+  rescan(data?: ScanPhotosRequest) {
+    return http.post<ScanPhotosResponse>('/photos/rescan', data || {})
+  },
+
   // 获取照片统计
   getStats() {
     return http.get<PhotoStats>('/photos/stats')

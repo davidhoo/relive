@@ -1,16 +1,18 @@
 <template>
-  <el-container class="main-layout">
+  <el-container class="main-layout" :class="{ 'sidebar-collapsed': isCollapsed }">
     <!-- 侧边栏 -->
-    <el-aside width="240px" class="sidebar">
+    <el-aside :width="isCollapsed ? '64px' : '240px'" class="sidebar">
       <div class="logo">
         <div class="logo-icon">
           <el-icon><PictureFilled /></el-icon>
         </div>
-        <h2 class="logo-text">Relive</h2>
+        <h2 v-show="!isCollapsed" class="logo-text">Relive</h2>
       </div>
       <el-menu
         :default-active="activeMenu"
         :router="true"
+        :collapse="isCollapsed"
+        :collapse-transition="false"
         class="sidebar-menu"
       >
         <el-menu-item
@@ -22,9 +24,21 @@
           <el-icon v-if="route.meta?.icon" class="menu-icon">
             <component :is="route.meta.icon" />
           </el-icon>
-          <span class="menu-title">{{ route.meta?.title }}</span>
+          <template #title>
+            <span class="menu-title">{{ route.meta?.title }}</span>
+          </template>
         </el-menu-item>
       </el-menu>
+
+      <!-- 折叠按钮 -->
+      <div class="collapse-trigger" @click="toggleCollapse">
+        <div class="collapse-line"></div>
+        <div class="collapse-arrow" :class="{ 'is-collapsed': isCollapsed }">
+          <el-icon :size="12">
+            <component :is="isCollapsed ? 'ArrowRight' : 'ArrowLeft'" />
+          </el-icon>
+        </div>
+      </div>
     </el-aside>
 
     <!-- 主内容区 -->
@@ -65,13 +79,31 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSystemStore } from '@/stores/system'
 
 const route = useRoute()
 const router = useRouter()
 const systemStore = useSystemStore()
+
+// 侧边栏折叠状态
+const isCollapsed = ref(false)
+
+// 切换折叠状态
+const toggleCollapse = () => {
+  isCollapsed.value = !isCollapsed.value
+  // 保存到 localStorage
+  localStorage.setItem('sidebar-collapsed', String(isCollapsed.value))
+}
+
+// 初始化时读取保存的状态
+onMounted(() => {
+  const saved = localStorage.getItem('sidebar-collapsed')
+  if (saved !== null) {
+    isCollapsed.value = saved === 'true'
+  }
+})
 
 // 当前激活的菜单
 const activeMenu = computed(() => {
@@ -106,6 +138,12 @@ const statusText = computed(() => {
 })
 
 onMounted(() => {
+  // 初始化折叠状态
+  const saved = localStorage.getItem('sidebar-collapsed')
+  if (saved !== null) {
+    isCollapsed.value = saved === 'true'
+  }
+
   systemStore.fetchHealth()
   // 每30秒刷新一次健康状态
   setInterval(() => {
@@ -127,7 +165,10 @@ onMounted(() => {
   box-shadow: 2px 0 8px rgba(0, 0, 0, 0.04);
   z-index: 100;
   overflow-y: auto;
+  overflow-x: hidden;
   border-right: 1px solid var(--color-border);
+  position: relative;
+  transition: width var(--transition-base);
 }
 
 /* Logo 区域 */
@@ -210,6 +251,107 @@ onMounted(() => {
   height: 24px;
   background: var(--color-primary);
   border-radius: 0 4px 4px 0;
+}
+
+/* 折叠触发区域 - WeDance 风格 */
+.collapse-trigger {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  background: transparent;
+  transition: all var(--transition-base);
+}
+
+.collapse-trigger:hover {
+  background: var(--color-bg-hover);
+}
+
+.collapse-line {
+  position: absolute;
+  top: 50%;
+  left: 16px;
+  right: 16px;
+  height: 1px;
+  background: var(--color-border);
+  transition: all var(--transition-base);
+}
+
+.collapse-trigger:hover .collapse-line {
+  background: var(--color-border-dark);
+}
+
+.collapse-arrow {
+  position: relative;
+  z-index: 1;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg-sidebar);
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  color: var(--color-text-secondary);
+  transition: all var(--transition-base);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.collapse-trigger:hover .collapse-arrow {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: white;
+  transform: scale(1.1);
+  box-shadow: 0 4px 8px rgba(0, 184, 148, 0.25);
+}
+
+.collapse-arrow.is-collapsed {
+  transform: rotate(180deg);
+}
+
+.collapse-arrow.is-collapsed:hover {
+  transform: rotate(180deg) scale(1.1);
+}
+
+/* 折叠状态的菜单样式 */
+.sidebar-collapsed .logo {
+  padding: var(--spacing-sm);
+  gap: 0;
+}
+
+.sidebar-collapsed .logo-icon {
+  width: 40px;
+  height: 40px;
+  font-size: 24px;
+}
+
+.sidebar-collapsed .sidebar-menu {
+  padding: var(--spacing-xs);
+}
+
+.sidebar-collapsed .menu-icon {
+  margin-right: 0;
+}
+
+.sidebar-collapsed .sidebar-menu :deep(.el-menu-item) {
+  justify-content: center;
+  padding: 0 !important;
+}
+
+.sidebar-collapsed .sidebar-menu :deep(.el-menu-item.is-active::before) {
+  width: 3px;
+  height: 20px;
+}
+
+/* 折叠状态下的折叠触发器 */
+.sidebar-collapsed .collapse-line {
+  left: 8px;
+  right: 8px;
 }
 
 .menu-icon {
@@ -355,11 +497,22 @@ onMounted(() => {
 /* ============ 响应式设计 ============ */
 @media (max-width: 768px) {
   .sidebar {
-    width: 80px !important;
+    width: 64px !important;
+  }
+
+  .logo {
+    padding: var(--spacing-sm);
+    gap: 0;
   }
 
   .logo-text {
     display: none;
+  }
+
+  .logo-icon {
+    width: 40px;
+    height: 40px;
+    font-size: 24px;
   }
 
   .menu-title {
@@ -367,15 +520,20 @@ onMounted(() => {
   }
 
   .sidebar-menu {
-    padding: var(--spacing-sm);
+    padding: var(--spacing-xs);
   }
 
   .sidebar-menu :deep(.el-menu-item) {
     justify-content: center;
+    padding: 0 !important;
   }
 
   .menu-icon {
     margin-right: 0;
+  }
+
+  .collapse-trigger {
+    display: none;
   }
 
   .header {
