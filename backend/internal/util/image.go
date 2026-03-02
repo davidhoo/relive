@@ -9,8 +9,10 @@ import (
 	_ "image/png" // 支持 PNG 格式
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/disintegration/imaging"
+	"github.com/jdeng/goheif"
 )
 
 // ImageProcessor 图片处理器
@@ -113,6 +115,37 @@ func max(a, b int) int {
 	return b
 }
 
+// init 注册 HEIC 解码器
+func init() {
+	// 注册 HEIC/HEIF 格式解码器
+	image.RegisterFormat("heic", "ftypheic", goheif.Decode, goheif.DecodeConfig)
+	image.RegisterFormat("heic", "ftypmif1", goheif.Decode, goheif.DecodeConfig)
+	image.RegisterFormat("heif", "ftypheic", goheif.Decode, goheif.DecodeConfig)
+	image.RegisterFormat("heif", "ftypmif1", goheif.Decode, goheif.DecodeConfig)
+}
+
+// isHEIC 检查是否是 HEIC/HEIF 格式
+func isHEIC(filePath string) bool {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	return ext == ".heic" || ext == ".heif"
+}
+
+// openImage 打开图片（支持 JPEG、PNG、HEIC 等格式）
+func openImage(filePath string) (image.Image, error) {
+	// 如果是 HEIC 格式，使用专门的解码器
+	if isHEIC(filePath) {
+		file, err := os.Open(filePath)
+		if err != nil {
+			return nil, err
+		}
+		defer file.Close()
+		return goheif.Decode(file)
+	}
+
+	// 其他格式使用 imaging 库
+	return imaging.Open(filePath)
+}
+
 // ThumbnailGenerator 缩略图生成器
 type ThumbnailGenerator struct {
 	MaxWidth    int    // 最大宽度
@@ -134,8 +167,8 @@ func NewThumbnailGenerator(maxWidth, maxHeight, jpegQuality int, outputDir strin
 // GenerateThumbnail 生成缩略图
 // 返回缩略图的相对路径和错误
 func (g *ThumbnailGenerator) GenerateThumbnail(filePath string) (string, error) {
-	// 打开原图
-	img, err := imaging.Open(filePath)
+	// 打开原图（支持 HEIC 等格式）
+	img, err := openImage(filePath)
 	if err != nil {
 		return "", err
 	}
