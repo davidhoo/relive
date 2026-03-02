@@ -970,13 +970,13 @@ onMounted(() => {
 /* Fix: 修复 append 按钮左边框被输入框遮挡的问题 */
 :deep(.el-input-group__append) {
   padding: 0;
-  border-left: 1px solid var(--el-border-color);
-  background-color: var(--el-fill-color-light);
+  border-left: none;
+  background: transparent;
 }
 
 :deep(.el-input-group__append .el-button) {
-  margin: 0 0 0 8px;
-  border: none;
+  margin-left: 8px;
+  border: 1px solid var(--el-border-color);
   border-radius: var(--el-border-radius-base);
 }
 </style>
