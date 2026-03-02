@@ -672,6 +672,7 @@ defineExpose({
 
 .filter-group {
   display: flex;
+  gap: var(--spacing-sm);
 }
 
 .filter-group :deep(.el-radio-button__inner) {
@@ -783,6 +784,16 @@ defineExpose({
 .scan-time {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
+}
+
+/* 按钮组间隙 */
+:deep(.el-button-group) {
+  display: flex;
+  gap: var(--spacing-xs);
+}
+
+:deep(.el-button-group .el-button) {
+  border-radius: var(--radius-sm);
 }
 
 /* 扫描按钮浅色样式 */
