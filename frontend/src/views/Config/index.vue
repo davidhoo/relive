@@ -967,16 +967,19 @@ onMounted(() => {
   line-height: 1.8;
 }
 
-/* Fix: 修复 append 按钮左边框被输入框遮挡的问题 */
+/* Fix: 修复 append 按钮样式，增加与输入框的间距 */
 :deep(.el-input-group__append) {
   padding: 0;
   border-left: none;
   background: transparent;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 :deep(.el-input-group__append .el-button) {
-  margin-left: 8px;
   border: 1px solid var(--el-border-color);
   border-radius: var(--el-border-radius-base);
+  margin: 0;
 }
 </style>
