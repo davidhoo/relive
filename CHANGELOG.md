@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 进行中 🚧
 - ESP32 固件开发 - **最后阶段**
 
+### 2026-03-02 - 前端 Bug 修复 🐛
+
+#### Bug 修复
+
+- ✅ **系统管理页面图标修复** - 修复数据库大小卡片缺少图标的问题
+  - 添加缺失的 Element Plus 图标导入
+  - 使用 `Collection` 图标替代不存在的 `Database` 图标
+
 ### 2026-03-02 - 照片管理功能增强 🆕
 
 #### 新增功能
