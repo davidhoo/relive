@@ -11,13 +11,15 @@ import (
 
 // ConfigHandler 配置处理器
 type ConfigHandler struct {
-	service service.ConfigService
+	service     service.ConfigService
+	aiService   service.AIService
 }
 
 // NewConfigHandler 创建配置处理器
-func NewConfigHandler(service service.ConfigService) *ConfigHandler {
+func NewConfigHandler(service service.ConfigService, aiService service.AIService) *ConfigHandler {
 	return &ConfigHandler{
-		service: service,
+		service:   service,
+		aiService: aiService,
 	}
 }
 
@@ -116,6 +118,21 @@ func (h *ConfigHandler) SetConfig(c *gin.Context) {
 			},
 		})
 		return
+	}
+
+	// 检查是否是 AI 配置变更，如果是则重新加载 AI provider
+	if key == "ai" && h.aiService != nil {
+		logger.Info("AI configuration changed, reloading AI provider...")
+		if err := h.aiService.ReloadProvider(); err != nil {
+			logger.Warnf("Failed to reload AI provider after config change: %v", err)
+			// 配置已保存，但 AI provider 重载失败，返回警告信息
+			c.JSON(http.StatusOK, model.Response{
+				Success: true,
+				Message: "Config saved, but failed to reload AI provider: " + err.Error(),
+			})
+			return
+		}
+		logger.Info("AI provider reloaded successfully")
 	}
 
 	c.JSON(http.StatusOK, model.Response{
@@ -241,6 +258,20 @@ func (h *ConfigHandler) SetBatchConfigs(c *gin.Context) {
 			},
 		})
 		return
+	}
+
+	// 检查是否包含 AI 配置变更，如果是则重新加载 AI provider
+	if _, hasAIConfig := configs["ai"]; hasAIConfig && h.aiService != nil {
+		logger.Info("AI configuration changed, reloading AI provider...")
+		if err := h.aiService.ReloadProvider(); err != nil {
+			logger.Warnf("Failed to reload AI provider after config change: %v", err)
+			// 配置已保存，但 AI provider 重载失败，返回警告信息
+			c.JSON(http.StatusOK, model.Response{
+				Success: true,
+				Message: "Configs saved, but failed to reload AI provider: " + err.Error(),
+			})
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, model.Response{

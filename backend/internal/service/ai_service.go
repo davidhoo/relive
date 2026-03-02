@@ -27,6 +27,9 @@ type AIService interface {
 
 	// GetProvider 获取当前使用的 provider
 	GetProvider() (provider.AIProvider, error)
+
+	// ReloadProvider 重新加载 AI provider（配置变更后调用）
+	ReloadProvider() error
 }
 
 // aiService AI 分析服务实现
@@ -329,6 +332,27 @@ func (s *aiService) GetProvider() (provider.AIProvider, error) {
 		return nil, fmt.Errorf("AI provider not configured")
 	}
 	return s.provider, nil
+}
+
+// ReloadProvider 重新加载 AI provider（配置变更后调用）
+func (s *aiService) ReloadProvider() error {
+	logger.Info("Reloading AI provider due to configuration change...")
+
+	// 重置当前 provider
+	s.provider = nil
+
+	// 重新初始化 provider
+	if err := s.initProvider(); err != nil {
+		return fmt.Errorf("failed to reload AI provider: %w", err)
+	}
+
+	if s.provider != nil {
+		logger.Infof("AI provider reloaded successfully: %s", s.provider.Name())
+	} else {
+		logger.Info("AI provider cleared (no provider configured)")
+	}
+
+	return nil
 }
 
 // AnalyzePhoto 分析单张照片

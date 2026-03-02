@@ -24,7 +24,7 @@ func NewHandlers(db *gorm.DB, services *service.Services) *Handlers {
 		Display: NewDisplayHandler(services.Display, services.ESP32),
 		ESP32:   NewESP32Handler(services.ESP32),
 		Export:  NewExportHandler(services.Export),
-		Config:  NewConfigHandler(services.Config),
+		Config:  NewConfigHandler(services.Config, services.AI),
 	}
 
 	// AI Handler 可能为 nil（如果 AI 服务未配置）
