@@ -347,16 +347,21 @@ const cleaningUp = ref(false)
 const categories = ref<string[]>([])
 const tags = ref<string[]>([])
 
-// 计算每个路径的照片数量
-const pathPhotoCounts = computed(() => {
-  const counts: Record<string, number> = {}
-  scanPaths.value.forEach(path => {
-    counts[path.path] = photos.value.filter(photo =>
-      photo.file_path?.startsWith(path.path)
-    ).length
-  })
-  return counts
-})
+// 存储每个路径的照片数量（从数据库获取）
+const pathPhotoCounts = ref<Record<string, number>>({})
+
+// 获取每个路径的照片数量
+const loadPathPhotoCounts = async () => {
+  if (scanPaths.value.length === 0) return
+
+  try {
+    const paths = scanPaths.value.map(p => p.path)
+    const res = await photoApi.countByPaths({ paths })
+    pathPhotoCounts.value = res.data?.counts || {}
+  } catch (error) {
+    console.error('Failed to load path photo counts:', error)
+  }
+}
 
 // 获取照片缩略图 URL
 const getPhotoThumbnailUrl = (photoId: number) => {
@@ -505,6 +510,8 @@ const loadScanPaths = async () => {
   try {
     const config = await configApi.getScanPaths()
     scanPaths.value = config.paths || []
+    // 加载每个路径的照片数量
+    await loadPathPhotoCounts()
   } catch (error: any) {
     console.error('Failed to load scan paths:', error)
     ElMessage.error('加载扫描路径失败')
@@ -566,6 +573,8 @@ const handleScanPath = async (path: ScanPathConfig) => {
     // Reload photos and scan paths (to update last_scanned_at)
     await loadPhotos()
     await loadScanPaths()
+    // 刷新路径照片数量
+    await loadPathPhotoCounts()
   } catch (error: any) {
     ElMessage.error(error.message || '扫描照片失败')
   } finally {
@@ -590,6 +599,8 @@ const handleRebuildPath = async (path: ScanPathConfig) => {
     // Reload photos and scan paths (to update last_scanned_at)
     await loadPhotos()
     await loadScanPaths()
+    // 刷新路径照片数量
+    await loadPathPhotoCounts()
   } catch (error: any) {
     ElMessage.error(error.message || '重建照片失败')
   } finally {
@@ -614,6 +625,8 @@ const handleCleanup = async () => {
 
     // Reload photos to update the list
     await loadPhotos()
+    // 刷新路径照片数量
+    await loadPathPhotoCounts()
   } catch (error: any) {
     ElMessage.error(error.message || '清理照片失败')
   } finally {

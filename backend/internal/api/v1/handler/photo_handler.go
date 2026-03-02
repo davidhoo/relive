@@ -815,3 +815,49 @@ func (h *PhotoHandler) GetTags(c *gin.Context) {
 		Data:    tags,
 	})
 }
+
+// CountPhotosByPaths 按路径统计照片数量
+// @Summary 按路径统计照片数量
+// @Description 统计多个扫描路径下的照片数量
+// @Tags photos
+// @Accept json
+// @Produce json
+// @Param request body model.CountPhotosByPathsRequest true "路径列表"
+// @Success 200 {object} model.Response{data=model.CountPhotosByPathsResponse}
+// @Failure 400 {object} model.Response
+// @Failure 500 {object} model.Response
+// @Router /api/v1/photos/count-by-paths [post]
+func (h *PhotoHandler) CountPhotosByPaths(c *gin.Context) {
+	var req model.CountPhotosByPathsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INVALID_REQUEST",
+				Message: err.Error(),
+			},
+		})
+		return
+	}
+
+	counts := make(map[string]int64)
+	for _, path := range req.Paths {
+		count, err := h.photoService.CountPhotosByPathPrefix(path)
+		if err != nil {
+			logger.Errorf("Count photos by path prefix failed: %s, error: %v", path, err)
+			counts[path] = 0
+			continue
+		}
+		counts[path] = count
+	}
+
+	resp := model.CountPhotosByPathsResponse{
+		Counts: counts,
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "Success",
+		Data:    resp,
+	})
+}

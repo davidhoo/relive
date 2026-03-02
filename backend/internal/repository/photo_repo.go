@@ -55,6 +55,9 @@ type PhotoRepository interface {
 	// 重建相关
 	ListByPathPrefix(prefix string) ([]*model.Photo, error)
 	SoftDeleteByPathPrefix(prefix string) error
+
+	// 路径统计
+	CountByPathPrefix(prefix string) (int64, error)
 }
 
 // photoRepository 照片仓库实现
@@ -350,6 +353,13 @@ func (r *photoRepository) ListByPathPrefix(prefix string) ([]*model.Photo, error
 // SoftDeleteByPathPrefix 软删除指定路径前缀的所有照片
 func (r *photoRepository) SoftDeleteByPathPrefix(prefix string) error {
 	return r.db.Where("file_path LIKE ?", prefix+"%").Delete(&model.Photo{}).Error
+}
+
+// CountByPathPrefix 统计指定路径前缀的照片数量
+func (r *photoRepository) CountByPathPrefix(prefix string) (int64, error) {
+	var count int64
+	err := r.db.Model(&model.Photo{}).Where("file_path LIKE ?", prefix+"%").Count(&count).Error
+	return count, err
 }
 
 // GetCategories 获取所有分类

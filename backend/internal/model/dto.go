@@ -239,3 +239,13 @@ type ValidatePathResponse struct {
 	Valid bool   `json:"valid"`
 	Error string `json:"error,omitempty"`
 }
+
+// CountPhotosByPathsRequest 按路径统计照片数量请求
+type CountPhotosByPathsRequest struct {
+	Paths []string `json:"paths" binding:"required"`
+}
+
+// CountPhotosByPathsResponse 按路径统计照片数量响应
+type CountPhotosByPathsResponse struct {
+	Counts map[string]int64 `json:"counts"` // key: path, value: count
+}

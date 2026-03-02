@@ -89,3 +89,13 @@ export interface CleanupPhotosResponse {
   deleted_count: number
   skipped_count: number
 }
+
+// 按路径统计照片数量请求
+export interface CountPhotosByPathsRequest {
+  paths: string[]
+}
+
+// 按路径统计照片数量响应
+export interface CountPhotosByPathsResponse {
+  counts: Record<string, number>  // key: path, value: count
+}

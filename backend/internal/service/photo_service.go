@@ -41,6 +41,9 @@ type PhotoService interface {
 	// 删除路径相关
 	DeletePhotosByPathPrefix(pathPrefix string) (int64, error)
 	GetPhotoIDsByPathPrefix(pathPrefix string) ([]uint, error)
+
+	// 路径统计
+	CountPhotosByPathPrefix(pathPrefix string) (int64, error)
 }
 
 // photoService 照片服务实现
@@ -547,4 +550,13 @@ func (s *photoService) GetPhotoIDsByPathPrefix(pathPrefix string) ([]uint, error
 	}
 
 	return ids, nil
+}
+
+// CountPhotosByPathPrefix 根据路径前缀统计照片数量
+func (s *photoService) CountPhotosByPathPrefix(pathPrefix string) (int64, error) {
+	count, err := s.repo.CountByPathPrefix(pathPrefix)
+	if err != nil {
+		return 0, fmt.Errorf("count photos by path prefix: %w", err)
+	}
+	return count, nil
 }

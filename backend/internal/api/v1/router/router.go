@@ -64,6 +64,7 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 			photos.POST("/rebuild", handlers.Photo.RebuildPhotos)
 		photos.POST("/cleanup", handlers.Photo.CleanupPhotos)
 			photos.POST("/validate-path", handlers.Photo.ValidatePath)
+		photos.POST("/count-by-paths", handlers.Photo.CountPhotosByPaths)
 			photos.GET("/stats", handlers.Photo.GetPhotoStats)     // 具体路径要在参数路径之前
 			photos.GET("/categories", handlers.Photo.GetCategories) // 获取所有分类
 			photos.GET("/tags", handlers.Photo.GetTags)             // 获取所有标签
