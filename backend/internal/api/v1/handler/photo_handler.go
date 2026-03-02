@@ -594,25 +594,31 @@ func (h *PhotoHandler) GetPhotoImage(c *gin.Context) {
 			thumbnailPath = "./data/thumbnails"
 		}
 
+		// 生成缩略图文件路径（使用分目录存储，避免单目录文件过多）
+		// ID 12345 -> 十六进制 0x3039 -> 路径 thumbnails/30/39/12345.jpg
+		idNum, _ := strconv.ParseUint(idStr, 10, 64)
+		hexStr := fmt.Sprintf("%04x", idNum)
+		subDir1 := hexStr[0:2]
+		subDir2 := hexStr[2:4]
+		thumbnailDir := filepath.Join(thumbnailPath, subDir1, subDir2)
+		thumbnailFile := filepath.Join(thumbnailDir, idStr+".jpg")
+
 		// 确保缩略图目录存在
-		if err := os.MkdirAll(thumbnailPath, 0755); err != nil {
+		if err := os.MkdirAll(thumbnailDir, 0755); err != nil {
 			logger.Warnf("Failed to create thumbnail directory: %v, trying direct serve", err)
 			c.File(photo.FilePath)
 			return
 		}
 
-		// 创建缩略图文件路径
-		tempJpeg := filepath.Join(thumbnailPath, "relive_heic_"+idStr+".jpg")
-
-		// 如果缓存文件已存在，直接返回
-		if _, err := os.Stat(tempJpeg); err == nil {
+		// 如果缩略图文件已存在，直接返回
+		if _, err := os.Stat(thumbnailFile); err == nil {
 			c.Header("Content-Type", "image/jpeg")
-			c.File(tempJpeg)
+			c.File(thumbnailFile)
 			return
 		}
 
 		// 使用 sips 转换
-		cmd := exec.Command("sips", "-s", "format", "jpeg", photo.FilePath, "--out", tempJpeg)
+		cmd := exec.Command("sips", "-s", "format", "jpeg", photo.FilePath, "--out", thumbnailFile)
 		if err := cmd.Run(); err != nil {
 			logger.Warnf("Failed to convert HEIC to JPEG with sips: %v, trying direct serve", err)
 			// 如果转换失败，尝试直接返回原文件（某些浏览器可能支持）
@@ -622,7 +628,7 @@ func (h *PhotoHandler) GetPhotoImage(c *gin.Context) {
 
 		// 返回转换后的 JPEG
 		c.Header("Content-Type", "image/jpeg")
-		c.File(tempJpeg)
+		c.File(thumbnailFile)
 		return
 	}
 
