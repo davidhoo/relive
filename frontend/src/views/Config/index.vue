@@ -150,19 +150,18 @@
           </el-divider>
 
           <el-form-item label="API Key">
-            <el-input
-              v-model="geocodeConfig.amap_api_key"
-              placeholder="请输入高德地图 API Key"
-              type="password"
-              show-password
-            >
-              <template #append>
-                <el-button @click="openAmapDocs">
-                  <el-icon><Link /></el-icon>
-                  申请
-                </el-button>
-              </template>
-            </el-input>
+            <div class="input-with-button">
+              <el-input
+                v-model="geocodeConfig.amap_api_key"
+                placeholder="请输入高德地图 API Key"
+                type="password"
+                show-password
+              />
+              <el-button @click="openAmapDocs">
+                <el-icon><Link /></el-icon>
+                申请
+              </el-button>
+            </div>
             <div class="form-hint">
               访问 <a href="https://lbs.amap.com/" target="_blank">https://lbs.amap.com/</a> 申请 API Key
             </div>
@@ -326,19 +325,18 @@
           </el-divider>
 
           <el-form-item label="API Key">
-            <el-input
-              v-model="aiConfig.qwen_api_key"
-              placeholder="请输入通义千问 API Key"
-              type="password"
-              show-password
-            >
-              <template #append>
-                <el-button @click="openQwenDocs">
-                  <el-icon><Link /></el-icon>
-                  申请
-                </el-button>
-              </template>
-            </el-input>
+            <div class="input-with-button">
+              <el-input
+                v-model="aiConfig.qwen_api_key"
+                placeholder="请输入通义千问 API Key"
+                type="password"
+                show-password
+              />
+              <el-button @click="openQwenDocs">
+                <el-icon><Link /></el-icon>
+                申请
+              </el-button>
+            </div>
             <div class="form-hint">
               访问 <a href="https://dashscope.console.aliyun.com/" target="_blank">阿里云 DashScope</a> 申请 API Key
             </div>
@@ -376,19 +374,18 @@
           </el-divider>
 
           <el-form-item label="API Key">
-            <el-input
-              v-model="aiConfig.openai_api_key"
-              placeholder="请输入 OpenAI API Key"
-              type="password"
-              show-password
-            >
-              <template #append>
-                <el-button @click="openOpenAIDocs">
-                  <el-icon><Link /></el-icon>
-                  申请
-                </el-button>
-              </template>
-            </el-input>
+            <div class="input-with-button">
+              <el-input
+                v-model="aiConfig.openai_api_key"
+                placeholder="请输入 OpenAI API Key"
+                type="password"
+                show-password
+              />
+              <el-button @click="openOpenAIDocs">
+                <el-icon><Link /></el-icon>
+                申请
+              </el-button>
+            </div>
             <div class="form-hint">
               访问 <a href="https://platform.openai.com/api-keys" target="_blank">OpenAI Platform</a> 申请 API Key
             </div>
@@ -516,11 +513,10 @@
           <el-input v-model="pathForm.name" placeholder="例如: iPhone 2025-11" />
         </el-form-item>
         <el-form-item label="路径" required>
-          <el-input v-model="pathForm.path" placeholder="/path/to/photos">
-            <template #append>
-              <el-button @click="handleValidatePath" :loading="validating">验证</el-button>
-            </template>
-          </el-input>
+          <div class="input-with-button">
+            <el-input v-model="pathForm.path" placeholder="/path/to/photos" />
+            <el-button @click="handleValidatePath" :loading="validating">验证</el-button>
+          </div>
           <div v-if="validationResult" :class="['validation-result', validationResult.valid ? 'valid' : 'invalid']">
             <el-icon v-if="validationResult.valid"><CircleCheck /></el-icon>
             <el-icon v-else><CircleClose /></el-icon>
@@ -967,19 +963,18 @@ onMounted(() => {
   line-height: 1.8;
 }
 
-/* Fix: 修复 append 按钮样式，增加与输入框的间距 */
-:deep(.el-input-group__append) {
-  padding: 0;
-  border-left: none;
-  background: transparent;
+/* 输入框与按钮并排布局 */
+.input-with-button {
   display: flex;
+  gap: 12px;
   align-items: center;
-  gap: 8px;
 }
 
-:deep(.el-input-group__append .el-button) {
-  border: 1px solid var(--el-border-color);
-  border-radius: var(--el-border-radius-base);
-  margin: 0;
+.input-with-button .el-input {
+  flex: 1;
+}
+
+.input-with-button .el-button {
+  flex-shrink: 0;
 }
 </style>
