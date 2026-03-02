@@ -41,8 +41,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Bug 修复
 
+- ✅ **照片删除修复** - 修复 `Delete` 方法使用 `Unscoped()` 确保硬删除而不是软删除
 - ✅ **分类搜索修复** - 搜索功能添加 `main_category` 字段匹配
 - ✅ **按钮间隙修复** - 修复筛选器和按钮组之间的间隙问题
+
+#### 其他改进
+
+- ✅ **删除扫描路径时同步清理数据**
+  - 新增 `DELETE /config/scan-paths/:id` 接口
+  - 删除路径时同时删除数据库记录和缩略图文件
+  - 前端添加确认对话框，显示警告信息
 
 #### API 变更
 - 新增 `GET /photos/categories` - 获取所有分类
