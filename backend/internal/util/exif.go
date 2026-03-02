@@ -164,5 +164,46 @@ func extractEXIFWithSips(filePath string) (*EXIFData, error) {
 		}
 	}
 
+	// 如果 sips 没有提取到 GPS，尝试使用 mdls（HEIC 文件的 GPS 信息在 mdls 中更完整）
+	if data.GPSLatitude == nil || data.GPSLongitude == nil {
+		extractGPSWithMdls(filePath, data)
+	}
+
 	return data, nil
+}
+
+// extractGPSWithMdls 使用 macOS mdls 命令提取 GPS 信息（备选方案）
+func extractGPSWithMdls(filePath string, data *EXIFData) {
+	cmd := exec.Command("mdls", "-name", "kMDItemLatitude", "-name", "kMDItemLongitude", filePath)
+	output, err := cmd.Output()
+	if err != nil {
+		return
+	}
+
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		// kMDItemLatitude = 40.04032216666667
+		if strings.HasPrefix(line, "kMDItemLatitude") {
+			parts := strings.Split(line, "=")
+			if len(parts) == 2 {
+				latStr := strings.TrimSpace(parts[1])
+				if lat, err := strconv.ParseFloat(latStr, 64); err == nil {
+					data.GPSLatitude = &lat
+				}
+			}
+		}
+
+		// kMDItemLongitude = 116.2705916666667
+		if strings.HasPrefix(line, "kMDItemLongitude") {
+			parts := strings.Split(line, "=")
+			if len(parts) == 2 {
+				lonStr := strings.TrimSpace(parts[1])
+				if lon, err := strconv.ParseFloat(lonStr, 64); err == nil {
+					data.GPSLongitude = &lon
+				}
+			}
+		}
+	}
 }

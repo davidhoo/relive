@@ -59,8 +59,15 @@
                 : '-' }}
             </el-descriptions-item>
             <el-descriptions-item label="位置">{{ photo.location || '-' }}</el-descriptions-item>
+          </el-descriptions>
+
+          <!-- 文件时间信息 -->
+          <el-divider />
+          <el-descriptions title="文件时间" :column="1" border>
+            <el-descriptions-item label="文件创建">{{ formatTime(photo.file_create_time) }}</el-descriptions-item>
+            <el-descriptions-item label="文件修改">{{ formatTime(photo.file_mod_time) }}</el-descriptions-item>
             <el-descriptions-item label="导入时间">{{ formatTime(photo.created_at) }}</el-descriptions-item>
-            <el-descriptions-item label="设备ID">{{ photo.esp32_device_id || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="更新时间">{{ formatTime(photo.updated_at) }}</el-descriptions-item>
           </el-descriptions>
 
           <!-- AI 分析结果 -->

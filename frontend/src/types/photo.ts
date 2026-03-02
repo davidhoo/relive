@@ -5,6 +5,8 @@ export interface Photo {
   file_name?: string
   file_size?: number
   file_hash: string
+  file_mod_time?: string    // 文件修改时间（来自文件系统）
+  file_create_time?: string // 文件创建时间（来自文件系统）
 
   // EXIF 信息
   taken_at?: string

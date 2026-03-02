@@ -14,10 +14,12 @@ type Photo struct {
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 
 	// 文件信息
-	FilePath string `gorm:"type:text;not null;uniqueIndex:idx_file_path" json:"file_path"` // 文件路径
-	FileName string `gorm:"type:varchar(255);not null" json:"file_name"`                    // 文件名
-	FileSize int64  `gorm:"not null" json:"file_size"`                                      // 文件大小（字节）
-	FileHash string `gorm:"type:varchar(64);index:idx_file_hash" json:"file_hash"`          // 文件哈希（SHA256）
+	FilePath     string     `gorm:"type:text;not null;uniqueIndex:idx_file_path" json:"file_path"` // 文件路径
+	FileName     string     `gorm:"type:varchar(255);not null" json:"file_name"`                    // 文件名
+	FileSize     int64      `gorm:"not null" json:"file_size"`                                      // 文件大小（字节）
+	FileHash     string     `gorm:"type:varchar(64);index:idx_file_hash" json:"file_hash"`          // 文件哈希（SHA256）
+	FileModTime  *time.Time `json:"file_mod_time"`                                                  // 文件修改时间（来自文件系统）
+	FileCreateTime *time.Time `json:"file_create_time"`                                             // 文件创建时间（来自文件系统，可能为空）
 
 	// EXIF 信息
 	TakenAt      *time.Time `gorm:"index:idx_taken_at" json:"taken_at"`               // 拍摄时间

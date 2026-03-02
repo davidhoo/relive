@@ -343,22 +343,27 @@ func (s *photoService) processPhoto(filePath string, info os.FileInfo) (*model.P
 		}
 	}
 
+	// 获取文件时间
+	fileTimes := util.GetFileTimes(info)
+
 	// 构建 Photo 对象
 	now := time.Now()
 	photo := &model.Photo{
-		FilePath:     filePath,
-		FileName:     filepath.Base(filePath),
-		FileSize:     info.Size(),
-		FileHash:     fileHash,
-		TakenAt:      exifData.TakenAt,
-		CameraModel:  exifData.CameraModel,
-		Width:        width,
-		Height:       height,
-		Orientation:  exifData.Orientation,
-		GPSLatitude:  exifData.GPSLatitude,
-		GPSLongitude: exifData.GPSLongitude,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		FilePath:       filePath,
+		FileName:       filepath.Base(filePath),
+		FileSize:       info.Size(),
+		FileHash:       fileHash,
+		FileModTime:    &fileTimes.ModTime,
+		FileCreateTime: fileTimes.CreateTime,
+		TakenAt:        exifData.TakenAt,
+		CameraModel:    exifData.CameraModel,
+		Width:          width,
+		Height:         height,
+		Orientation:    exifData.Orientation,
+		GPSLatitude:    exifData.GPSLatitude,
+		GPSLongitude:   exifData.GPSLongitude,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 
 	// 如果有 GPS 坐标，尝试进行地理编码
