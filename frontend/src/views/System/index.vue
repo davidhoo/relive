@@ -142,7 +142,7 @@
         <div class="storage-card">
           <div class="storage-header">
             <div class="storage-icon">
-              <el-icon><Database /></el-icon>
+              <el-icon><Collection /></el-icon>
             </div>
             <div class="storage-title">数据库大小</div>
           </div>
@@ -168,7 +168,7 @@ import {
   DataAnalysis,
   FolderOpened,
   PictureFilled,
-  Database
+  Collection
 } from '@element-plus/icons-vue'
 import { useSystemStore } from '@/stores/system'
 import dayjs from 'dayjs'
