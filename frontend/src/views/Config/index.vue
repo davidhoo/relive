@@ -966,4 +966,16 @@ onMounted(() => {
 :deep(.el-alert) {
   line-height: 1.8;
 }
+
+/* Fix: 修复 append 按钮左边框被输入框遮挡的问题 */
+:deep(.el-input-group__append) {
+  padding: 0;
+  border-left: 1px solid var(--el-border-color);
+}
+
+:deep(.el-input-group__append .el-button) {
+  margin: 0;
+  border: none;
+  border-radius: 0 var(--el-border-radius-base) var(--el-border-radius-base) 0;
+}
 </style>
