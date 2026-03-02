@@ -807,8 +807,13 @@ defineExpose({
 }
 
 .path-name.clickable.active {
-  color: var(--color-primary);
-  background-color: var(--color-primary-light);
+  color: white;
+  background-color: var(--color-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.path-name.clickable.active:hover {
+  background-color: var(--color-primary-dark);
 }
 
 .path-text {
