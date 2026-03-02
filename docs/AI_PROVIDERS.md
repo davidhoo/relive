@@ -170,11 +170,16 @@ func NewProvider(providerType ProviderType, config interface{}) (AIProvider, err
 type QwenConfig struct {
     APIKey      string  `yaml:"api_key"`
     Endpoint    string  `yaml:"endpoint"`
-    Model       string  `yaml:"model"`        // qwen-vl-max / qwen-vl-plus
+    Model       string  `yaml:"model"`        // qwen-vl-max / qwen-vl-plus / qwen3.5-plus
     Temperature float64 `yaml:"temperature"`
-    Timeout     int     `yaml:"timeout"`      // 秒
+    Timeout     int     `yaml:"timeout"`      // 秒，默认 120
 }
 ```
+
+**模型选项**：
+- `qwen-vl-max` - 视觉理解能力最强（推荐）
+- `qwen-vl-plus` - 性价比更高
+- `qwen3.5-plus` - 最新模型，能力更强但处理时间较长（需设置 120 秒以上超时）
 
 **实现**：
 ```go
@@ -708,9 +713,9 @@ ai:
   qwen:
     api_key: sk-xxxxx
     endpoint: https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation
-    model: qwen-vl-max
+    model: qwen-vl-max  # 可选: qwen-vl-max, qwen-vl-plus, qwen3.5-plus
     temperature: 0.7
-    timeout: 30
+    timeout: 120  # 默认 120 秒，qwen3.5-plus 建议 120-180 秒
 
   # Ollama 配置（离线，免费）
   ollama:
