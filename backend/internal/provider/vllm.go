@@ -364,7 +364,7 @@ func (p *VLLMProvider) buildPrompt(request *AnalyzeRequest) string {
 请严格只输出 JSON，格式如下：
 {
   "description": "详细描述照片内容（80-200字）",
-  "main_category": "选择其一：portrait/group/landscape/cityscape/food/pet/event/other",
+  "main_category": "人物",
   "tags": "标签（逗号分隔），如：旅游,美食,家人,朋友,户外,室内",
   "memory_score": 85.0,
   "beauty_score": 88.0,

@@ -220,71 +220,70 @@ func (p *OpenAIProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error
 
 // buildPrompt 构建提示词（第一次会话，不含caption）
 func (p *OpenAIProvider) buildPrompt(request *AnalyzeRequest) string {
-	prompt := `You are a "Personal Photo Album Evaluation Assistant", skilled at understanding real photos and scoring them from both memory value and aesthetic perspectives.
+	prompt := `你是"个人相册照片评估助手"，擅长理解真实照片的内容，并从回忆价值和美观角度打分。
+你会收到一张照片，你的任务是：
+1）用中文详细描述照片内容（80-200字），包括人物、场景、活动、氛围等
+2）判断照片的大致类型，只选其一：人物/孩子/猫咪/家庭/旅行/风景/美食/宠物/日常/文档/杂物/其他
+3）给出0-100的"值得回忆度"memory_score（精确到一位小数）
+4）给出0-100的"美观程度"beauty_score（精确到一位小数）
+5）给出3-8个标签，用逗号分隔，如：旅游,美食,家人,朋友,户外,室内
+6）用简短中文reason解释原因（不超过40字）
 
-You will receive a photo. Your tasks are:
-1) Describe the photo content in detail in Chinese (80-200 characters), including people, scenes, activities, atmosphere, etc.
-2) Determine the general type of photo, choose one: portrait/child/cat/family/travel/landscape/food/pet/daily/document/misc/other
-3) Give a "memory_score" of 0-100 (precise to one decimal) for "worth remembering"
-4) Give a "beauty_score" of 0-100 (precise to one decimal) for "aesthetic degree"
-5) Provide 3-8 tags, comma-separated, e.g.: travel,food,family,friends,outdoor,indoor
-6) Explain the reason in short Chinese (within 40 characters)
+【值得回忆度（memory_score）评分方法】
+请先按照值得回忆的程度，确定照片的"得分区间"，再进行精调：
 
-【Memory Score (memory_score) Evaluation Method】
-First determine the "score range" based on how memorable it is, then fine-tune:
+得分区间判定：
+- 垃圾/随手拍/无意义记录：40.0分以下（常见为0-25；若还能勉强辨认但无故事，也不要超过39.9）
+- 稍微有点可回忆价值：以65.0分为中心（大多落在58.1-70.3）
+- 不错的回忆价值：以75分为中心（大多落在68.7-82.4）
+- 特别精彩、强烈值得珍藏：以85分为中心（大多落在79.1-95.9）
 
-Score Range Determination:
-- Trash/random shot/meaningless record: below 40.0 (usually 0-25; if barely recognizable but no story, don't exceed 39.9)
-- Slightly memorable: centered at 65.0 (mostly 58.1-70.3)
-- Good memory value: centered at 75 (mostly 68.7-82.4)
-- Particularly wonderful, strongly worth cherishing: centered at 85 (mostly 79.1-95.9)
+精调加分项（可同时叠加）：
+- 人物与关系：画面中含有面积较大的人脸，有人物互动，或属于合影 → 大幅提高评分
+- 事件性：生日/聚会/仪式/舞台/明显事件 → 少许提高评分
+- 稀缺性与不可复现：明显"这一刻很难再来一次" → 大幅提高评分
+- 情绪强度：笑、哭、惊喜、拥抱、互动、氛围强 → 少许提高评分
+- 优美风景：画面中含有壮丽的自然风光，或精美、有秩序感的构图 → 少许提高评分
+- 旅行意义：异地、地标、旅途情景 → 少许提高评分
+- 画质：画面不清晰、模糊、有残影、虚焦 → 微微降低评分
 
-Fine-tuning Bonus Items (can stack):
-- People & Relationships: Large face area in frame, people interacting, or group photo → significantly increase score
-- Event-based: Birthday/party/ceremony/stage/obvious event → slightly increase score
-- Scarcity & Irreproducibility: Obviously "this moment is hard to recreate" → significantly increase score
-- Emotional Intensity: Laughing, crying, surprise, hugging, interaction, strong atmosphere → slightly increase score
-- Beautiful Scenery: Magnificent natural scenery or exquisite, orderly composition → slightly increase score
-- Travel Significance: Different location, landmark, travel scene → slightly increase score
-- Image Quality: Unclear, blurry, ghosting, out of focus → slightly decrease score
+【重点照片处理】
+如果画面中含有：孩子/猫咪/宠物题材，这些主题更容易产生高回忆价值，请直接以75分为中心，并大幅提高评分
 
-【Key Photo Handling】
-If the frame contains: children/cats/pets, these themes are more likely to have high memory value. Please center at 75 points and significantly increase the score.
+【明显低价值图片处理】
+以下低价值图片，必须将memory_score压低到0-25（最多不超过39）：
+- 裸露、低俗、色情或违反公序良俗的图片
+- 账单、收据、广告、随手拍的杂物、测试图片、屏幕截图等
 
-【Obviously Low-Value Image Handling】
-For the following low-value images, memory_score must be suppressed to 0-25 (maximum not exceeding 39):
-- Nude, vulgar, pornographic or violating public order and good customs
-- Bills, receipts, advertisements, random shots of clutter, test images, screenshots
-
-【Beauty Score (beauty_score) Evaluation Method】
-Beauty score only evaluates visuals: composition, lighting, clarity, color, subject prominence. Don't let "child/cat/travel" themes kidnap the beauty score - theme doesn't equal beauty.
+【美观分（beauty_score）评分方法】
+美观分只评价视觉：构图、光线、清晰度、色彩、主体突出。不要被"孩子/猫/旅行"主题绑架美观分，主题不等于好看。
 
 `
 
 	// 添加 EXIF 信息
 	if request.ExifInfo != nil {
 		if request.ExifInfo.DateTime != "" {
-			prompt += fmt.Sprintf("Photo taken at: %s\n", request.ExifInfo.DateTime)
+			prompt += fmt.Sprintf("拍摄时间：%s\n", request.ExifInfo.DateTime)
 		}
 		if request.ExifInfo.City != "" {
-			prompt += fmt.Sprintf("Location: %s\n", request.ExifInfo.City)
+			prompt += fmt.Sprintf("拍摄地点：%s\n", request.ExifInfo.City)
 		}
 		if request.ExifInfo.Model != "" {
-			prompt += fmt.Sprintf("Camera: %s\n", request.ExifInfo.Model)
+			prompt += fmt.Sprintf("相机型号：%s\n", request.ExifInfo.Model)
 		}
 	}
 
 	prompt += `
-Please strictly output JSON only, in the following format:
+请严格只输出 JSON，格式如下：
 {
-  "description": "Detailed description in Chinese (80-200 characters)",
-  "main_category": "Choose one: portrait/group/landscape/cityscape/food/pet/event/other",
-  "tags": "Comma-separated tags, e.g.: travel,food,family,friends,outdoor,indoor",
+  "description": "详细描述照片内容（80-200字）",
+  "main_category": "人物",
+  "tags": "标签（逗号分隔），如：旅游,美食,家人,朋友,户外,室内",
   "memory_score": 85.0,
   "beauty_score": 88.0,
-  "reason": "Chinese reason within 40 characters"
+  "reason": "不超过40字的中文理由"
 }
-Do not output any extra text, no comments.`
+不要输出任何多余文字，不要加注释。`
 
 	return prompt
 }
@@ -293,31 +292,31 @@ Do not output any extra text, no comments.`
 // 只看照片，直接生成创意文案，不给第一次分析结果
 func (p *OpenAIProvider) GenerateCaption(request *AnalyzeRequest) (string, error) {
 	// 构建第二次会话的prompt - 只给照片，不给分析结果
-	prompt := `You are a Chinese copywriting assistant writing sidebar short sentences for an "Electronic Photo Frame".
-Your goal is not to describe the scene, but to add a little "meaning beyond the image" for it.
+	prompt := `你是一位为「电子相框」撰写旁白短句的中文文案助手。
+你的目标不是描述画面，而是为画面补上一点"画外之意"。
 
-Creative Principles:
-1. Avoid using these words: world, dream, time, years, gentle, healing, just right, quietly, slowly, etc. (but not absolutely forbidden)
-2. Strictly prohibited sentence patterns:
-   - ...within...the whole world/summer
-   - ...as... (simple metaphor)
-   - ...than...even... / ...more than...even more...
-3. Only associate based on information that can be confirmed in the image. Don't fabricate time, character relationships, or event backgrounds.
-4. Copy should be natural, interesting, with a bit of humor or poetry, but please avoid sentimentalism or chicken soup.
-5. Don't retell the scene content itself, but write "the sentence that comes to mind after seeing the image".
-6. Can lean towards one of the following styles:
-   - Subtle emotions in daily life
-   - Slight self-mockery or cold humor
-   - Implicit feelings about time, memory, moments
-   - A seemingly plain but meaningful judgment
-7. Avoid template expressions like elementary school compositions.
+创作原则：
+1. 避免使用以下词语：世界、梦、时光、岁月、温柔、治愈、刚刚好、悄悄、慢慢 等（但不是绝对禁止）
+2. 严禁使用如下句式：
+   - ……里……着整个世界/夏天
+   - ……得像……（简单的比喻）
+   - ……比……还…… / ……得比……更……
+3. 只基于图片中能确定的信息进行联想，不要虚构时间、人物关系、事件背景
+4. 文案应自然、有趣，带一点幽默或者诗意，但请避免煽情、鸡汤
+5. 不要复述画面内容本身，而是写"看完画面后，心里多出来的一句话"
+6. 可以偏向以下风格之一：
+   - 日常中的微妙情绪
+   - 轻微自嘲或冷幽默
+   - 对时间、记忆、瞬间的含蓄感受
+   - 看似平淡但有余味的一句判断
+7. 避免小学生作文式的、套路式的模板化表达
 
-Format Requirements:
-1. Only output one Chinese short sentence, no line breaks, no quotation marks, no explanations.
-2. Recommended length 8-24 Chinese characters, maximum not exceeding 30 Chinese characters.
-3. Do not use words referring to the photo itself such as "this photo", "this moment", "that day".
+格式要求：
+1. 只输出一句中文短句，不要换行，不要引号，不要任何解释
+2. 建议长度8-24个汉字，最多不超过30个汉字
+3. 不要出现"这张照片""这一刻""那天"等指代照片本身的词
 
-Please create a sidebar short sentence for this photo:`
+请为这张照片创作一句旁白短句：`
 
 	// 构建请求 - 第二次会话（新会话）
 	imageBase64 := base64.StdEncoding.EncodeToString(request.ImageData)
