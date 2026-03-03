@@ -23,6 +23,11 @@ func NewAIHandler(aiService service.AIService) *AIHandler {
 	}
 }
 
+// SetAIService 动态更新 AI 服务（用于配置变更后热重载）
+func (h *AIHandler) SetAIService(aiService service.AIService) {
+	h.aiService = aiService
+}
+
 // Analyze 分析单张照片
 // @Summary 分析照片
 // @Description 使用 AI 分析单张照片

@@ -50,9 +50,15 @@ http.interceptors.response.use(
         return Promise.reject(error)
       }
 
-      // 显示错误消息
-      const message = data?.error?.message || data?.message || `请求失败 (${status})`
-      ElMessage.error(message)
+      // 显示错误消息（排除某些特定的错误）
+      // 404 错误对于配置类接口是预期的（如 geocode 配置不存在）
+      const isConfigNotFound = status === 404 &&
+        (error.config?.url?.includes('/config/') || data?.error?.code === 'CONFIG_NOT_FOUND')
+
+      if (!isConfigNotFound) {
+        const message = data?.error?.message || data?.message || `请求失败 (${status})`
+        ElMessage.error(message)
+      }
     } else if (error.request) {
       ElMessage.error('网络错误，请检查后端服务是否正常运行')
     } else {

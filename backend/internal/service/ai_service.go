@@ -98,6 +98,7 @@ type AIConfigFromDB struct {
 	VLLMTemperature float64 `json:"vllm_temperature"`
 	VLLMMaxTokens   int     `json:"vllm_max_tokens"`
 	VLLMTimeout     int     `json:"vllm_timeout"`
+	VLLMConcurrency int     `json:"vllm_concurrency"`
 
 	// Hybrid
 	HybridPrimary      string `json:"hybrid_primary"`
@@ -168,6 +169,7 @@ func (s *aiService) initProvider() error {
 			Temperature: aiConfig.VLLMTemperature,
 			MaxTokens:   aiConfig.VLLMMaxTokens,
 			Timeout:     aiConfig.VLLMTimeout,
+			Concurrency: aiConfig.VLLMConcurrency,
 		})
 	case "hybrid":
 		// 构建 hybrid provider 配置
@@ -567,31 +569,57 @@ func (s *aiService) runBatchAnalysis(task *AnalyzeTask, photos []*model.Photo) {
 		task.ID, task.TotalCount, successCount, failedCount)
 }
 
-// analyzeOneByOneAsync 逐个分析照片（异步更新进度）
+// analyzeOneByOneAsync 逐个分析照片（支持并发）
 func (s *aiService) analyzeOneByOneAsync(task *AnalyzeTask, photos []*model.Photo) (successCount, failedCount int, totalCost float64) {
-	for i, photo := range photos {
-		// 更新当前索引
-		s.taskMutex.Lock()
-		task.CurrentIndex = i + 1
-		s.taskMutex.Unlock()
-
-		logger.Infof("[Task %s] Analyzing photo %d/%d: id=%d, path=%s", task.ID, i+1, len(photos), photo.ID, photo.FileName)
-
-		err := s.AnalyzePhoto(photo.ID)
-		if err != nil {
-			logger.Errorf("[Task %s] Failed to analyze photo %d: %v", task.ID, photo.ID, err)
-			failedCount++
-		} else {
-			successCount++
-			totalCost += s.provider.Cost()
-		}
-
-		// 更新任务进度
-		s.taskMutex.Lock()
-		task.SuccessCount = successCount
-		task.FailedCount = failedCount
-		s.taskMutex.Unlock()
+	// 获取并发数限制
+	concurrency := s.provider.MaxConcurrency()
+	if concurrency <= 0 {
+		concurrency = 5 // 默认并发数
 	}
+
+	totalCount := len(photos)
+	logger.Infof("[Task %s] Starting concurrent analysis: %d photos, concurrency=%d", task.ID, totalCount, concurrency)
+
+	// 使用 semaphore 控制并发
+	semaphore := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for i, photo := range photos {
+		wg.Add(1)
+		go func(idx int, p *model.Photo) {
+			defer wg.Done()
+
+			// 获取 semaphore 许可
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			logger.Infof("[Task %s] Analyzing photo %d/%d: id=%d, path=%s", task.ID, idx+1, totalCount, p.ID, p.FileName)
+
+			err := s.AnalyzePhoto(p.ID)
+
+			// 更新进度（加锁保护）
+			mu.Lock()
+			if err != nil {
+				logger.Errorf("[Task %s] Failed to analyze photo %d: %v", task.ID, p.ID, err)
+				failedCount++
+			} else {
+				successCount++
+				totalCost += s.provider.Cost()
+			}
+			task.CurrentIndex = idx + 1
+			task.SuccessCount = successCount
+			task.FailedCount = failedCount
+			mu.Unlock()
+		}(i, photo)
+	}
+
+	// 等待所有分析完成
+	wg.Wait()
+
+	logger.Infof("[Task %s] Concurrent analysis completed: total=%d, success=%d, failed=%d",
+		task.ID, totalCount, successCount, failedCount)
+
 	return successCount, failedCount, totalCost
 }
 

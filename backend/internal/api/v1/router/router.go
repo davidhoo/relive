@@ -48,7 +48,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 	services := service.NewServices(repos, cfg, db)
 
 	// 初始化 Handlers
-	handlers := handler.NewHandlers(db, services, cfg)
+	handlers := handler.NewHandlers(db, services, repos, cfg)
 
 	// API 路由组
 	v1 := r.Group("/api/v1")
@@ -141,32 +141,13 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 			// AI 分析相关
 			ai := authorized.Group("/ai")
 			{
-				if handlers.AI != nil {
-					ai.POST("/analyze", handlers.AI.Analyze)
-					ai.POST("/analyze/batch", handlers.AI.AnalyzeBatch)
-					ai.GET("/progress", handlers.AI.GetProgress)
-					ai.GET("/task", handlers.AI.GetTaskStatus)
-					ai.POST("/reanalyze/:id", handlers.AI.ReAnalyze)
-					ai.GET("/provider", handlers.AI.GetProviderInfo)
-				} else {
-					// AI 服务未配置时，返回友好的错误信息
-					aiNotAvailable := func(c *gin.Context) {
-						c.JSON(503, gin.H{
-							"success": false,
-							"error": gin.H{
-								"code":    "SERVICE_UNAVAILABLE",
-								"message": "AI service is not configured or unavailable",
-							},
-							"message": "AI service is not available. Please check your configuration.",
-						})
-					}
-					ai.POST("/analyze", aiNotAvailable)
-					ai.POST("/analyze/batch", aiNotAvailable)
-					ai.GET("/progress", aiNotAvailable)
-					ai.GET("/task", aiNotAvailable)
-					ai.POST("/reanalyze/:id", aiNotAvailable)
-					ai.GET("/provider", aiNotAvailable)
-				}
+				// AIHandler 现在总是存在，它会自己处理服务未配置的情况
+				ai.POST("/analyze", handlers.AI.Analyze)
+				ai.POST("/analyze/batch", handlers.AI.AnalyzeBatch)
+				ai.GET("/progress", handlers.AI.GetProgress)
+				ai.GET("/task", handlers.AI.GetTaskStatus)
+				ai.POST("/reanalyze/:id", handlers.AI.ReAnalyze)
+				ai.GET("/provider", handlers.AI.GetProviderInfo)
 			}
 
 			// 导出/导入相关

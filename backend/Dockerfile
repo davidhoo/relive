@@ -27,21 +27,34 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
     .
 WORKDIR /app
 
+# 构建 import-cities 工具
+RUN CGO_ENABLED=1 GOOS=linux go build \
+    -ldflags "-X main.Version=${VERSION:-dev} -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    -o /app/import-cities \
+    ./cmd/import-cities/main.go
+
 # 运行阶段
 FROM alpine:latest
 
 WORKDIR /app
 
-# 安装运行时依赖（包括 libstdc++ 用于 C++ 库）
+# 安装运行时依赖（包括 libstdc++ 用于 C++ 库，sqlite 用于 entrypoint 脚本）
 RUN apk add --no-cache \
     ca-certificates \
     sqlite-libs \
+    sqlite \
     tzdata \
     libstdc++
 
 # 从构建阶段复制二进制文件
 COPY --from=backend-builder /app/relive /app/relive
 COPY --from=backend-builder /app/relive-analyzer /app/relive-analyzer
+COPY --from=backend-builder /app/import-cities /app/import-cities
+
+# 复制初始化脚本和入口点
+COPY scripts/init-cities.sh /app/init-cities.sh
+COPY scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/init-cities.sh /app/docker-entrypoint.sh
 
 # 创建必要的目录
 RUN mkdir -p /app/data/logs /app/data/photos
@@ -56,6 +69,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:8080/system/health || exit 1
 
-# 运行应用
-ENTRYPOINT ["/app/relive"]
-CMD ["--config", "/app/config.yaml"]
+# 设置入口点（自动导入 + 启动应用）
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["/app/relive", "--config", "/app/config.yaml"]

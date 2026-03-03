@@ -67,6 +67,7 @@ export interface AIConfig {
   vllm_temperature: number
   vllm_max_tokens: number
   vllm_timeout: number
+  vllm_concurrency: number
 
   // Hybrid configuration
   hybrid_primary: string
@@ -189,6 +190,7 @@ export const configApi = {
     vllm_temperature: 0.7,
     vllm_max_tokens: 1000,
     vllm_timeout: 60,
+    vllm_concurrency: 5,
     hybrid_primary: '',
     hybrid_fallback: '',
     hybrid_retry_on_error: true

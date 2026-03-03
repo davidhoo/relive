@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/internal/service"
 	"github.com/davidhoo/relive/pkg/config"
 	"gorm.io/gorm"
@@ -21,23 +22,24 @@ type Handlers struct {
 }
 
 // NewHandlers 创建所有处理器
-func NewHandlers(db *gorm.DB, services *service.Services, cfg *config.Config) *Handlers {
+func NewHandlers(db *gorm.DB, services *service.Services, repos *repository.Repositories, cfg *config.Config) *Handlers {
 	handlers := &Handlers{
 		System:   NewSystemHandler(db, services),
 		Photo:    NewPhotoHandler(services.Photo, services.Config, cfg),
 		Display:  NewDisplayHandler(services.Display, services.ESP32),
 		ESP32:    NewESP32Handler(services.ESP32),
 		Export:   NewExportHandler(services.Export),
-		Config:   NewConfigHandler(services.Config, services.AI, services.Photo, cfg),
+		Config:   NewConfigHandler(services.Config, services.AI, services.Photo, repos.Photo, cfg),
 		Auth:     NewAuthHandler(services.Auth),
 		APIKey:   NewAPIKeyHandler(services.APIKey),
 		Analyzer: NewAnalyzerHandler(services.Photo, services.Analysis),
 	}
 
-	// AI Handler 可能为 nil（如果 AI 服务未配置）
-	if services.AI != nil {
-		handlers.AI = NewAIHandler(services.AI)
-	}
+	// AI Handler - 即使 AI 服务未配置也创建，以便配置变更后动态更新
+	handlers.AI = NewAIHandler(services.AI)
+
+	// 设置 ConfigHandler 对 AIHandler 的引用，用于配置变更后热重载
+	handlers.Config.SetAIHandler(handlers.AI)
 
 	return handlers
 }

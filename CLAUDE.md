@@ -205,3 +205,48 @@ Production uses Docker Compose:
 ```
 - Frontend: http://localhost:8888 (served via Nginx)
 - Backend API: http://localhost:8080/api/v1/
+
+## Recent Features
+
+### VLLM Concurrent Analysis (2025-03-03)
+- VLLM provider supports concurrent batch analysis
+- Configurable concurrency (default: 5, configurable via `vllm_concurrency`)
+- Improves batch analysis speed by 3-5x
+
+### AI Service Hot Reload (2025-03-03)
+- AI configuration changes apply immediately without restart
+- ConfigHandler reinitializes AI service dynamically
+- AIHandler updates its service reference automatically
+
+### Offline Geocoding with Auto Import (2025-03-03)
+- Docker container auto-imports city data on first startup
+- Place `cities500.txt` in `./data/backend/` directory
+- Configure via `config.prod.yaml` geocode section
+- Supports offline, amap, nominatim, and hybrid modes
+
+### Async Photo Scanning (2025-03-03)
+- Photo scanning uses async task system to prevent timeouts
+- Supports both scan and rebuild operations
+- Frontend polls for progress updates
+
+## Docker Geocoding Setup
+
+### Automatic City Data Import
+1. Download GeoNames data:
+   ```bash
+   cd data/backend
+   wget https://download.geonames.org/export/dump/cities500.zip
+   unzip cities500.zip
+   ```
+
+2. Start container - data imports automatically on first run
+
+3. Configure geocode provider in `config.prod.yaml`:
+   ```yaml
+   geocode:
+     provider: "offline"  # or "hybrid" with fallback
+     offline:
+       max_distance: 100
+   ```
+
+See `docs/docker-geocode.md` for detailed documentation.

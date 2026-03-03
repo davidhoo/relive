@@ -448,6 +448,13 @@
             <el-input-number v-model="aiConfig.vllm_max_tokens" :min="100" :max="4000" style="width: 150px" />
           </el-form-item>
 
+          <el-form-item label="并发数">
+            <el-input-number v-model="aiConfig.vllm_concurrency" :min="1" :max="20" style="width: 150px" />
+            <div class="form-hint">
+              批量分析时的并发请求数（默认 5）
+            </div>
+          </el-form-item>
+
           <!-- Hybrid Configuration -->
           <el-divider content-position="left">
             <el-icon><Cpu /></el-icon>
@@ -487,7 +494,7 @@
             style="margin-top: 16px"
           >
             <template #default>
-              <div>AI 配置保存后需要重启服务才能生效。</div>
+              <div>AI 配置保存后立即生效，无需重启服务。</div>
               <div style="margin-top: 8px">
                 <strong>推荐配置：</strong>
                 <ul style="margin: 4px 0; padding-left: 20px">
@@ -815,7 +822,7 @@ const handleSaveAIConfig = async () => {
   savingAI.value = true
   try {
     await configApi.updateAIConfig(aiConfig.value)
-    ElMessage.success('AI 配置保存成功，重启服务后生效')
+    ElMessage.success('AI 配置保存成功，已立即生效')
   } catch (error: any) {
     ElMessage.error('保存失败: ' + (error.message || '未知错误'))
   } finally {

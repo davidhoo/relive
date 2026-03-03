@@ -100,3 +100,30 @@ performance:
   max_scan_workers: 10  # 扫描照片的并发数
   max_analyze_workers: 5  # AI 分析的并发数
   cache_size: 1000  # 缓存的照片数量
+
+# 逆地理编码配置（GPS 坐标转位置信息）
+geocode:
+  # provider: 可选值 - offline (离线), amap (高德), nominatim (OpenStreetMap), hybrid (混合)
+  # 推荐使用 offline，因为已导入 23万+ 城市数据，无需联网
+  provider: "offline"
+
+  # 离线模式配置
+  offline:
+    max_distance: 100  # 最大搜索距离（公里），默认 100km
+
+  # 高德地图配置（在线，国内精度高）
+  # 需要申请 API Key: https://lbs.amap.com/
+  amap:
+    api_key: "${AMAP_API_KEY}"  # 从环境变量读取
+    timeout: 10
+
+  # OpenStreetMap Nominatim 配置（在线，免费）
+  nominatim:
+    endpoint: "https://nominatim.openstreetmap.org/reverse"
+    timeout: 10
+    # 注意：生产环境使用请遵守使用政策，建议自建 Nominatim 服务
+
+  # 混合模式配置（优先离线，失败时回退到在线）
+  hybrid:
+    primary: "offline"     # 主要 provider
+    fallback: "nominatim"  # 离线失败时的备用 provider

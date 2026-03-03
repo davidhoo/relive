@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/davidhoo/relive/pkg/logger"
@@ -19,6 +21,7 @@ type VLLMConfig struct {
 	Temperature float64 `yaml:"temperature"` // 温度参数
 	Timeout     int     `yaml:"timeout"`     // 超时（秒）
 	MaxTokens   int     `yaml:"max_tokens"`  // 最大 tokens
+	Concurrency int     `yaml:"concurrency"` // 并发数（批量分析时）
 }
 
 // VLLMProvider VLLM 提供者
@@ -32,6 +35,11 @@ func NewVLLMProvider(config *VLLMConfig) (*VLLMProvider, error) {
 	if config.Endpoint == "" {
 		return nil, fmt.Errorf("vllm endpoint is required")
 	}
+
+	// 自动清理 endpoint，去除可能的 API 路径后缀
+	// 支持处理: /v1/chat/completions, /v1/models 等后缀
+	config.Endpoint = normalizeVLLMEndpoint(config.Endpoint)
+
 	if config.Model == "" {
 		config.Model = "llava-v1.6-vicuna-13b" // 默认模型
 	}
@@ -44,6 +52,9 @@ func NewVLLMProvider(config *VLLMConfig) (*VLLMProvider, error) {
 	if config.MaxTokens == 0 {
 		config.MaxTokens = 800
 	}
+	if config.Concurrency == 0 {
+		config.Concurrency = 5 // 默认并发数
+	}
 
 	return &VLLMProvider{
 		config: config,
@@ -51,6 +62,30 @@ func NewVLLMProvider(config *VLLMConfig) (*VLLMProvider, error) {
 			Timeout: time.Duration(config.Timeout) * time.Second,
 		},
 	}, nil
+}
+
+// normalizeVLLMEndpoint 规范化 VLLM endpoint，去除 API 路径后缀
+func normalizeVLLMEndpoint(endpoint string) string {
+	// 去除可能的尾部斜杠
+	endpoint = strings.TrimRight(endpoint, "/")
+
+	// 去除常见的 API 路径后缀
+	suffixes := []string{
+		"/v1/chat/completions",
+		"/v1/models",
+		"/v1/completions",
+		"/chat/completions",
+	}
+
+	for _, suffix := range suffixes {
+		if strings.HasSuffix(endpoint, suffix) {
+			endpoint = strings.TrimSuffix(endpoint, suffix)
+			break
+		}
+	}
+
+	// 再次去除尾部斜杠
+	return strings.TrimRight(endpoint, "/")
 }
 
 // Name 返回 provider 名称
@@ -87,7 +122,7 @@ func (p *VLLMProvider) IsAvailable() bool {
 
 // MaxConcurrency 最大并发数
 func (p *VLLMProvider) MaxConcurrency() int {
-	return 4 // VLLM 支持较高并发
+	return p.config.Concurrency // 使用配置的并发数
 }
 
 // SupportsBatch 是否支持批量分析
@@ -100,16 +135,59 @@ func (p *VLLMProvider) MaxBatchSize() int {
 	return 1
 }
 
-// AnalyzeBatch 批量分析照片（VLLM 不支持，逐个处理）
+// AnalyzeBatch 批量分析照片（并发处理）
 func (p *VLLMProvider) AnalyzeBatch(requests []*AnalyzeRequest) ([]*AnalyzeResult, error) {
-	results := make([]*AnalyzeResult, 0, len(requests))
-	for _, req := range requests {
-		result, err := p.Analyze(req)
-		if err != nil {
-			return nil, err
-		}
-		results = append(results, result)
+	results := make([]*AnalyzeResult, len(requests))
+
+	// 使用 semaphore 限制并发数
+	concurrency := p.config.Concurrency
+	if concurrency <= 0 {
+		concurrency = 5 // 默认并发数
 	}
+
+	semaphore := make(chan struct{}, concurrency)
+	errChan := make(chan error, len(requests))
+
+	// 使用 WaitGroup 等待所有 goroutine 完成
+	var wg sync.WaitGroup
+
+	for i, req := range requests {
+		wg.Add(1)
+		go func(idx int, request *AnalyzeRequest) {
+			defer wg.Done()
+
+			// 获取 semaphore 许可
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			result, err := p.Analyze(request)
+			if err != nil {
+				errChan <- fmt.Errorf("photo %d: %w", idx, err)
+				return
+			}
+			results[idx] = result
+		}(i, req)
+	}
+
+	// 等待所有分析完成
+	wg.Wait()
+	close(errChan)
+
+	// 检查是否有错误
+	var errs []error
+	for err := range errChan {
+		errs = append(errs, err)
+	}
+
+	if len(errs) > 0 {
+		// 部分失败，返回已成功分析的结果和错误
+		logger.Warnf("VLLM batch analysis: %d/%d failed", len(errs), len(requests))
+		// 如果全部失败，返回错误
+		if len(errs) == len(requests) {
+			return results, fmt.Errorf("all analyses failed: %v", errs[0])
+		}
+	}
+
 	return results, nil
 }
 
@@ -202,6 +280,12 @@ func (p *VLLMProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error) 
 	// 解析 AI 响应
 	result, err := p.parseResponse(vllmResp.Choices[0].Message.Content)
 	if err != nil {
+		// 记录完整的响应内容以便调试
+		content := vllmResp.Choices[0].Message.Content
+		if len(content) > 1000 {
+			content = content[:1000] + "... (truncated)"
+		}
+		logger.Warnf("VLLM parse response failed: %v. Content: %s", err, content)
 		return nil, fmt.Errorf("parse response: %w", err)
 	}
 
@@ -255,7 +339,10 @@ func (p *VLLMProvider) buildPrompt(request *AnalyzeRequest) string {
 	}
 
 	prompt += `
-请严格按照以下 JSON 格式返回结果（不要有任何其他文字）：
+
+【重要】请直接返回 JSON 结果，不要输出任何思考过程、解释或额外文字。
+
+请严格按照以下 JSON 格式返回结果（只返回 JSON，不要有其他内容）：
 {
   "description": "...",
   "caption": "...",
@@ -274,6 +361,12 @@ func (p *VLLMProvider) parseResponse(response string) (*AnalyzeResult, error) {
 	// 尝试提取 JSON
 	jsonStr := extractJSON(response)
 	if jsonStr == "" {
+		// 记录原始响应用于调试（限制长度避免日志过大）
+		preview := response
+		if len(preview) > 500 {
+			preview = preview[:500] + "..."
+		}
+		logger.Warnf("VLLM response contains no valid JSON. Raw response preview: %s", preview)
 		return nil, fmt.Errorf("no valid JSON found in response")
 	}
 
@@ -289,6 +382,8 @@ func (p *VLLMProvider) parseResponse(response string) (*AnalyzeResult, error) {
 	}
 
 	if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
+		// 记录原始 JSON 和错误
+		logger.Warnf("Failed to unmarshal JSON: %v. JSON content: %s", err, jsonStr)
 		return nil, fmt.Errorf("unmarshal json: %w", err)
 	}
 

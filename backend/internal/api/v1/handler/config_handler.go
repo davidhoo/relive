@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/davidhoo/relive/internal/model"
+	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/internal/service"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/logger"
@@ -21,16 +22,24 @@ type ConfigHandler struct {
 	aiService     service.AIService
 	photoService  service.PhotoService
 	cfg           *config.Config
+	photoRepo     repository.PhotoRepository
+	aiHandler     *AIHandler // 用于更新 AIHandler 的 aiService
 }
 
 // NewConfigHandler 创建配置处理器
-func NewConfigHandler(service service.ConfigService, aiService service.AIService, photoService service.PhotoService, cfg *config.Config) *ConfigHandler {
+func NewConfigHandler(service service.ConfigService, aiService service.AIService, photoService service.PhotoService, photoRepo repository.PhotoRepository, cfg *config.Config) *ConfigHandler {
 	return &ConfigHandler{
 		service:      service,
 		aiService:    aiService,
 		photoService: photoService,
+		photoRepo:    photoRepo,
 		cfg:          cfg,
 	}
+}
+
+// SetAIHandler 设置 AIHandler 引用（用于动态更新 AI 服务）
+func (h *ConfigHandler) SetAIHandler(aiHandler *AIHandler) {
+	h.aiHandler = aiHandler
 }
 
 // GetConfig 获取配置
@@ -131,18 +140,42 @@ func (h *ConfigHandler) SetConfig(c *gin.Context) {
 	}
 
 	// 检查是否是 AI 配置变更，如果是则重新加载 AI provider
-	if key == "ai" && h.aiService != nil {
-		logger.Info("AI configuration changed, reloading AI provider...")
-		if err := h.aiService.ReloadProvider(); err != nil {
-			logger.Warnf("Failed to reload AI provider after config change: %v", err)
-			// 配置已保存，但 AI provider 重载失败，返回警告信息
-			c.JSON(http.StatusOK, model.Response{
-				Success: true,
-				Message: "Config saved, but failed to reload AI provider: " + err.Error(),
-			})
-			return
+	if key == "ai" {
+		if h.aiService != nil {
+			logger.Info("AI configuration changed, reloading AI provider...")
+			if err := h.aiService.ReloadProvider(); err != nil {
+				logger.Warnf("Failed to reload AI provider after config change: %v", err)
+				// 配置已保存，但 AI provider 重载失败，返回警告信息
+				c.JSON(http.StatusOK, model.Response{
+					Success: true,
+					Message: "Config saved, but failed to reload AI provider: " + err.Error(),
+				})
+				return
+			}
+			logger.Info("AI provider reloaded successfully")
+			// 同时更新 AIHandler 中的 aiService
+			if h.aiHandler != nil {
+				h.aiHandler.SetAIService(h.aiService)
+			}
+		} else {
+			// AI service 为 nil，尝试重新初始化
+			logger.Info("AI service not initialized, trying to initialize...")
+			newAIService, err := service.NewAIService(h.photoRepo, h.cfg, h.service)
+			if err != nil {
+				logger.Warnf("Failed to initialize AI service after config change: %v", err)
+				c.JSON(http.StatusOK, model.Response{
+					Success: true,
+					Message: "Config saved, but failed to initialize AI service: " + err.Error(),
+				})
+				return
+			}
+			h.aiService = newAIService
+			logger.Info("AI service initialized successfully")
+			// 同时更新 AIHandler 中的 aiService
+			if h.aiHandler != nil {
+				h.aiHandler.SetAIService(newAIService)
+			}
 		}
-		logger.Info("AI provider reloaded successfully")
 	}
 
 	c.JSON(http.StatusOK, model.Response{
@@ -271,16 +304,41 @@ func (h *ConfigHandler) SetBatchConfigs(c *gin.Context) {
 	}
 
 	// 检查是否包含 AI 配置变更，如果是则重新加载 AI provider
-	if _, hasAIConfig := configs["ai"]; hasAIConfig && h.aiService != nil {
-		logger.Info("AI configuration changed, reloading AI provider...")
-		if err := h.aiService.ReloadProvider(); err != nil {
-			logger.Warnf("Failed to reload AI provider after config change: %v", err)
-			// 配置已保存，但 AI provider 重载失败，返回警告信息
-			c.JSON(http.StatusOK, model.Response{
-				Success: true,
-				Message: "Configs saved, but failed to reload AI provider: " + err.Error(),
-			})
-			return
+	if _, hasAIConfig := configs["ai"]; hasAIConfig {
+		if h.aiService != nil {
+			logger.Info("AI configuration changed, reloading AI provider...")
+			if err := h.aiService.ReloadProvider(); err != nil {
+				logger.Warnf("Failed to reload AI provider after config change: %v", err)
+				// 配置已保存，但 AI provider 重载失败，返回警告信息
+				c.JSON(http.StatusOK, model.Response{
+					Success: true,
+					Message: "Configs saved, but failed to reload AI provider: " + err.Error(),
+				})
+				return
+			}
+			logger.Info("AI provider reloaded successfully")
+			// 同时更新 AIHandler 中的 aiService
+			if h.aiHandler != nil {
+				h.aiHandler.SetAIService(h.aiService)
+			}
+		} else {
+			// AI service 为 nil，尝试重新初始化
+			logger.Info("AI service not initialized, trying to initialize...")
+			newAIService, err := service.NewAIService(h.photoRepo, h.cfg, h.service)
+			if err != nil {
+				logger.Warnf("Failed to initialize AI service after config change: %v", err)
+				c.JSON(http.StatusOK, model.Response{
+					Success: true,
+					Message: "Configs saved, but failed to initialize AI service: " + err.Error(),
+				})
+				return
+			}
+			h.aiService = newAIService
+			logger.Info("AI service initialized successfully")
+			// 同时更新 AIHandler 中的 aiService
+			if h.aiHandler != nil {
+				h.aiHandler.SetAIService(newAIService)
+			}
 		}
 	}
 
