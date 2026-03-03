@@ -13,14 +13,29 @@ export const photoApi = {
     return http.get<ApiResponse<Photo>>(`/photos/${id}`)
   },
 
-  // 扫描照片（超时时间设置为 5 分钟，因为扫描大量照片可能需要较长时间）
+  // 异步扫描照片（新接口，立即返回任务 ID）
+  startScan(data?: ScanPhotosRequest) {
+    return http.post<ApiResponse<{ task_id: string }>>('/photos/scan/async', data || {})
+  },
+
+  // 获取扫描任务状态
+  getScanTask() {
+    return http.get<ApiResponse<{ task: any; is_running: boolean }>>('/photos/scan/task')
+  },
+
+  // 异步重建照片（新接口，立即返回任务 ID）
+  startRebuild(data?: RebuildPhotosRequest) {
+    return http.post<ApiResponse<{ task_id: string }>>('/photos/rebuild/async', data || {})
+  },
+
+  // 同步扫描照片（已弃用，保留兼容）
   scan(data?: ScanPhotosRequest) {
     return http.post<ApiResponse<ScanPhotosResponse>>('/photos/scan', data || {}, {
       timeout: 300000, // 5 分钟
     })
   },
 
-  // 重建照片（重新扫描文件、提取 EXIF、计算哈希、地理编码、生成缩略图，保留 AI 分析结果）
+  // 同步重建照片（已弃用，保留兼容）
   rebuild(data?: RebuildPhotosRequest) {
     return http.post<ApiResponse<RebuildPhotosResponse>>('/photos/rebuild', data || {})
   },

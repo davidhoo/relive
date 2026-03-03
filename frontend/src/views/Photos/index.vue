@@ -551,6 +551,7 @@ const handlePathClick = (row: ScanPathConfig) => {
 }
 
 // 扫描指定路径
+// 异步扫描指定路径
 const handleScanPath = async (path: ScanPathConfig) => {
   if (!path.enabled) {
     ElMessage.warning('该路径已禁用，无法扫描')
@@ -559,22 +560,18 @@ const handleScanPath = async (path: ScanPathConfig) => {
 
   try {
     scanningPathId.value = path.id
-    const res = await photoApi.scan({ path: path.path })
-    ElMessage.success(`「${path.name}」扫描完成，新增 ${res.data?.data?.new_count || 0} 张照片`)
+    const res = await photoApi.startScan({ path: path.path })
+    ElMessage.info(`「${path.name}」扫描任务已启动，正在后台处理...`)
 
-    // Reload photos and scan paths (to update last_scanned_at)
-    await loadPhotos()
-    await loadScanPaths()
-    // 刷新路径照片数量
-    await loadPathPhotoCounts()
+    // 开始轮询进度
+    startPollingScanProgress(path.name)
   } catch (error: any) {
-    ElMessage.error(error.message || '扫描照片失败')
-  } finally {
     scanningPathId.value = ''
+    ElMessage.error(error.message || '扫描照片失败')
   }
 }
 
-// 重建指定路径
+// 异步重建指定路径
 const handleRebuildPath = async (path: ScanPathConfig) => {
   if (!path.enabled) {
     ElMessage.warning('该路径已禁用，无法重建')
@@ -583,21 +580,73 @@ const handleRebuildPath = async (path: ScanPathConfig) => {
 
   try {
     rebuildingPathId.value = path.id
-    const res = await photoApi.rebuild({ path: path.path })
-    ElMessage.success(
-      `「${path.name}」重建完成：新增 ${res.data?.data?.new_count || 0} 张，更新 ${res.data?.data?.updated_count || 0} 张，删除 ${res.data?.data?.deleted_count || 0} 张`
-    )
+    const res = await photoApi.startRebuild({ path: path.path })
+    ElMessage.info(`「${path.name}」重建任务已启动，正在后台处理...`)
 
-    // Reload photos and scan paths (to update last_scanned_at)
-    await loadPhotos()
-    await loadScanPaths()
-    // 刷新路径照片数量
-    await loadPathPhotoCounts()
+    // 开始轮询进度
+    startPollingScanProgress(path.name)
   } catch (error: any) {
-    ElMessage.error(error.message || '重建照片失败')
-  } finally {
     rebuildingPathId.value = ''
+    ElMessage.error(error.message || '重建照片失败')
   }
+}
+
+// 轮询扫描进度
+let scanProgressTimer: number | null = null
+
+const startPollingScanProgress = (pathName: string) => {
+  // 清除之前的定时器
+  if (scanProgressTimer) {
+    clearInterval(scanProgressTimer)
+  }
+
+  // 每 2 秒查询一次进度
+  scanProgressTimer = window.setInterval(async () => {
+    try {
+      const res = await photoApi.getScanTask()
+      const { task, is_running } = res.data?.data || {}
+
+      if (!task) {
+        // 没有任务信息，停止轮询
+        clearInterval(scanProgressTimer!)
+        scanProgressTimer = null
+        scanningPathId.value = ''
+        rebuildingPathId.value = ''
+        return
+      }
+
+      if (is_running) {
+        // 任务进行中，显示进度
+        const percent = task.total_files > 0
+          ? Math.round((task.processed_files / task.total_files) * 100)
+          : 0
+        console.log(`[${pathName}] 进度: ${percent}% (${task.processed_files}/${task.total_files})`)
+      } else {
+        // 任务完成
+        clearInterval(scanProgressTimer!)
+        scanProgressTimer = null
+        scanningPathId.value = ''
+        rebuildingPathId.value = ''
+
+        // 显示结果
+        if (task.type === 'scan') {
+          ElMessage.success(`「${pathName}」扫描完成，新增 ${task.new_photos || 0} 张照片`)
+        } else {
+          ElMessage.success(
+            `「${pathName}」重建完成：新增 ${task.new_photos || 0} 张，更新 ${task.updated_photos || 0} 张`
+          )
+        }
+
+        // 刷新数据
+        await loadPhotos()
+        await loadScanPaths()
+        await loadPathPhotoCounts()
+      }
+    } catch (error: any) {
+      console.error('查询扫描进度失败:', error)
+      // 发生错误时继续轮询，不中断
+    }
+  }, 2000) // 2 秒轮询一次
 }
 
 // 清理不存在文件的照片

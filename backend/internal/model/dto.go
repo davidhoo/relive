@@ -269,6 +269,43 @@ type CountPhotosByPathsResponse struct {
 	Counts map[string]int64 `json:"counts"` // key: path, value: count
 }
 
+// ScanTask 扫描任务状态
+type ScanTask struct {
+	ID            string     `json:"id"`
+	Status        string     `json:"status"` // pending, running, completed, failed
+	Type          string     `json:"type"`   // scan, rebuild
+	Path          string     `json:"path"`
+	TotalFiles    int        `json:"total_files"`
+	ProcessedFiles int       `json:"processed_files"`
+	NewPhotos     int        `json:"new_photos"`
+	UpdatedPhotos int        `json:"updated_photos"`
+	CurrentFile   string     `json:"current_file,omitempty"`
+	ErrorMessage  string     `json:"error_message,omitempty"`
+	StartedAt     time.Time  `json:"started_at"`
+	CompletedAt   *time.Time `json:"completed_at,omitempty"`
+}
+
+// IsRunning 检查任务是否运行中
+func (t *ScanTask) IsRunning() bool {
+	return t.Status == "running"
+}
+
+// StartScanRequest 开始扫描请求
+type StartScanRequest struct {
+	Path string `json:"path,omitempty"`
+}
+
+// StartScanResponse 开始扫描响应
+type StartScanResponse struct {
+	TaskID string `json:"task_id"`
+}
+
+// GetScanProgressResponse 获取扫描进度响应
+type GetScanProgressResponse struct {
+	Task      *ScanTask `json:"task"`
+	IsRunning bool      `json:"is_running"`
+}
+
 // ==================== Auth related DTOs ====================
 
 // LoginRequest 登录请求

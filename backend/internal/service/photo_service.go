@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
@@ -17,11 +18,16 @@ import (
 
 // PhotoService 照片服务接口
 type PhotoService interface {
-	// 扫描
+	// 扫描（同步，已弃用，建议使用异步扫描）
 	ScanPhotos(path string) (*model.ScanPhotosResponse, error)
 	ScanDirectory(dir string) ([]*model.Photo, error)
 	RebuildPhotos(path string) (*model.RebuildPhotosResponse, error) // 重建照片（重新扫描文件、提取 EXIF、计算哈希、地理编码）
 	CleanupNonExistentPhotos() (*model.CleanupPhotosResponse, error) // 清理数据库中所有不存在的照片
+
+	// 异步扫描
+	StartScan(path string) (*model.ScanTask, error)
+	StartRebuild(path string) (*model.ScanTask, error)
+	GetScanTask() *model.ScanTask
 
 	// 查询
 	GetPhotoByID(id uint) (*model.Photo, error)
@@ -54,6 +60,8 @@ type photoService struct {
 	configService      ConfigService
 	geocodeService     GeocodeService
 	thumbnailGenerator *util.ThumbnailGenerator
+	scanTask           *model.ScanTask
+	taskMutex          sync.RWMutex
 }
 
 // NewPhotoService 创建照片服务
@@ -602,4 +610,218 @@ func (s *photoService) getEnabledScanPaths() ([]string, error) {
 	}
 
 	return enabledPaths, nil
+}
+
+// ==================== Async Scan Methods ====================
+
+// StartScan 启动异步扫描任务
+func (s *photoService) StartScan(path string) (*model.ScanTask, error) {
+	// 检查是否已有运行中的任务
+	s.taskMutex.Lock()
+	if s.scanTask != nil && s.scanTask.IsRunning() {
+		s.taskMutex.Unlock()
+		return nil, fmt.Errorf("scan task already running")
+	}
+
+	// 检查路径是否存在
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		s.taskMutex.Unlock()
+		return nil, fmt.Errorf("path does not exist: %s", path)
+	}
+
+	// 创建新任务
+	task := &model.ScanTask{
+		ID:         fmt.Sprintf("scan_%d", time.Now().Unix()),
+		Status:     "running",
+		Type:       "scan",
+		Path:       path,
+		StartedAt:  time.Now(),
+	}
+	s.scanTask = task
+	s.taskMutex.Unlock()
+
+	logger.Infof("Starting async scan: path=%s, task_id=%s", path, task.ID)
+
+	// 异步执行扫描
+	go s.runScanTask(task, path, false)
+
+	return task, nil
+}
+
+// StartRebuild 启动异步重建任务
+func (s *photoService) StartRebuild(path string) (*model.ScanTask, error) {
+	// 检查是否已有运行中的任务
+	s.taskMutex.Lock()
+	if s.scanTask != nil && s.scanTask.IsRunning() {
+		s.taskMutex.Unlock()
+		return nil, fmt.Errorf("scan task already running")
+	}
+
+	// 检查路径是否存在
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		s.taskMutex.Unlock()
+		return nil, fmt.Errorf("path does not exist: %s", path)
+	}
+
+	// 创建新任务
+	task := &model.ScanTask{
+		ID:         fmt.Sprintf("rebuild_%d", time.Now().Unix()),
+		Status:     "running",
+		Type:       "rebuild",
+		Path:       path,
+		StartedAt:  time.Now(),
+	}
+	s.scanTask = task
+	s.taskMutex.Unlock()
+
+	logger.Infof("Starting async rebuild: path=%s, task_id=%s", path, task.ID)
+
+	// 异步执行重建
+	go s.runScanTask(task, path, true)
+
+	return task, nil
+}
+
+// GetScanTask 获取当前扫描任务
+func (s *photoService) GetScanTask() *model.ScanTask {
+	s.taskMutex.RLock()
+	defer s.taskMutex.RUnlock()
+	return s.scanTask
+}
+
+// runScanTask 后台执行扫描任务
+func (s *photoService) runScanTask(task *model.ScanTask, path string, rebuild bool) {
+	// 第一步：遍历目录统计文件总数
+	totalFiles, fileList := s.countAndListFiles(path)
+
+	s.taskMutex.Lock()
+	task.TotalFiles = totalFiles
+	s.taskMutex.Unlock()
+
+	logger.Infof("[Task %s] Found %d files to process", task.ID, totalFiles)
+
+	// 第二步：逐个处理文件
+	newCount, updatedCount := 0, 0
+	processedCount := 0
+
+	for _, filePath := range fileList {
+		// 更新当前文件
+		s.taskMutex.Lock()
+		task.CurrentFile = filepath.Base(filePath)
+		task.ProcessedFiles = processedCount
+		s.taskMutex.Unlock()
+
+		// 获取文件信息
+		info, err := os.Stat(filePath)
+		if err != nil {
+			logger.Warnf("[Task %s] Stat file failed: %s, error: %v", task.ID, filePath, err)
+			processedCount++
+			continue
+		}
+
+		// 处理照片
+		photo, err := s.processPhoto(filePath, info)
+		if err != nil {
+			logger.Warnf("[Task %s] Process photo failed: %s, error: %v", task.ID, filePath, err)
+			processedCount++
+			continue
+		}
+
+		// 检查是否已存在
+		exists, _ := s.repo.ExistsByFilePath(photo.FilePath)
+
+		if !exists {
+			// 新照片
+			if err := s.repo.Create(photo); err != nil {
+				logger.Errorf("[Task %s] Create photo failed: %v", task.ID, err)
+			} else {
+				newCount++
+			}
+		} else if rebuild {
+			// 重建模式：更新现有照片
+			existing, _ := s.repo.GetByFilePath(photo.FilePath)
+			if existing != nil {
+				photo.ID = existing.ID
+				// 保留 AI 分析结果
+				if existing.Description != "" {
+					photo.Description = existing.Description
+					photo.MainCategory = existing.MainCategory
+					photo.Tags = existing.Tags
+				}
+				if err := s.repo.Update(photo); err != nil {
+					logger.Errorf("[Task %s] Update photo failed: %v", task.ID, err)
+				} else {
+					updatedCount++
+				}
+			}
+		} else {
+			// 扫描模式：检查文件哈希是否变化
+			existing, _ := s.repo.GetByFilePath(photo.FilePath)
+			if existing != nil && existing.FileHash != photo.FileHash {
+				photo.ID = existing.ID
+				// 保留 AI 分析结果
+				if existing.Description != "" {
+					photo.Description = existing.Description
+					photo.MainCategory = existing.MainCategory
+					photo.Tags = existing.Tags
+				}
+				if err := s.repo.Update(photo); err != nil {
+					logger.Errorf("[Task %s] Update photo failed: %v", task.ID, err)
+				} else {
+					updatedCount++
+				}
+			}
+		}
+
+		processedCount++
+
+		// 更新进度
+		s.taskMutex.Lock()
+		task.NewPhotos = newCount
+		task.UpdatedPhotos = updatedCount
+		task.ProcessedFiles = processedCount
+		s.taskMutex.Unlock()
+	}
+
+	// 更新任务完成状态
+	s.taskMutex.Lock()
+	task.Status = "completed"
+	task.NewPhotos = newCount
+	task.UpdatedPhotos = updatedCount
+	task.ProcessedFiles = processedCount
+	task.CurrentFile = ""
+	now := time.Now()
+	task.CompletedAt = &now
+	s.taskMutex.Unlock()
+
+	logger.Infof("[Task %s] Completed: total=%d, new=%d, updated=%d",
+		task.ID, totalFiles, newCount, updatedCount)
+}
+
+// countAndListFiles 统计并列出所有需要处理的文件
+func (s *photoService) countAndListFiles(dir string) (int, []string) {
+	var files []string
+
+	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		// 跳过目录
+		if info.IsDir() {
+			if s.shouldExcludeDir(info.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// 检查文件格式
+		if s.isSupportedFormat(path) {
+			files = append(files, path)
+		}
+
+		return nil
+	})
+
+	return len(files), files
 }
