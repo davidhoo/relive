@@ -1,0 +1,38 @@
+# relive-analyzer API 模式配置
+server:
+  endpoint: "http://localhost:8080"
+  api_key: "sk-relive-0f3375046a50ceaa42435ccd43fa029b"
+  timeout: 30
+
+analyzer:
+  workers: 2
+  fetch_limit: 5
+  retry_count: 3
+  retry_delay: 5
+  checkpoint_file: "./data/analyzer-checkpoint.db"
+
+ai:
+  provider: "vllm"
+  vllm:
+    endpoint: "http://10.222.107.22:8027"
+    model: "/workspace/data/modelscope_cache/Qwen/Qwen3-VL-8B-Instruct"
+    temperature: 0.7
+    timeout: 60
+
+download:
+  temp_dir: "./data/analyzer-temp"
+  timeout: 60
+  max_concurrent: 3
+  retry_count: 3
+  keep_temp: false
+
+batch:
+  size: 5
+  flush_interval: 30
+  max_retry: 3
+  retry_delay: 5
+
+logging:
+  level: "debug"
+  console: true
+  file: "./data/logs/analyzer.log"

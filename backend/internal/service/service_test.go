@@ -66,7 +66,7 @@ func setupTestServices(t *testing.T) (*Services, *gorm.DB) {
 		},
 		Security: config.SecurityConfig{
 			JWTSecret:    "test-secret",
-			APIKeyPrefix: "sk-esp32-",
+			APIKeyPrefix: "sk-relive-",
 		},
 	}
 
@@ -150,7 +150,7 @@ func TestESP32Service_Register(t *testing.T) {
 	assert.NotNil(t, resp)
 	assert.Equal(t, "ESP32-TEST01", resp.DeviceID)
 	assert.NotEmpty(t, resp.APIKey)
-	assert.Contains(t, resp.APIKey, "sk-esp32-")
+	assert.Contains(t, resp.APIKey, "sk-relive-")
 }
 
 func TestESP32Service_Heartbeat(t *testing.T) {
@@ -211,6 +211,6 @@ func TestESP32Service_GenerateAPIKey(t *testing.T) {
 
 	// 验证 API Key 不同
 	assert.NotEqual(t, resp1.APIKey, resp2.APIKey)
-	assert.Contains(t, resp1.APIKey, "sk-esp32-")
-	assert.Contains(t, resp2.APIKey, "sk-esp32-")
+	assert.Contains(t, resp1.APIKey, "sk-relive-")
+	assert.Contains(t, resp2.APIKey, "sk-relive-")
 }

@@ -317,7 +317,7 @@ logging:
 # 安全配置
 security:
   jwt_secret: "your-secret-key-change-this"  # 修改为随机字符串
-  api_key_prefix: "sk-esp32-"
+  api_key_prefix: "sk-relive-"
 ```
 
 **启动服务**：

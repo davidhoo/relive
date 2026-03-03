@@ -106,4 +106,4 @@ logging:
 # 安全配置
 security:
   jwt_Secret: "dev-secret-change-in-production"
-  api_key_prefix: "sk-esp32-"
+  api_key_prefix: "sk-relive-"

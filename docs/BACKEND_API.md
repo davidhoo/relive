@@ -444,7 +444,7 @@ Content-Type: application/json
   "success": true,
   "data": {
     "device_id": "ESP32-001",
-    "api_key": "sk-esp32-f210686c20583cf53be417f595c07d9e...",
+    "api_key": "sk-relive-f210686c20583cf53be417f595c07d9e...",
     "config": {
       "refresh_hour": [8, 20],
       "brightness": 100,
@@ -459,7 +459,7 @@ Content-Type: application/json
 
 **说明**
 - 如果设备已注册，返回现有 API Key
-- API Key 格式：`sk-esp32-{64位随机hex}`
+- API Key 格式：`sk-relive-{64位随机hex}`
 - 配置包含默认刷新时间、亮度、睡眠模式等
 
 ---

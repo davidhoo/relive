@@ -167,7 +167,7 @@ Content-Type: application/json
   "success": true,
   "data": {
     "device_id": "ESP32-ABCD1234",
-    "api_key": "sk-esp32-xxxxxxxxxxxxxxxx",
+    "api_key": "sk-relive-xxxxxxxxxxxxxxxx",
     "config": {
       "refresh_hour": [8, 20],
       "brightness": 100
@@ -183,7 +183,7 @@ Content-Type: application/json
 ```http
 POST /api/v1/esp32/heartbeat HTTP/1.1
 Host: 192.168.1.100:8080
-Authorization: Bearer sk-esp32-xxxxxxxxxxxxxxxx
+Authorization: Bearer sk-relive-xxxxxxxxxxxxxxxx
 Content-Type: application/json
 
 {
@@ -215,7 +215,7 @@ Content-Type: application/json
 ```http
 GET /api/v1/esp32/display/photo?device_id=ESP32-ABCD1234 HTTP/1.1
 Host: 192.168.1.100:8080
-Authorization: Bearer sk-esp32-xxxxxxxxxxxxxxxx
+Authorization: Bearer sk-relive-xxxxxxxxxxxxxxxx
 ```
 
 **响应**：
@@ -246,7 +246,7 @@ Authorization: Bearer sk-esp32-xxxxxxxxxxxxxxxx
 ```http
 GET /api/v1/esp32/image/12345 HTTP/1.1
 Host: 192.168.1.100:8080
-Authorization: Bearer sk-esp32-xxxxxxxxxxxxxxxx
+Authorization: Bearer sk-relive-xxxxxxxxxxxxxxxx
 ```
 
 **响应**：
@@ -264,7 +264,7 @@ Authorization: Bearer sk-esp32-xxxxxxxxxxxxxxxx
 ```http
 POST /api/v1/esp32/display/record HTTP/1.1
 Host: 192.168.1.100:8080
-Authorization: Bearer sk-esp32-xxxxxxxxxxxxxxxx
+Authorization: Bearer sk-relive-xxxxxxxxxxxxxxxx
 Content-Type: application/json
 
 {
@@ -549,15 +549,15 @@ bool requestWithRetry(const char* url) {
 
 **生成规则**：
 ```
-api_key = "sk-esp32-" + random(32字符)
+api_key = "sk-relive-" + random(32字符)
 ```
 
-示例：`sk-esp32-a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6`
+示例：`sk-relive-a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6`
 
 **使用方式**：
 ```http
 GET /api/v1/esp32/display/photo HTTP/1.1
-Authorization: Bearer sk-esp32-xxxxxxxxxxxxxxxx
+Authorization: Bearer sk-relive-xxxxxxxxxxxxxxxx
 ```
 
 ### 8.2 HTTPS 支持（可选）
@@ -688,7 +688,7 @@ void optimizeWiFi() {
 ```http
 GET /api/v1/esp32/ota/check?device_id=ESP32-ABCD1234&version=1.0.0 HTTP/1.1
 Host: 192.168.1.100:8080
-Authorization: Bearer sk-esp32-xxxxxxxxxxxxxxxx
+Authorization: Bearer sk-relive-xxxxxxxxxxxxxxxx
 ```
 
 **响应**：
@@ -712,7 +712,7 @@ Authorization: Bearer sk-esp32-xxxxxxxxxxxxxxxx
 ```http
 GET /api/v1/esp32/ota/download/1.1.0 HTTP/1.1
 Host: 192.168.1.100:8080
-Authorization: Bearer sk-esp32-xxxxxxxxxxxxxxxx
+Authorization: Bearer sk-relive-xxxxxxxxxxxxxxxx
 ```
 
 **响应**：

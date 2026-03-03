@@ -9,7 +9,7 @@
 - **分析器**: relive-analyzer v2.0.0
 - **数据库**: SQLite (1534 张照片)
 - **AI Provider**: Ollama (配置但未运行)
-- **API Key**: sk-esp32-0e4e4b310b856d66b48505be80304889
+- **API Key**: sk-relive-0e4e4b310b856d66b48505be80304889
 
 ## 测试内容及结果
 
