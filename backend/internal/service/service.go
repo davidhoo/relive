@@ -55,7 +55,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	}
 
 	// 创建分析服务
-	analysisService := NewAnalysisService(db, repos.Photo)
+	analysisService := NewAnalysisService(db, repos.Photo, cfg)
 
 	// 创建定时任务调度器
 	scheduler := NewTaskScheduler(analysisService)

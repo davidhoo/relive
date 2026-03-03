@@ -21,9 +21,10 @@ type Config struct {
 
 // ServerConfig 服务器配置
 type ServerConfig struct {
-	Host string `yaml:"host"`
-	Port int    `yaml:"port"`
-	Mode string `yaml:"mode"` // debug / release
+	Host        string `yaml:"host"`
+	Port        int    `yaml:"port"`
+	Mode        string `yaml:"mode"`         // debug / release
+	ExternalURL string `yaml:"external_url"` // 外部访问地址，用于生成下载链接
 }
 
 // DatabaseConfig 数据库配置

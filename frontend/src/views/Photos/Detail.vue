@@ -14,7 +14,7 @@
               :disabled="false"
             >
               <el-button type="primary" @click="handleAnalyze" :loading="analyzing">
-                {{ analyzing ? '分析中...' : '重新分析' }}
+                {{ analyzing ? '分析中...' : (photo?.ai_analyzed ? '重新分析' : '分析') }}
               </el-button>
             </el-tooltip>
           </div>
@@ -223,30 +223,47 @@ const loadPhoto = async () => {
   }
 }
 
-// 重新分析
+// AI 分析/重新分析
 const handleAnalyze = async () => {
   if (!photo.value) return
 
+  const isReanalyze = photo.value.ai_analyzed
   try {
     analyzing.value = true
-    await aiApi.analyze(photo.value.id)
-    ElMessage.success('分析请求已提交')
+
+    // 根据是否已分析调用不同 API
+    if (isReanalyze) {
+      await aiApi.reAnalyze(photo.value.id)
+      ElMessage.success('重新分析请求已提交')
+    } else {
+      await aiApi.analyze(photo.value.id)
+      ElMessage.success('分析请求已提交')
+    }
+
+    // 记录当前分析时间用于检测变化
+    const lastAnalyzedAt = photo.value.analyzed_at
 
     // 轮询结果
     const timer = setInterval(async () => {
       await loadPhoto()
-      if (photo.value?.ai_analyzed) {
+      // 首次分析：检测 ai_analyzed 变为 true
+      // 重新分析：检测 analyzed_at 时间变化
+      const completed = !isReanalyze
+        ? photo.value?.ai_analyzed
+        : (photo.value?.analyzed_at && photo.value.analyzed_at !== lastAnalyzedAt)
+
+      if (completed) {
         clearInterval(timer)
         analyzing.value = false
         ElMessage.success('分析完成')
       }
     }, 2000)
 
-    // 30秒超时
+    // 60秒超时（重新分析可能需要更长时间）
     setTimeout(() => {
       clearInterval(timer)
       analyzing.value = false
-    }, 30000)
+    }, 60000)
   } catch (error: any) {
     analyzing.value = false
     // 特殊处理 AI 服务未配置的情况

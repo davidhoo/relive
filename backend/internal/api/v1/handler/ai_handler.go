@@ -295,8 +295,8 @@ func (h *AIHandler) ReAnalyze(c *gin.Context) {
 		return
 	}
 
-	// 重新分析（直接调用 AnalyzePhoto，不检查是否已分析）
-	if err := h.aiService.AnalyzePhoto(uint(id)); err != nil {
+	// 重新分析（强制重新分析已分析的照片）
+	if err := h.aiService.ReAnalyzePhoto(uint(id)); err != nil {
 		logger.Errorf("Re-analyze photo failed: %v", err)
 		c.JSON(http.StatusInternalServerError, model.Response{
 			Success: false,

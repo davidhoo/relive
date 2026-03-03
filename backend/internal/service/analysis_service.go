@@ -3,10 +3,12 @@ package service
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
+	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/logger"
 	"gorm.io/gorm"
 )
@@ -30,15 +32,17 @@ type AnalysisService interface {
 
 // analysisService 分析服务实现
 type analysisService struct {
-	db        *gorm.DB
-	photoRepo repository.PhotoRepository
+	db         *gorm.DB
+	photoRepo  repository.PhotoRepository
+	cfg        *config.Config
 }
 
 // NewAnalysisService 创建分析服务
-func NewAnalysisService(db *gorm.DB, photoRepo repository.PhotoRepository) AnalysisService {
+func NewAnalysisService(db *gorm.DB, photoRepo repository.PhotoRepository, cfg *config.Config) AnalysisService {
 	return &analysisService{
 		db:        db,
 		photoRepo: photoRepo,
+		cfg:       cfg,
 	}
 }
 
@@ -90,8 +94,14 @@ func (s *analysisService) GetPendingTasks(limit int, analyzerID string) ([]model
 
 	// 4. 构建任务响应
 	tasks = make([]model.AnalysisTask, 0, len(photos))
+	baseURL := s.cfg.Server.ExternalURL
+	if baseURL == "" {
+		baseURL = fmt.Sprintf("http://%s:%d", s.cfg.Server.Host, s.cfg.Server.Port)
+	}
+	baseURL = strings.TrimSuffix(baseURL, "/")
+
 	for _, photo := range photos {
-		downloadURL := fmt.Sprintf("/api/v1/photos/%d/image?token=%s", photo.ID, "temp-token")
+		downloadURL := fmt.Sprintf("%s/api/v1/photos/%d/image?token=%s", baseURL, photo.ID, "temp-token")
 		tokenExpiresAt := time.Now().Add(30 * time.Minute)
 
 		task := model.AnalysisTask{

@@ -39,6 +39,9 @@ type AIService interface {
 	// AnalyzePhoto 分析单张照片
 	AnalyzePhoto(photoID uint) error
 
+	// ReAnalyzePhoto 重新分析照片（强制重新分析已分析的照片）
+	ReAnalyzePhoto(photoID uint) error
+
 	// AnalyzeBatch 批量分析照片（异步启动）
 	AnalyzeBatch(limit int) (*AnalyzeTask, error)
 
@@ -406,6 +409,18 @@ func (s *aiService) getImageDataForAI(photo *model.Photo) ([]byte, string, error
 
 // AnalyzePhoto 分析单张照片
 func (s *aiService) AnalyzePhoto(photoID uint) error {
+	return s.analyzePhotoInternal(photoID, false)
+}
+
+// ReAnalyzePhoto 重新分析照片（强制重新分析已分析的照片）
+func (s *aiService) ReAnalyzePhoto(photoID uint) error {
+	logger.Infof("Re-analyzing photo %d (force mode)", photoID)
+	return s.analyzePhotoInternal(photoID, true)
+}
+
+// analyzePhotoInternal 内部分析方法
+// force: 是否强制重新分析已分析的照片
+func (s *aiService) analyzePhotoInternal(photoID uint, force bool) error {
 	if s.provider == nil {
 		return fmt.Errorf("AI provider not configured")
 	}
@@ -416,8 +431,8 @@ func (s *aiService) AnalyzePhoto(photoID uint) error {
 		return fmt.Errorf("get photo: %w", err)
 	}
 
-	// 检查是否已分析
-	if photo.AIAnalyzed {
+	// 检查是否已分析（非强制模式下跳过已分析的照片）
+	if photo.AIAnalyzed && !force {
 		logger.Warnf("Photo %d already analyzed, skipping", photoID)
 		return nil
 	}
