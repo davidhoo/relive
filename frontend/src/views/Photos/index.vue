@@ -195,10 +195,11 @@
           <div class="filter-label">
             <el-icon><PriceTag /></el-icon>
             <span>标签</span>
+            <el-tag type="info" size="small" effect="plain" class="count-tag">{{ tags.length }}</el-tag>
           </div>
           <div class="filter-tags">
             <el-tag
-              v-for="tag in tags"
+              v-for="tag in displayedTags"
               :key="tag"
               :type="searchQuery === tag ? 'primary' : 'info'"
               class="filter-tag"
@@ -206,6 +207,19 @@
             >
               {{ tag }}
             </el-tag>
+            <el-button
+              v-if="tags.length > TAGS_DISPLAY_LIMIT"
+              link
+              size="small"
+              class="collapse-btn"
+              @click="tagsCollapsed = !tagsCollapsed"
+            >
+              <el-icon class="collapse-icon">
+                <ArrowDown v-if="tagsCollapsed" />
+                <ArrowUp v-else />
+              </el-icon>
+              {{ tagsCollapsed ? `展开全部 (${tags.length})` : '收起' }}
+            </el-button>
           </div>
         </div>
 
@@ -315,6 +329,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
+import { ArrowDown, ArrowUp } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { photoApi } from '@/api/photo'
@@ -338,6 +353,18 @@ const rebuildingPathId = ref<string>('')
 const cleaningUp = ref(false)
 const categories = ref<string[]>([])
 const tags = ref<string[]>([])
+
+// 标签折叠状态
+const tagsCollapsed = ref(true)
+const TAGS_DISPLAY_LIMIT = 15
+
+// 计算要显示的标签（根据折叠状态）
+const displayedTags = computed(() => {
+  if (tagsCollapsed.value && tags.value.length > TAGS_DISPLAY_LIMIT) {
+    return tags.value.slice(0, TAGS_DISPLAY_LIMIT)
+  }
+  return tags.value
+})
 
 // 存储每个路径的照片数量（从数据库获取）
 const pathPhotoCounts = ref<Record<string, number>>({})
@@ -1396,6 +1423,26 @@ defineExpose({
 .filter-tag:hover {
   transform: translateY(-2px);
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* 折叠按钮 */
+.collapse-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  padding: 4px 8px;
+  height: auto;
+  margin-left: var(--spacing-xs);
+}
+
+.collapse-btn:hover {
+  color: var(--color-primary);
+}
+
+.collapse-icon {
+  font-size: 12px;
 }
 
 </style>
