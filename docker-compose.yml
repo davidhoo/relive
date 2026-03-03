@@ -15,14 +15,26 @@ services:
       - ./backend/config.prod.yaml:/app/config.yaml:ro
       # 数据目录（数据库、日志）
       - ./data/backend:/app/data
-      # 照片目录挂载（支持多路径）
-      # 默认挂载 data/photos 到 /app/photos
-      - ${PHOTOS_PATH:-./data/photos}:/app/photos:ro
+      # =============================================================================
+      # 照片目录挂载（Docker 特有配置）
+      # =============================================================================
+      # 注意：直接运行 Go 程序时不需要以下配置，系统启动后可在 Web 界面添加扫描路径
+      #
+      # 使用方法：
+      # 1. 修改下方的宿主机路径（冒号左边）为你实际的照片目录
+      # 2. 容器内路径（冒号右边）保持 /app/photos 不变
+      # 3. 在 Web 界面中添加扫描路径时使用容器内路径：/app/photos
+      #
+      # 示例：
+      # - /Users/david/Pictures:/app/photos:ro
+      # - /Volumes/ExternalDrive/Photos:/app/photos:ro
+      # =============================================================================
+      - ./data/photos:/app/photos:ro
       # 额外的照片路径挂载（可选）
-      # 使用方法：在 .env 中设置 EXTRA_PHOTOS_PATH_1=/Users/david/Downloads/2025
-      - ${EXTRA_PHOTOS_PATH_1:-./data/photos_empty}:/app/photos_extra1:ro
-      - ${EXTRA_PHOTOS_PATH_2:-./data/photos_empty}:/app/photos_extra2:ro
-      - ${EXTRA_PHOTOS_PATH_3:-./data/photos_empty}:/app/photos_extra3:ro
+      # 如需使用，取消注释并修改路径：
+      # - /path/to/extra/photos1:/app/photos_extra1:ro
+      # - /path/to/extra/photos2:/app/photos_extra2:ro
+      # - /path/to/extra/photos3:/app/photos_extra3:ro
     environment:
       - TZ=Asia/Shanghai
       # AI Provider API Keys（如果使用）

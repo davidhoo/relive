@@ -5,6 +5,16 @@
     width="600px"
     :close-on-click-modal="false"
   >
+    <el-alert
+      type="info"
+      :closable="false"
+      style="margin-bottom: 16px"
+    >
+      <template #title>
+        <strong>Docker 路径说明</strong>
+      </template>
+      这里显示的是容器内的路径。如需挂载新的宿主机目录，请编辑 docker-compose.yml 文件中的 volumes 配置。
+    </el-alert>
     <div class="path-browser">
       <!-- Current Path Display -->
       <div class="current-path">
