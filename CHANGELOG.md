@@ -9,6 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 2026-03-03 - AI 提供商显示修复 🐛
+
+#### Bug 修复
+
+**后端修复**
+- ✅ **修复 AI Provider 字段映射问题**
+  - 问题: GORM 自动将 `AIProvider` 映射为 `a_iprovider`，但数据库实际列为 `ai_provider`
+  - 解决: 在 `Photo` 模型中显式指定 `gorm:"column:ai_provider"`
+  - 文件: `backend/internal/model/photo.go`
+
+- ✅ **修复 AI Provider 返回值缺失问题**
+  - 问题: 所有 AI Provider 返回的 `AnalyzeResult` 未设置 `Provider` 字段
+  - 解决: 在 `qwen`, `ollama`, `openai`, `vllm` provider 的返回结果中添加 `Provider: p.Name()`
+  - 文件: `backend/internal/provider/qwen.go`, `ollama.go`, `openai.go`, `vllm.go`
+
+- ✅ **修复离线分析器 AI Provider 记录问题**
+  - 问题: 离线分析器提交结果时，后端硬编码为 "analyzer"
+  - 解决: 从 `AnalysisResult.AIProvider` 读取真实 provider，支持向前兼容
+  - 文件: `backend/internal/service/analysis_service.go`
+  - 模型: `backend/internal/model/analyzer.go` - 添加 `AIProvider` 字段
+  - 客户端: `backend/cmd/relive-analyzer/internal/analyzer/api_analyzer.go` - 提交真实 provider
+
+**前端修复**
+- ✅ **修复照片详情页 AI 提供商显示问题**
+  - 问题: AI 提供商显示重复，布局压缩导致显示异常
+  - 解决:
+    - 删除重复的 "分析时间和提供商" 区块
+    - 调整布局，AI 提供商和分析时间独占一行（`:span="2"`）
+    - 添加 `formatAIProvider()` 函数映射英文 provider 到中文显示
+  - 文件: `frontend/src/views/Photos/Detail.vue`
+
+#### 修改文件
+- `backend/internal/model/photo.go` - 显式指定 ai_provider 列名
+- `backend/internal/provider/qwen.go` - 返回 Provider 字段（单条+批量）
+- `backend/internal/provider/ollama.go` - 返回 Provider 字段
+- `backend/internal/provider/openai.go` - 返回 Provider 字段
+- `backend/internal/provider/vllm.go` - 返回 Provider 字段
+- `backend/internal/model/analyzer.go` - 添加 AIProvider 字段到 AnalysisResult
+- `backend/internal/service/analysis_service.go` - 使用提交结果中的 provider
+- `backend/cmd/relive-analyzer/internal/analyzer/api_analyzer.go` - 提交真实 AI provider
+- `frontend/src/views/Photos/Detail.vue` - 修复布局，添加 provider 中文映射
+
+---
+
 ### 进行中 🚧
 - ESP32 固件开发 - **最后阶段**
 

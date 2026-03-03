@@ -69,6 +69,7 @@ type AnalysisResult struct {
 	MainCategory  string    `json:"main_category,omitempty"`          // 主分类
 	Tags          string    `json:"tags,omitempty"`                   // 标签（逗号分隔）
 	AnalyzedAt    time.Time `json:"analyzed_at,omitempty"`            // 分析时间
+	AIProvider    string    `json:"ai_provider,omitempty"`            // AI提供商（如 qwen, ollama 等）
 }
 
 // SubmitResultsRequest 提交结果请求

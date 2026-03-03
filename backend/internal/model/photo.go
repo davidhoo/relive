@@ -37,7 +37,7 @@ type Photo struct {
 	// AI 分析结果
 	AIAnalyzed   bool       `gorm:"default:false;index:idx_ai_analyzed" json:"ai_analyzed"` // 是否已分析
 	AnalyzedAt   *time.Time `json:"analyzed_at"`                                            // 分析时间
-	AIProvider   string     `gorm:"type:varchar(50)" json:"ai_provider"`                    // AI 提供商（qwen/openai/ollama等）
+	AIProvider   string     `gorm:"column:ai_provider;type:varchar(50)" json:"ai_provider"`                    // AI 提供商（qwen/openai/ollama等）
 
 	// 离线分析任务锁定（用于多分析器并发控制）
 	AnalysisLockID       *string    `gorm:"type:varchar(64);index:idx_analysis_lock" json:"-"`      // 分析器实例ID（UUID）

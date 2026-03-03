@@ -86,10 +86,10 @@
               </el-descriptions-item>
               <el-descriptions-item label="记忆价值">{{ photo.memory_score?.toFixed(2) }}</el-descriptions-item>
               <el-descriptions-item label="美学评分">{{ photo.beauty_score?.toFixed(2) }}</el-descriptions-item>
-              <el-descriptions-item label="AI 提供商">
-                <el-tag type="success" size="small">{{ photo.ai_provider || '-' }}</el-tag>
+              <el-descriptions-item label="AI 提供商" :span="2">
+                <el-tag type="success" size="small">{{ formatAIProvider(photo.ai_provider) }}</el-tag>
               </el-descriptions-item>
-              <el-descriptions-item label="分析时间">{{ formatTime(photo.analyzed_at) }}</el-descriptions-item>
+              <el-descriptions-item label="分析时间" :span="2">{{ formatTime(photo.analyzed_at) }}</el-descriptions-item>
             </el-descriptions>
 
             <!-- 描述 -->
@@ -138,16 +138,6 @@
                 <p style="white-space: pre-wrap; line-height: 1.6">{{ (photo as any).analysis_result }}</p>
               </el-card>
             </div>
-
-            <!-- 分析时间和提供商 -->
-            <el-descriptions :column="2" border style="margin-top: 20px">
-              <el-descriptions-item label="分析时间">
-                {{ formatTime(photo.analyzed_at) }}
-              </el-descriptions-item>
-              <el-descriptions-item label="AI 提供商">
-                <el-tag>{{ photo.ai_provider || '-' }}</el-tag>
-              </el-descriptions-item>
-            </el-descriptions>
           </div>
           <el-empty v-else description="照片尚未分析" />
         </el-col>
@@ -204,6 +194,19 @@ const getScoreColor = (score: number) => {
   if (score >= 80) return '#67c23a'
   if (score >= 60) return '#e6a23c'
   return '#f56c6c'
+}
+
+// 格式化 AI 提供商名称
+const formatAIProvider = (provider?: string) => {
+  if (!provider) return '-'
+  const providerMap: Record<string, string> = {
+    'qwen': '通义千问',
+    'ollama': 'Ollama',
+    'openai': 'OpenAI',
+    'vllm': 'vLLM',
+    'hybrid': '混合模式'
+  }
+  return providerMap[provider] || provider
 }
 
 // 加载照片详情

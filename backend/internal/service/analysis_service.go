@@ -250,11 +250,17 @@ func (s *analysisService) SubmitResults(results []model.AnalysisResult, apiKeyID
 			overallScore := int(float64(result.MemoryScore)*0.7 + float64(result.BeautyScore)*0.3)
 			now := time.Now()
 
+			// 使用提交结果中的 AI provider，如果没有提供则使用 "analyzer"
+			aiProvider := result.AIProvider
+			if aiProvider == "" {
+				aiProvider = "analyzer"
+			}
+
 			// 更新照片分析结果
 			updates := map[string]interface{}{
 				"ai_analyzed":               true,
 				"analyzed_at":               now,
-				"ai_provider":               "analyzer", // 记录为离线分析器
+				"ai_provider":               aiProvider,
 				"description":               result.Description,
 				"caption":                   result.Caption,
 				"memory_score":              result.MemoryScore,

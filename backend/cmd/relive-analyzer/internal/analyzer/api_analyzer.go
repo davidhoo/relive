@@ -373,6 +373,7 @@ func (a *APIAnalyzer) processTask(ctx context.Context, task *model.AnalysisTask)
 		MainCategory: result.MainCategory,
 		Tags:         result.Tags,
 		AnalyzedAt:   time.Now(),
+		AIProvider:   a.aiProvider.Name(),
 	}
 
 	// 添加到结果缓冲区

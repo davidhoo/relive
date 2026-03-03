@@ -537,6 +537,7 @@ func (p *QwenProvider) parseBatchResponse(response string, expectedCount int) ([
 			MemoryScore:  data.MemoryScore,
 			BeautyScore:  data.BeautyScore,
 			Reason:       data.Reason,
+			Provider:     p.Name(),
 		}
 	}
 
@@ -579,5 +580,6 @@ func (p *QwenProvider) parseResponse(response string) (*AnalyzeResult, error) {
 		MemoryScore:  data.MemoryScore,
 		BeautyScore:  data.BeautyScore,
 		Reason:       data.Reason,
+		Provider:     p.Name(),
 	}, nil
 }
