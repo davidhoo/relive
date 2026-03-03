@@ -117,6 +117,12 @@ export const configApi = {
     return response.data?.data || { valid: false, error: 'Unknown error' }
   },
 
+  // List directories in a path (for path browser)
+  listDirectories: async (path: string): Promise<{ entries: Array<{ name: string; path: string; is_dir: boolean }>; parent_path?: string; current_path: string }> => {
+    const response = await http.post<ApiResponse<{ entries: Array<{ name: string; path: string; is_dir: boolean }>; parent_path?: string; current_path: string }>>('/photos/list-directories', { path })
+    return response.data?.data || { entries: [], current_path: path }
+  },
+
   // Get geocode configuration
   getGeocodeConfig: async (): Promise<GeocodeConfig> => {
     try {

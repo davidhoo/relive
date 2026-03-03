@@ -515,6 +515,10 @@
         <el-form-item label="路径" required>
           <div class="input-with-button">
             <el-input v-model="pathForm.path" placeholder="/path/to/photos" />
+            <el-button @click="handleBrowsePath">
+              <el-icon><FolderOpened /></el-icon>
+              浏览
+            </el-button>
             <el-button @click="handleValidatePath" :loading="validating">验证</el-button>
           </div>
           <div v-if="validationResult" :class="['validation-result', validationResult.valid ? 'valid' : 'invalid']">
@@ -536,16 +540,21 @@
 
     <!-- API Key 管理 -->
     <ApiKeyManager />
+
+    <!-- Path Browser Dialog -->
+    <PathBrowser v-model="pathBrowserVisible" :initial-path="pathForm.path" @select="handlePathSelected" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import ApiKeyManager from './components/ApiKeyManager.vue'
+import PathBrowser from '@/components/PathBrowser.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { configApi, type ScanPathConfig, type GeocodeConfig, type AIConfig } from '@/api/config'
 import dayjs from 'dayjs'
 import { v4 as uuidv4 } from 'uuid'
+import { FolderOpened, CircleCheck, CircleClose } from '@element-plus/icons-vue'
 
 // Scan paths state
 const scanPaths = ref<ScanPathConfig[]>([])
@@ -555,6 +564,7 @@ const isEdit = ref(false)
 const saving = ref(false)
 const validating = ref(false)
 const validationResult = ref<{ valid: boolean; error?: string } | null>(null)
+const pathBrowserVisible = ref(false)
 
 const pathForm = ref<Partial<ScanPathConfig>>({
   name: '',
@@ -618,6 +628,14 @@ const handleEditPath = (path: ScanPathConfig) => {
   pathForm.value = { ...path }
   validationResult.value = null
   dialogVisible.value = true
+}
+
+const handleBrowsePath = () => {
+  pathBrowserVisible.value = true
+}
+
+const handlePathSelected = (path: string) => {
+  pathForm.value.path = path
 }
 
 const handleValidatePath = async () => {

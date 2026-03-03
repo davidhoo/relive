@@ -240,6 +240,25 @@ type ValidatePathResponse struct {
 	Error string `json:"error,omitempty"`
 }
 
+// ListDirectoriesRequest 列出目录内容请求
+type ListDirectoriesRequest struct {
+	Path string `json:"path" binding:"required"`
+}
+
+// DirectoryEntry 目录条目
+type DirectoryEntry struct {
+	Name  string `json:"name"`
+	Path  string `json:"path"`
+	IsDir bool   `json:"is_dir"`
+}
+
+// ListDirectoriesResponse 列出目录内容响应
+type ListDirectoriesResponse struct {
+	Entries    []DirectoryEntry `json:"entries"`
+	ParentPath string           `json:"parent_path,omitempty"`
+	CurrentPath string          `json:"current_path"`
+}
+
 // CountPhotosByPathsRequest 按路径统计照片数量请求
 type CountPhotosByPathsRequest struct {
 	Paths []string `json:"paths" binding:"required"`

@@ -407,6 +407,99 @@ func (h *PhotoHandler) ValidatePath(c *gin.Context) {
 	})
 }
 
+// ListDirectories 列出目录内容
+// @Summary 列出目录内容
+// @Description 列出指定目录下的所有子目录（用于路径选择器）
+// @Tags photos
+// @Accept json
+// @Produce json
+// @Param request body model.ListDirectoriesRequest true "目录路径"
+// @Success 200 {object} model.Response{data=model.ListDirectoriesResponse}
+// @Failure 400 {object} model.Response
+// @Failure 500 {object} model.Response
+// @Router /api/v1/photos/list-directories [post]
+func (h *PhotoHandler) ListDirectories(c *gin.Context) {
+	var req model.ListDirectoriesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INVALID_REQUEST",
+				Message: "Invalid request",
+			},
+		})
+		return
+	}
+
+	// 确保路径是绝对路径
+	path := req.Path
+	if !filepath.IsAbs(path) {
+		// 如果是相对路径，尝试从配置的基础路径解析
+		path = filepath.Join(h.cfg.Photos.RootPath, path)
+	}
+
+	// 读取目录内容
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		logger.Errorf("Failed to read directory %s: %v", path, err)
+		c.JSON(http.StatusOK, model.Response{
+			Success: true,
+			Data: model.ListDirectoriesResponse{
+				Entries:     []model.DirectoryEntry{},
+				CurrentPath: req.Path,
+			},
+		})
+		return
+	}
+
+	// 获取父目录
+	parentPath := filepath.Dir(path)
+	if parentPath == path {
+		parentPath = "" // 根目录没有父目录
+	}
+
+	// 构建响应
+	var dirEntries []model.DirectoryEntry
+
+	// 如果不是根目录，添加返回上级选项
+	if parentPath != "" && parentPath != path {
+		dirEntries = append(dirEntries, model.DirectoryEntry{
+			Name:  "..",
+			Path:  parentPath,
+			IsDir: true,
+		})
+	}
+
+	for _, entry := range entries {
+		// 只显示目录
+		if entry.IsDir() {
+			// 跳过隐藏目录
+			name := entry.Name()
+			if strings.HasPrefix(name, ".") {
+				continue
+			}
+
+			fullPath := filepath.Join(path, name)
+			dirEntries = append(dirEntries, model.DirectoryEntry{
+				Name:  name,
+				Path:  fullPath,
+				IsDir: true,
+			})
+		}
+	}
+
+	resp := model.ListDirectoriesResponse{
+		Entries:     dirEntries,
+		ParentPath:  parentPath,
+		CurrentPath: path,
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Data:    resp,
+	})
+}
+
 // GetPhotos 获取照片列表
 // @Summary 获取照片列表
 // @Description 分页获取照片列表，支持过滤和排序
