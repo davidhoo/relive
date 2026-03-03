@@ -519,8 +519,8 @@ const loadCategoriesAndTags = async () => {
       photoApi.getCategories(),
       photoApi.getTags()
     ])
-    categories.value = categoriesRes.data || []
-    tags.value = tagsRes.data || []
+    categories.value = categoriesRes.data?.data || []
+    tags.value = tagsRes.data?.data || []
   } catch (error: any) {
     console.error('Failed to load categories and tags:', error)
   }
@@ -605,7 +605,7 @@ const handleCleanup = async () => {
   try {
     cleaningUp.value = true
     const res = await photoApi.cleanup()
-    const { total_count, deleted_count, skipped_count } = res.data?.data || {}
+    const { total_count = 0, deleted_count = 0, skipped_count = 0 } = res.data?.data || {}
 
     if (deleted_count > 0) {
       ElMessage.success(

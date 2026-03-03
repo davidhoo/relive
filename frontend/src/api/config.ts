@@ -1,4 +1,5 @@
 import http from '@/utils/request'
+import type { ApiResponse } from '@/types/api'
 
 export interface ScanPathConfig {
   id: string
@@ -86,7 +87,7 @@ export const configApi = {
   // Get scan paths configuration
   getScanPaths: async (): Promise<ScanPathsConfig> => {
     try {
-      const response = await http.get<BackendConfigResponse>('/config/photos.scan_paths')
+      const response = await http.get<ApiResponse<BackendConfigResponse>>('/config/photos.scan_paths')
       // response.data is ApiResponse, response.data.data is BackendConfigResponse
       if (response.data?.data?.value) {
         return JSON.parse(response.data.data.value)
@@ -106,20 +107,20 @@ export const configApi = {
 
   // Delete scan path and associated data
   deleteScanPath: async (pathId: string): Promise<{ success: boolean; message: string }> => {
-    const response = await http.delete<{ success: boolean; message: string }>(`/config/scan-paths/${pathId}`)
+    const response = await http.delete<ApiResponse<{ success: boolean; message: string }>>(`/config/scan-paths/${pathId}`)
     return response.data?.data || { success: false, message: 'Unknown error' }
   },
 
   // Validate a scan path
   validatePath: async (path: string): Promise<{ valid: boolean; error?: string }> => {
-    const response = await http.post<{ valid: boolean; error?: string }>('/photos/validate-path', { path })
+    const response = await http.post<ApiResponse<{ valid: boolean; error?: string }>>('/photos/validate-path', { path })
     return response.data?.data || { valid: false, error: 'Unknown error' }
   },
 
   // Get geocode configuration
   getGeocodeConfig: async (): Promise<GeocodeConfig> => {
     try {
-      const response = await http.get<BackendConfigResponse>('/config/geocode')
+      const response = await http.get<ApiResponse<BackendConfigResponse>>('/config/geocode')
       if (response.data?.data?.value) {
         return JSON.parse(response.data.data.value)
       }
@@ -190,7 +191,7 @@ export const configApi = {
   // Get AI configuration
   getAIConfig: async (): Promise<AIConfig> => {
     try {
-      const response = await http.get<BackendConfigResponse>('/config/ai')
+      const response = await http.get<ApiResponse<BackendConfigResponse>>('/config/ai')
       if (response.data?.data?.value) {
         const savedConfig = JSON.parse(response.data.data.value)
         // Merge with defaults to ensure all fields exist
@@ -242,18 +243,24 @@ export interface UpdateAPIKeyRequest {
 
 // API Key management functions
 export const getAPIKeys = async (): Promise<APIKey[]> => {
-  const response = await http.get<any>('/config/api-keys')
+  const response = await http.get<ApiResponse<APIKey[]>>('/config/api-keys')
   return response.data?.data || []
 }
 
 export const createAPIKey = async (req: CreateAPIKeyRequest): Promise<APIKeyWithKey> => {
-  const response = await http.post<any>('/config/api-keys', req)
-  return response.data?.data
+  const response = await http.post<ApiResponse<APIKeyWithKey>>('/config/api-keys', req)
+  if (!response.data?.data) {
+    throw new Error('Failed to create API key')
+  }
+  return response.data.data
 }
 
 export const updateAPIKey = async (id: number, req: UpdateAPIKeyRequest): Promise<APIKey> => {
-  const response = await http.put<any>(`/config/api-keys/${id}`, req)
-  return response.data?.data
+  const response = await http.put<ApiResponse<APIKey>>(`/config/api-keys/${id}`, req)
+  if (!response.data?.data) {
+    throw new Error('Failed to update API key')
+  }
+  return response.data.data
 }
 
 export const deleteAPIKey = async (id: number): Promise<void> => {
@@ -261,6 +268,9 @@ export const deleteAPIKey = async (id: number): Promise<void> => {
 }
 
 export const regenerateAPIKey = async (id: number): Promise<{ id: number; key: string }> => {
-  const response = await http.post<any>(`/config/api-keys/${id}/regenerate`)
-  return response.data?.data
+  const response = await http.post<ApiResponse<{ id: number; key: string }>>(`/config/api-keys/${id}/regenerate`)
+  if (!response.data?.data) {
+    throw new Error('Failed to regenerate API key')
+  }
+  return response.data.data
 }

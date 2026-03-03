@@ -25,7 +25,7 @@ func main() {
 		10,
 	)
 
-	fmt.Println("Testing Geocoding Providers\n")
+	fmt.Println("Testing Geocoding Providers")
 	fmt.Println("============================")
 
 	for _, tc := range testCases {

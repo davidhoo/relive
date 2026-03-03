@@ -71,7 +71,7 @@ func setupTestServices(t *testing.T) (*Services, *gorm.DB) {
 	}
 
 	// 创建 Services
-	services := NewServices(repos, cfg)
+	services := NewServices(repos, cfg, db)
 
 	return services, db
 }
