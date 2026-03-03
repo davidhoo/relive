@@ -46,21 +46,6 @@
           :image-size="80"
         />
       </div>
-
-      <!-- Quick Access -->
-      <div class="quick-access">
-        <div class="quick-access-title">快速访问</div>
-        <div class="quick-access-items">
-          <el-tag
-            v-for="shortcut in shortcuts"
-            :key="shortcut.path"
-            class="shortcut-tag"
-            @click="loadDirectory(shortcut.path)"
-          >
-            {{ shortcut.name }}
-          </el-tag>
-        </div>
-      </div>
     </div>
 
     <template #footer>
@@ -82,11 +67,6 @@ interface DirectoryEntry {
   is_dir: boolean
 }
 
-interface Shortcut {
-  name: string
-  path: string
-}
-
 const props = defineProps<{
   modelValue: boolean
   initialPath?: string
@@ -101,15 +81,6 @@ const visible = ref(props.modelValue)
 const loading = ref(false)
 const currentPath = ref('/app')
 const entries = ref<DirectoryEntry[]>([])
-
-// Quick access shortcuts for Docker mounted paths
-const shortcuts: Shortcut[] = [
-  { name: '主目录 (/app/photos)', path: '/app/photos' },
-  { name: '额外目录 1', path: '/app/photos_extra1' },
-  { name: '额外目录 2', path: '/app/photos_extra2' },
-  { name: '额外目录 3', path: '/app/photos_extra3' },
-  { name: '根目录', path: '/app' },
-]
 
 watch(() => props.modelValue, (val) => {
   visible.value = val
@@ -216,32 +187,5 @@ const handleConfirm = () => {
 
 .entry-name {
   font-size: 14px;
-}
-
-.quick-access {
-  padding-top: 12px;
-  border-top: 1px solid var(--el-border-color);
-}
-
-.quick-access-title {
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
-  margin-bottom: 8px;
-}
-
-.quick-access-items {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.shortcut-tag {
-  cursor: pointer;
-}
-
-.shortcut-tag:hover {
-  background: var(--el-color-primary-light-9);
-  border-color: var(--el-color-primary);
-  color: var(--el-color-primary);
 }
 </style>

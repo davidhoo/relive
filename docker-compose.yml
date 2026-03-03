@@ -29,7 +29,9 @@ services:
       # - /Users/david/Pictures:/app/photos:ro
       # - /Volumes/ExternalDrive/Photos:/app/photos:ro
       # =============================================================================
-      - ./data/photos:/app/photos:ro
+      # - ./data/photos:/app/photos:ro
+      - /Users/david/Downloads/2025:/app/photos/iphone2025:ro
+      - /Users/david/SynologyDrive/亚太锦标赛韩国-仁川站:/app/photos/亚太锦标赛韩国-仁川站:ro
       # 额外的照片路径挂载（可选）
       # 如需使用，取消注释并修改路径：
       # - /path/to/extra/photos1:/app/photos_extra1:ro
