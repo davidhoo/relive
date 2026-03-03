@@ -165,6 +165,11 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				configGroup.DELETE("/:key", handlers.Config.DeleteConfig)
 				configGroup.DELETE("/scan-paths/:id", handlers.Config.DeleteScanPath)
 
+				// 提示词配置管理
+				configGroup.GET("/prompts", handlers.Config.GetPromptConfig)
+				configGroup.PUT("/prompts", handlers.Config.SetPromptConfig)
+				configGroup.POST("/prompts/reset", handlers.Config.ResetPromptConfig)
+
 				// API Key 管理
 				configGroup.GET("/api-keys", handlers.APIKey.GetAPIKeys)
 				configGroup.POST("/api-keys", handlers.APIKey.CreateAPIKey)

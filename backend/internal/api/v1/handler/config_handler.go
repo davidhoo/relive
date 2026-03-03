@@ -21,19 +21,21 @@ type ConfigHandler struct {
 	service       service.ConfigService
 	aiService     service.AIService
 	photoService  service.PhotoService
+	promptService service.PromptService
 	cfg           *config.Config
 	photoRepo     repository.PhotoRepository
 	aiHandler     *AIHandler // 用于更新 AIHandler 的 aiService
 }
 
 // NewConfigHandler 创建配置处理器
-func NewConfigHandler(service service.ConfigService, aiService service.AIService, photoService service.PhotoService, photoRepo repository.PhotoRepository, cfg *config.Config) *ConfigHandler {
+func NewConfigHandler(service service.ConfigService, aiService service.AIService, photoService service.PhotoService, promptService service.PromptService, photoRepo repository.PhotoRepository, cfg *config.Config) *ConfigHandler {
 	return &ConfigHandler{
-		service:      service,
-		aiService:    aiService,
-		photoService: photoService,
-		photoRepo:    photoRepo,
-		cfg:          cfg,
+		service:       service,
+		aiService:     aiService,
+		photoService:  photoService,
+		promptService: promptService,
+		photoRepo:     photoRepo,
+		cfg:           cfg,
 	}
 }
 
@@ -507,5 +509,107 @@ func (h *ConfigHandler) DeleteScanPath(c *gin.Context) {
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
 		Message: message,
+	})
+}
+
+// GetPromptConfig 获取提示词配置
+// @Summary 获取提示词配置
+// @Description 获取 AI 分析的提示词配置
+// @Tags Config
+// @Produce json
+// @Success 200 {object} model.Response{data=model.PromptConfig}
+// @Failure 500 {object} model.Response
+// @Router /api/v1/config/prompts [get]
+func (h *ConfigHandler) GetPromptConfig(c *gin.Context) {
+	config, err := h.promptService.GetPromptConfig()
+	if err != nil {
+		logger.Errorf("Failed to get prompt config: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "GET_PROMPT_CONFIG_FAILED",
+				Message: err.Error(),
+			},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Data:    config,
+		Message: "Prompt config retrieved successfully",
+	})
+}
+
+// SetPromptConfig 设置提示词配置
+// @Summary 设置提示词配置
+// @Description 设置或更新 AI 分析的提示词配置
+// @Tags Config
+// @Accept json
+// @Produce json
+// @Param request body model.PromptConfig true "提示词配置"
+// @Success 200 {object} model.Response
+// @Failure 400 {object} model.Response
+// @Failure 500 {object} model.Response
+// @Router /api/v1/config/prompts [put]
+func (h *ConfigHandler) SetPromptConfig(c *gin.Context) {
+	var config model.PromptConfig
+	if err := c.ShouldBindJSON(&config); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INVALID_REQUEST",
+				Message: err.Error(),
+			},
+		})
+		return
+	}
+
+	if err := h.promptService.SetPromptConfig(&config); err != nil {
+		logger.Errorf("Failed to set prompt config: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "SET_PROMPT_CONFIG_FAILED",
+				Message: err.Error(),
+			},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "Prompt config updated successfully",
+	})
+}
+
+// ResetPromptConfig 重置提示词配置为默认值
+// @Summary 重置提示词配置
+// @Description 将提示词配置重置为系统默认值
+// @Tags Config
+// @Produce json
+// @Success 200 {object} model.Response
+// @Failure 500 {object} model.Response
+// @Router /api/v1/config/prompts/reset [post]
+func (h *ConfigHandler) ResetPromptConfig(c *gin.Context) {
+	if err := h.promptService.ResetToDefaults(); err != nil {
+		logger.Errorf("Failed to reset prompt config: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "RESET_PROMPT_CONFIG_FAILED",
+				Message: err.Error(),
+			},
+		})
+		return
+	}
+
+	// 返回重置后的默认配置
+	config, _ := h.promptService.GetPromptConfig()
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Data:    config,
+		Message: "Prompt config reset to defaults successfully",
 	})
 }

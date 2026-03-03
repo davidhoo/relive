@@ -135,6 +135,9 @@ func (s *aiService) initProvider() error {
 		return nil
 	}
 
+	// 加载提示词配置
+	promptConfig := s.loadPromptConfig()
+
 	var (
 		p   provider.AIProvider
 		err error
@@ -143,36 +146,45 @@ func (s *aiService) initProvider() error {
 	switch aiConfig.Provider {
 	case "ollama":
 		p, err = provider.NewOllamaProvider(&provider.OllamaConfig{
-			Endpoint:    aiConfig.OllamaEndpoint,
-			Model:       aiConfig.OllamaModel,
-			Temperature: aiConfig.OllamaTemperature,
-			Timeout:     aiConfig.OllamaTimeout,
+			Endpoint:       aiConfig.OllamaEndpoint,
+			Model:          aiConfig.OllamaModel,
+			Temperature:    aiConfig.OllamaTemperature,
+			Timeout:        aiConfig.OllamaTimeout,
+			AnalysisPrompt: promptConfig.AnalysisPrompt,
+			CaptionPrompt:  promptConfig.CaptionPrompt,
 		})
 	case "qwen":
 		p, err = provider.NewQwenProvider(&provider.QwenConfig{
-			APIKey:      aiConfig.QwenAPIKey,
-			Endpoint:    aiConfig.QwenEndpoint,
-			Model:       aiConfig.QwenModel,
-			Temperature: aiConfig.QwenTemperature,
-			Timeout:     aiConfig.QwenTimeout,
+			APIKey:         aiConfig.QwenAPIKey,
+			Endpoint:       aiConfig.QwenEndpoint,
+			Model:          aiConfig.QwenModel,
+			Temperature:    aiConfig.QwenTemperature,
+			Timeout:        aiConfig.QwenTimeout,
+			AnalysisPrompt: promptConfig.AnalysisPrompt,
+			CaptionPrompt:  promptConfig.CaptionPrompt,
+			BatchPrompt:    promptConfig.BatchPrompt,
 		})
 	case "openai":
 		p, err = provider.NewOpenAIProvider(&provider.OpenAIConfig{
-			APIKey:      aiConfig.OpenAIAPIKey,
-			Endpoint:    aiConfig.OpenAIEndpoint,
-			Model:       aiConfig.OpenAIModel,
-			Temperature: aiConfig.OpenAITemperature,
-			MaxTokens:   aiConfig.OpenAIMaxTokens,
-			Timeout:     aiConfig.OpenAITimeout,
+			APIKey:         aiConfig.OpenAIAPIKey,
+			Endpoint:       aiConfig.OpenAIEndpoint,
+			Model:          aiConfig.OpenAIModel,
+			Temperature:    aiConfig.OpenAITemperature,
+			MaxTokens:      aiConfig.OpenAIMaxTokens,
+			Timeout:        aiConfig.OpenAITimeout,
+			AnalysisPrompt: promptConfig.AnalysisPrompt,
+			CaptionPrompt:  promptConfig.CaptionPrompt,
 		})
 	case "vllm":
 		p, err = provider.NewVLLMProvider(&provider.VLLMConfig{
-			Endpoint:    aiConfig.VLLMEndpoint,
-			Model:       aiConfig.VLLMModel,
-			Temperature: aiConfig.VLLMTemperature,
-			MaxTokens:   aiConfig.VLLMMaxTokens,
-			Timeout:     aiConfig.VLLMTimeout,
-			Concurrency: aiConfig.VLLMConcurrency,
+			Endpoint:       aiConfig.VLLMEndpoint,
+			Model:          aiConfig.VLLMModel,
+			Temperature:    aiConfig.VLLMTemperature,
+			MaxTokens:      aiConfig.VLLMMaxTokens,
+			Timeout:        aiConfig.VLLMTimeout,
+			Concurrency:    aiConfig.VLLMConcurrency,
+			AnalysisPrompt: promptConfig.AnalysisPrompt,
+			CaptionPrompt:  promptConfig.CaptionPrompt,
 		})
 	case "hybrid":
 		// 构建 hybrid provider 配置
@@ -274,6 +286,35 @@ func (s *aiService) loadAIConfig() *AIConfigFromDB {
 	}
 
 	return aiConfig
+}
+
+// loadPromptConfig 加载提示词配置
+func (s *aiService) loadPromptConfig() *provider.PromptConfig {
+	// 默认使用 provider 包中的默认值
+	config := &provider.PromptConfig{}
+
+	// 尝试从数据库读取配置
+	if s.configService != nil {
+		dbConfig, err := s.configService.Get("prompts")
+		if err == nil && dbConfig != nil && dbConfig.Value != "" {
+			var dbPromptConfig provider.PromptConfig
+			if err := json.Unmarshal([]byte(dbConfig.Value), &dbPromptConfig); err == nil {
+				// 只使用非空的配置项
+				if dbPromptConfig.AnalysisPrompt != "" {
+					config.AnalysisPrompt = dbPromptConfig.AnalysisPrompt
+				}
+				if dbPromptConfig.CaptionPrompt != "" {
+					config.CaptionPrompt = dbPromptConfig.CaptionPrompt
+				}
+				if dbPromptConfig.BatchPrompt != "" {
+					config.BatchPrompt = dbPromptConfig.BatchPrompt
+				}
+				logger.Info("Loading prompt config from database")
+			}
+		}
+	}
+
+	return config
 }
 
 // getProviderConfigFromDB 从数据库配置获取指定 provider 的配置

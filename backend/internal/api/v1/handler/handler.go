@@ -29,7 +29,7 @@ func NewHandlers(db *gorm.DB, services *service.Services, repos *repository.Repo
 		Display:  NewDisplayHandler(services.Display, services.ESP32),
 		ESP32:    NewESP32Handler(services.ESP32),
 		Export:   NewExportHandler(services.Export),
-		Config:   NewConfigHandler(services.Config, services.AI, services.Photo, repos.Photo, cfg),
+		Config:   NewConfigHandler(services.Config, services.AI, services.Photo, services.Prompt, repos.Photo, cfg),
 		Auth:     NewAuthHandler(services.Auth),
 		APIKey:   NewAPIKeyHandler(services.APIKey),
 		Analyzer: NewAnalyzerHandler(services.Photo, services.Analysis),

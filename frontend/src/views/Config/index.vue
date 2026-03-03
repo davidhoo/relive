@@ -509,6 +509,93 @@
       </div>
     </el-card>
 
+    <!-- AI Prompt Configuration Card -->
+    <el-card shadow="never" class="prompt-card">
+      <template #header>
+        <div class="card-header">
+          <div>
+            <el-icon class="header-icon"><Document /></el-icon>
+            <span class="header-title">AI 提示词配置</span>
+          </div>
+          <div class="header-actions">
+            <el-button @click="handleResetPrompts" :loading="resettingPrompts">
+              <el-icon><RefreshLeft /></el-icon>
+              恢复默认
+            </el-button>
+            <el-button type="primary" @click="handleSavePromptConfig" :loading="savingPrompts">
+              <el-icon><Check /></el-icon>
+              保存配置
+            </el-button>
+          </div>
+        </div>
+      </template>
+
+      <div v-loading="loadingPrompts">
+        <el-form :model="promptConfig" label-width="120px" class="prompt-form">
+          <!-- Analysis Prompt -->
+          <el-form-item label="分析提示词">
+            <div class="prompt-textarea-wrapper">
+              <el-input
+                v-model="promptConfig.analysis_prompt"
+                type="textarea"
+                :rows="8"
+                placeholder="输入 AI 照片分析的提示词..."
+              />
+              <div class="prompt-description">
+                用于第一次会话，指导 AI 分析照片内容、分类、评分等
+              </div>
+            </div>
+          </el-form-item>
+
+          <!-- Caption Prompt -->
+          <el-form-item label="文案生成提示词">
+            <div class="prompt-textarea-wrapper">
+              <el-input
+                v-model="promptConfig.caption_prompt"
+                type="textarea"
+                :rows="8"
+                placeholder="输入 AI 生成照片文案的提示词..."
+              />
+              <div class="prompt-description">
+                用于第二次会话，指导 AI 为照片生成创意旁白短句
+              </div>
+            </div>
+          </el-form-item>
+
+          <!-- Batch Prompt -->
+          <el-form-item label="批量分析提示词">
+            <div class="prompt-textarea-wrapper">
+              <el-input
+                v-model="promptConfig.batch_prompt"
+                type="textarea"
+                :rows="6"
+                placeholder="输入批量分析的提示词..."
+              />
+              <div class="prompt-description">
+                仅用于支持批量分析的 provider（如 Qwen），包含 %d 占位符表示照片数量
+              </div>
+            </div>
+          </el-form-item>
+
+          <el-alert
+            title="提示词配置说明"
+            type="info"
+            :closable="false"
+            style="margin-top: 16px"
+          >
+            <template #default>
+              <ul style="margin: 8px 0; padding-left: 20px">
+                <li>修改提示词后，新的分析将使用新的提示词</li>
+                <li>已分析的照片不会自动重新分析</li>
+                <li>提示词为空时将使用系统默认值</li>
+                <li>批量分析提示词需要包含 <code>%d</code> 占位符表示照片数量</li>
+              </ul>
+            </template>
+          </el-alert>
+        </el-form>
+      </div>
+    </el-card>
+
     <!-- Add/Edit Path Dialog -->
     <el-dialog
       v-model="dialogVisible"
@@ -558,10 +645,10 @@ import { ref, onMounted } from 'vue'
 import ApiKeyManager from './components/ApiKeyManager.vue'
 import PathBrowser from '@/components/PathBrowser.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { configApi, type ScanPathConfig, type GeocodeConfig, type AIConfig } from '@/api/config'
+import { configApi, promptApi, type ScanPathConfig, type GeocodeConfig, type AIConfig, type PromptConfig, defaultPrompts } from '@/api/config'
 import dayjs from 'dayjs'
 import { v4 as uuidv4 } from 'uuid'
-import { FolderOpened, CircleCheck, CircleClose } from '@element-plus/icons-vue'
+import { FolderOpened, CircleCheck, CircleClose, Document, RefreshLeft, Check } from '@element-plus/icons-vue'
 
 // Scan paths state
 const scanPaths = ref<ScanPathConfig[]>([])
@@ -599,6 +686,12 @@ const savingGeocode = ref(false)
 const aiConfig = ref<AIConfig>(configApi.getDefaultAIConfig())
 const loadingAI = ref(false)
 const savingAI = ref(false)
+
+// Prompt configuration state
+const promptConfig = ref<PromptConfig>({ ...defaultPrompts })
+const loadingPrompts = ref(false)
+const savingPrompts = ref(false)
+const resettingPrompts = ref(false)
 
 const formatTime = (time?: string) => {
   if (!time) return '-'
@@ -838,10 +931,61 @@ const openOpenAIDocs = () => {
   window.open('https://platform.openai.com/api-keys', '_blank')
 }
 
+// Prompt configuration functions
+const loadPromptConfig = async () => {
+  loadingPrompts.value = true
+  try {
+    const config = await promptApi.getPromptConfig()
+    promptConfig.value = config
+  } catch (error: any) {
+    ElMessage.error('加载提示词配置失败')
+  } finally {
+    loadingPrompts.value = false
+  }
+}
+
+const handleSavePromptConfig = async () => {
+  savingPrompts.value = true
+  try {
+    await promptApi.updatePromptConfig(promptConfig.value)
+    ElMessage.success('提示词配置保存成功')
+  } catch (error: any) {
+    ElMessage.error('保存失败: ' + (error.message || '未知错误'))
+  } finally {
+    savingPrompts.value = false
+  }
+}
+
+const handleResetPrompts = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '确定要恢复默认提示词吗？这将覆盖当前的自定义提示词。',
+      '确认恢复默认',
+      {
+        type: 'warning',
+        confirmButtonText: '恢复默认',
+        cancelButtonText: '取消',
+      }
+    )
+
+    resettingPrompts.value = true
+    const config = await promptApi.resetPromptConfig()
+    promptConfig.value = config
+    ElMessage.success('已恢复默认提示词')
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error('恢复失败: ' + (error.message || '未知错误'))
+    }
+  } finally {
+    resettingPrompts.value = false
+  }
+}
+
 onMounted(() => {
   loadScanPaths()
   loadGeocodeConfig()
   loadAIConfig()
+  loadPromptConfig()
 })
 </script>
 
@@ -855,7 +999,8 @@ onMounted(() => {
 
 .scan-paths-card,
 .geocode-card,
-.ai-card {
+.ai-card,
+.prompt-card {
   max-width: 1200px;
 }
 
@@ -1007,5 +1152,34 @@ onMounted(() => {
 
 .input-with-button .el-button {
   flex-shrink: 0;
+}
+
+/* Prompt configuration styles */
+.prompt-form {
+  max-width: 900px;
+}
+
+.prompt-textarea-wrapper {
+  width: 100%;
+}
+
+.prompt-textarea-wrapper .el-textarea {
+  width: 100%;
+}
+
+.prompt-description {
+  font-size: 13px;
+  color: var(--color-text-tertiary);
+  margin-top: 8px;
+  line-height: 1.5;
+}
+
+.header-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.prompt-card :deep(.el-form-item__content) {
+  width: calc(100% - 120px);
 }
 </style>

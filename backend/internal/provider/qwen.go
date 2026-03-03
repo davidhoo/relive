@@ -20,6 +20,11 @@ type QwenConfig struct {
 	Model       string  `yaml:"model"`       // 模型名称（qwen-vl-max/qwen-vl-plus）
 	Temperature float64 `yaml:"temperature"` // 温度参数
 	Timeout     int     `yaml:"timeout"`     // 超时（秒）
+
+	// 提示词配置（可选，为空时使用默认提示词）
+	AnalysisPrompt string `yaml:"analysis_prompt,omitempty"` // 分析提示词
+	CaptionPrompt  string `yaml:"caption_prompt,omitempty"`  // 文案生成提示词
+	BatchPrompt    string `yaml:"batch_prompt,omitempty"`    // 批量分析提示词
 }
 
 // QwenProvider Qwen 提供者
@@ -332,32 +337,11 @@ func (p *QwenProvider) generateCaption(request *AnalyzeRequest) (string, int, er
 
 // buildCaptionPrompt 构建第二次会话的prompt（生成创意文案，只看照片）
 func (p *QwenProvider) buildCaptionPrompt() string {
-	prompt := `你是一位为「电子相框」撰写旁白短句的中文文案助手。
-你的目标不是描述画面，而是为画面补上一点"画外之意"。
-
-创作原则：
-1. 避免使用以下词语：世界、梦、时光、岁月、温柔、治愈、刚刚好、悄悄、慢慢 等（但不是绝对禁止）
-2. 严禁使用如下句式：
-   - ……里……着整个世界/夏天
-   - ……得像……（简单的比喻）
-   - ……比……还…… / ……得比……更……
-3. 只基于图片中能确定的信息进行联想，不要虚构时间、人物关系、事件背景
-4. 文案应自然、有趣，带一点幽默或者诗意，但请避免煽情、鸡汤
-5. 不要复述画面内容本身，而是写"看完画面后，心里多出来的一句话"
-6. 可以偏向以下风格之一：
-   - 日常中的微妙情绪
-   - 轻微自嘲或冷幽默
-   - 对时间、记忆、瞬间的含蓄感受
-   - 看似平淡但有余味的一句判断
-7. 避免小学生作文式的、套路式的模板化表达
-
-格式要求：
-1. 只输出一句中文短句，不要换行，不要引号，不要任何解释
-2. 建议长度8-24个汉字，最多不超过30个汉字
-3. 不要出现"这张照片""这一刻""那天"等指代照片本身的词
-
-请为这张照片创作一句旁白短句：`
-
+	// 使用配置的提示词，如果没有则使用默认提示词
+	prompt := p.config.CaptionPrompt
+	if prompt == "" {
+		prompt = DefaultCaptionPrompt
+	}
 	return prompt
 }
 
@@ -406,45 +390,11 @@ func (p *QwenProvider) parseCaptionResponse(response string) (string, error) {
 
 // buildPrompt 构建提示词（第一次会话：分析照片）
 func (p *QwenProvider) buildPrompt(request *AnalyzeRequest) string {
-	prompt := `你是"个人相册照片评估助手"，擅长理解真实照片的内容，并从回忆价值和美观角度打分。
-你会收到一张照片，你的任务是：
-1）用中文详细描述照片内容（80-200字），包括人物、场景、活动、氛围等
-2）判断照片的大致类型，必须从以下选项中只选其一（禁止使用英文）：人物/孩子/猫咪/家庭/旅行/风景/美食/宠物/日常/文档/杂物/其他
-3）给出0-100的"值得回忆度"memory_score（精确到一位小数）
-4）给出0-100的"美观程度"beauty_score（精确到一位小数）
-5）给出3-8个标签，用逗号分隔，如：旅游,美食,家人,朋友,户外,室内
-6）用简短中文reason解释原因（不超过40字）
-
-【值得回忆度（memory_score）评分方法】
-请先按照值得回忆的程度，确定照片的"得分区间"，再进行精调：
-
-得分区间判定：
-- 垃圾/随手拍/无意义记录：40.0分以下（常见为0-25；若还能勉强辨认但无故事，也不要超过39.9）
-- 稍微有点可回忆价值：以65.0分为中心（大多落在58.1-70.3）
-- 不错的回忆价值：以75分为中心（大多落在68.7-82.4）
-- 特别精彩、强烈值得珍藏：以85分为中心（大多落在79.1-95.9）
-
-精调加分项（可同时叠加）：
-- 人物与关系：画面中含有面积较大的人脸，有人物互动，或属于合影 → 大幅提高评分
-- 事件性：生日/聚会/仪式/舞台/明显事件 → 少许提高评分
-- 稀缺性与不可复现：明显"这一刻很难再来一次" → 大幅提高评分
-- 情绪强度：笑、哭、惊喜、拥抱、互动、氛围强 → 少许提高评分
-- 优美风景：画面中含有壮丽的自然风光，或精美、有秩序感的构图 → 少许提高评分
-- 旅行意义：异地、地标、旅途情景 → 少许提高评分
-- 画质：画面不清晰、模糊、有残影、虚焦 → 微微降低评分
-
-【重点照片处理】
-如果画面中含有：孩子/猫咪/宠物题材，这些主题更容易产生高回忆价值，请直接以75分为中心，并大幅提高评分
-
-【明显低价值图片处理】
-以下低价值图片，必须将memory_score压低到0-25（最多不超过39）：
-- 裸露、低俗、色情或违反公序良俗的图片
-- 账单、收据、广告、随手拍的杂物、测试图片、屏幕截图等
-
-【美观分（beauty_score）评分方法】
-美观分只评价视觉：构图、光线、清晰度、色彩、主体突出。不要被"孩子/猫/旅行"主题绑架美观分，主题不等于好看。
-
-`
+	// 使用配置的提示词，如果没有则使用默认提示词
+	prompt := p.config.AnalysisPrompt
+	if prompt == "" {
+		prompt = DefaultAnalysisPrompt
+	}
 
 	// 添加 EXIF 信息
 	if request.ExifInfo != nil {
@@ -630,38 +580,14 @@ func (p *QwenProvider) AnalyzeBatch(requests []*AnalyzeRequest) ([]*AnalyzeResul
 
 // buildBatchPrompt 构建批量分析的 prompt（第一次会话，不含caption）
 func (p *QwenProvider) buildBatchPrompt(count int) string {
-	prompt := fmt.Sprintf(`请分析上面的 %d 张照片，每张照片以 JSON 对象返回分析结果，所有结果放入一个 JSON 数组中。`, count)
+	// 使用配置的提示词，如果没有则使用默认提示词
+	prompt := p.config.BatchPrompt
+	if prompt == "" {
+		prompt = DefaultBatchPrompt
+	}
 
-	prompt += `
-
-每张照片的分析要求：
-1. description: 详细描述照片内容（80-200字），包括人物、场景、活动、氛围等
-2. main_category: 主要分类，从以下8个中选择：
-   - portrait（人物/肖像）
-   - group（集体/合影）
-   - landscape（风景）
-   - cityscape（城市）
-   - food（美食）
-   - pet（宠物）
-   - event（事件/活动）
-   - other（其他）
-3. tags: 标签（逗号分隔），如：旅游,美食,家人,朋友,户外,室内等
-4. memory_score: 回忆价值评分（0-100），评估纪念意义和情感价值
-5. beauty_score: 美观度评分（0-100），评估构图、光线、色彩等摄影质量
-6. reason: 评分理由（40字内）
-
-请严格按照以下 JSON 格式返回结果数组（不要有任何其他文字）：
-[
-  {
-    "description": "...",
-    "main_category": "...",
-    "tags": "...",
-    "memory_score": 85,
-    "beauty_score": 90,
-    "reason": "..."
-  },
-  ...
-]`
+	// 替换 %d 为实际的图片数量
+	prompt = fmt.Sprintf(prompt, count)
 
 	return prompt
 }

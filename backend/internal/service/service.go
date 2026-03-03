@@ -15,6 +15,7 @@ type Services struct {
 	AI        AIService
 	Export    ExportService
 	Config    ConfigService
+	Prompt    PromptService
 	Geocode   GeocodeService
 	Auth      AuthService
 	APIKey    APIKeyService
@@ -60,6 +61,9 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	// 创建定时任务调度器
 	scheduler := NewTaskScheduler(analysisService)
 
+	// 创建提示词配置服务
+	promptService := NewPromptService(repos.Config)
+
 	return &Services{
 		Photo:    NewPhotoService(repos.Photo, cfg, configService, geocodeService),
 		Display:  NewDisplayService(
@@ -72,6 +76,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		AI:       aiService,
 		Export:   NewExportService(repos.Photo),
 		Config:   configService,
+		Prompt:   promptService,
 		Geocode:  geocodeService,
 		Auth:      authService,
 		APIKey:    apiKeyService,
