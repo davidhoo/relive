@@ -15,8 +15,14 @@ services:
       - ./backend/config.prod.yaml:/app/config.yaml:ro
       # 数据目录（数据库、日志）
       - ./data/backend:/app/data
-      # 照片目录（只读）- 使用 .env 中配置的 PHOTOS_PATH
+      # 照片目录挂载（支持多路径）
+      # 默认挂载 data/photos 到 /app/photos
       - ${PHOTOS_PATH:-./data/photos}:/app/photos:ro
+      # 额外的照片路径挂载（可选）
+      # 使用方法：在 .env 中设置 EXTRA_PHOTOS_PATH_1=/Users/david/Downloads/2025
+      - ${EXTRA_PHOTOS_PATH_1:-./data/photos_empty}:/app/photos_extra1:ro
+      - ${EXTRA_PHOTOS_PATH_2:-./data/photos_empty}:/app/photos_extra2:ro
+      - ${EXTRA_PHOTOS_PATH_3:-./data/photos_empty}:/app/photos_extra3:ro
     environment:
       - TZ=Asia/Shanghai
       # AI Provider API Keys（如果使用）
