@@ -13,9 +13,11 @@ export const photoApi = {
     return http.get<ApiResponse<Photo>>(`/photos/${id}`)
   },
 
-  // 扫描照片
+  // 扫描照片（超时时间设置为 5 分钟，因为扫描大量照片可能需要较长时间）
   scan(data?: ScanPhotosRequest) {
-    return http.post<ApiResponse<ScanPhotosResponse>>('/photos/scan', data || {})
+    return http.post<ApiResponse<ScanPhotosResponse>>('/photos/scan', data || {}, {
+      timeout: 300000, // 5 分钟
+    })
   },
 
   // 重建照片（重新扫描文件、提取 EXIF、计算哈希、地理编码、生成缩略图，保留 AI 分析结果）
