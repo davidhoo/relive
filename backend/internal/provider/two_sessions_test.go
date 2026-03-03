@@ -20,13 +20,13 @@ func TestBuildCaptionPrompt(t *testing.T) {
 	if strings.Contains(prompt, "描述") && strings.Contains(prompt, "分类") {
 		t.Error("Second session prompt should NOT depend on first analysis result")
 	}
-	if !strings.Contains(prompt, "仔细看这张照片") {
-		t.Error("Prompt should ask AI to look at the photo directly")
+	if !strings.Contains(prompt, "电子相框") {
+		t.Error("Prompt should mention electronic photo frame")
 	}
-	if !strings.Contains(prompt, "富有感染力") {
-		t.Error("Prompt should contain creativity instruction")
+	if !strings.Contains(prompt, "画外之意") {
+		t.Error("Prompt should contain creativity instruction about 'meaning beyond the image'")
 	}
-	if !strings.Contains(prompt, "8-30字") {
+	if !strings.Contains(prompt, "8-24") {
 		t.Error("Prompt should specify length requirement")
 	}
 }
@@ -113,18 +113,18 @@ func TestAnalyzePromptWithoutCaption(t *testing.T) {
 	prompt := provider.buildPrompt(request)
 
 	// 验证第一次会话的prompt不包含caption要求
-	if strings.Contains(prompt, "caption:") {
+	if strings.Contains(prompt, "caption") {
 		t.Error("First session prompt should NOT contain caption requirement")
 	}
 
 	// 验证包含其他必要字段
-	if !strings.Contains(prompt, "description:") {
+	if !strings.Contains(prompt, "description") {
 		t.Error("Prompt should contain description requirement")
 	}
-	if !strings.Contains(prompt, "main_category:") {
+	if !strings.Contains(prompt, "main_category") {
 		t.Error("Prompt should contain main_category requirement")
 	}
-	if !strings.Contains(prompt, "memory_score:") {
+	if !strings.Contains(prompt, "memory_score") {
 		t.Error("Prompt should contain memory_score requirement")
 	}
 }

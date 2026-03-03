@@ -220,23 +220,44 @@ func (p *OpenAIProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error
 
 // buildPrompt 构建提示词（第一次会话，不含caption）
 func (p *OpenAIProvider) buildPrompt(request *AnalyzeRequest) string {
-	prompt := `Analyze this photo and return the result in JSON format.
+	prompt := `You are a "Personal Photo Album Evaluation Assistant", skilled at understanding real photos and scoring them from both memory value and aesthetic perspectives.
 
-Requirements:
-1. description: Detailed description in Chinese (80-200 characters), including people, scenes, activities, atmosphere, etc.
-2. main_category: Main category, choose from the following 8:
-   - portrait (人物/肖像)
-   - group (集体/合影)
-   - landscape (风景)
-   - cityscape (城市)
-   - food (美食)
-   - pet (宠物)
-   - event (事件/活动)
-   - other (其他)
-3. tags: Tags in Chinese (comma separated), such as: 旅游,美食,家人,朋友,户外,室内
-4. memory_score: Memory value score (0-100), assess commemorative significance and emotional value
-5. beauty_score: Beauty score (0-100), assess composition, lighting, color and other photographic qualities
-6. reason: Scoring reason in Chinese (within 40 characters)
+You will receive a photo. Your tasks are:
+1) Describe the photo content in detail in Chinese (80-200 characters), including people, scenes, activities, atmosphere, etc.
+2) Determine the general type of photo, choose one: portrait/child/cat/family/travel/landscape/food/pet/daily/document/misc/other
+3) Give a "memory_score" of 0-100 (precise to one decimal) for "worth remembering"
+4) Give a "beauty_score" of 0-100 (precise to one decimal) for "aesthetic degree"
+5) Provide 3-8 tags, comma-separated, e.g.: travel,food,family,friends,outdoor,indoor
+6) Explain the reason in short Chinese (within 40 characters)
+
+【Memory Score (memory_score) Evaluation Method】
+First determine the "score range" based on how memorable it is, then fine-tune:
+
+Score Range Determination:
+- Trash/random shot/meaningless record: below 40.0 (usually 0-25; if barely recognizable but no story, don't exceed 39.9)
+- Slightly memorable: centered at 65.0 (mostly 58.1-70.3)
+- Good memory value: centered at 75 (mostly 68.7-82.4)
+- Particularly wonderful, strongly worth cherishing: centered at 85 (mostly 79.1-95.9)
+
+Fine-tuning Bonus Items (can stack):
+- People & Relationships: Large face area in frame, people interacting, or group photo → significantly increase score
+- Event-based: Birthday/party/ceremony/stage/obvious event → slightly increase score
+- Scarcity & Irreproducibility: Obviously "this moment is hard to recreate" → significantly increase score
+- Emotional Intensity: Laughing, crying, surprise, hugging, interaction, strong atmosphere → slightly increase score
+- Beautiful Scenery: Magnificent natural scenery or exquisite, orderly composition → slightly increase score
+- Travel Significance: Different location, landmark, travel scene → slightly increase score
+- Image Quality: Unclear, blurry, ghosting, out of focus → slightly decrease score
+
+【Key Photo Handling】
+If the frame contains: children/cats/pets, these themes are more likely to have high memory value. Please center at 75 points and significantly increase the score.
+
+【Obviously Low-Value Image Handling】
+For the following low-value images, memory_score must be suppressed to 0-25 (maximum not exceeding 39):
+- Nude, vulgar, pornographic or violating public order and good customs
+- Bills, receipts, advertisements, random shots of clutter, test images, screenshots
+
+【Beauty Score (beauty_score) Evaluation Method】
+Beauty score only evaluates visuals: composition, lighting, clarity, color, subject prominence. Don't let "child/cat/travel" themes kidnap the beauty score - theme doesn't equal beauty.
 
 `
 
@@ -254,15 +275,16 @@ Requirements:
 	}
 
 	prompt += `
-Please return the result strictly in the following JSON format (without any other text):
+Please strictly output JSON only, in the following format:
 {
-  "description": "...",
-  "main_category": "...",
-  "tags": "...",
-  "memory_score": 85,
-  "beauty_score": 90,
-  "reason": "..."
-}`
+  "description": "Detailed description in Chinese (80-200 characters)",
+  "main_category": "Choose one: portrait/group/landscape/cityscape/food/pet/event/other",
+  "tags": "Comma-separated tags, e.g.: travel,food,family,friends,outdoor,indoor",
+  "memory_score": 85.0,
+  "beauty_score": 88.0,
+  "reason": "Chinese reason within 40 characters"
+}
+Do not output any extra text, no comments.`
 
 	return prompt
 }
@@ -271,15 +293,31 @@ Please return the result strictly in the following JSON format (without any othe
 // 只看照片，直接生成创意文案，不给第一次分析结果
 func (p *OpenAIProvider) GenerateCaption(request *AnalyzeRequest) (string, error) {
 	// 构建第二次会话的prompt - 只给照片，不给分析结果
-	prompt := `Look at this photo carefully and create a creative, emotional caption for it (8-30 Chinese characters).
+	prompt := `You are a Chinese copywriting assistant writing sidebar short sentences for an "Electronic Photo Frame".
+Your goal is not to describe the scene, but to add a little "meaning beyond the image" for it.
 
-Requirements:
-1. Create an emotional, artistic caption (8-30 Chinese characters)
-2. Can be a poetic line, a lyric, a reflection, or a warm message
-3. Should evoke memories and feelings, not just describe the image
-4. Be creative and unique - let your imagination flow
+Creative Principles:
+1. Avoid using these words: world, dream, time, years, gentle, healing, just right, quietly, slowly, etc. (but not absolutely forbidden)
+2. Strictly prohibited sentence patterns:
+   - ...within...the whole world/summer
+   - ...as... (simple metaphor)
+   - ...than...even... / ...more than...even more...
+3. Only associate based on information that can be confirmed in the image. Don't fabricate time, character relationships, or event backgrounds.
+4. Copy should be natural, interesting, with a bit of humor or poetry, but please avoid sentimentalism or chicken soup.
+5. Don't retell the scene content itself, but write "the sentence that comes to mind after seeing the image".
+6. Can lean towards one of the following styles:
+   - Subtle emotions in daily life
+   - Slight self-mockery or cold humor
+   - Implicit feelings about time, memory, moments
+   - A seemingly plain but meaningful judgment
+7. Avoid template expressions like elementary school compositions.
 
-Please return ONLY the caption text (no JSON, no quotes):`
+Format Requirements:
+1. Only output one Chinese short sentence, no line breaks, no quotation marks, no explanations.
+2. Recommended length 8-24 Chinese characters, maximum not exceeding 30 Chinese characters.
+3. Do not use words referring to the photo itself such as "this photo", "this moment", "that day".
+
+Please create a sidebar short sentence for this photo:`
 
 	// 构建请求 - 第二次会话（新会话）
 	imageBase64 := base64.StdEncoding.EncodeToString(request.ImageData)
