@@ -65,7 +65,7 @@
 
           <!-- 文件时间信息 -->
           <el-divider />
-          <el-descriptions title="文件时间" :column="1" border>
+          <el-descriptions title="文件时间" :column="2" border>
             <el-descriptions-item label="文件创建">{{ formatTime(photo.file_create_time) }}</el-descriptions-item>
             <el-descriptions-item label="文件修改">{{ formatTime(photo.file_mod_time) }}</el-descriptions-item>
             <el-descriptions-item label="导入时间">{{ formatTime(photo.created_at) }}</el-descriptions-item>
@@ -86,10 +86,10 @@
               </el-descriptions-item>
               <el-descriptions-item label="记忆价值">{{ photo.memory_score?.toFixed(2) }}</el-descriptions-item>
               <el-descriptions-item label="美学评分">{{ photo.beauty_score?.toFixed(2) }}</el-descriptions-item>
-              <el-descriptions-item label="AI 提供商" :span="2">
+              <el-descriptions-item label="AI 提供商">
                 <el-tag type="success" size="small">{{ formatAIProvider(photo.ai_provider) }}</el-tag>
               </el-descriptions-item>
-              <el-descriptions-item label="分析时间" :span="2">{{ formatTime(photo.analyzed_at) }}</el-descriptions-item>
+              <el-descriptions-item label="分析时间">{{ formatTime(photo.analyzed_at) }}</el-descriptions-item>
             </el-descriptions>
 
             <!-- 描述 -->
