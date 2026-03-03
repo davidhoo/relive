@@ -1,4 +1,4 @@
-import { http } from '@/utils/request'
+import http from '@/utils/request'
 import type { Photo, PhotoListParams, PhotoStats, ScanPhotosRequest, ScanPhotosResponse, RebuildPhotosRequest, RebuildPhotosResponse, CleanupPhotosResponse, CountPhotosByPathsRequest, CountPhotosByPathsResponse } from '@/types/photo'
 import type { PagedResponse } from '@/types/api'
 

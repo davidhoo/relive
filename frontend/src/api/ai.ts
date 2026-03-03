@@ -1,4 +1,4 @@
-import { http } from '@/utils/request'
+import http from '@/utils/request'
 import type { AIAnalyzeProgress, AIAnalyzeBatchResponse, AIAnalyzeTask, AIProviderInfo } from '@/types/ai'
 
 export const aiApi = {

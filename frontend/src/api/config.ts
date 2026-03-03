@@ -1,4 +1,4 @@
-import { http } from '@/utils/request'
+import http from '@/utils/request'
 
 export interface ScanPathConfig {
   id: string
@@ -87,9 +87,9 @@ export const configApi = {
   getScanPaths: async (): Promise<ScanPathsConfig> => {
     try {
       const response = await http.get<BackendConfigResponse>('/config/photos.scan_paths')
-      // http.get returns ApiResponse, response.data is the BackendConfigResponse
-      if (response.data && response.data.value) {
-        return JSON.parse(response.data.value)
+      // response.data is ApiResponse, response.data.data is BackendConfigResponse
+      if (response.data?.data?.value) {
+        return JSON.parse(response.data.data.value)
       }
       return { paths: [] }
     } catch (error) {
@@ -107,21 +107,21 @@ export const configApi = {
   // Delete scan path and associated data
   deleteScanPath: async (pathId: string): Promise<{ success: boolean; message: string }> => {
     const response = await http.delete<{ success: boolean; message: string }>(`/config/scan-paths/${pathId}`)
-    return response.data || { success: false, message: 'Unknown error' }
+    return response.data?.data || { success: false, message: 'Unknown error' }
   },
 
   // Validate a scan path
   validatePath: async (path: string): Promise<{ valid: boolean; error?: string }> => {
     const response = await http.post<{ valid: boolean; error?: string }>('/photos/validate-path', { path })
-    return response.data || { valid: false, error: 'Unknown error' }
+    return response.data?.data || { valid: false, error: 'Unknown error' }
   },
 
   // Get geocode configuration
   getGeocodeConfig: async (): Promise<GeocodeConfig> => {
     try {
       const response = await http.get<BackendConfigResponse>('/config/geocode')
-      if (response.data && response.data.value) {
-        return JSON.parse(response.data.value)
+      if (response.data?.data?.value) {
+        return JSON.parse(response.data.data.value)
       }
       // Return default config
       return {
@@ -191,8 +191,8 @@ export const configApi = {
   getAIConfig: async (): Promise<AIConfig> => {
     try {
       const response = await http.get<BackendConfigResponse>('/config/ai')
-      if (response.data && response.data.value) {
-        const savedConfig = JSON.parse(response.data.value)
+      if (response.data?.data?.value) {
+        const savedConfig = JSON.parse(response.data.data.value)
         // Merge with defaults to ensure all fields exist
         return { ...configApi.getDefaultAIConfig(), ...savedConfig }
       }
@@ -207,4 +207,60 @@ export const configApi = {
     const value = JSON.stringify(config)
     await http.put('/config/ai', { value })
   }
+}
+
+// ==================== API Key interfaces ====================
+
+export interface APIKey {
+  id: number
+  created_at: string
+  updated_at: string
+  name: string
+  description: string
+  is_active: boolean
+  expires_at?: string
+  last_used_at?: string
+  use_count: number
+}
+
+export interface APIKeyWithKey extends APIKey {
+  key: string
+}
+
+export interface CreateAPIKeyRequest {
+  name: string
+  description?: string
+  expires_at?: string
+}
+
+export interface UpdateAPIKeyRequest {
+  name?: string
+  description?: string
+  is_active?: boolean
+  expires_at?: string | null
+}
+
+// API Key management functions
+export const getAPIKeys = async (): Promise<APIKey[]> => {
+  const response = await http.get<any>('/config/api-keys')
+  return response.data?.data || []
+}
+
+export const createAPIKey = async (req: CreateAPIKeyRequest): Promise<APIKeyWithKey> => {
+  const response = await http.post<any>('/config/api-keys', req)
+  return response.data?.data
+}
+
+export const updateAPIKey = async (id: number, req: UpdateAPIKeyRequest): Promise<APIKey> => {
+  const response = await http.put<any>(`/config/api-keys/${id}`, req)
+  return response.data?.data
+}
+
+export const deleteAPIKey = async (id: number): Promise<void> => {
+  await http.delete(`/config/api-keys/${id}`)
+}
+
+export const regenerateAPIKey = async (id: number): Promise<{ id: number; key: string }> => {
+  const response = await http.post<any>(`/config/api-keys/${id}/regenerate`)
+  return response.data?.data
 }

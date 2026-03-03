@@ -15,6 +15,8 @@ type Handlers struct {
 	AI      *AIHandler
 	Export  *ExportHandler
 	Config  *ConfigHandler
+	Auth    *AuthHandler
+	APIKey  *APIKeyHandler
 }
 
 // NewHandlers 创建所有处理器
@@ -26,6 +28,8 @@ func NewHandlers(db *gorm.DB, services *service.Services, cfg *config.Config) *H
 		ESP32:   NewESP32Handler(services.ESP32),
 		Export:  NewExportHandler(services.Export),
 		Config:  NewConfigHandler(services.Config, services.AI, services.Photo, cfg),
+		Auth:    NewAuthHandler(services.Auth),
+		APIKey:  NewAPIKeyHandler(services.APIKey),
 	}
 
 	// AI Handler 可能为 nil（如果 AI 服务未配置）

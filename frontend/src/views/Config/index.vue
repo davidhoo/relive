@@ -533,11 +533,15 @@
         <el-button type="primary" @click="handleSavePath" :loading="saving">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- API Key 管理 -->
+    <ApiKeyManager />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import ApiKeyManager from './components/ApiKeyManager.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { configApi, type ScanPathConfig, type GeocodeConfig, type AIConfig } from '@/api/config'
 import dayjs from 'dayjs'

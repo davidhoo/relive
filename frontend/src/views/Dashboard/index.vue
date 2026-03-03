@@ -262,7 +262,7 @@ const formatDate = (dateStr: string) => {
 const loadRecentPhotos = async () => {
   try {
     const res = await photoApi.getList({ page: 1, page_size: 12 })
-    recentPhotos.value = res.data?.items || []
+    recentPhotos.value = res.data?.data?.items || []
   } catch (error) {
     console.error('Failed to load recent photos:', error)
   }
@@ -272,7 +272,7 @@ const loadRecentPhotos = async () => {
 const loadAIProgress = async () => {
   try {
     const res = await aiApi.getProgress()
-    aiProgress.value = res.data || null
+    aiProgress.value = res.data?.data || null
   } catch (error: any) {
     // AI 服务未配置时返回 503，这是正常情况，不需要显示错误
     if (error?.response?.status === 503) {
@@ -313,7 +313,7 @@ const handleScan = async () => {
     // 使用环境变量中配置的照片路径
     const photoPath = '/Volumes/home/Photos/MobileBackup/iPhone/2025/11'
     const res = await photoApi.scan({ path: photoPath })
-    ElMessage.success(`扫描完成，新增 ${res.data?.new_count || 0} 张照片`)
+    ElMessage.success(`扫描完成，新增 ${res.data?.data?.new_count || 0} 张照片`)
     await loadRecentPhotos()
     await systemStore.fetchStats()
   } catch (error: any) {

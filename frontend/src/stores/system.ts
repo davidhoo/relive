@@ -13,9 +13,10 @@ export const useSystemStore = defineStore('system', () => {
     loading.value = true
     try {
       const res = await systemApi.getStats()
-      stats.value = res.data || null
+      stats.value = res.data?.data || null
     } catch (error) {
       console.error('Failed to fetch system stats:', error)
+      stats.value = null
     } finally {
       loading.value = false
     }
@@ -25,9 +26,10 @@ export const useSystemStore = defineStore('system', () => {
   const fetchHealth = async () => {
     try {
       const res = await systemApi.getHealth()
-      health.value = res.data || null
+      health.value = res.data?.data || null
     } catch (error) {
       console.error('Failed to fetch system health:', error)
+      health.value = null
     }
   }
 

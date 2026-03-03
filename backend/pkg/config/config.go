@@ -116,7 +116,7 @@ type LoggingConfig struct {
 
 // SecurityConfig 安全配置
 type SecurityConfig struct {
-	JWTSecret    string `yaml:"jwt_secret"`     // JWT 密钥
+	JWTSecret    string `yaml:"jwt_Secret"`     // JWT 密钥
 	APIKeyPrefix string `yaml:"api_key_prefix"` // API Key 前缀
 }
 
@@ -205,7 +205,7 @@ func (c *Config) Validate() error {
 
 	// 验证 JWT 密钥
 	if c.Security.JWTSecret == "" {
-		return fmt.Errorf("security.jwt_secret is required")
+		return fmt.Errorf("security.jwt_Secret is required")
 	}
 
 	return nil

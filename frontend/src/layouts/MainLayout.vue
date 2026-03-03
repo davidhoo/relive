@@ -58,10 +58,29 @@
             </el-breadcrumb>
           </div>
           <div class="header-right">
-            <div class="status-badge" v-if="systemHealth">
+            <div class="status-badge">
               <div class="status-indicator" :class="statusClass"></div>
               <span class="status-text">{{ statusText }}</span>
             </div>
+            <el-dropdown @command="handleCommand" class="user-dropdown">
+              <span class="user-info">
+                <el-icon><User /></el-icon>
+                <span class="username">{{ userStore.username }}</span>
+                <el-icon><ArrowDown /></el-icon>
+              </span>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="changepassword">
+                    <el-icon><Key /></el-icon>
+                    修改密码
+                  </el-dropdown-item>
+                  <el-dropdown-item divided command="logout">
+                    <el-icon><SwitchButton /></el-icon>
+                    退出登录
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </div>
         </div>
       </el-header>
@@ -82,6 +101,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSystemStore } from '@/stores/system'
+import { User, ArrowDown, Key, SwitchButton } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -96,14 +116,6 @@ const toggleCollapse = () => {
   // 保存到 localStorage
   localStorage.setItem('sidebar-collapsed', String(isCollapsed.value))
 }
-
-// 初始化时读取保存的状态
-onMounted(() => {
-  const saved = localStorage.getItem('sidebar-collapsed')
-  if (saved !== null) {
-    isCollapsed.value = saved === 'true'
-  }
-})
 
 // 当前激活的菜单
 const activeMenu = computed(() => {
@@ -129,13 +141,47 @@ const systemHealth = computed(() => systemStore.health)
 
 // 状态样式类
 const statusClass = computed(() => {
-  return systemHealth.value?.status === 'healthy' ? 'status-healthy' : 'status-error'
+  if (!systemHealth.value) return 'status-error'
+  return systemHealth.value.status === 'healthy' ? 'status-healthy' : 'status-error'
 })
 
 // 状态文本
 const statusText = computed(() => {
-  return systemHealth.value?.status === 'healthy' ? '系统正常' : '系统异常'
+  if (!systemHealth.value) return '系统异常'
+  return systemHealth.value.status === 'healthy' ? '系统正常' : '系统异常'
 })
+
+// 用户状态
+import { useUserStore } from '@/stores/user'
+import { ElMessage, ElMessageBox } from 'element-plus'
+const userStore = useUserStore()
+
+// 处理下拉菜单命令
+const handleCommand = (command: string) => {
+  if (command === 'logout') {
+    handleLogout()
+  } else if (command === 'changepassword') {
+    router.push('/change-password')
+  }
+}
+
+// 退出登录
+const handleLogout = async () => {
+  try {
+    await ElMessageBox.confirm('确定要退出登录吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    await userStore.logout()
+    ElMessage.success('已退出登录')
+    router.push('/login')
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      console.error('Logout error:', error)
+    }
+  }
+}
 
 onMounted(() => {
   // 初始化折叠状态
@@ -144,7 +190,10 @@ onMounted(() => {
     isCollapsed.value = saved === 'true'
   }
 
+  // 获取用户信息和系统状态
+  userStore.fetchUserInfo()
   systemStore.fetchHealth()
+
   // 每30秒刷新一次健康状态
   setInterval(() => {
     systemStore.fetchHealth()
@@ -397,6 +446,12 @@ onMounted(() => {
   flex: 1;
 }
 
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-lg);
+}
+
 .breadcrumb {
   font-size: var(--font-size-base);
 }
@@ -459,6 +514,39 @@ onMounted(() => {
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
   color: var(--color-text-secondary);
+}
+
+/* 用户下拉菜单 */
+.user-dropdown {
+  cursor: pointer;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-base);
+  color: var(--color-text-secondary);
+}
+
+.user-info:hover {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+}
+
+.user-info .el-icon {
+  font-size: 18px;
+}
+
+.username {
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-base);
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @keyframes pulse {

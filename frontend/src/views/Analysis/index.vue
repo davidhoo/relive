@@ -170,7 +170,7 @@ const formatTime = (time?: string) => {
 const loadProviderInfo = async () => {
   try {
     const res = await aiApi.getProviderInfo()
-    providerInfo.value = res.data || null
+    providerInfo.value = res.data?.data || null
   } catch (error) {
     console.error('Failed to load provider info:', error)
   }
@@ -180,7 +180,7 @@ const loadProviderInfo = async () => {
 const loadProgress = async () => {
   try {
     const res = await aiApi.getProgress()
-    progress.value = res.data || null
+    progress.value = res.data?.data || null
   } catch (error) {
     console.error('Failed to load progress:', error)
   }
@@ -196,7 +196,7 @@ const handleBatchAnalyze = async () => {
   try {
     analyzing.value = true
     const res = await aiApi.analyzeBatch(batchLimit.value)
-    ElMessage.success(`已提交 ${res.data?.queued || 0} 张照片进行分析`)
+    ElMessage.success(`已提交 ${res.data?.data?.queued || 0} 张照片进行分析`)
 
     // 开始轮询进度
     startProgressPolling()

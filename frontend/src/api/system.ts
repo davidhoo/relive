@@ -1,4 +1,4 @@
-import { http } from '@/utils/request'
+import http from '@/utils/request'
 import type { SystemHealth, SystemStats } from '@/types/system'
 
 export const systemApi = {

@@ -16,8 +16,11 @@ type Services struct {
 	Export  ExportService
 	Config  ConfigService
 	Geocode GeocodeService
+	Auth    AuthService
+	APIKey  APIKeyService
 }
 
+// NewServices 创建所有服务
 // NewServices 创建所有服务
 func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB) *Services {
 	// 首先创建 Config 服务（其他服务可能需要访问配置）
@@ -37,8 +40,20 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		geocodeService = nil
 	}
 
+	// 创建认证服务并初始化默认用户
+	authService := NewAuthService(repos.User, cfg)
+	if err := authService.InitializeDefaultUser(); err != nil {
+		logger.Warnf("Failed to initialize default user: %v", err)
+	}
+
+	// 创建 API Key 服务并初始化默认Key
+	apiKeyService := NewAPIKeyService(repos.APIKey, cfg)
+	if err := apiKeyService.InitializeDefaultKey(); err != nil {
+		logger.Warnf("Failed to initialize default API key: %v", err)
+	}
+
 	return &Services{
-		Photo: NewPhotoService(repos.Photo, cfg, configService, geocodeService),
+		Photo:   NewPhotoService(repos.Photo, cfg, configService, geocodeService),
 		Display: NewDisplayService(
 			repos.Photo,
 			repos.DisplayRecord,
@@ -50,5 +65,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		Export:  NewExportService(repos.Photo),
 		Config:  configService,
 		Geocode: geocodeService,
+		Auth:    authService,
+		APIKey:  apiKeyService,
 	}
 }

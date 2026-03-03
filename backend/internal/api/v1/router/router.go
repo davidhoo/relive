@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/davidhoo/relive/internal/api/v1/handler"
+	"github.com/davidhoo/relive/internal/middleware"
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/internal/service"
 	"github.com/davidhoo/relive/pkg/config"
@@ -31,7 +32,7 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 			"http://127.0.0.1:3000",
 		},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "Accept", "X-Requested-With"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "Accept", "X-Requested-With", "X-API-Key"},
 		ExposeHeaders:    []string{"Content-Length", "Content-Type"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
@@ -50,92 +51,126 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 	// API 路由组
 	v1 := r.Group("/api/v1")
 	{
-		// 系统相关
+		// 认证相关（公开接口）
+		auth := v1.Group("/auth")
+		{
+			auth.POST("/login", handlers.Auth.Login)
+			auth.POST("/logout", handlers.Auth.Logout)
+			// 以下接口需要 JWT 认证，但不需要检查首次登录
+			auth.POST("/change-Password", middleware.JWTAuth(services.Auth), handlers.Auth.ChangePassword)
+			auth.GET("/user", middleware.JWTAuth(services.Auth), handlers.Auth.GetUserInfo)
+		}
+
+		// 系统相关（公开接口）
 		system := v1.Group("/system")
 		{
 			system.GET("/health", handlers.System.Health)
-			system.GET("/stats", handlers.System.Stats)
 		}
 
-		// 照片相关
-		photos := v1.Group("/photos")
+		// ESP32 设备相关（API Key 认证）
+		esp32 := v1.Group("/esp32")
+		esp32.Use(middleware.APIKeyAuth(services.APIKey))
 		{
-			photos.POST("/scan", handlers.Photo.ScanPhotos)
-			photos.POST("/rebuild", handlers.Photo.RebuildPhotos)
-		photos.POST("/cleanup", handlers.Photo.CleanupPhotos)
-			photos.POST("/validate-path", handlers.Photo.ValidatePath)
-		photos.POST("/count-by-paths", handlers.Photo.CountPhotosByPaths)
-			photos.GET("/stats", handlers.Photo.GetPhotoStats)     // 具体路径要在参数路径之前
-			photos.GET("/categories", handlers.Photo.GetCategories) // 获取所有分类
-			photos.GET("/tags", handlers.Photo.GetTags)             // 获取所有标签
-			photos.GET("", handlers.Photo.GetPhotos)
-			photos.GET("/:id", handlers.Photo.GetPhotoByID)
-			photos.GET("/:id/image", handlers.Photo.GetPhotoImage)
-		photos.GET("/:id/thumbnail", handlers.Photo.GetPhotoThumbnail)
+			esp32.POST("/register", handlers.ESP32.Register)
+			esp32.POST("/heartbeat", handlers.ESP32.Heartbeat)
 		}
 
-		// 展示相关
+		// 展示相关（API Key 认证，设备获取照片）
 		display := v1.Group("/display")
+		display.Use(middleware.APIKeyAuth(services.APIKey))
 		{
 			display.GET("/photo", handlers.Display.GetDisplayPhoto)
 			display.POST("/record", handlers.Display.RecordDisplay)
 		}
 
-		// ESP32 设备相关
-		esp32 := v1.Group("/esp32")
-		{
-			esp32.POST("/register", handlers.ESP32.Register)
-			esp32.POST("/heartbeat", handlers.ESP32.Heartbeat)
-			esp32.GET("/stats", handlers.ESP32.GetDeviceStats) // 具体路径要在参数路径之前
-			esp32.GET("/devices", handlers.ESP32.GetDevices)
-			esp32.GET("/devices/:device_id", handlers.ESP32.GetDeviceByID)
-		}
+		// 图片访问（公开访问，不需要认证）
+		v1.GET("/photos/:id/image", handlers.Photo.GetPhotoImage)
+		v1.GET("/photos/:id/thumbnail", handlers.Photo.GetPhotoThumbnail)
 
-		// AI 分析相关
-		ai := v1.Group("/ai")
+		// 以下接口需要 JWT 认证
+		authorized := v1.Group("")
+		authorized.Use(middleware.JWTAuth(services.Auth))
+		authorized.Use(middleware.FirstLoginCheck(services.Auth))
 		{
-			if handlers.AI != nil {
-				ai.POST("/analyze", handlers.AI.Analyze)
-				ai.POST("/analyze/batch", handlers.AI.AnalyzeBatch)
-				ai.GET("/progress", handlers.AI.GetProgress)
-				ai.GET("/task", handlers.AI.GetTaskStatus)
-				ai.POST("/reanalyze/:id", handlers.AI.ReAnalyze)
-				ai.GET("/provider", handlers.AI.GetProviderInfo)
-			} else {
-				// AI 服务未配置时，返回友好的错误信息
-				aiNotAvailable := func(c *gin.Context) {
-					c.JSON(503, gin.H{
-						"success": false,
-						"error": gin.H{
-							"code":    "SERVICE_UNAVAILABLE",
-							"message": "AI service is not configured or unavailable",
-						},
-						"message": "AI service is not available. Please check your configuration.",
-					})
-				}
-				ai.POST("/analyze", aiNotAvailable)
-				ai.POST("/analyze/batch", aiNotAvailable)
-				ai.GET("/progress", aiNotAvailable)
-				ai.GET("/task", aiNotAvailable)
-				ai.POST("/reanalyze/:id", aiNotAvailable)
-				ai.GET("/provider", aiNotAvailable)
+			// 系统相关（需要认证）
+			authorized.GET("/system/stats", handlers.System.Stats)
+
+			// 照片相关
+			photos := authorized.Group("/photos")
+			{
+				photos.POST("/scan", handlers.Photo.ScanPhotos)
+				photos.POST("/rebuild", handlers.Photo.RebuildPhotos)
+				photos.POST("/cleanup", handlers.Photo.CleanupPhotos)
+				photos.POST("/validate-path", handlers.Photo.ValidatePath)
+				photos.POST("/count-by-paths", handlers.Photo.CountPhotosByPaths)
+				photos.GET("/stats", handlers.Photo.GetPhotoStats)
+				photos.GET("/categories", handlers.Photo.GetCategories)
+				photos.GET("/tags", handlers.Photo.GetTags)
+				photos.GET("", handlers.Photo.GetPhotos)
+				photos.GET("/:id", handlers.Photo.GetPhotoByID)
 			}
-		}
 
-		// 导出/导入相关
-		v1.POST("/export", handlers.Export.Export)
-		v1.POST("/import", handlers.Export.Import)
-		v1.POST("/export/check", handlers.Export.CheckExport)
+			// ESP32 设备管理（需要 JWT 认证）
+			esp32Manage := authorized.Group("/esp32")
+			{
+				esp32Manage.GET("/stats", handlers.ESP32.GetDeviceStats)
+				esp32Manage.GET("/devices", handlers.ESP32.GetDevices)
+				esp32Manage.GET("/devices/:device_id", handlers.ESP32.GetDeviceByID)
+			}
 
-		// 配置管理相关
-		configGroup := v1.Group("/config")
-		{
-			configGroup.GET("", handlers.Config.ListConfigs)             // 获取所有配置
-			configGroup.POST("/batch", handlers.Config.SetBatchConfigs)   // 批量设置配置
-			configGroup.GET("/:key", handlers.Config.GetConfig)           // 获取配置
-			configGroup.PUT("/:key", handlers.Config.SetConfig)           // 设置配置
-			configGroup.DELETE("/:key", handlers.Config.DeleteConfig)     // 删除配置
-			configGroup.DELETE("/scan-paths/:id", handlers.Config.DeleteScanPath) // 删除扫描路径及其数据
+			// AI 分析相关
+			ai := authorized.Group("/ai")
+			{
+				if handlers.AI != nil {
+					ai.POST("/analyze", handlers.AI.Analyze)
+					ai.POST("/analyze/batch", handlers.AI.AnalyzeBatch)
+					ai.GET("/progress", handlers.AI.GetProgress)
+					ai.GET("/task", handlers.AI.GetTaskStatus)
+					ai.POST("/reanalyze/:id", handlers.AI.ReAnalyze)
+					ai.GET("/provider", handlers.AI.GetProviderInfo)
+				} else {
+					// AI 服务未配置时，返回友好的错误信息
+					aiNotAvailable := func(c *gin.Context) {
+						c.JSON(503, gin.H{
+							"success": false,
+							"error": gin.H{
+								"code":    "SERVICE_UNAVAILABLE",
+								"message": "AI service is not configured or unavailable",
+							},
+							"message": "AI service is not available. Please check your configuration.",
+						})
+					}
+					ai.POST("/analyze", aiNotAvailable)
+					ai.POST("/analyze/batch", aiNotAvailable)
+					ai.GET("/progress", aiNotAvailable)
+					ai.GET("/task", aiNotAvailable)
+					ai.POST("/reanalyze/:id", aiNotAvailable)
+					ai.GET("/provider", aiNotAvailable)
+				}
+			}
+
+			// 导出/导入相关
+			authorized.POST("/export", handlers.Export.Export)
+			authorized.POST("/import", handlers.Export.Import)
+			authorized.POST("/export/check", handlers.Export.CheckExport)
+
+			// 配置管理相关
+			configGroup := authorized.Group("/config")
+			{
+				configGroup.GET("", handlers.Config.ListConfigs)
+				configGroup.POST("/batch", handlers.Config.SetBatchConfigs)
+				configGroup.GET("/:key", handlers.Config.GetConfig)
+				configGroup.PUT("/:key", handlers.Config.SetConfig)
+				configGroup.DELETE("/:key", handlers.Config.DeleteConfig)
+				configGroup.DELETE("/scan-paths/:id", handlers.Config.DeleteScanPath)
+
+				// API Key 管理
+				configGroup.GET("/api-keys", handlers.APIKey.GetAPIKeys)
+				configGroup.POST("/api-keys", handlers.APIKey.CreateAPIKey)
+				configGroup.PUT("/api-keys/:id", handlers.APIKey.UpdateAPIKey)
+				configGroup.DELETE("/api-keys/:id", handlers.APIKey.DeleteAPIKey)
+				configGroup.POST("/api-keys/:id/regenerate", handlers.APIKey.RegenerateAPIKey)
+			}
 		}
 	}
 

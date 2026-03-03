@@ -249,3 +249,38 @@ type CountPhotosByPathsRequest struct {
 type CountPhotosByPathsResponse struct {
 	Counts map[string]int64 `json:"counts"` // key: path, value: count
 }
+
+// ==================== Auth related DTOs ====================
+
+// LoginRequest 登录请求
+type LoginRequest struct {
+	Username string `json:"username" binding:"required"`
+	Password string `json:"Password" binding:"required"`
+}
+
+// LoginResponse 登录响应
+type LoginResponse struct {
+	Token        string    `json:"token"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	User         UserInfo  `json:"user"`
+	IsFirstLogin bool      `json:"is_first_login"`
+}
+
+// UserInfo 用户信息
+type UserInfo struct {
+	ID       uint   `json:"id"`
+	Username string `json:"username"`
+}
+
+// ChangePasswordRequest 修改密码请求
+type ChangePasswordRequest struct {
+	OldPassword string `json:"old_Password" binding:"required"`
+	NewPassword string `json:"new_Password" binding:"required,min=6"`
+}
+
+// UserInfoResponse 用户信息响应
+type UserInfoResponse struct {
+	ID           uint   `json:"id"`
+	Username     string `json:"username"`
+	IsFirstLogin bool   `json:"is_first_login"`
+}

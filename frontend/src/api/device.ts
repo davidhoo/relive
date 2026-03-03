@@ -1,4 +1,4 @@
-import { http } from '@/utils/request'
+import http from '@/utils/request'
 import type { ESP32Device, DeviceStats } from '@/types/device'
 import type { PagedResponse } from '@/types/api'
 

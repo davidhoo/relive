@@ -29,6 +29,8 @@
             :preview-src-list="[getPhotoUrl(photo.id)]"
             fit="contain"
             style="width: 100%; border-radius: 8px"
+            preview-teleported
+            :preview-props="{ zIndex: 9999 }"
           />
         </el-col>
 
@@ -130,10 +132,10 @@
             </div>
 
             <!-- 分析描述 -->
-            <div style="margin-top: 20px" v-if="photo.analysis_result">
+            <div style="margin-top: 20px" v-if="(photo as any).analysis_result">
               <h4>AI 描述</h4>
               <el-card shadow="never" style="margin-top: 8px">
-                <p style="white-space: pre-wrap; line-height: 1.6">{{ photo.analysis_result }}</p>
+                <p style="white-space: pre-wrap; line-height: 1.6">{{ (photo as any).analysis_result }}</p>
               </el-card>
             </div>
 
@@ -210,7 +212,7 @@ const loadPhoto = async () => {
   try {
     const photoId = Number(route.params.id)
     const res = await photoApi.getById(photoId)
-    photo.value = res.data || null
+    photo.value = res.data?.data || null
   } catch (error: any) {
     ElMessage.error(error.message || '加载照片详情失败')
   } finally {

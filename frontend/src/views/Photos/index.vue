@@ -349,7 +349,7 @@ const loadPathPhotoCounts = async () => {
   try {
     const paths = scanPaths.value.map(p => p.path)
     const res = await photoApi.countByPaths({ paths })
-    pathPhotoCounts.value = res.data?.counts || {}
+    pathPhotoCounts.value = res.data?.data?.counts || {}
   } catch (error) {
     console.error('Failed to load path photo counts:', error)
   }
@@ -444,7 +444,7 @@ const goToConfig = () => {
 const loadSystemTotal = async () => {
   try {
     const res = await photoApi.getList({ page_size: 1 })
-    systemTotal.value = res.data?.total || 0
+    systemTotal.value = res.data?.data?.total || 0
   } catch (error: any) {
     console.error('Failed to load system total:', error)
   }
@@ -476,8 +476,8 @@ const loadPhotos = async () => {
     }
 
     const res = await photoApi.getList(params)
-    photos.value = res.data?.items || []
-    total.value = res.data?.total || 0
+    photos.value = res.data?.data?.items || []
+    total.value = res.data?.data?.total || 0
   } catch (error: any) {
     ElMessage.error(error.message || '加载照片列表失败')
   } finally {
@@ -560,7 +560,7 @@ const handleScanPath = async (path: ScanPathConfig) => {
   try {
     scanningPathId.value = path.id
     const res = await photoApi.scan({ path: path.path })
-    ElMessage.success(`「${path.name}」扫描完成，新增 ${res.data?.new_count || 0} 张照片`)
+    ElMessage.success(`「${path.name}」扫描完成，新增 ${res.data?.data?.new_count || 0} 张照片`)
 
     // Reload photos and scan paths (to update last_scanned_at)
     await loadPhotos()
@@ -585,7 +585,7 @@ const handleRebuildPath = async (path: ScanPathConfig) => {
     rebuildingPathId.value = path.id
     const res = await photoApi.rebuild({ path: path.path })
     ElMessage.success(
-      `「${path.name}」重建完成：新增 ${res.data?.new_count || 0} 张，更新 ${res.data?.updated_count || 0} 张，删除 ${res.data?.deleted_count || 0} 张`
+      `「${path.name}」重建完成：新增 ${res.data?.data?.new_count || 0} 张，更新 ${res.data?.data?.updated_count || 0} 张，删除 ${res.data?.data?.deleted_count || 0} 张`
     )
 
     // Reload photos and scan paths (to update last_scanned_at)
@@ -605,7 +605,7 @@ const handleCleanup = async () => {
   try {
     cleaningUp.value = true
     const res = await photoApi.cleanup()
-    const { total_count, deleted_count, skipped_count } = res.data || {}
+    const { total_count, deleted_count, skipped_count } = res.data?.data || {}
 
     if (deleted_count > 0) {
       ElMessage.success(

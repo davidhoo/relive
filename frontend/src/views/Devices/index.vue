@@ -144,8 +144,8 @@ const loadDevices = async () => {
       page: currentPage.value,
       page_size: pageSize.value,
     })
-    devices.value = res.data?.items || []
-    total.value = res.data?.total || 0
+    devices.value = res.data?.data?.items || []
+    total.value = res.data?.data?.total || 0
   } catch (error: any) {
     ElMessage.error(error.message || '加载设备列表失败')
   } finally {
@@ -157,7 +157,7 @@ const loadDevices = async () => {
 const loadStats = async () => {
   try {
     const res = await deviceApi.getStats()
-    stats.value = res.data || null
+    stats.value = res.data?.data || null
   } catch (error) {
     console.error('Failed to load device stats:', error)
   }
@@ -167,7 +167,7 @@ const loadStats = async () => {
 const viewDevice = async (deviceId: string) => {
   try {
     const res = await deviceApi.getById(deviceId)
-    currentDevice.value = res.data || null
+    currentDevice.value = res.data?.data || null
     detailVisible.value = true
   } catch (error: any) {
     ElMessage.error(error.message || '加载设备详情失败')

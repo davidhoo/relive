@@ -85,6 +85,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.ESP32Device{},
 		&model.AppConfig{},
 		&model.City{},
+		&model.User{},
+		&model.APIKey{},
 	}
 
 	if err := db.AutoMigrate(models...); err != nil {

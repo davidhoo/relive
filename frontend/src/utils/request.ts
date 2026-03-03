@@ -1,10 +1,9 @@
-import axios from 'axios'
-import type { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios'
+import axios, { AxiosError, type AxiosRequestConfig } from 'axios'
 import { ElMessage } from 'element-plus'
-import type { ApiResponse } from '@/types/api'
+import { useUserStore } from '@/stores/user'
 
 // 创建 axios 实例
-const request: AxiosInstance = axios.create({
+const http = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1',
   timeout: 30000,
   headers: {
@@ -12,75 +11,50 @@ const request: AxiosInstance = axios.create({
   },
 })
 
-// 请求拦截器
-request.interceptors.request.use(
+// 请求拦截器 - 添加 Token
+http.interceptors.request.use(
   (config) => {
-    // 可以在这里添加 token
-    // const token = localStorage.getItem('token')
-    // if (token) {
-    //   config.headers.Authorization = `Bearer ${token}`
-    // }
+    const userStore = useUserStore()
+    if (userStore.token) {
+      config.headers.Authorization = `Bearer ${userStore.token}`
+    }
     return config
   },
   (error) => {
-    console.error('Request error:', error)
     return Promise.reject(error)
   }
 )
 
 // 响应拦截器
-request.interceptors.response.use(
-  (response: AxiosResponse<ApiResponse>) => {
-    const res = response.data
-
-    // 如果响应成功
-    if (res.success) {
-      return response
-    }
-
-    // 处理业务错误
-    ElMessage.error(res.error?.message || res.message || '请求失败')
-    return Promise.reject(new Error(res.error?.message || '请求失败'))
+http.interceptors.response.use(
+  (response) => {
+    return response
   },
-  (error) => {
-    console.error('Response error:', error)
-
-    // 处理 HTTP 错误
+  (error: AxiosError) => {
     if (error.response) {
       const status = error.response.status
-      const data = error.response.data
+      const data = error.response.data as any
 
-      // 对于 503 Service Unavailable，检查是否是 AI 服务未配置
-      // 这是预期的情况，不需要显示错误提示
-      if (status === 503 && data?.error?.code === 'SERVICE_UNAVAILABLE') {
-        console.log('Service unavailable (expected):', data.message)
+      // 处理 401 未授权
+      if (status === 401) {
+        const userStore = useUserStore()
+        userStore.clearUserState()
+        ElMessage.error('登录已过期，请重新登录')
+        window.location.href = '/login'
         return Promise.reject(error)
       }
 
-      switch (status) {
-        case 400:
-          ElMessage.error('请求参数错误')
-          break
-        case 401:
-          ElMessage.error('未授权，请登录')
-          break
-        case 403:
-          ElMessage.error('拒绝访问')
-          break
-        case 404:
-          ElMessage.error('请求资源不存在')
-          break
-        case 500:
-          ElMessage.error('服务器错误')
-          break
-        case 503:
-          ElMessage.error('服务暂时不可用')
-          break
-        default:
-          ElMessage.error(`请求失败: ${status}`)
+      // 处理 403 首次登录需要修改密码
+      if (status === 403 && data?.error?.code === 'FIRST_LOGIN_REQUIRED') {
+        window.location.href = '/change-password'
+        return Promise.reject(error)
       }
+
+      // 显示错误消息
+      const message = data?.error?.message || data?.message || `请求失败 (${status})`
+      ElMessage.error(message)
     } else if (error.request) {
-      ElMessage.error('网络错误，请检查网络连接')
+      ElMessage.error('网络错误，请检查后端服务是否正常运行')
     } else {
       ElMessage.error('请求配置错误')
     }
@@ -89,23 +63,24 @@ request.interceptors.response.use(
   }
 )
 
-// 封装请求方法
-export const http = {
-  get<T = any>(url: string, config?: AxiosRequestConfig): Promise<ApiResponse<T>> {
-    return request.get(url, config).then((res) => res.data)
-  },
-
-  post<T = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<ApiResponse<T>> {
-    return request.post(url, data, config).then((res) => res.data)
-  },
-
-  put<T = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<ApiResponse<T>> {
-    return request.put(url, data, config).then((res) => res.data)
-  },
-
-  delete<T = any>(url: string, config?: AxiosRequestConfig): Promise<ApiResponse<T>> {
-    return request.delete(url, config).then((res) => res.data)
-  },
+// 封装 GET 请求
+export const get = <T>(url: string, config?: AxiosRequestConfig) => {
+  return http.get<T>(url, config)
 }
 
-export default request
+// 封装 POST 请求
+export const post = <T>(url: string, data?: unknown, config?: AxiosRequestConfig) => {
+  return http.post<T>(url, data, config)
+}
+
+// 封装 PUT 请求
+export const put = <T>(url: string, data?: unknown, config?: AxiosRequestConfig) => {
+  return http.put<T>(url, data, config)
+}
+
+// 封装 DELETE 请求
+export const del = <T>(url: string, config?: AxiosRequestConfig) => {
+  return http.delete<T>(url, config)
+}
+
+export default http
