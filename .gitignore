@@ -39,6 +39,11 @@ ENV/
 *.sqlite
 *.sqlite3
 
+# Data directory (contains runtime data, city data files, should not be committed)
+data/
+backend/data/
+!backend/data/.gitkeep
+
 # Thumbnails
 thumbnails/
 backend/data/thumbnails/
