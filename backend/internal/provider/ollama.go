@@ -192,7 +192,7 @@ func (p *OllamaProvider) buildPrompt(request *AnalyzeRequest) string {
 	prompt := `你是"个人相册照片评估助手"，擅长理解真实照片的内容，并从回忆价值和美观角度打分。
 你会收到一张照片，你的任务是：
 1）用中文详细描述照片内容（80-200字），包括人物、场景、活动、氛围等
-2）判断照片的大致类型，只选其一：人物/孩子/猫咪/家庭/旅行/风景/美食/宠物/日常/文档/杂物/其他
+2）判断照片的大致类型，必须从以下选项中只选其一（禁止使用英文）：人物/孩子/猫咪/家庭/旅行/风景/美食/宠物/日常/文档/杂物/其他
 3）给出0-100的"值得回忆度"memory_score（精确到一位小数）
 4）给出0-100的"美观程度"beauty_score（精确到一位小数）
 5）给出3-8个标签，用逗号分隔，如：旅游,美食,家人,朋友,户外,室内
@@ -252,7 +252,11 @@ func (p *OllamaProvider) buildPrompt(request *AnalyzeRequest) string {
   "beauty_score": 88.0,
   "reason": "不超过40字的中文理由"
 }
-不要输出任何多余文字，不要加注释。`
+
+【重要约束】
+- main_category 必须从以下选项中选择（只能是这12个之一）：人物、孩子、猫咪、家庭、旅行、风景、美食、宠物、日常、文档、杂物、其他
+- 禁止使用英文分类如 "event", "people", "landscape" 等
+- 不要输出任何多余文字，不要加注释。`
 
 	return prompt
 }
@@ -368,15 +372,76 @@ func (p *OllamaProvider) parseResponse(response string) (*AnalyzeResult, error) 
 		return nil, fmt.Errorf("missing required fields in response")
 	}
 
+	// 映射英文分类到中文（防止 AI 未按提示词返回）
+	mainCategory := mapCategoryToChineseOllama(data.MainCategory)
+
 	return &AnalyzeResult{
 		Description:  data.Description,
-		MainCategory: data.MainCategory,
+		MainCategory: mainCategory,
 		Tags:         data.Tags,
 		MemoryScore:  data.MemoryScore,
 		BeautyScore:  data.BeautyScore,
 		Reason:       data.Reason,
 		Provider:     p.Name(),
 	}, nil
+}
+
+// mapCategoryToChineseOllama 将英文分类映射到中文
+func mapCategoryToChineseOllama(category string) string {
+	// 如果已经是中文，直接返回
+	validCategories := []string{"人物", "孩子", "猫咪", "家庭", "旅行", "风景", "美食", "宠物", "日常", "文档", "杂物", "其他"}
+	for _, valid := range validCategories {
+		if category == valid {
+			return category
+		}
+	}
+
+	// 英文到中文的映射
+	mapping := map[string]string{
+		"person":      "人物",
+		"people":      "人物",
+		"human":       "人物",
+		"child":       "孩子",
+		"kid":         "孩子",
+		"baby":        "孩子",
+		"cat":         "猫咪",
+		"kitten":      "猫咪",
+		"family":      "家庭",
+		"travel":      "旅行",
+		"trip":        "旅行",
+		"landscape":   "风景",
+		"scenery":     "风景",
+		"nature":      "风景",
+		"food":        "美食",
+		"meal":        "美食",
+		"pet":         "宠物",
+		"dog":         "宠物",
+		"daily":       "日常",
+		"life":        "日常",
+		"document":    "文档",
+		"receipt":     "文档",
+		"bill":        "文档",
+		"screenshot":  "文档",
+		"trash":       "杂物",
+		"junk":        "杂物",
+		"clutter":     "杂物",
+		"other":       "其他",
+		"others":      "其他",
+		"event":       "日常",
+		"activity":    "日常",
+		"party":       "家庭",
+		"celebration": "家庭",
+	}
+
+	// 尝试小写匹配
+	lower := strings.ToLower(category)
+	if mapped, ok := mapping[lower]; ok {
+		return mapped
+	}
+
+	// 如果无法映射，返回"其他"
+	logger.Warnf("Unknown category '%s', mapping to '其他'", category)
+	return "其他"
 }
 
 // extractJSON 从文本中提取 JSON
