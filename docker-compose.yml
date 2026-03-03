@@ -15,8 +15,8 @@ services:
       - ./backend/config.prod.yaml:/app/config.yaml:ro
       # 数据目录（数据库、日志）
       - ./data/backend:/app/data
-      # 照片目录（只读）- 修改为你的实际照片路径
-      - /volume1/photos:/app/photos:ro
+      # 照片目录（只读）- 使用 .env 中配置的 PHOTOS_PATH
+      - ${PHOTOS_PATH:-./data/photos}:/app/photos:ro
     environment:
       - TZ=Asia/Shanghai
       # AI Provider API Keys（如果使用）

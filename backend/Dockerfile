@@ -3,8 +3,8 @@ FROM golang:1.24-alpine AS backend-builder
 
 WORKDIR /app
 
-# 安装依赖
-RUN apk add --no-cache gcc musl-dev sqlite-dev
+# 安装依赖（包括 g++ 用于编译 goheif/libde265）
+RUN apk add --no-cache gcc g++ musl-dev sqlite-dev
 
 # 复制 go mod 文件
 COPY go.mod go.sum ./
@@ -20,21 +20,24 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
     ./cmd/relive/main.go
 
 # 构建 relive-analyzer
+WORKDIR /app/cmd/relive-analyzer
 RUN CGO_ENABLED=1 GOOS=linux go build \
     -ldflags "-X main.Version=${VERSION:-dev} -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    -o relive-analyzer \
-    ./cmd/relive-analyzer/main.go
+    -o /app/relive-analyzer \
+    .
+WORKDIR /app
 
 # 运行阶段
 FROM alpine:latest
 
 WORKDIR /app
 
-# 安装运行时依赖
+# 安装运行时依赖（包括 libstdc++ 用于 C++ 库）
 RUN apk add --no-cache \
     ca-certificates \
     sqlite-libs \
-    tzdata
+    tzdata \
+    libstdc++
 
 # 从构建阶段复制二进制文件
 COPY --from=backend-builder /app/relive /app/relive

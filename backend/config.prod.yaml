@@ -92,7 +92,7 @@ logging:
 
 # 安全配置
 security:
-  jwt_secret: "${JWT_SECRET:-relive-production-secret-change-me}"
+  jwt_Secret: "${JWT_SECRET:-relive-production-secret-change-me}"
   api_key_prefix: "sk-esp32-"
 
 # 性能配置
