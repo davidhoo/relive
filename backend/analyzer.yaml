@@ -1,7 +1,7 @@
 # relive-analyzer API 模式配置
 server:
   endpoint: "http://localhost:8080"
-  api_key: "sk-relive-0f3375046a50ceaa42435ccd43fa029b"
+  api_key: "sk-relive-929f2f705f8bf98a44e429ae669c9b61"
   timeout: 30
 
 analyzer:
