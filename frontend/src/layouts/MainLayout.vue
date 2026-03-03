@@ -70,7 +70,7 @@
               </span>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item command="changepassword">
+                  <el-dropdown-item command="changePassword">
                     <el-icon><Key /></el-icon>
                     修改密码
                   </el-dropdown-item>
@@ -160,8 +160,8 @@ const userStore = useUserStore()
 const handleCommand = (command: string) => {
   if (command === 'logout') {
     handleLogout()
-  } else if (command === 'changepassword') {
-    router.push('/change-password')
+  } else if (command === 'changePassword') {
+    router.push('/change-Password')
   }
 }
 

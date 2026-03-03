@@ -86,7 +86,7 @@ func JWTAuth(authService service.AuthService) gin.HandlerFunc {
 func FirstLoginCheck(authService service.AuthService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 跳过修改密码接口本身的检查
-		if c.Request.URL.Path == "/api/v1/auth/change-password" {
+		if c.Request.URL.Path == "/api/v1/auth/change-Password" {
 			c.Next()
 			return
 		}
@@ -110,7 +110,7 @@ func FirstLoginCheck(authService service.AuthService) gin.HandlerFunc {
 				Success: false,
 				Error: &model.ErrorInfo{
 					Code:    "FIRST_LOGIN_REQUIRED",
-					Message: "First login, please change your password",
+					Message: "首次登录，请先修改密码",
 				},
 			})
 			c.Abort()

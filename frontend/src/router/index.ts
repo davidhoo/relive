@@ -12,7 +12,7 @@ const routes: RouteRecordRaw[] = [
     meta: { public: true, title: '登录' }
   },
   {
-    path: '/change-password',
+    path: '/change-Password',
     name: 'ChangePassword',
     component: () => import('@/views/ChangePassword/index.vue'),
     meta: { title: '修改密码' }
@@ -72,15 +72,9 @@ router.beforeEach(async (to, from, next) => {
   }
 
   // 检查是否是首次登录（必须修改密码）
-  if (userStore.isFirstLogin && to.path !== '/change-password') {
+  if (userStore.isFirstLogin && to.path !== '/change-Password') {
     ElMessage.info('首次登录，请先修改密码')
-    next('/change-password')
-    return
-  }
-
-  // 如果已经修改过密码，禁止访问修改密码页面
-  if (!userStore.isFirstLogin && to.path === '/change-password') {
-    next('/')
+    next('/change-Password')
     return
   }
 

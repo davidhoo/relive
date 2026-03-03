@@ -46,7 +46,7 @@ http.interceptors.response.use(
 
       // 处理 403 首次登录需要修改密码
       if (status === 403 && data?.error?.code === 'FIRST_LOGIN_REQUIRED') {
-        window.location.href = '/change-password'
+        window.location.href = '/change-Password'
         return Promise.reject(error)
       }
 
