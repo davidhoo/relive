@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/davidhoo/relive/pkg/logger"
@@ -186,14 +187,13 @@ func (p *OllamaProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error
 	return result, nil
 }
 
-// buildPrompt 构建提示词
+// buildPrompt 构建提示词（第一次会话，不含caption）
 func (p *OllamaProvider) buildPrompt(request *AnalyzeRequest) string {
 	prompt := `请分析这张照片，并以 JSON 格式返回分析结果。
 
 要求：
 1. description: 详细描述照片内容（80-200字），包括人物、场景、活动、氛围等
-2. caption: 简短优美的文案（8-30字），适合展示在相框上
-3. main_category: 主要分类，从以下8个中选择：
+2. main_category: 主要分类，从以下8个中选择：
    - portrait（人物/肖像）
    - group（集体/合影）
    - landscape（风景）
@@ -202,10 +202,10 @@ func (p *OllamaProvider) buildPrompt(request *AnalyzeRequest) string {
    - pet（宠物）
    - event（事件/活动）
    - other（其他）
-4. tags: 标签（逗号分隔），如：旅游,美食,家人,朋友,户外,室内等
-5. memory_score: 回忆价值评分（0-100），评估纪念意义和情感价值
-6. beauty_score: 美观度评分（0-100），评估构图、光线、色彩等摄影质量
-7. reason: 评分理由（40字内）
+3. tags: 标签（逗号分隔），如：旅游,美食,家人,朋友,户外,室内等
+4. memory_score: 回忆价值评分（0-100），评估纪念意义和情感价值
+5. beauty_score: 美观度评分（0-100），评估构图、光线、色彩等摄影质量
+6. reason: 评分理由（40字内）
 
 `
 
@@ -226,7 +226,6 @@ func (p *OllamaProvider) buildPrompt(request *AnalyzeRequest) string {
 请严格按照以下 JSON 格式返回结果（不要有任何其他文字）：
 {
   "description": "...",
-  "caption": "...",
   "main_category": "...",
   "tags": "...",
   "memory_score": 85,
@@ -237,7 +236,76 @@ func (p *OllamaProvider) buildPrompt(request *AnalyzeRequest) string {
 	return prompt
 }
 
-// parseResponse 解析 AI 响应
+// GenerateCaption 生成照片文案（第二次会话）
+// 只看照片，直接生成创意文案，不给第一次分析结果
+func (p *OllamaProvider) GenerateCaption(request *AnalyzeRequest) (string, error) {
+	prompt := `请仔细看这张照片，为它创作一句富有感染力的文案。
+
+要求：
+1. 简短精炼（8-30字），适合电子相框展示
+2. 富有情感和艺术感，能唤起回忆
+3. 可以是一句诗、一句歌词、一个感悟，或一段温暖的话
+4. 不要描述性的文字，而是有温度的表达
+5. 充分发挥你的创造力，让文案独特而动人
+
+请直接返回文案内容（不需要JSON格式），只返回一句话：`
+
+	imageBase64 := base64.StdEncoding.EncodeToString(request.ImageData)
+
+	reqBody := map[string]interface{}{
+		"model":  p.config.Model,
+		"prompt": prompt,
+		"images": []string{imageBase64},
+		"stream": false,
+		"options": map[string]interface{}{
+			"temperature": 0.9, // 更高的temperature增加创意
+		},
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", p.config.Endpoint+"/api/generate", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("ollama api error: %s, body: %s", resp.Status, string(body))
+	}
+
+	var ollamaResp struct {
+		Response string `json:"response"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+
+	caption := strings.TrimSpace(ollamaResp.Response)
+	caption = strings.Trim(caption, `"'`)
+
+	if len(caption) < 5 {
+		return "", fmt.Errorf("caption too short")
+	}
+	if len(caption) > 100 {
+		caption = caption[:100]
+	}
+
+	return caption, nil
+}
+
+// parseResponse 解析 AI 响应（第一次会话，不含caption）
 func (p *OllamaProvider) parseResponse(response string) (*AnalyzeResult, error) {
 	// 尝试提取 JSON
 	jsonStr := extractJSON(response)
@@ -248,7 +316,6 @@ func (p *OllamaProvider) parseResponse(response string) (*AnalyzeResult, error) 
 	// 解析 JSON
 	var data struct {
 		Description  string  `json:"description"`
-		Caption      string  `json:"caption"`
 		MainCategory string  `json:"main_category"`
 		Tags         string  `json:"tags"`
 		MemoryScore  float64 `json:"memory_score"`
@@ -260,14 +327,13 @@ func (p *OllamaProvider) parseResponse(response string) (*AnalyzeResult, error) 
 		return nil, fmt.Errorf("unmarshal json: %w", err)
 	}
 
-	// 验证必填字段
-	if data.Description == "" || data.Caption == "" || data.MainCategory == "" {
+	// 验证必填字段（第一次会话不返回caption）
+	if data.Description == "" || data.MainCategory == "" {
 		return nil, fmt.Errorf("missing required fields in response")
 	}
 
 	return &AnalyzeResult{
 		Description:  data.Description,
-		Caption:      data.Caption,
 		MainCategory: data.MainCategory,
 		Tags:         data.Tags,
 		MemoryScore:  data.MemoryScore,

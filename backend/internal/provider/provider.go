@@ -16,6 +16,34 @@ const (
 	ProviderTypeHybrid ProviderType = "hybrid"
 )
 
+// CaptionResult 文案生成结果
+type CaptionResult struct {
+	Caption   string        // 生成的文案
+	Provider  string        // 使用的 provider
+	ModelName string        // 使用的模型
+	Timestamp time.Time     // 生成时间
+	Duration  time.Duration // 耗时
+	TokensUsed int          // 消耗的 tokens
+	Cost      float64       // 实际成本
+}
+
+// CaptionRequest 文案生成请求
+type CaptionRequest struct {
+	// 图片数据（已预处理）
+	ImageData []byte
+	ImagePath string
+
+	// 第一次分析的结果，用于辅助生成文案
+	Description  string  // 照片描述
+	MainCategory string  // 主分类
+	Tags         string  // 标签
+	MemoryScore  float64 // 回忆价值评分
+	BeautyScore  float64 // 美观度评分
+
+	// 配置选项
+	Options *AnalyzeOptions
+}
+
 // AIProvider 统一的 AI 提供商接口
 type AIProvider interface {
 	// Analyze 分析单张照片
@@ -24,6 +52,10 @@ type AIProvider interface {
 	// AnalyzeBatch 批量分析照片（如果 provider 支持）
 	// 返回的结果顺序与 requests 顺序一致
 	AnalyzeBatch(requests []*AnalyzeRequest) ([]*AnalyzeResult, error)
+
+	// GenerateCaption 生成照片文案（第二次会话）
+	// 只看照片，直接生成创意文案，充分发挥AI创造力
+	GenerateCaption(request *AnalyzeRequest) (string, error)
 
 	// Name 返回 provider 名称
 	Name() string

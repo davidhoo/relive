@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/davidhoo/relive/pkg/logger"
@@ -217,14 +218,13 @@ func (p *OpenAIProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error
 	return result, nil
 }
 
-// buildPrompt 构建提示词
+// buildPrompt 构建提示词（第一次会话，不含caption）
 func (p *OpenAIProvider) buildPrompt(request *AnalyzeRequest) string {
 	prompt := `Analyze this photo and return the result in JSON format.
 
 Requirements:
 1. description: Detailed description in Chinese (80-200 characters), including people, scenes, activities, atmosphere, etc.
-2. caption: Short beautiful caption in Chinese (8-30 characters), suitable for display in a photo frame
-3. main_category: Main category, choose from the following 8:
+2. main_category: Main category, choose from the following 8:
    - portrait (人物/肖像)
    - group (集体/合影)
    - landscape (风景)
@@ -233,10 +233,10 @@ Requirements:
    - pet (宠物)
    - event (事件/活动)
    - other (其他)
-4. tags: Tags in Chinese (comma separated), such as: 旅游,美食,家人,朋友,户外,室内
-5. memory_score: Memory value score (0-100), assess commemorative significance and emotional value
-6. beauty_score: Beauty score (0-100), assess composition, lighting, color and other photographic qualities
-7. reason: Scoring reason in Chinese (within 40 characters)
+3. tags: Tags in Chinese (comma separated), such as: 旅游,美食,家人,朋友,户外,室内
+4. memory_score: Memory value score (0-100), assess commemorative significance and emotional value
+5. beauty_score: Beauty score (0-100), assess composition, lighting, color and other photographic qualities
+6. reason: Scoring reason in Chinese (within 40 characters)
 
 `
 
@@ -257,7 +257,6 @@ Requirements:
 Please return the result strictly in the following JSON format (without any other text):
 {
   "description": "...",
-  "caption": "...",
   "main_category": "...",
   "tags": "...",
   "memory_score": 85,
@@ -268,7 +267,100 @@ Please return the result strictly in the following JSON format (without any othe
 	return prompt
 }
 
-// parseResponse 解析 AI 响应
+// GenerateCaption 生成照片文案（第二次会话）
+// 只看照片，直接生成创意文案，不给第一次分析结果
+func (p *OpenAIProvider) GenerateCaption(request *AnalyzeRequest) (string, error) {
+	// 构建第二次会话的prompt - 只给照片，不给分析结果
+	prompt := `Look at this photo carefully and create a creative, emotional caption for it (8-30 Chinese characters).
+
+Requirements:
+1. Create an emotional, artistic caption (8-30 Chinese characters)
+2. Can be a poetic line, a lyric, a reflection, or a warm message
+3. Should evoke memories and feelings, not just describe the image
+4. Be creative and unique - let your imagination flow
+
+Please return ONLY the caption text (no JSON, no quotes):`
+
+	// 构建请求 - 第二次会话（新会话）
+	imageBase64 := base64.StdEncoding.EncodeToString(request.ImageData)
+	imageURL := "data:image/jpeg;base64," + imageBase64
+
+	reqBody := map[string]interface{}{
+		"model": p.config.Model,
+		"messages": []map[string]interface{}{
+			{
+				"role": "user",
+				"content": []map[string]interface{}{
+					{
+						"type": "text",
+						"text": prompt,
+					},
+					{
+						"type": "image_url",
+						"image_url": map[string]interface{}{
+							"url": imageURL,
+						},
+					},
+				},
+			},
+		},
+		"max_tokens":  100,
+		"temperature": 0.9, // 更高的temperature增加创意
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", p.config.Endpoint, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("openai api error: %s, body: %s", resp.Status, string(body))
+	}
+
+	var openaiResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&openaiResp); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+
+	if len(openaiResp.Choices) == 0 {
+		return "", fmt.Errorf("no response from openai api")
+	}
+
+	caption := strings.TrimSpace(openaiResp.Choices[0].Message.Content)
+	caption = strings.Trim(caption, `"'`) // 移除可能的引号
+
+	if len(caption) < 5 {
+		return "", fmt.Errorf("caption too short")
+	}
+	if len(caption) > 100 {
+		caption = caption[:100]
+	}
+
+	return caption, nil
+}
+
+// parseResponse 解析 AI 响应（第一次会话，不含caption）
 func (p *OpenAIProvider) parseResponse(response string) (*AnalyzeResult, error) {
 	// 尝试提取 JSON
 	jsonStr := extractJSON(response)
@@ -279,7 +371,6 @@ func (p *OpenAIProvider) parseResponse(response string) (*AnalyzeResult, error) 
 	// 解析 JSON
 	var data struct {
 		Description  string  `json:"description"`
-		Caption      string  `json:"caption"`
 		MainCategory string  `json:"main_category"`
 		Tags         string  `json:"tags"`
 		MemoryScore  float64 `json:"memory_score"`
@@ -291,14 +382,13 @@ func (p *OpenAIProvider) parseResponse(response string) (*AnalyzeResult, error) 
 		return nil, fmt.Errorf("unmarshal json: %w", err)
 	}
 
-	// 验证必填字段
-	if data.Description == "" || data.Caption == "" || data.MainCategory == "" {
+	// 验证必填字段（第一次会话不返回caption）
+	if data.Description == "" || data.MainCategory == "" {
 		return nil, fmt.Errorf("missing required fields in response")
 	}
 
 	return &AnalyzeResult{
 		Description:  data.Description,
-		Caption:      data.Caption,
 		MainCategory: data.MainCategory,
 		Tags:         data.Tags,
 		MemoryScore:  data.MemoryScore,

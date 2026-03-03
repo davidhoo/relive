@@ -150,3 +150,27 @@ func (p *HybridProvider) AnalyzeBatch(requests []*AnalyzeRequest) ([]*AnalyzeRes
 
 	return nil, fmt.Errorf("no available provider for batch analysis")
 }
+
+// GenerateCaption 生成照片文案（第二次会话）
+// 只看照片，直接生成创意文案
+func (p *HybridProvider) GenerateCaption(request *AnalyzeRequest) (string, error) {
+	// 尝试使用主 provider
+	if p.primary.IsAvailable() {
+		caption, err := p.primary.GenerateCaption(request)
+		if err == nil {
+			return caption, nil
+		}
+		logger.Warnf("Primary provider %s caption generation failed: %v, trying fallback", p.primary.Name(), err)
+	}
+
+	// 主 provider 不可用或失败，使用备用 provider
+	if p.fallback != nil && p.fallback.IsAvailable() {
+		caption, err := p.fallback.GenerateCaption(request)
+		if err == nil {
+			return caption, nil
+		}
+		return "", fmt.Errorf("fallback provider %s also failed: %w", p.fallback.Name(), err)
+	}
+
+	return "", fmt.Errorf("no available provider for caption generation")
+}

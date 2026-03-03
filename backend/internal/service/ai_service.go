@@ -473,11 +473,24 @@ func (s *aiService) analyzePhotoInternal(photoID uint, force bool) error {
 		},
 	}
 
-	// 调用 AI 分析
-	logger.Infof("Analyzing photo %d with provider %s...", photoID, s.provider.Name())
+	// ========== 第一次会话：分析照片 ==========
+	logger.Infof("Analyzing photo %d with provider %s (session 1: analysis)...", photoID, s.provider.Name())
 	result, err := s.provider.Analyze(req)
 	if err != nil {
 		return fmt.Errorf("analyze photo: %w", err)
+	}
+
+	// ========== 第二次会话：生成创意文案 ==========
+	logger.Infof("Generating caption for photo %d (session 2: creative caption)...", photoID)
+	caption, err := s.provider.GenerateCaption(req)
+	if err != nil {
+		// 如果文案生成失败，使用描述的一部分作为fallback
+		logger.Warnf("Caption generation failed for photo %d, using fallback: %v", photoID, err)
+		if len(result.Description) > 30 {
+			caption = result.Description[:30]
+		} else {
+			caption = result.Description
+		}
 	}
 
 	// 更新照片记录
@@ -485,7 +498,7 @@ func (s *aiService) analyzePhotoInternal(photoID uint, force bool) error {
 	photo.AIAnalyzed = true
 	photo.AIProvider = s.provider.Name() // 保存 AI 提供商名称
 	photo.Description = result.Description
-	photo.Caption = result.Caption
+	photo.Caption = caption
 	photo.MainCategory = result.MainCategory
 	photo.Tags = result.Tags
 	photo.MemoryScore = int(result.MemoryScore)
@@ -499,8 +512,8 @@ func (s *aiService) analyzePhotoInternal(photoID uint, force bool) error {
 		return fmt.Errorf("update photo: %w", err)
 	}
 
-	logger.Infof("Photo %d analyzed successfully: memory=%d, beauty=%d, overall=%d, duration=%v",
-		photoID, photo.MemoryScore, photo.BeautyScore, photo.OverallScore, result.Duration)
+	logger.Infof("Photo %d analyzed successfully (2 sessions): memory=%d, beauty=%d, overall=%d, caption=%s",
+		photoID, photo.MemoryScore, photo.BeautyScore, photo.OverallScore, caption)
 
 	return nil
 }
@@ -731,18 +744,33 @@ func (s *aiService) analyzeInBatchesAsync(task *AnalyzeTask, photos []*model.Pho
 				}
 			}
 		} else {
-			// 保存结果
+			// ========== 第一次会话：批量分析完成，保存中间结果 ==========
+			logger.Infof("[Task %s] Batch analysis completed, starting caption generation...", task.ID)
+
 			for idx, result := range results {
 				photo, ok := photoMap[idx]
 				if !ok {
 					continue
 				}
 
+				// ========== 第二次会话：生成创意文案 ==========
+				req := requests[idx]
+				caption, captionErr := s.provider.GenerateCaption(req)
+				if captionErr != nil {
+					// 如果文案生成失败，使用描述的一部分作为fallback
+					logger.Warnf("[Task %s] Caption generation failed for photo %d, using fallback: %v", task.ID, photo.ID, captionErr)
+					if len(result.Description) > 30 {
+						caption = result.Description[:30]
+					} else {
+						caption = result.Description
+					}
+				}
+
 				now := time.Now()
 				photo.AIAnalyzed = true
 				photo.AIProvider = result.Provider
 				photo.Description = result.Description
-				photo.Caption = result.Caption
+				photo.Caption = caption
 				photo.MainCategory = result.MainCategory
 				photo.Tags = result.Tags
 				photo.MemoryScore = int(result.MemoryScore)
