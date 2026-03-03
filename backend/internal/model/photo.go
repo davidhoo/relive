@@ -38,6 +38,11 @@ type Photo struct {
 	AIAnalyzed   bool       `gorm:"default:false;index:idx_ai_analyzed" json:"ai_analyzed"` // 是否已分析
 	AnalyzedAt   *time.Time `json:"analyzed_at"`                                            // 分析时间
 	AIProvider   string     `gorm:"type:varchar(50)" json:"ai_provider"`                    // AI 提供商（qwen/openai/ollama等）
+
+	// 离线分析任务锁定（用于多分析器并发控制）
+	AnalysisLockID       *string    `gorm:"type:varchar(64);index:idx_analysis_lock" json:"-"`      // 分析器实例ID（UUID）
+	AnalysisLockExpiredAt *time.Time `json:"-"`                                                     // 锁过期时间
+	AnalysisRetryCount   int        `gorm:"default:0" json:"-"`                                    // 分析重试次数
 	Description  string     `gorm:"type:text" json:"description"`                           // 详细描述（80-200字）
 	Caption      string     `gorm:"type:varchar(100)" json:"caption"`                       // 精美短句（8-30字）
 	MemoryScore  int        `gorm:"default:0;index:idx_memory_score" json:"memory_score"`   // 回忆价值评分（0-100）

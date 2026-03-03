@@ -121,13 +121,27 @@ func FirstLoginCheck(authService service.AuthService) gin.HandlerFunc {
 	}
 }
 
-// APIKeyAuth API Key 认证中间件（用于 ESP32 设备）
+// APIKeyAuth API Key 认证中间件（用于 ESP32 设备和 Analyzer）
 func APIKeyAuth(apiKeyService service.APIKeyService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 从 Header 获取 API Key
-		apiKey := c.GetHeader("X-API-Key")
+		var apiKey string
+
+		// 1. 尝试从 Authorization Header 获取 Bearer Token
+		authHeader := c.GetHeader("Authorization")
+		if authHeader != "" {
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) == 2 && parts[0] == "Bearer" {
+				apiKey = parts[1]
+			}
+		}
+
+		// 2. 尝试从 X-API-Key Header 获取
 		if apiKey == "" {
-			// 也支持从查询参数获取（某些设备可能更方便）
+			apiKey = c.GetHeader("X-API-Key")
+		}
+
+		// 3. 尝试从查询参数获取（某些设备可能更方便）
+		if apiKey == "" {
 			apiKey = c.Query("api_key")
 		}
 

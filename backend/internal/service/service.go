@@ -9,15 +9,17 @@ import (
 
 // Services 所有服务的集合
 type Services struct {
-	Photo   PhotoService
-	Display DisplayService
-	ESP32   ESP32Service
-	AI      AIService
-	Export  ExportService
-	Config  ConfigService
-	Geocode GeocodeService
-	Auth    AuthService
-	APIKey  APIKeyService
+	Photo     PhotoService
+	Display   DisplayService
+	ESP32     ESP32Service
+	AI        AIService
+	Export    ExportService
+	Config    ConfigService
+	Geocode   GeocodeService
+	Auth      AuthService
+	APIKey    APIKeyService
+	Analysis  AnalysisService
+	Scheduler *TaskScheduler
 }
 
 // NewServices 创建所有服务
@@ -52,20 +54,28 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		logger.Warnf("Failed to initialize default API key: %v", err)
 	}
 
+	// 创建分析服务
+	analysisService := NewAnalysisService(db, repos.Photo)
+
+	// 创建定时任务调度器
+	scheduler := NewTaskScheduler(analysisService)
+
 	return &Services{
-		Photo:   NewPhotoService(repos.Photo, cfg, configService, geocodeService),
-		Display: NewDisplayService(
+		Photo:    NewPhotoService(repos.Photo, cfg, configService, geocodeService),
+		Display:  NewDisplayService(
 			repos.Photo,
 			repos.DisplayRecord,
 			repos.ESP32Device,
 			cfg,
 		),
-		ESP32:   NewESP32Service(repos.ESP32Device, cfg),
-		AI:      aiService,
-		Export:  NewExportService(repos.Photo),
-		Config:  configService,
-		Geocode: geocodeService,
-		Auth:    authService,
-		APIKey:  apiKeyService,
+		ESP32:    NewESP32Service(repos.ESP32Device, cfg),
+		AI:       aiService,
+		Export:   NewExportService(repos.Photo),
+		Config:   configService,
+		Geocode:  geocodeService,
+		Auth:      authService,
+		APIKey:    apiKeyService,
+		Analysis:  analysisService,
+		Scheduler: scheduler,
 	}
 }

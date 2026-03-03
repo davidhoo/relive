@@ -13,8 +13,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// Setup 设置路由
-func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
+// Setup 设置路由，返回 gin 引擎和服务集合
+func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 	r := gin.New()
 
 	// 中间件
@@ -81,6 +81,18 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 		{
 			display.GET("/photo", handlers.Display.GetDisplayPhoto)
 			display.POST("/record", handlers.Display.RecordDisplay)
+		}
+
+		// 分析器相关（API Key 认证，离线分析器使用）
+		analyzer := v1.Group("/analyzer")
+		analyzer.Use(middleware.APIKeyAuth(services.APIKey))
+		{
+			analyzer.GET("/tasks", handlers.Analyzer.GetTasks)
+			analyzer.POST("/tasks/:task_id/heartbeat", handlers.Analyzer.Heartbeat)
+			analyzer.POST("/tasks/:task_id/release", handlers.Analyzer.ReleaseTask)
+			analyzer.POST("/results", handlers.Analyzer.SubmitResults)
+			analyzer.GET("/stats", handlers.Analyzer.GetStats)
+			analyzer.POST("/clean-locks", handlers.Analyzer.CleanExpiredLocks)
 		}
 
 		// 图片访问（公开访问，不需要认证）
@@ -174,5 +186,5 @@ func Setup(db *gorm.DB, cfg *config.Config) *gin.Engine {
 		}
 	}
 
-	return r
+	return r, services
 }
