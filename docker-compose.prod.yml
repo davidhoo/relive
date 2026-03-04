@@ -1,0 +1,78 @@
+version: '3.8'
+
+# Relive 生产环境配置（使用 DockerHub 镜像）
+# 使用方法：docker-compose -f docker-compose.prod.yml up -d
+
+services:
+  # Relive 后端服务
+  relive-backend:
+    image: davidhoo/relive-backend:latest
+    container_name: relive-backend
+    restart: unless-stopped
+    ports:
+      # 生产环境建议只监听 localhost，通过 Nginx 反向代理访问
+      # - "127.0.0.1:8080:8080"
+      # 或者直接暴露（不推荐）
+      - "8080:8080"
+    volumes:
+      # 配置文件
+      - ./config.prod.yaml:/app/config.yaml:ro
+      # 数据目录（数据库、日志）
+      - ./data/backend:/app/data
+      # =============================================================================
+      # 照片目录挂载
+      # =============================================================================
+      # 取消注释并修改为你的照片目录：
+      # - /volume1/photos/2024:/app/photos/2024:ro
+      # - /volume1/photos/2025:/app/photos/2025:ro
+      #
+      # 或者挂载整个照片根目录：
+      # - /volume1/photos:/app/photos:ro
+      # =============================================================================
+    environment:
+      - TZ=Asia/Shanghai
+      # JWT 密钥（从 .env 文件读取，或直接设置）
+      - JWT_SECRET=${JWT_SECRET}
+      # 自动导入城市数据（首次启动）
+      - AUTO_IMPORT_CITIES=${AUTO_IMPORT_CITIES:-true}
+    networks:
+      - relive-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/system/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Relive 前端服务
+  relive-frontend:
+    image: davidhoo/relive-frontend:latest
+    container_name: relive-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-8888}:80"
+    volumes:
+      # Nginx 配置（如果需要自定义）
+      # - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - relive-backend
+    networks:
+      - relive-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  relive-network:
+    driver: bridge
+
+volumes:
+  relive-data:
+    driver: local

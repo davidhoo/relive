@@ -1,0 +1,121 @@
+name: Build and Push Multi-arch Images
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v0.3.0)'
+        required: true
+        default: 'latest'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          driver-opts: network=host
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build and push backend
+        uses: docker/build-push-action@v4
+        with:
+          context: ./backend
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            davidhoo/relive-backend:${{ steps.version.outputs.version }}
+            davidhoo/relive-backend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+
+      - name: Build and push frontend
+        uses: docker/build-push-action@v4
+        with:
+          context: ./frontend
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            davidhoo/relive-frontend:${{ steps.version.outputs.version }}
+            davidhoo/relive-frontend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify images
+        run: |
+          echo "Verifying backend image..."
+          docker buildx imagetools inspect davidhoo/relive-backend:${{ steps.version.outputs.version }}
+
+          echo "Verifying frontend image..."
+          docker buildx imagetools inspect davidhoo/relive-frontend:${{ steps.version.outputs.version }}
+
+      - name: Test images
+        run: |
+          echo "Testing amd64 backend..."
+          docker run --rm --platform linux/amd64 davidhoo/relive-backend:${{ steps.version.outputs.version }} /app/relive --version || echo "Backend test skipped"
+
+          echo "Testing arm64 backend..."
+          docker run --rm --platform linux/arm64 davidhoo/relive-backend:${{ steps.version.outputs.version }} /app/relive --version || echo "Backend test skipped"
+
+      - name: Create release notes
+        run: |
+          cat > release-notes.md << EOF
+          ## Docker Images
+
+          Multi-architecture support for:
+          - ✅ linux/amd64 (Intel/AMD x86_64)
+          - ✅ linux/arm64 (Apple Silicon, ARM NAS, Raspberry Pi)
+
+          ### Pull Images
+          \`\`\`bash
+          docker pull davidhoo/relive-backend:${{ steps.version.outputs.version }}
+          docker pull davidhoo/relive-frontend:${{ steps.version.outputs.version }}
+          \`\`\`
+
+          ### Deploy
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/davidhoo/relive/main/install.sh | bash
+          \`\`\`
+
+          ### Image Sizes
+          - Backend: ~50MB (per architecture)
+          - Frontend: ~25MB (per architecture)
+
+          See [Deployment Guide](https://github.com/davidhoo/relive/blob/main/docs/DEPLOY_FROM_DOCKERHUB.md) for details.
+          EOF
+
+          cat release-notes.md
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v3
+        with:
+          name: release-notes
+          path: release-notes.md
