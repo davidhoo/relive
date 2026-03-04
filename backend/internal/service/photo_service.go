@@ -796,6 +796,11 @@ func (s *photoService) runScanTask(task *model.ScanTask, path string, rebuild bo
 
 	logger.Infof("[Task %s] Completed: total=%d, new=%d, updated=%d",
 		task.ID, totalFiles, newCount, updatedCount)
+
+	// 更新扫描路径的 last_scanned_at
+	if err := s.updateScanPathTimestamp(path); err != nil {
+		logger.Warnf("[Task %s] Failed to update scan path timestamp: %v", task.ID, err)
+	}
 }
 
 // countAndListFiles 统计并列出所有需要处理的文件
@@ -824,4 +829,64 @@ func (s *photoService) countAndListFiles(dir string) (int, []string) {
 	})
 
 	return len(files), files
+}
+
+// updateScanPathTimestamp 更新扫描路径的 last_scanned_at 时间戳
+func (s *photoService) updateScanPathTimestamp(scanPath string) error {
+	// 获取当前扫描路径配置
+	configValue, err := s.configService.GetWithDefault("photos.scan_paths", "")
+	if err != nil {
+		return fmt.Errorf("get scan paths config: %w", err)
+	}
+
+	if configValue == "" {
+		// 没有配置扫描路径，直接返回
+		return nil
+	}
+
+	// 解析扫描路径配置
+	var pathsConfig struct {
+		Paths []struct {
+			ID            string     `json:"id"`
+			Name          string     `json:"name"`
+			Path          string     `json:"path"`
+			IsDefault     bool       `json:"is_default"`
+			Enabled       bool       `json:"enabled"`
+			CreatedAt     time.Time  `json:"created_at"`
+			LastScannedAt *time.Time `json:"last_scanned_at,omitempty"`
+		} `json:"paths"`
+	}
+
+	if err := json.Unmarshal([]byte(configValue), &pathsConfig); err != nil {
+		return fmt.Errorf("parse scan paths config: %w", err)
+	}
+
+	// 找到匹配的扫描路径并更新时间戳
+	now := time.Now()
+	updated := false
+	for i := range pathsConfig.Paths {
+		if pathsConfig.Paths[i].Path == scanPath {
+			pathsConfig.Paths[i].LastScannedAt = &now
+			updated = true
+			break
+		}
+	}
+
+	if !updated {
+		// 没有找到匹配的路径，可能是通过直接路径扫描而非配置的路径
+		return nil
+	}
+
+	// 保存更新后的配置
+	newConfigValue, err := json.Marshal(pathsConfig)
+	if err != nil {
+		return fmt.Errorf("marshal scan paths config: %w", err)
+	}
+
+	if err := s.configService.Set("photos.scan_paths", string(newConfigValue)); err != nil {
+		return fmt.Errorf("save scan paths config: %w", err)
+	}
+
+	logger.Infof("Updated last_scanned_at for scan path: %s", scanPath)
+	return nil
 }
