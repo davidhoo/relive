@@ -153,6 +153,16 @@ func runAnalyze() {
 	logger.Infof("Starting relive-analyzer v%s", Version)
 	logger.Infof("Server: %s", cfg.Server.Endpoint)
 	logger.Infof("Analyzer ID: %s", getAnalyzerID(cfg))
+	// 打印 API Key 前 10 位用于调试（不打印完整 Key）
+	if cfg.Server.APIKey != "" {
+		maskKey := cfg.Server.APIKey
+		if len(maskKey) > 10 {
+			maskKey = maskKey[:10] + "..."
+		}
+		logger.Infof("API Key: %s", maskKey)
+	} else {
+		logger.Warn("API Key is empty!")
+	}
 
 	// Create analyzer
 	analyzer, err := createAnalyzer(cfg)

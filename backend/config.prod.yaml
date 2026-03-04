@@ -46,16 +46,18 @@ ai:
     timeout: 120
 
   # Qwen 配置（阿里云在线 API）
+  # API Key 通过管理页面配置，存储在数据库中
   qwen:
-    api_key: "${QWEN_API_KEY}"  # 从环境变量读取
+    api_key: ""
     endpoint: "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
     model: "qwen-vl-max"
     temperature: 0.7
     timeout: 60
 
   # OpenAI 配置（OpenAI 在线 API）
+  # API Key 通过管理页面配置，存储在数据库中
   openai:
-    api_key: "${OPENAI_API_KEY}"  # 从环境变量读取
+    api_key: ""
     endpoint: "https://api.openai.com/v1/chat/completions"
     model: "gpt-4-vision-preview"
     temperature: 0.7
@@ -113,8 +115,9 @@ geocode:
 
   # 高德地图配置（在线，国内精度高）
   # 需要申请 API Key: https://lbs.amap.com/
+  # 注意：如需使用，通过管理页面配置
   amap:
-    api_key: "${AMAP_API_KEY}"  # 从环境变量读取
+    api_key: ""
     timeout: 10
 
   # OpenStreetMap Nominatim 配置（在线，免费）
