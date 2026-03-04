@@ -3,6 +3,7 @@
 # Relive 一键安装脚本（使用 DockerHub 镜像）
 # 用途：无需克隆仓库，直接从 DockerHub 部署
 # 使用：curl -fsSL https://raw.githubusercontent.com/davidhoo/relive/main/install.sh | bash
+# 自定义目录：INSTALL_DIR=/path curl -fsSL ... | bash
 
 set -e
 
@@ -48,18 +49,11 @@ echo ""
 echo -e "${BLUE}[2/5]${NC} 创建安装目录..."
 
 INSTALL_DIR="${INSTALL_DIR:-$HOME/relive}"
-
-echo "  安装目录: $INSTALL_DIR"
-read -p "  是否使用此目录？[Y/n] " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Nn]$ ]]; then
-    read -p "  请输入安装目录: " INSTALL_DIR
-fi
-
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
-echo -e "${GREEN}  ✓${NC} 目录已创建: $INSTALL_DIR"
+echo "  安装目录: $INSTALL_DIR"
+echo -e "${GREEN}  ✓${NC} 目录已创建"
 
 # 创建数据目录
 mkdir -p data/backend/logs
@@ -80,7 +74,7 @@ GITHUB_RAW="https://raw.githubusercontent.com/davidhoo/relive/main"
 echo "  下载 docker-compose.yml..."
 curl -fsSL "$GITHUB_RAW/docker-compose.prod.yml" -o docker-compose.yml
 
-# 下载后端配置（放到 backend 目录以匹配 docker-compose.prod.yml 的路径）
+# 下载后端配置
 echo "  下载 config.prod.yaml..."
 curl -fsSL "$GITHUB_RAW/backend/config.prod.yaml" -o backend/config.prod.yaml
 
@@ -128,60 +122,10 @@ fi
 echo ""
 
 # ============================================
-# 4.1 下载城市数据（可选）
+# 5. 拉取镜像并启动
 # ============================================
 
-if [ ! -f "data/backend/cities500.txt" ]; then
-    echo -e "${YELLOW}  离线地理编码数据未找到${NC}"
-    echo "  用于照片位置信息显示，大小约 180MB"
-    read -p "  是否现在下载？[y/N] " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        echo -e "${BLUE}  下载中...${NC}"
-        if command -v wget &> /dev/null; then
-            wget -q -O data/backend/cities500.zip "https://download.geonames.org/export/dump/cities500.zip"
-        elif command -v curl &> /dev/null; then
-            curl -sL -o data/backend/cities500.zip "https://download.geonames.org/export/dump/cities500.zip"
-        fi
-        if [ -f "data/backend/cities500.zip" ]; then
-            unzip -q data/backend/cities500.zip -d data/backend/
-            rm -f data/backend/cities500.zip
-            echo -e "${GREEN}  ✓${NC} 城市数据下载完成"
-        fi
-    else
-        echo -e "${YELLOW}  ⏭  跳过，可稍后手动下载${NC}"
-        echo "     下载: https://download.geonames.org/export/dump/cities500.zip"
-        echo "     解压到: data/backend/cities500.txt"
-    fi
-else
-    echo -e "${GREEN}  ✓${NC} 城市数据已存在"
-fi
-
-echo ""
-
-# ============================================
-# 5. 配置照片路径（可选）
-# ============================================
-
-echo -e "${BLUE}[5/6]${NC} 配置照片路径..."
-
-echo ""
-echo "  照片目录需要在 docker-compose.yml 中配置"
-echo "  安装完成后请编辑：$INSTALL_DIR/docker-compose.yml"
-echo ""
-echo "  示例："
-echo "    volumes:"
-echo "      - /your/photos:/app/photos:ro"
-echo ""
-echo -e "${GREEN}  ✓${NC} 可稍后在 Web 界面添加扫描路径"
-
-echo ""
-
-# ============================================
-# 6. 拉取镜像并启动
-# ============================================
-
-echo -e "${BLUE}[6/6]${NC} 拉取镜像并启动服务..."
+echo -e "${BLUE}[5/5]${NC} 拉取镜像并启动服务..."
 echo ""
 
 # 拉取镜像
@@ -210,7 +154,7 @@ echo ""
 
 # 获取 IP 地址
 if command -v hostname &> /dev/null; then
-    HOST_IP=$(hostname -I | awk '{print $1}')
+    HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
     if [ -z "$HOST_IP" ]; then
         HOST_IP="localhost"
     fi
@@ -218,7 +162,7 @@ else
     HOST_IP="localhost"
 fi
 
-RELIVE_PORT=$(grep "^RELIVE_PORT=" .env | cut -d'=' -f2)
+RELIVE_PORT=$(grep "^RELIVE_PORT=" .env 2>/dev/null | cut -d'=' -f2)
 RELIVE_PORT=${RELIVE_PORT:-8080}
 
 echo "📌 访问地址："
@@ -244,13 +188,15 @@ echo "   docker-compose down          # 停止服务"
 echo "   docker-compose pull && docker-compose up -d  # 更新"
 echo ""
 
-echo "📚 下一步："
-echo "   1. 访问前端地址，使用 admin/admin 登录"
-echo "   2. 首次登录后修改密码"
-echo "   3. 如未配置照片路径，编辑："
-echo "      $INSTALL_DIR/docker-compose.yml"
-echo "   4. 在 Web 界面「配置管理」中添加扫描路径"
-echo "   5. 开始扫描照片"
+echo "📸 照片路径配置："
+echo "   编辑 $INSTALL_DIR/docker-compose.yml"
+echo "   在 volumes 部分添加："
+echo "     - /your/photos:/app/photos:ro"
+echo ""
+
+echo "🏙️ 城市数据（可选，用于位置显示）："
+echo "   下载: https://download.geonames.org/export/dump/cities500.zip"
+echo "   解压到: $INSTALL_DIR/data/backend/cities500.txt"
 echo ""
 
 echo -e "${YELLOW}⚠️  安全提醒：${NC}"
@@ -262,7 +208,7 @@ echo ""
 
 # 健康检查
 echo "正在等待服务启动..."
-sleep 8
+sleep 5
 
 if curl -s "http://localhost:${RELIVE_PORT}/api/v1/system/health" > /dev/null 2>&1; then
     echo -e "${GREEN}✓ 服务健康检查通过${NC}"
