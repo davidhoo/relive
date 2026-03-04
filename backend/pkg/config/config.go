@@ -84,11 +84,12 @@ type OpenAIConfig struct {
 
 // VLLMConfig vLLM 配置
 type VLLMConfig struct {
-	Endpoint    string  `yaml:"endpoint"`
-	Model       string  `yaml:"model"`
-	Temperature float64 `yaml:"temperature"`
-	MaxTokens   int     `yaml:"max_tokens"`
-	Timeout     int     `yaml:"timeout"`
+	Endpoint       string  `yaml:"endpoint"`
+	Model          string  `yaml:"model"`
+	Temperature    float64 `yaml:"temperature"`
+	MaxTokens      int     `yaml:"max_tokens"`
+	Timeout        int     `yaml:"timeout"`
+	EnableThinking bool    `yaml:"enable_thinking"` // 是否启用思考，默认 false
 }
 
 // HybridProviderConfig 混合模式配置

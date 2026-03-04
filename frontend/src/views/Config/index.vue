@@ -455,6 +455,13 @@
             </div>
           </el-form-item>
 
+          <el-form-item label="启用思考">
+            <el-switch v-model="aiConfig.vllm_enable_thinking" />
+            <div class="form-hint">
+              是否启用模型的思考功能（默认关闭）
+            </div>
+          </el-form-item>
+
           <!-- Hybrid Configuration -->
           <el-divider content-position="left">
             <el-icon><Cpu /></el-icon>

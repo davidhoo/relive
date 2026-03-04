@@ -16,12 +16,13 @@ import (
 
 // VLLMConfig VLLM 配置
 type VLLMConfig struct {
-	Endpoint    string  `yaml:"endpoint"`    // VLLM 服务地址
-	Model       string  `yaml:"model"`       // 模型名称
-	Temperature float64 `yaml:"temperature"` // 温度参数
-	Timeout     int     `yaml:"timeout"`     // 超时（秒）
-	MaxTokens   int     `yaml:"max_tokens"`  // 最大 tokens
-	Concurrency int     `yaml:"concurrency"` // 并发数（批量分析时）
+	Endpoint       string  `yaml:"endpoint"`        // VLLM 服务地址
+	Model          string  `yaml:"model"`           // 模型名称
+	Temperature    float64 `yaml:"temperature"`     // 温度参数
+	Timeout        int     `yaml:"timeout"`         // 超时（秒）
+	MaxTokens      int     `yaml:"max_tokens"`      // 最大 tokens
+	Concurrency    int     `yaml:"concurrency"`     // 并发数（批量分析时）
+	EnableThinking bool    `yaml:"enable_thinking"` // 是否启用思考，默认 false
 
 	// 提示词配置（可选，为空时使用默认提示词）
 	AnalysisPrompt string `yaml:"analysis_prompt,omitempty"` // 分析提示词
@@ -235,6 +236,13 @@ func (p *VLLMProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error) 
 		"temperature": p.config.Temperature,
 	}
 
+	// 如果未启用思考，添加 chat_template_kwargs 参数
+	if !p.config.EnableThinking {
+		reqBody["chat_template_kwargs"] = map[string]interface{}{
+			"enable_thinking": false,
+		}
+	}
+
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -382,6 +390,13 @@ func (p *VLLMProvider) GenerateCaption(request *AnalyzeRequest) (string, error) 
 		},
 		"max_tokens":  100,
 		"temperature": 0.9,
+	}
+
+	// 如果未启用思考，添加 chat_template_kwargs 参数
+	if !p.config.EnableThinking {
+		reqBody["chat_template_kwargs"] = map[string]interface{}{
+			"enable_thinking": false,
+		}
 	}
 
 	jsonData, err := json.Marshal(reqBody)

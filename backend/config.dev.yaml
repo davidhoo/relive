@@ -64,6 +64,7 @@ ai:
     temperature: 0.7
     max_tokens: 800
     timeout: 120
+    enable_thinking: false  # 是否启用思考，默认 false
 
   # Hybrid 混合模式配置
   hybrid:
