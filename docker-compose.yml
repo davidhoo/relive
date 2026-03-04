@@ -1,15 +1,19 @@
 version: '3.8'
 
 services:
-  # Relive 后端服务
-  relive-backend:
+  # Relive 统一服务（包含前端和后端）
+  relive:
     build:
-      context: ./backend
+      context: .
       dockerfile: Dockerfile
-    container_name: relive-backend
+      args:
+        VERSION: ${VERSION:-dev}
+        GOPROXY: https://goproxy.cn,https://proxy.golang.org,direct
+    image: relive:local
+    container_name: relive
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "8080:8080"  # 统一端口（前端 + 后端 API）
     volumes:
       # 配置文件
       - ./backend/config.prod.yaml:/app/config.yaml:ro
@@ -45,6 +49,7 @@ services:
       # - /path/to/extra/photos3:/app/photos_extra3:ro
     environment:
       - TZ=Asia/Shanghai
+      - JWT_SECRET=${JWT_SECRET}
       # AI Provider API Keys（如果使用）
       - QWEN_API_KEY=${QWEN_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -53,7 +58,7 @@ services:
     networks:
       - relive-network
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/system/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/api/v1/system/health"]
       interval: 30s
       timeout: 3s
       retries: 3
@@ -64,32 +69,6 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # Relive 前端服务
-  relive-frontend:
-    image: nginx:alpine
-    container_name: relive-frontend
-    restart: unless-stopped
-    ports:
-      - "8888:80"
-    volumes:
-      # 前端构建产物
-      - ./frontend/dist:/usr/share/nginx/html:ro
-      # Nginx 配置
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on:
-      - relive-backend
-    networks:
-      - relive-network
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
 networks:
   relive-network:
     driver: bridge
-
-volumes:
-  # 如果需要持久化数据，可以使用 named volumes
-  relive-data:

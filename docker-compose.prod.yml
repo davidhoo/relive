@@ -1,18 +1,19 @@
 version: '3.8'
 
-# Relive 生产环境配置（使用 DockerHub 镜像）
+# Relive 生产环境配置（使用 DockerHub 镜像 - 单镜像版本）
 # 使用方法：docker-compose -f docker-compose.prod.yml up -d
 
 services:
-  # Relive 后端服务
-  relive-backend:
-    image: davidhoo/relive-backend:latest
-    container_name: relive-backend
+  # Relive 统一服务（包含前端 + 后端）
+  relive:
+    image: davidhoo/relive:latest
+    container_name: relive
     restart: unless-stopped
     ports:
+      # 单一端口访问（前端 + 后端 API）
       # 生产环境建议只监听 localhost，通过 Nginx 反向代理访问
       # - "127.0.0.1:8080:8080"
-      # 或者直接暴露（不推荐）
+      # 或者直接暴露
       - "8080:8080"
     volumes:
       # 配置文件
@@ -38,7 +39,7 @@ services:
     networks:
       - relive-network
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/system/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/api/v1/system/health"]
       interval: 30s
       timeout: 3s
       retries: 3
@@ -49,30 +50,6 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # Relive 前端服务
-  relive-frontend:
-    image: davidhoo/relive-frontend:latest
-    container_name: relive-frontend
-    restart: unless-stopped
-    ports:
-      - "${FRONTEND_PORT:-8888}:80"
-    volumes:
-      # Nginx 配置（如果需要自定义）
-      # - ./nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on:
-      - relive-backend
-    networks:
-      - relive-network
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
 networks:
   relive-network:
     driver: bridge
-
-volumes:
-  relive-data:
-    driver: local

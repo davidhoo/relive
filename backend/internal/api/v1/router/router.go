@@ -41,6 +41,19 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 	}
 	r.Use(cors.New(corsConfig))
 
+	// 提供前端静态文件（单镜像部署）
+	// 在生产环境中，前端文件在 /app/frontend/dist
+	// 在开发环境中，前端由 Vite 独立提供
+	if cfg.Server.StaticPath != "" {
+		r.Static("/assets", cfg.Server.StaticPath+"/assets")
+		r.StaticFile("/", cfg.Server.StaticPath+"/index.html")
+		r.StaticFile("/favicon.ico", cfg.Server.StaticPath+"/favicon.ico")
+		// SPA fallback - 所有非 API 路径都返回 index.html
+		r.NoRoute(func(c *gin.Context) {
+			c.File(cfg.Server.StaticPath + "/index.html")
+		})
+	}
+
 	// 初始化 Repositories
 	repos := repository.NewRepositories(db)
 

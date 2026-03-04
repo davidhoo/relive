@@ -70,77 +70,44 @@ docker buildx inspect --bootstrap
 echo ""
 
 # ============================================
-# 3. 构建后端镜像
+# 3. 构建统一镜像（包含前端和后端）
 # ============================================
 
-echo -e "${BLUE}[3/5]${NC} 构建后端镜像（多架构）..."
+echo -e "${BLUE}[3/5]${NC} 构建统一镜像（多架构）..."
 
-cd backend
-
-echo "  构建 davidhoo/relive-backend:$VERSION"
+echo "  构建 davidhoo/relive:$VERSION"
 echo "  架构：linux/amd64, linux/arm64"
+echo "  包含：后端 API + 前端静态文件"
 
 # 构建并推送（多架构镜像必须推送，不能 load 到本地）
+# 使用 Go 国内代理提高网络稳定性
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  --tag davidhoo/relive-backend:$VERSION \
-  --tag davidhoo/relive-backend:latest \
+  --build-arg GOPROXY=https://goproxy.cn,https://proxy.golang.org,direct \
+  --build-arg VERSION=$VERSION \
+  --tag davidhoo/relive:$VERSION \
+  --tag davidhoo/relive:latest \
   --push \
   .
 
 if [ $? -eq 0 ]; then
-    echo -e "${GREEN}  ✓${NC} 后端镜像构建成功"
+    echo -e "${GREEN}  ✓${NC} 统一镜像构建成功"
 else
-    echo -e "${RED}  ❌ 后端镜像构建失败${NC}"
+    echo -e "${RED}  ❌ 统一镜像构建失败${NC}"
     exit 1
 fi
 
-cd ..
-
 echo ""
 
 # ============================================
-# 4. 构建前端镜像
+# 4. 验证镜像
 # ============================================
 
-echo -e "${BLUE}[4/5]${NC} 构建前端镜像（多架构）..."
-
-cd frontend
-
-echo "  构建 davidhoo/relive-frontend:$VERSION"
-echo "  架构：linux/amd64, linux/arm64"
-
-docker buildx build \
-  --platform linux/amd64,linux/arm64 \
-  --tag davidhoo/relive-frontend:$VERSION \
-  --tag davidhoo/relive-frontend:latest \
-  --push \
-  .
-
-if [ $? -eq 0 ]; then
-    echo -e "${GREEN}  ✓${NC} 前端镜像构建成功"
-else
-    echo -e "${RED}  ❌ 前端镜像构建失败${NC}"
-    exit 1
-fi
-
-cd ..
+echo -e "${BLUE}[4/5]${NC} 验证镜像..."
 
 echo ""
-
-# ============================================
-# 5. 验证镜像
-# ============================================
-
-echo -e "${BLUE}[5/5]${NC} 验证镜像..."
-
-echo ""
-echo "  后端镜像信息："
-docker buildx imagetools inspect davidhoo/relive-backend:$VERSION
-
-echo ""
-echo "  前端镜像信息："
-docker buildx imagetools inspect davidhoo/relive-frontend:$VERSION
+echo "  镜像信息："
+docker buildx imagetools inspect davidhoo/relive:$VERSION
 
 echo ""
 
@@ -154,10 +121,8 @@ echo "╚═══════════════════════�
 echo ""
 
 echo "📦 已推送镜像："
-echo "   davidhoo/relive-backend:$VERSION"
-echo "   davidhoo/relive-backend:latest"
-echo "   davidhoo/relive-frontend:$VERSION"
-echo "   davidhoo/relive-frontend:latest"
+echo "   davidhoo/relive:$VERSION"
+echo "   davidhoo/relive:latest"
 echo ""
 
 echo "🏗️  支持架构："
@@ -165,15 +130,27 @@ echo "   ✓ linux/amd64 (Intel/AMD x86_64)"
 echo "   ✓ linux/arm64 (Apple Silicon, ARM NAS)"
 echo ""
 
+echo "📋 镜像内容："
+echo "   ✓ 后端 API 服务（Go + Gin）"
+echo "   ✓ 前端静态文件（Vue3 + Vite）"
+echo "   ✓ relive-analyzer 工具"
+echo "   ✓ import-cities 工具"
+echo ""
+
 echo "🧪 测试命令："
 echo "   # 在 Intel Mac/Linux 上测试"
-echo "   docker pull --platform linux/amd64 davidhoo/relive-backend:$VERSION"
+echo "   docker pull --platform linux/amd64 davidhoo/relive:$VERSION"
 echo ""
 echo "   # 在 Apple Silicon Mac 上测试"
-echo "   docker pull --platform linux/arm64 davidhoo/relive-backend:$VERSION"
+echo "   docker pull --platform linux/arm64 davidhoo/relive:$VERSION"
 echo ""
 echo "   # 在 NAS 上自动选择架构"
-echo "   docker pull davidhoo/relive-backend:$VERSION"
+echo "   docker pull davidhoo/relive:$VERSION"
+echo ""
+echo "   # 运行测试（单容器）"
+echo "   docker run -d -p 8080:8080 -v ./data:/app/data davidhoo/relive:$VERSION"
+echo "   # 访问前端：http://localhost:8080"
+echo "   # 访问API：http://localhost:8080/api/v1/system/health"
 echo ""
 
 echo "📝 下一步："

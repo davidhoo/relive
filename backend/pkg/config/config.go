@@ -25,6 +25,7 @@ type ServerConfig struct {
 	Port        int    `yaml:"port"`
 	Mode        string `yaml:"mode"`         // debug / release
 	ExternalURL string `yaml:"external_url"` // 外部访问地址，用于生成下载链接
+	StaticPath  string `yaml:"static_path"`  // 前端静态文件路径（单镜像部署）
 }
 
 // DatabaseConfig 数据库配置

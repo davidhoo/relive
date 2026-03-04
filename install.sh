@@ -112,11 +112,8 @@ if [ ! -f ".env" ]; then
 # JWT 密钥（请勿泄露）
 JWT_SECRET=$JWT_SECRET
 
-# 前端端口
-FRONTEND_PORT=8888
-
-# 后端端口
-BACKEND_PORT=8080
+# 服务端口（单容器，包含前端+后端）
+RELIVE_PORT=8080
 
 # 自动导入城市数据
 AUTO_IMPORT_CITIES=true

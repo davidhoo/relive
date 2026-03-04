@@ -4,6 +4,7 @@ server:
   port: 8080
   mode: "debug"  # debug / release
   external_url: "http://localhost:8080"  # 外部访问地址，用于生成照片下载链接
+  static_path: ""  # 开发环境不提供静态文件（由 Vite 独立提供）
 
 # 数据库配置
 database:
