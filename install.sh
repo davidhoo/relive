@@ -64,6 +64,7 @@ echo -e "${GREEN}  ✓${NC} 目录已创建: $INSTALL_DIR"
 # 创建数据目录
 mkdir -p data/backend/logs
 mkdir -p data/backend/thumbnails
+mkdir -p backend
 
 echo ""
 
@@ -79,13 +80,9 @@ GITHUB_RAW="https://raw.githubusercontent.com/davidhoo/relive/main"
 echo "  下载 docker-compose.yml..."
 curl -fsSL "$GITHUB_RAW/docker-compose.prod.yml" -o docker-compose.yml
 
-# 下载后端配置
+# 下载后端配置（放到 backend 目录以匹配 docker-compose.prod.yml 的路径）
 echo "  下载 config.prod.yaml..."
-curl -fsSL "$GITHUB_RAW/backend/config.prod.yaml" -o config.prod.yaml
-
-# 下载 Nginx 配置（可选）
-echo "  下载 nginx.conf..."
-curl -fsSL "$GITHUB_RAW/nginx.conf" -o nginx.conf
+curl -fsSL "$GITHUB_RAW/backend/config.prod.yaml" -o backend/config.prod.yaml
 
 echo -e "${GREEN}  ✓${NC} 配置文件下载完成"
 
@@ -131,35 +128,52 @@ fi
 echo ""
 
 # ============================================
+# 4.1 下载城市数据（可选）
+# ============================================
+
+if [ ! -f "data/backend/cities500.txt" ]; then
+    echo -e "${YELLOW}  离线地理编码数据未找到${NC}"
+    echo "  用于照片位置信息显示，大小约 180MB"
+    read -p "  是否现在下载？[y/N] " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo -e "${BLUE}  下载中...${NC}"
+        if command -v wget &> /dev/null; then
+            wget -q -O data/backend/cities500.zip "https://download.geonames.org/export/dump/cities500.zip"
+        elif command -v curl &> /dev/null; then
+            curl -sL -o data/backend/cities500.zip "https://download.geonames.org/export/dump/cities500.zip"
+        fi
+        if [ -f "data/backend/cities500.zip" ]; then
+            unzip -q data/backend/cities500.zip -d data/backend/
+            rm -f data/backend/cities500.zip
+            echo -e "${GREEN}  ✓${NC} 城市数据下载完成"
+        fi
+    else
+        echo -e "${YELLOW}  ⏭  跳过，可稍后手动下载${NC}"
+        echo "     下载: https://download.geonames.org/export/dump/cities500.zip"
+        echo "     解压到: data/backend/cities500.txt"
+    fi
+else
+    echo -e "${GREEN}  ✓${NC} 城市数据已存在"
+fi
+
+echo ""
+
+# ============================================
 # 5. 配置照片路径（可选）
 # ============================================
 
-echo -e "${BLUE}[5/5]${NC} 配置照片路径（可选）..."
+echo -e "${BLUE}[5/6]${NC} 配置照片路径..."
 
 echo ""
-echo "  照片路径配置方式："
-echo "  1. 现在手动输入路径（自动添加到 docker-compose.yml）"
-echo "  2. 稍后手动编辑 docker-compose.yml"
+echo "  照片目录需要在 docker-compose.yml 中配置"
+echo "  安装完成后请编辑：$INSTALL_DIR/docker-compose.yml"
 echo ""
-read -p "  请选择 [1/2]，直接回车跳过: " -n 1 -r
-echo
-
-if [[ $REPLY =~ ^[1]$ ]]; then
-    echo ""
-    echo "  请输入照片目录完整路径（例如：/volume1/photos）："
-    read -r PHOTOS_PATH
-
-    if [ -d "$PHOTOS_PATH" ]; then
-        # 在 docker-compose.yml 中添加 volume
-        echo "      - $PHOTOS_PATH:/app/photos:ro" >> docker-compose.yml
-        echo -e "${GREEN}  ✓${NC} 照片路径已添加: $PHOTOS_PATH"
-    else
-        echo -e "${YELLOW}  ⚠️  路径不存在，请稍后手动编辑 docker-compose.yml${NC}"
-    fi
-else
-    echo -e "${YELLOW}  跳过照片路径配置，请稍后编辑：${NC}"
-    echo "    $INSTALL_DIR/docker-compose.yml"
-fi
+echo "  示例："
+echo "    volumes:"
+echo "      - /your/photos:/app/photos:ro"
+echo ""
+echo -e "${GREEN}  ✓${NC} 可稍后在 Web 界面添加扫描路径"
 
 echo ""
 
@@ -167,7 +181,7 @@ echo ""
 # 6. 拉取镜像并启动
 # ============================================
 
-echo -e "${BLUE}正在拉取镜像并启动服务...${NC}"
+echo -e "${BLUE}[6/6]${NC} 拉取镜像并启动服务..."
 echo ""
 
 # 拉取镜像
