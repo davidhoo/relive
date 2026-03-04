@@ -21,3 +21,18 @@ export interface SystemHealth {
   timestamp?: string
   time?: string
 }
+
+// 系统还原请求
+export interface SystemResetRequest {
+  confirm_text: string
+}
+
+// 系统还原响应
+export interface SystemResetResponse {
+  success: boolean
+  message: string
+  database_cleared: boolean
+  thumbnails_cleared: boolean
+  cache_cleared: boolean
+  password_reset: boolean
+}

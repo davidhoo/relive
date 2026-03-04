@@ -45,9 +45,10 @@ type Photo struct {
 	AnalysisRetryCount   int        `gorm:"default:0" json:"-"`                                    // 分析重试次数
 	Description  string     `gorm:"type:text" json:"description"`                           // 详细描述（80-200字）
 	Caption      string     `gorm:"type:varchar(100)" json:"caption"`                       // 精美短句（8-30字）
-	MemoryScore  int        `gorm:"default:0;index:idx_memory_score" json:"memory_score"`   // 回忆价值评分（0-100）
-	BeautyScore  int        `gorm:"default:0;index:idx_beauty_score" json:"beauty_score"`   // 美观度评分（0-100）
-	OverallScore int        `gorm:"default:0;index:idx_overall_score" json:"overall_score"` // 综合评分（0-100）
+	MemoryScore   int        `gorm:"default:0;index:idx_memory_score" json:"memory_score"`   // 回忆价值评分（0-100）
+	BeautyScore   int        `gorm:"default:0;index:idx_beauty_score" json:"beauty_score"`   // 美观度评分（0-100）
+	OverallScore  int        `gorm:"default:0;index:idx_overall_score" json:"overall_score"` // 综合评分（0-100）
+	ScoreReason   string     `gorm:"type:varchar(200)" json:"score_reason"`                  // 评分理由
 
 	// 分类标签
 	MainCategory string `gorm:"type:varchar(50);index:idx_main_category" json:"main_category"` // 主分类

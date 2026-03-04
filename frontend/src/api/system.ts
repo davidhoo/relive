@@ -1,5 +1,5 @@
 import http from '@/utils/request'
-import type { SystemHealth, SystemStats } from '@/types/system'
+import type { SystemHealth, SystemStats, SystemResetRequest, SystemResetResponse } from '@/types/system'
 import type { ApiResponse } from '@/types/api'
 
 export const systemApi = {
@@ -11,5 +11,10 @@ export const systemApi = {
   // 获取系统统计
   getStats() {
     return http.get<ApiResponse<SystemStats>>('/system/stats')
+  },
+
+  // 系统还原
+  reset(data: SystemResetRequest) {
+    return http.post<ApiResponse<SystemResetResponse>>('/system/reset', data)
   },
 }

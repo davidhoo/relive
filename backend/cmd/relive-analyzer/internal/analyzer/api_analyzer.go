@@ -370,6 +370,7 @@ func (a *APIAnalyzer) processTask(ctx context.Context, task *model.AnalysisTask)
 		MemoryScore:  int(result.MemoryScore),
 		BeautyScore:  int(result.BeautyScore),
 		OverallScore: int(result.MemoryScore*0.7 + result.BeautyScore*0.3),
+		ScoreReason:  result.Reason,
 		MainCategory: result.MainCategory,
 		Tags:         result.Tags,
 		AnalyzedAt:   time.Now(),

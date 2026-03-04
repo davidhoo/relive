@@ -198,6 +198,21 @@ type SystemHealthResponse struct {
 	Timestamp time.Time `json:"timestamp"` // 检查时间
 }
 
+// SystemResetRequest 系统还原请求
+type SystemResetRequest struct {
+	ConfirmText string `json:"confirm_text" binding:"required"` // 确认文本，必须为 "RESET"
+}
+
+// SystemResetResponse 系统还原响应
+type SystemResetResponse struct {
+	Success           bool   `json:"success"`
+	Message           string `json:"message"`
+	DatabaseCleared   bool   `json:"database_cleared"`   // 数据库是否已清除
+	ThumbnailsCleared bool   `json:"thumbnails_cleared"` // 缩略图是否已清除
+	CacheCleared      bool   `json:"cache_cleared"`      // 缓存是否已清除
+	PasswordReset      bool   `json:"password_reset"`       // 密码是否已重置
+}
+
 // SystemStatsResponse 系统统计响应
 type SystemStatsResponse struct {
 	TotalPhotos      int64     `json:"total_photos"`

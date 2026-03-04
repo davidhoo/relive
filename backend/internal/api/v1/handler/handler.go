@@ -24,7 +24,7 @@ type Handlers struct {
 // NewHandlers 创建所有处理器
 func NewHandlers(db *gorm.DB, services *service.Services, repos *repository.Repositories, cfg *config.Config) *Handlers {
 	handlers := &Handlers{
-		System:   NewSystemHandler(db, services),
+		System:   NewSystemHandler(db, cfg, services),
 		Photo:    NewPhotoHandler(services.Photo, services.Config, cfg),
 		Display:  NewDisplayHandler(services.Display, services.ESP32),
 		ESP32:    NewESP32Handler(services.ESP32),

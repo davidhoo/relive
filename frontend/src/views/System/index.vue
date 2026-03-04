@@ -154,11 +154,107 @@
         </div>
       </el-col>
     </el-row>
+
+    <!-- 危险操作区域 -->
+    <div class="section-title animate-fade-in">
+      <el-icon><Warning /></el-icon>
+      <span>危险操作</span>
+    </div>
+
+    <el-row :gutter="20" class="danger-grid">
+      <el-col :xs="24" :sm="12" class="animate-fade-in">
+        <div class="danger-card">
+          <div class="danger-header">
+            <div class="danger-icon">
+              <el-icon><DeleteFilled /></el-icon>
+            </div>
+            <div class="danger-title">
+              <h3>系统还原</h3>
+              <p class="danger-desc">清除所有数据，恢复到初始状态</p>
+            </div>
+          </div>
+          <div class="danger-content">
+            <p class="danger-warning">
+              <el-icon><WarningFilled /></el-icon>
+              此操作将永久删除以下数据，无法恢复：
+            </p>
+            <ul class="danger-list">
+              <li>所有照片记录和元数据</li>
+              <li>所有 ESP32 设备信息</li>
+              <li>所有展示历史记录</li>
+              <li>所有应用配置</li>
+              <li>所有缩略图文件</li>
+              <li>所有缓存数据</li>
+              <li><strong>管理员密码将重置为 admin/admin</strong></li>
+            </ul>
+          </div>
+          <div class="danger-footer">
+            <el-button
+              type="danger"
+              size="large"
+              @click="handleResetClick"
+              class="reset-btn"
+            >
+              <el-icon><DeleteFilled /></el-icon>
+              系统还原
+            </el-button>
+          </div>
+        </div>
+      </el-col>
+    </el-row>
+
+    <!-- 系统还原确认对话框 -->
+    <el-dialog
+      v-model="resetDialogVisible"
+      title="系统还原确认"
+      width="500px"
+      :close-on-click-modal="false"
+      class="reset-dialog"
+    >
+      <div class="reset-dialog-content">
+        <div class="reset-warning-icon">
+          <el-icon color="#f56c6c" :size="48"><WarningFilled /></el-icon>
+        </div>
+        <h3 class="reset-title">确定要还原系统吗？</h3>
+        <p class="reset-desc">
+          此操作将<strong>永久删除</strong>所有数据，包括照片记录、设备信息、展示历史、缩略图和缓存。
+          删除的数据<strong>无法恢复</strong>！<br/>
+          管理员密码将重置为 <strong>admin/admin</strong>，还原后需要重新登录。
+        </p>
+        <div class="reset-confirm-input">
+          <p class="reset-hint">
+            请输入 <strong>RESET</strong> 以确认操作：
+          </p>
+          <el-input
+            v-model="resetConfirmText"
+            placeholder="请输入 RESET"
+            size="large"
+            :input-style="{ textAlign: 'center', fontSize: '16px', letterSpacing: '2px' }"
+          />
+        </div>
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="handleResetCancel" size="large">取消</el-button>
+          <el-button
+            type="danger"
+            size="large"
+            :loading="resetLoading"
+            :disabled="resetConfirmText !== 'RESET'"
+            @click="handleResetConfirm"
+          >
+            <el-icon><DeleteFilled /></el-icon>
+            确认还原
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   SuccessFilled,
   WarningFilled,
@@ -168,15 +264,68 @@ import {
   DataAnalysis,
   FolderOpened,
   PictureFilled,
-  Collection
+  Collection,
+  DeleteFilled,
+  Warning
 } from '@element-plus/icons-vue'
 import { useSystemStore } from '@/stores/system'
+import { useUserStore } from '@/stores/user'
+import { systemApi } from '@/api/system'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import duration from 'dayjs/plugin/duration'
 
 dayjs.extend(duration)
 
 const systemStore = useSystemStore()
+const userStore = useUserStore()
+const router = useRouter()
+
+// 系统还原相关
+const resetDialogVisible = ref(false)
+const resetConfirmText = ref('')
+const resetLoading = ref(false)
+
+// 打开还原确认对话框
+const handleResetClick = () => {
+  resetConfirmText.value = ''
+  resetDialogVisible.value = true
+}
+
+// 执行系统还原
+const handleResetConfirm = async () => {
+  if (resetConfirmText.value !== 'RESET') {
+    ElMessage.error('请输入正确的确认文本 "RESET"')
+    return
+  }
+
+  resetLoading.value = true
+  try {
+    const response = await systemApi.reset({ confirm_text: resetConfirmText.value })
+    if (response.data.success) {
+      ElMessage.success('系统已成功还原到初始状态，即将退出登录...')
+      resetDialogVisible.value = false
+
+      // 延迟1秒后退出登录并跳转到登录页
+      setTimeout(async () => {
+        await userStore.logout()
+        router.push('/login')
+      }, 1500)
+    } else {
+      ElMessage.error(response.data.message || '系统还原失败')
+    }
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || '系统还原失败')
+  } finally {
+    resetLoading.value = false
+  }
+}
+
+// 取消还原
+const handleResetCancel = () => {
+  resetDialogVisible.value = false
+  resetConfirmText.value = ''
+}
 
 const health = computed(() => systemStore.health)
 const stats = computed(() => systemStore.stats)
@@ -613,5 +762,148 @@ onMounted(async () => {
     gap: var(--spacing-sm);
     align-items: flex-start;
   }
+}
+
+/* ============ 危险操作区域 ============ */
+.danger-grid {
+  margin-bottom: var(--spacing-2xl);
+}
+
+.danger-card {
+  background: var(--color-bg-primary);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--color-error);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  transition: all var(--transition-base);
+}
+
+.danger-card:hover {
+  box-shadow: var(--shadow-md);
+  border-color: var(--color-error);
+}
+
+.danger-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-lg);
+  padding: var(--spacing-xl);
+  background: linear-gradient(135deg, rgba(245, 108, 108, 0.1) 0%, rgba(245, 108, 108, 0.05) 100%);
+  border-bottom: 1px solid rgba(245, 108, 108, 0.2);
+}
+
+.danger-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-lg);
+  background: var(--color-error);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  flex-shrink: 0;
+}
+
+.danger-title h3 {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-error);
+  margin: 0 0 var(--spacing-xs) 0;
+}
+
+.danger-desc {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.danger-content {
+  padding: var(--spacing-xl);
+}
+
+.danger-warning {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-error);
+  margin: 0 0 var(--spacing-md) 0;
+}
+
+.danger-list {
+  margin: 0;
+  padding-left: var(--spacing-xl);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.danger-list li {
+  margin-bottom: var(--spacing-xs);
+}
+
+.danger-footer {
+  padding: var(--spacing-lg) var(--spacing-xl);
+  background: var(--color-bg-secondary);
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.reset-btn {
+  font-weight: var(--font-weight-semibold);
+}
+
+/* ============ 系统还原对话框 ============ */
+.reset-dialog-content {
+  text-align: center;
+  padding: var(--spacing-lg);
+}
+
+.reset-warning-icon {
+  margin-bottom: var(--spacing-lg);
+}
+
+.reset-title {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  margin: 0 0 var(--spacing-md) 0;
+}
+
+.reset-desc {
+  font-size: var(--font-size-base);
+  color: var(--color-text-secondary);
+  margin: 0 0 var(--spacing-xl) 0;
+  line-height: 1.6;
+}
+
+.reset-desc strong {
+  color: var(--color-error);
+}
+
+.reset-confirm-input {
+  background: var(--color-bg-secondary);
+  padding: var(--spacing-lg);
+  border-radius: var(--radius-lg);
+}
+
+.reset-hint {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  margin: 0 0 var(--spacing-md) 0;
+}
+
+.reset-hint strong {
+  color: var(--color-error);
+  font-family: monospace;
+  font-size: var(--font-size-base);
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-md);
 }
 </style>

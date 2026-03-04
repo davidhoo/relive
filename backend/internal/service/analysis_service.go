@@ -268,19 +268,20 @@ func (s *analysisService) SubmitResults(results []model.AnalysisResult, apiKeyID
 
 			// 更新照片分析结果
 			updates := map[string]interface{}{
-				"ai_analyzed":               true,
-				"analyzed_at":               now,
-				"ai_provider":               aiProvider,
-				"description":               result.Description,
-				"caption":                   result.Caption,
-				"memory_score":              result.MemoryScore,
-				"beauty_score":              result.BeautyScore,
-				"overall_score":             overallScore,
-				"main_category":             result.MainCategory,
-				"tags":                      result.Tags,
-				"analysis_lock_id":          nil,
-				"analysis_lock_expired_at":  nil,
-				"analysis_retry_count":      0,
+				"ai_analyzed":              true,
+				"analyzed_at":              now,
+				"ai_provider":              aiProvider,
+				"description":              result.Description,
+				"caption":                  result.Caption,
+				"memory_score":             result.MemoryScore,
+				"beauty_score":             result.BeautyScore,
+				"overall_score":            overallScore,
+				"score_reason":             result.ScoreReason,
+				"main_category":            result.MainCategory,
+				"tags":                     result.Tags,
+				"analysis_lock_id":         nil,
+				"analysis_lock_expired_at": nil,
+				"analysis_retry_count":     0,
 			}
 
 			err = tx.Model(&photo).Updates(updates).Error

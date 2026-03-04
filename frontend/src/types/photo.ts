@@ -32,6 +32,7 @@ export interface Photo {
   emotion_score?: number
   technical_score?: number
   overall_score?: number
+  score_reason?: string  // 评分理由
   main_category?: string
   tags?: string
 

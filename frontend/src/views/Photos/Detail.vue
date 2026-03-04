@@ -86,6 +86,10 @@
               </el-descriptions-item>
               <el-descriptions-item label="记忆价值">{{ photo.memory_score?.toFixed(2) }}</el-descriptions-item>
               <el-descriptions-item label="美学评分">{{ photo.beauty_score?.toFixed(2) }}</el-descriptions-item>
+              <el-descriptions-item label="评分理由" :span="2" v-if="photo.score_reason">
+                <el-icon><InfoFilled /></el-icon>
+                <span style="margin-left: 8px; color: #606266; font-style: italic;">{{ photo.score_reason }}</span>
+              </el-descriptions-item>
               <el-descriptions-item label="AI 提供商">
                 <el-tag type="success" size="small">{{ formatAIProvider(photo.ai_provider) }}</el-tag>
               </el-descriptions-item>

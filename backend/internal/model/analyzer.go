@@ -66,6 +66,7 @@ type AnalysisResult struct {
 	MemoryScore   int       `json:"memory_score" binding:"required,min=0,max=100"`  // 记忆分数
 	BeautyScore   int       `json:"beauty_score" binding:"required,min=0,max=100"`  // 美观分数
 	OverallScore  int       `json:"overall_score,omitempty"`          // 综合分数（后端计算）
+	ScoreReason   string    `json:"score_reason,omitempty"`           // 评分理由
 	MainCategory  string    `json:"main_category,omitempty"`          // 主分类
 	Tags          string    `json:"tags,omitempty"`                   // 标签（逗号分隔）
 	AnalyzedAt    time.Time `json:"analyzed_at,omitempty"`            // 分析时间

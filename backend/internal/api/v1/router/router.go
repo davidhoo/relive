@@ -108,6 +108,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 		{
 			// 系统相关（需要认证）
 			authorized.GET("/system/stats", handlers.System.Stats)
+			authorized.POST("/system/reset", handlers.System.Reset)
 
 			// 照片相关
 			photos := authorized.Group("/photos")

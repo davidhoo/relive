@@ -544,6 +544,7 @@ func (s *aiService) analyzePhotoInternal(photoID uint, force bool) error {
 	photo.Tags = result.Tags
 	photo.MemoryScore = int(result.MemoryScore)
 	photo.BeautyScore = int(result.BeautyScore)
+	photo.ScoreReason = result.Reason
 	photo.AnalyzedAt = &now
 
 	// 计算综合评分
@@ -816,6 +817,7 @@ func (s *aiService) analyzeInBatchesAsync(task *AnalyzeTask, photos []*model.Pho
 				photo.Tags = result.Tags
 				photo.MemoryScore = int(result.MemoryScore)
 				photo.BeautyScore = int(result.BeautyScore)
+				photo.ScoreReason = result.Reason
 				photo.AnalyzedAt = &now
 				photo.OverallScore = int(float64(photo.MemoryScore)*0.7 + float64(photo.BeautyScore)*0.3)
 
