@@ -75,9 +75,10 @@ COPY --from=backend-builder /app/import-cities /app/import-cities
 # 从构建阶段复制前端静态文件
 COPY --from=frontend-builder /frontend/dist /app/frontend/dist
 
-# 复制脚本
+# 复制脚本和默认配置
 COPY backend/scripts/init-cities.sh /app/init-cities.sh
 COPY backend/scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
+COPY backend/config.default.yaml /app/config.default.yaml
 RUN chmod +x /app/init-cities.sh /app/docker-entrypoint.sh
 
 # 创建必要的目录
@@ -93,6 +94,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:8080/system/health || exit 1
 
-# 设置入口点
+# 设置入口点（配置文件由入口脚本自动检测）
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
-CMD ["/app/relive", "--config", "/app/config.yaml"]

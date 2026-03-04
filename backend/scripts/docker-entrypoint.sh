@@ -3,8 +3,21 @@ set -e
 
 # Docker 入口点脚本
 # 功能：
-# 1. 自动导入城市数据（如果配置了 AUTO_IMPORT_CITIES）
-# 2. 启动主应用
+# 1. 检查配置文件，使用默认配置作为后备
+# 2. 自动导入城市数据（如果配置了 AUTO_IMPORT_CITIES）
+# 3. 启动主应用
+
+# 配置文件路径
+CONFIG_FILE="${CONFIG_FILE:-/app/config.yaml}"
+DEFAULT_CONFIG="/app/config.default.yaml"
+
+# 如果没有外部配置文件，使用默认配置
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "No external config found, using default config"
+    CONFIG_FILE="$DEFAULT_CONFIG"
+fi
+
+echo "Using config: $CONFIG_FILE"
 
 DB_PATH="${DB_PATH:-/app/data/relive.db}"
 CITIES_FILE="${CITIES_FILE:-/app/data/cities500.txt}"
@@ -43,14 +56,14 @@ import_cities_if_needed() {
     echo "Database: $DB_PATH"
     echo "======================================"
 
-    if /app/import-cities --file "$CITIES_FILE" --config /app/config.yaml; then
+    if /app/import-cities --file "$CITIES_FILE" --config "$CONFIG_FILE"; then
         echo "======================================"
         echo "City data import completed successfully"
         echo "======================================"
     else
         echo "Warning: City data import failed, continuing without offline geocoding"
         echo "         You can manually import later using:"
-        echo "         docker exec <container> /app/import-cities --file /app/data/cities500.txt --config /app/config.yaml"
+        echo "         docker exec <container> /app/import-cities --file /app/data/cities500.txt --config $CONFIG_FILE"
     fi
 }
 
@@ -62,4 +75,4 @@ import_cities_if_needed
 
 # 启动主应用
 echo "Starting Relive..."
-exec "$@"
+exec /app/relive --config "$CONFIG_FILE"

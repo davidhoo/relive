@@ -1,0 +1,65 @@
+# 默认配置（适用于 Docker Desktop 直接运行）
+server:
+  host: "0.0.0.0"
+  port: 8080
+  mode: "release"
+  static_path: "/app/frontend/dist"
+
+database:
+  type: "sqlite"
+  path: "/app/data/relive.db"
+  auto_migrate: true
+  log_mode: false
+
+photos:
+  root_path: "/app/photos"
+  thumbnail_path: "/app/data/thumbnails"
+  exclude_dirs:
+    - ".sync"
+    - "@eaDir"
+    - "#recycle"
+    - ".DS_Store"
+    - "Thumbs.db"
+  supported_formats:
+    - ".jpg"
+    - ".jpeg"
+    - ".png"
+    - ".heic"
+    - ".HEIC"
+
+ai:
+  provider: ""
+  timeout: 120
+  ollama:
+    endpoint: "http://host.docker.internal:11434"
+    model: "llava"
+  qwen:
+    endpoint: "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+    model: "qwen-vl-max"
+  openai:
+    endpoint: "https://api.openai.com/v1/chat/completions"
+    model: "gpt-4-vision-preview"
+
+display:
+  algorithm: "on_this_day"
+  fallback_days: [3, 7, 30, 365]
+
+logging:
+  level: "info"
+  file: "/app/data/logs/relive.log"
+  max_size: 100
+  max_backups: 5
+  console: true
+
+security:
+  jwt_Secret: "${JWT_SECRET:-relive-default-secret-change-me}"
+  api_key_prefix: "sk-relive-"
+
+performance:
+  max_scan_workers: 10
+  max_analyze_workers: 5
+
+geocode:
+  provider: "offline"
+  offline:
+    max_distance: 100
