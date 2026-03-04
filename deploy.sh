@@ -129,6 +129,43 @@ echo -e "${GREEN}  ✓${NC} 数据目录已创建"
 echo "    - data/backend/logs"
 echo "    - data/backend/thumbnails"
 
+# ============================================
+# 3.1 下载离线地理编码数据（可选）
+# ============================================
+
+if [ ! -f "data/backend/cities500.txt" ]; then
+    echo ""
+    echo -e "${YELLOW}  离线地理编码数据未找到${NC}"
+    echo "  用于照片位置信息显示，大小约 180MB"
+    echo ""
+    read -p "是否现在下载？[y/N] " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo -e "${BLUE}  下载 cities500.txt...${NC}"
+        if command -v wget &> /dev/null; then
+            wget -q -O data/backend/cities500.zip "https://download.geonames.org/export/dump/cities500.zip" && \
+            unzip -q data/backend/cities500.zip -d data/backend/ && \
+            rm -f data/backend/cities500.zip && \
+            echo -e "${GREEN}  ✓${NC} 城市数据下载完成"
+        elif command -v curl &> /dev/null; then
+            curl -sL -o data/backend/cities500.zip "https://download.geonames.org/export/dump/cities500.zip" && \
+            unzip -q data/backend/cities500.zip -d data/backend/ && \
+            rm -f data/backend/cities500.zip && \
+            echo -e "${GREEN}  ✓${NC} 城市数据下载完成"
+        else
+            echo -e "${RED}  ❌ 需要 wget 或 curl 来下载${NC}"
+            echo "  手动下载: https://download.geonames.org/export/dump/cities500.zip"
+            echo "  解压到: data/backend/cities500.txt"
+        fi
+    else
+        echo -e "${YELLOW}  ⏭  跳过，稍后可手动下载${NC}"
+        echo "  下载地址: https://download.geonames.org/export/dump/cities500.zip"
+        echo "  解压到: data/backend/cities500.txt"
+    fi
+else
+    echo -e "${GREEN}  ✓${NC} 城市数据已存在: cities500.txt"
+fi
+
 echo ""
 
 # ============================================
