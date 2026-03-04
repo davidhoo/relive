@@ -172,10 +172,10 @@ echo ""
 
 # 拉取镜像
 echo "  拉取后端镜像..."
-docker pull davidhoo/relive-backend:latest
+docker pull davidhu/relive-backend:latest
 
 echo "  拉取前端镜像..."
-docker pull davidhoo/relive-frontend:latest
+docker pull davidhu/relive-frontend:latest
 
 # 启动服务
 echo ""

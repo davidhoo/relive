@@ -29,18 +29,18 @@ echo -e "${BLUE}[1/4]${NC} 检查镜像 manifest..."
 
 echo ""
 echo "  后端镜像："
-if docker buildx imagetools inspect davidhoo/relive-backend:$VERSION > /dev/null 2>&1; then
-    docker buildx imagetools inspect davidhoo/relive-backend:$VERSION
+if docker buildx imagetools inspect davidhu/relive-backend:$VERSION > /dev/null 2>&1; then
+    docker buildx imagetools inspect davidhu/relive-backend:$VERSION
 
     # 检查是否包含 amd64
-    if docker buildx imagetools inspect davidhoo/relive-backend:$VERSION | grep -q "linux/amd64"; then
+    if docker buildx imagetools inspect davidhu/relive-backend:$VERSION | grep -q "linux/amd64"; then
         echo -e "${GREEN}  ✓${NC} 包含 linux/amd64"
     else
         echo -e "${RED}  ❌ 缺少 linux/amd64${NC}"
     fi
 
     # 检查是否包含 arm64
-    if docker buildx imagetools inspect davidhoo/relive-backend:$VERSION | grep -q "linux/arm64"; then
+    if docker buildx imagetools inspect davidhu/relive-backend:$VERSION | grep -q "linux/arm64"; then
         echo -e "${GREEN}  ✓${NC} 包含 linux/arm64"
     else
         echo -e "${RED}  ❌ 缺少 linux/arm64${NC}"
@@ -52,16 +52,16 @@ fi
 
 echo ""
 echo "  前端镜像："
-if docker buildx imagetools inspect davidhoo/relive-frontend:$VERSION > /dev/null 2>&1; then
-    docker buildx imagetools inspect davidhoo/relive-frontend:$VERSION | head -20
+if docker buildx imagetools inspect davidhu/relive-frontend:$VERSION > /dev/null 2>&1; then
+    docker buildx imagetools inspect davidhu/relive-frontend:$VERSION | head -20
 
-    if docker buildx imagetools inspect davidhoo/relive-frontend:$VERSION | grep -q "linux/amd64"; then
+    if docker buildx imagetools inspect davidhu/relive-frontend:$VERSION | grep -q "linux/amd64"; then
         echo -e "${GREEN}  ✓${NC} 包含 linux/amd64"
     else
         echo -e "${RED}  ❌ 缺少 linux/amd64${NC}"
     fi
 
-    if docker buildx imagetools inspect davidhoo/relive-frontend:$VERSION | grep -q "linux/arm64"; then
+    if docker buildx imagetools inspect davidhu/relive-frontend:$VERSION | grep -q "linux/arm64"; then
         echo -e "${GREEN}  ✓${NC} 包含 linux/arm64"
     else
         echo -e "${RED}  ❌ 缺少 linux/arm64${NC}"
@@ -82,13 +82,13 @@ echo -e "${BLUE}[2/4]${NC} 测试拉取镜像..."
 # 测试 amd64
 echo ""
 echo "  测试拉取 linux/amd64 版本..."
-if docker pull --platform linux/amd64 davidhoo/relive-backend:$VERSION > /dev/null 2>&1; then
+if docker pull --platform linux/amd64 davidhu/relive-backend:$VERSION > /dev/null 2>&1; then
     echo -e "${GREEN}  ✓${NC} amd64 后端镜像拉取成功"
 else
     echo -e "${RED}  ❌ amd64 后端镜像拉取失败${NC}"
 fi
 
-if docker pull --platform linux/amd64 davidhoo/relive-frontend:$VERSION > /dev/null 2>&1; then
+if docker pull --platform linux/amd64 davidhu/relive-frontend:$VERSION > /dev/null 2>&1; then
     echo -e "${GREEN}  ✓${NC} amd64 前端镜像拉取成功"
 else
     echo -e "${RED}  ❌ amd64 前端镜像拉取失败${NC}"
@@ -97,13 +97,13 @@ fi
 # 测试 arm64
 echo ""
 echo "  测试拉取 linux/arm64 版本..."
-if docker pull --platform linux/arm64 davidhoo/relive-backend:$VERSION > /dev/null 2>&1; then
+if docker pull --platform linux/arm64 davidhu/relive-backend:$VERSION > /dev/null 2>&1; then
     echo -e "${GREEN}  ✓${NC} arm64 后端镜像拉取成功"
 else
     echo -e "${RED}  ❌ arm64 后端镜像拉取失败${NC}"
 fi
 
-if docker pull --platform linux/arm64 davidhoo/relive-frontend:$VERSION > /dev/null 2>&1; then
+if docker pull --platform linux/arm64 davidhu/relive-frontend:$VERSION > /dev/null 2>&1; then
     echo -e "${GREEN}  ✓${NC} arm64 前端镜像拉取成功"
 else
     echo -e "${RED}  ❌ arm64 前端镜像拉取失败${NC}"
@@ -133,7 +133,7 @@ echo "  当前平台：$PLATFORM"
 # 测试后端
 echo ""
 echo "  测试后端镜像..."
-if docker run --rm --platform $PLATFORM davidhoo/relive-backend:$VERSION /app/relive --version 2>/dev/null; then
+if docker run --rm --platform $PLATFORM davidhu/relive-backend:$VERSION /app/relive --version 2>/dev/null; then
     echo -e "${GREEN}  ✓${NC} 后端运行测试通过"
 else
     echo -e "${YELLOW}  ⚠️  后端运行测试失败（可能需要配置文件）${NC}"
@@ -142,7 +142,7 @@ fi
 # 测试前端
 echo ""
 echo "  测试前端镜像..."
-CONTAINER_ID=$(docker run -d --rm --platform $PLATFORM davidhoo/relive-frontend:$VERSION)
+CONTAINER_ID=$(docker run -d --rm --platform $PLATFORM davidhu/relive-frontend:$VERSION)
 sleep 2
 
 if docker exec $CONTAINER_ID sh -c "wget --spider http://localhost/" > /dev/null 2>&1; then
@@ -163,14 +163,14 @@ echo -e "${BLUE}[4/4]${NC} 检查镜像大小..."
 
 echo ""
 echo "  后端镜像大小："
-docker images davidhoo/relive-backend --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | grep $VERSION
+docker images davidhu/relive-backend --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | grep $VERSION
 
 echo ""
 echo "  前端镜像大小："
-docker images davidhoo/relive-frontend --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | grep $VERSION
+docker images davidhu/relive-frontend --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | grep $VERSION
 
 # 检查大小是否合理
-BACKEND_SIZE=$(docker images davidhoo/relive-backend:$VERSION --format "{{.Size}}" | head -1)
+BACKEND_SIZE=$(docker images davidhu/relive-backend:$VERSION --format "{{.Size}}" | head -1)
 if [[ "$BACKEND_SIZE" =~ "MB" ]]; then
     SIZE_NUM=$(echo $BACKEND_SIZE | grep -o '[0-9]*')
     if [ $SIZE_NUM -lt 100 ]; then
@@ -180,7 +180,7 @@ if [[ "$BACKEND_SIZE" =~ "MB" ]]; then
     fi
 fi
 
-FRONTEND_SIZE=$(docker images davidhoo/relive-frontend:$VERSION --format "{{.Size}}" | head -1)
+FRONTEND_SIZE=$(docker images davidhu/relive-frontend:$VERSION --format "{{.Size}}" | head -1)
 if [[ "$FRONTEND_SIZE" =~ "MB" ]]; then
     SIZE_NUM=$(echo $FRONTEND_SIZE | grep -o '[0-9]*')
     if [ $SIZE_NUM -lt 50 ]; then
@@ -222,8 +222,8 @@ read -p "是否清理测试镜像？[y/N] " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     docker rmi --force \
-        davidhoo/relive-backend:$VERSION \
-        davidhoo/relive-frontend:$VERSION \
+        davidhu/relive-backend:$VERSION \
+        davidhu/relive-frontend:$VERSION \
         2>/dev/null || true
     echo -e "${GREEN}✓ 测试镜像已清理${NC}"
 fi

@@ -50,8 +50,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            davidhoo/relive-backend:${{ steps.version.outputs.version }}
-            davidhoo/relive-backend:latest
+            davidhu/relive-backend:${{ steps.version.outputs.version }}
+            davidhu/relive-backend:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
@@ -64,26 +64,26 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            davidhoo/relive-frontend:${{ steps.version.outputs.version }}
-            davidhoo/relive-frontend:latest
+            davidhu/relive-frontend:${{ steps.version.outputs.version }}
+            davidhu/relive-frontend:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Verify images
         run: |
           echo "Verifying backend image..."
-          docker buildx imagetools inspect davidhoo/relive-backend:${{ steps.version.outputs.version }}
+          docker buildx imagetools inspect davidhu/relive-backend:${{ steps.version.outputs.version }}
 
           echo "Verifying frontend image..."
-          docker buildx imagetools inspect davidhoo/relive-frontend:${{ steps.version.outputs.version }}
+          docker buildx imagetools inspect davidhu/relive-frontend:${{ steps.version.outputs.version }}
 
       - name: Test images
         run: |
           echo "Testing amd64 backend..."
-          docker run --rm --platform linux/amd64 davidhoo/relive-backend:${{ steps.version.outputs.version }} /app/relive --version || echo "Backend test skipped"
+          docker run --rm --platform linux/amd64 davidhu/relive-backend:${{ steps.version.outputs.version }} /app/relive --version || echo "Backend test skipped"
 
           echo "Testing arm64 backend..."
-          docker run --rm --platform linux/arm64 davidhoo/relive-backend:${{ steps.version.outputs.version }} /app/relive --version || echo "Backend test skipped"
+          docker run --rm --platform linux/arm64 davidhu/relive-backend:${{ steps.version.outputs.version }} /app/relive --version || echo "Backend test skipped"
 
       - name: Create release notes
         run: |
@@ -96,8 +96,8 @@ jobs:
 
           ### Pull Images
           \`\`\`bash
-          docker pull davidhoo/relive-backend:${{ steps.version.outputs.version }}
-          docker pull davidhoo/relive-frontend:${{ steps.version.outputs.version }}
+          docker pull davidhu/relive-backend:${{ steps.version.outputs.version }}
+          docker pull davidhu/relive-frontend:${{ steps.version.outputs.version }}
           \`\`\`
 
           ### Deploy

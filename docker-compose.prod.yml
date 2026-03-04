@@ -6,7 +6,7 @@ version: '3.8'
 services:
   # Relive 统一服务（包含前端 + 后端）
   relive:
-    image: davidhoo/relive:latest
+    image: davidhu/relive:latest
     container_name: relive
     restart: unless-stopped
     ports:
