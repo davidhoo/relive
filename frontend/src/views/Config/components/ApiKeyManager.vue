@@ -14,8 +14,8 @@
     </template>
 
     <el-alert
-      title="API Key 用于 ESP32 设备访问系统"
-      description="设备通过 API Key 获取照片和上报状态。请妥善保管，不要泄露给他人。"
+      title="API Key 用于设备访问系统"
+      description="设备（ESP32/Android/iOS等）通过 API Key 获取照片和上报状态。请妥善保管，不要泄露给他人。"
       type="info"
       :closable="false"
       show-icon
@@ -92,7 +92,7 @@
     >
       <el-form :model="form" label-width="80px">
         <el-form-item label="名称" required>
-          <el-input v-model="form.name" placeholder="例如: ESP32设备" />
+          <el-input v-model="form.name" placeholder="例如: 客厅相框、我的手机" />
         </el-form-item>
         <el-form-item label="描述">
           <el-input

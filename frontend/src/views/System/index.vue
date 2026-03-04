@@ -180,7 +180,7 @@
             </p>
             <ul class="danger-list">
               <li>所有照片记录和元数据</li>
-              <li>所有 ESP32 设备信息</li>
+              <li>所有设备信息</li>
               <li>所有展示历史记录</li>
               <li>所有应用配置</li>
               <li>所有 API Key</li>

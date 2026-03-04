@@ -11,7 +11,7 @@
         :closable="false"
         style="margin-bottom: 20px"
       >
-        <p>根据不同的算法策略，ESP32 设备将从照片库中选择合适的照片进行展示。</p>
+        <p>根据不同的算法策略，设备（电子相框/手机等）将从照片库中选择合适的照片进行展示。</p>
       </el-alert>
 
       <el-form :model="form" label-width="150px" style="max-width: 800px">
