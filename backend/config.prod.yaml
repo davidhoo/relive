@@ -34,7 +34,7 @@ photos:
 
 # AI 配置
 ai:
-  provider: "ollama"  # 默认使用 ollama，可通过配置管理 API 动态修改
+  provider: ""  # 默认不启用 AI，可通过配置管理页面动态配置，可选: ollama / qwen / openai / vllm / hybrid
   timeout: 120
   temperature: 0.7
 

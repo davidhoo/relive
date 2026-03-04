@@ -29,7 +29,7 @@ photos:
 
 # AI 配置
 ai:
-  provider: "qwen"  # ollama / qwen / openai / vllm / hybrid
+  provider: ""  # 默认不启用 AI，可选: ollama / qwen / openai / vllm / hybrid
   timeout: 60
   temperature: 0.7
 
