@@ -132,53 +132,23 @@ echo "    - data/backend/thumbnails"
 echo ""
 
 # ============================================
-# 4. 配置照片路径
+# 4. 提示照片路径配置
 # ============================================
 
-echo -e "${BLUE}[4/5]${NC} 配置照片路径..."
+echo -e "${BLUE}[4/5]${NC} 照片路径配置..."
 
 if [ ! -f "docker-compose.yml" ]; then
     echo -e "${RED}❌ docker-compose.yml 不存在${NC}"
     exit 1
 fi
 
-if [ "$QUICK_MODE" = true ]; then
-    echo -e "${YELLOW}  快速模式：跳过照片路径配置${NC}"
-else
-    if grep -q "# - /Users/david/Downloads/2025:/app/photos/iphone2025:ro" docker-compose.yml; then
-        echo -e "${YELLOW}  照片路径配置示例已在 docker-compose.yml 中${NC}"
-        echo ""
-        echo "  请编辑 docker-compose.yml，配置你的照片目录："
-        echo ""
-        echo "  volumes:"
-        echo "    # 示例："
-        echo "    # - /volume1/photos/2024:/app/photos/2024:ro"
-        echo "    # - /volume1/photos/2025:/app/photos/2025:ro"
-        echo ""
-    fi
-
-    read -p "是否现在配置照片路径？[y/N] " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        echo ""
-        echo "请输入照片目录的完整路径（例如：/volume1/photos）："
-        read -r PHOTOS_PATH
-
-        if [ -d "$PHOTOS_PATH" ]; then
-            echo ""
-            echo "  将在 docker-compose.yml 中添加："
-            echo "  - ${PHOTOS_PATH}:/app/photos:ro"
-            echo ""
-            echo -e "${GREEN}  ✓${NC} 照片路径配置完成"
-            echo -e "${YELLOW}  注意：请手动编辑 docker-compose.yml 取消注释相关行${NC}"
-        else
-            echo -e "${RED}  ❌ 路径不存在: $PHOTOS_PATH${NC}"
-            echo -e "${YELLOW}  请稍后手动编辑 docker-compose.yml 配置照片路径${NC}"
-        fi
-    else
-        echo -e "${YELLOW}  ⏭  跳过照片路径配置，请稍后手动配置${NC}"
-    fi
-fi
+echo -e "${YELLOW}  请编辑 docker-compose.yml 配置照片目录挂载${NC}"
+echo ""
+echo "  示例："
+echo "    volumes:"
+echo "      - /your/photos/path:/app/photos:ro"
+echo ""
+echo -e "${GREEN}  ✓${NC} 部署后可在 Web 界面添加扫描路径"
 
 echo ""
 
