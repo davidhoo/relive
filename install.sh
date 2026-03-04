@@ -171,11 +171,8 @@ echo -e "${BLUE}正在拉取镜像并启动服务...${NC}"
 echo ""
 
 # 拉取镜像
-echo "  拉取后端镜像..."
-docker pull davidhu/relive-backend:latest
-
-echo "  拉取前端镜像..."
-docker pull davidhu/relive-frontend:latest
+echo "  拉取镜像..."
+docker pull davidhu/relive:latest
 
 # 启动服务
 echo ""
@@ -207,13 +204,12 @@ else
     HOST_IP="localhost"
 fi
 
-FRONTEND_PORT=$(grep "^FRONTEND_PORT=" .env | cut -d'=' -f2)
-FRONTEND_PORT=${FRONTEND_PORT:-8888}
+RELIVE_PORT=$(grep "^RELIVE_PORT=" .env | cut -d'=' -f2)
+RELIVE_PORT=${RELIVE_PORT:-8080}
 
 echo "📌 访问地址："
-echo "   🌐 前端：http://${HOST_IP}:${FRONTEND_PORT}"
-echo "   🔧 后端：http://${HOST_IP}:8080"
-echo "   💚 健康检查：http://${HOST_IP}:8080/system/health"
+echo "   🌐 http://${HOST_IP}:${RELIVE_PORT}"
+echo "   💚 健康检查：http://${HOST_IP}:${RELIVE_PORT}/api/v1/system/health"
 echo ""
 
 echo "📁 安装位置："
@@ -254,11 +250,11 @@ echo ""
 echo "正在等待服务启动..."
 sleep 8
 
-if curl -s "http://localhost:8080/system/health" > /dev/null 2>&1; then
-    echo -e "${GREEN}✓ 后端服务健康检查通过${NC}"
+if curl -s "http://localhost:${RELIVE_PORT}/api/v1/system/health" > /dev/null 2>&1; then
+    echo -e "${GREEN}✓ 服务健康检查通过${NC}"
 else
-    echo -e "${YELLOW}⚠️  后端服务可能还在启动中${NC}"
-    echo "   请稍后访问：http://${HOST_IP}:8080/system/health"
+    echo -e "${YELLOW}⚠️  服务可能还在启动中${NC}"
+    echo "   请稍后访问：http://${HOST_IP}:${RELIVE_PORT}/api/v1/system/health"
 fi
 
 echo ""
