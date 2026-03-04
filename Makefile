@@ -1,4 +1,6 @@
 # Makefile for Relive Project
+# 禁用隐式规则，避免 deploy.sh 被自动转换为 deploy
+MAKEFLAGS += --no-builtin-rules
 
 .PHONY: help dev build deploy prod stop restart logs clean test deps
 
