@@ -1,40 +1,45 @@
 version: '3.8'
 
-# Relive 生产环境配置（使用 DockerHub 镜像 - 单镜像版本）
-# 使用方法：docker-compose -f docker-compose.prod.yml up -d
+# Relive 生产环境配置（使用 DockerHub 镜像）
+# 使用方法：make prod 或 docker-compose -f docker-compose.prod.yml up -d
 
 services:
-  # Relive 统一服务（包含前端 + 后端）
   relive:
     image: davidhu/relive:latest
     container_name: relive
     restart: unless-stopped
     ports:
-      # 单一端口访问（前端 + 后端 API）
-      # 生产环境建议只监听 localhost，通过 Nginx 反向代理访问
-      # - "127.0.0.1:8080:8080"
-      # 或者直接暴露
       - "8080:8080"
     volumes:
       # 配置文件
-      - ./config.prod.yaml:/app/config.yaml:ro
+      - ./backend/config.prod.yaml:/app/config.yaml:ro
       # 数据目录（数据库、日志）
       - ./data/backend:/app/data
       # =============================================================================
+      # 离线逆地理编码数据（可选）
+      # =============================================================================
+      # 下载 cities500.zip 并解压到 ./data/backend/ 目录
+      # 容器启动时会自动检测并导入
+      # =============================================================================
       # 照片目录挂载
       # =============================================================================
-      # 取消注释并修改为你的照片目录：
-      # - /volume1/photos/2024:/app/photos/2024:ro
-      # - /volume1/photos/2025:/app/photos/2025:ro
+      # 使用方法：
+      # 1. 修改下方的宿主机路径（冒号左边）为你实际的照片目录
+      # 2. 容器内路径（冒号右边）保持 /app/photos 不变
+      # 3. 在 Web 界面中添加扫描路径时使用容器内路径：/app/photos
       #
-      # 或者挂载整个照片根目录：
+      # 示例：
+      # - /Users/yourname/Pictures:/app/photos:ro
       # - /volume1/photos:/app/photos:ro
       # =============================================================================
+      # - ./data/photos:/app/photos:ro
     environment:
       - TZ=Asia/Shanghai
-      # JWT 密钥（从 .env 文件读取，或直接设置）
       - JWT_SECRET=${JWT_SECRET}
-      # 自动导入城市数据（首次启动）
+      # AI Provider API Keys（如果使用）
+      - QWEN_API_KEY=${QWEN_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # 自动导入城市数据（默认开启，首次启动时会自动导入 cities500.txt）
       - AUTO_IMPORT_CITIES=${AUTO_IMPORT_CITIES:-true}
     networks:
       - relive-network
