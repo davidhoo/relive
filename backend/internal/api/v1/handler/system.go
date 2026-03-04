@@ -227,7 +227,7 @@ func (h *SystemHandler) Reset(c *gin.Context) {
 	}
 
 	// 1. 清除数据库表数据（保留 cities 表，因为城市数据是离线地理编码的基础）
-	tables := []string{"display_records", "esp32_devices", "photos", "app_config"}
+	tables := []string{"display_records", "esp32_devices", "photos", "app_config", "api_keys"}
 	for _, table := range tables {
 		if err := h.db.Exec(fmt.Sprintf("DELETE FROM %s", table)).Error; err != nil {
 			logger.Errorf("Failed to clear table %s: %v", table, err)

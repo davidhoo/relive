@@ -183,6 +183,7 @@
               <li>所有 ESP32 设备信息</li>
               <li>所有展示历史记录</li>
               <li>所有应用配置</li>
+              <li>所有 API Key</li>
               <li>所有缩略图文件</li>
               <li>所有缓存数据</li>
               <li><strong>管理员密码将重置为 admin/admin</strong></li>
@@ -217,7 +218,7 @@
         </div>
         <h3 class="reset-title">确定要还原系统吗？</h3>
         <p class="reset-desc">
-          此操作将<strong>永久删除</strong>所有数据，包括照片记录、设备信息、展示历史、缩略图和缓存。
+          此操作将<strong>永久删除</strong>所有数据，包括照片记录、设备信息、展示历史、API Key、缩略图和缓存。
           删除的数据<strong>无法恢复</strong>！<br/>
           管理员密码将重置为 <strong>admin/admin</strong>，还原后需要重新登录。
         </p>
