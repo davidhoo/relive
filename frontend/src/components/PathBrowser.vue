@@ -5,7 +5,8 @@
     width="600px"
     :close-on-click-modal="false"
   >
-    <el-alert
+      <el-alert
+      v-if="isDocker"
       type="info"
       :closable="false"
       style="margin-bottom: 16px"
@@ -56,10 +57,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Folder, FolderOpened, ArrowUp } from '@element-plus/icons-vue'
 import { configApi } from '@/api/config'
+import { systemApi } from '@/api/system'
 
 interface DirectoryEntry {
   name: string
@@ -79,13 +81,38 @@ const emit = defineEmits<{
 
 const visible = ref(props.modelValue)
 const loading = ref(false)
-const currentPath = ref('/app')
+const currentPath = ref('/')
+const defaultPath = ref('/')
+const isDocker = ref(false)
 const entries = ref<DirectoryEntry[]>([])
+
+// 获取环境信息（默认路径）
+const loadEnvironment = async () => {
+  try {
+    const response = await systemApi.getEnvironment()
+    if (response.data?.data) {
+      isDocker.value = response.data.data.is_docker
+      defaultPath.value = response.data.data.default_path
+      currentPath.value = defaultPath.value
+    }
+  } catch (error) {
+    console.error('Failed to load environment:', error)
+    // 使用默认路径作为回退
+    isDocker.value = false
+    defaultPath.value = '/'
+    currentPath.value = '/'
+  }
+}
+
+// 组件挂载时加载环境信息
+onMounted(() => {
+  loadEnvironment()
+})
 
 watch(() => props.modelValue, (val) => {
   visible.value = val
   if (val) {
-    const startPath = props.initialPath || '/app'
+    const startPath = props.initialPath || defaultPath.value
     loadDirectory(startPath)
   }
 })

@@ -228,6 +228,13 @@ type SystemStatsResponse struct {
 	Timestamp        time.Time `json:"timestamp"`      // 统计时间
 }
 
+// SystemEnvironmentResponse 系统环境信息响应
+type SystemEnvironmentResponse struct {
+	IsDocker    bool   `json:"is_docker"`     // 是否在 Docker 中运行
+	DefaultPath string `json:"default_path"`  // 默认路径（Docker 中为 /app，否则为当前工作目录）
+	WorkDir     string `json:"work_dir"`      // 当前工作目录
+}
+
 // ScanPathConfig represents a single scan path configuration
 type ScanPathConfig struct {
 	ID            string     `json:"id"`                         // UUID

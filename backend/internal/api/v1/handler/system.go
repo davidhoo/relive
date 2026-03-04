@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
@@ -135,6 +136,56 @@ func (h *SystemHandler) Stats(c *gin.Context) {
 		Data:    stats,
 		Message: "Stats retrieved successfully",
 	})
+}
+
+// Environment 获取系统环境信息
+// @Summary 获取系统环境信息
+// @Description 获取运行环境信息，包括是否在 Docker 中运行、默认路径等
+// @Tags system
+// @Produce json
+// @Success 200 {object} model.Response{data=model.SystemEnvironmentResponse}
+// @Router /api/v1/system/environment [get]
+func (h *SystemHandler) Environment(c *gin.Context) {
+	isDocker := checkIsDocker()
+
+	// 获取当前工作目录
+	workDir, err := os.Getwd()
+	if err != nil {
+		workDir = "."
+	}
+
+	// 默认路径：Docker 中使用 /app，否则使用当前工作目录
+	defaultPath := workDir
+	if isDocker {
+		defaultPath = "/app"
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Data: model.SystemEnvironmentResponse{
+			IsDocker:    isDocker,
+			DefaultPath: defaultPath,
+			WorkDir:     workDir,
+		},
+		Message: "Environment info retrieved successfully",
+	})
+}
+
+// checkIsDocker 检查是否在 Docker 容器中运行
+func checkIsDocker() bool {
+	// 方法1: 检查 /.dockerenv 文件是否存在
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+
+	// 方法2: 检查 /proc/1/cgroup 是否包含 "docker"
+	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		if strings.Contains(string(data), "docker") {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Reset 系统还原

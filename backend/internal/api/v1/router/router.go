@@ -67,6 +67,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 		system := v1.Group("/system")
 		{
 			system.GET("/health", handlers.System.Health)
+			system.GET("/environment", handlers.System.Environment)
 		}
 
 		// ESP32 设备相关（API Key 认证）

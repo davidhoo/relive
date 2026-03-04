@@ -36,3 +36,10 @@ export interface SystemResetResponse {
   cache_cleared: boolean
   password_reset: boolean
 }
+
+// 系统环境信息
+export interface SystemEnvironment {
+  is_docker: boolean
+  default_path: string
+  work_dir: string
+}
