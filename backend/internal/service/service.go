@@ -11,7 +11,8 @@ import (
 type Services struct {
 	Photo     PhotoService
 	Display   DisplayService
-	ESP32     ESP32Service
+	Device    DeviceService       // 新名称
+	ESP32     ESP32Service        // 保留兼容（别名）
 	AI        AIService
 	Export    ExportService
 	Config    ConfigService
@@ -64,20 +65,24 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	// 创建提示词配置服务
 	promptService := NewPromptService(repos.Config)
 
+	// 创建设备服务
+	deviceService := NewDeviceService(repos.Device, cfg)
+
 	return &Services{
 		Photo:    NewPhotoService(repos.Photo, cfg, configService, geocodeService),
 		Display:  NewDisplayService(
 			repos.Photo,
 			repos.DisplayRecord,
-			repos.ESP32Device,
+			repos.Device, // 改为 Device
 			cfg,
 		),
-		ESP32:    NewESP32Service(repos.ESP32Device, cfg),
-		AI:       aiService,
-		Export:   NewExportService(repos.Photo),
-		Config:   configService,
-		Prompt:   promptService,
-		Geocode:  geocodeService,
+		Device:    deviceService,        // 新名称
+		ESP32:     deviceService,        // 兼容旧代码（指向同一个实例）
+		AI:        aiService,
+		Export:    NewExportService(repos.Photo),
+		Config:    configService,
+		Prompt:    promptService,
+		Geocode:   geocodeService,
 		Auth:      authService,
 		APIKey:    apiKeyService,
 		Analysis:  analysisService,

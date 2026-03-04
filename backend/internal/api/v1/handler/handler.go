@@ -12,7 +12,8 @@ type Handlers struct {
 	System   *SystemHandler
 	Photo    *PhotoHandler
 	Display  *DisplayHandler
-	ESP32    *ESP32Handler
+	Device   *DeviceHandler      // 新名称
+	ESP32    *ESP32Handler       // 保留兼容（别名）
 	AI       *AIHandler
 	Export   *ExportHandler
 	Config   *ConfigHandler
@@ -23,11 +24,15 @@ type Handlers struct {
 
 // NewHandlers 创建所有处理器
 func NewHandlers(db *gorm.DB, services *service.Services, repos *repository.Repositories, cfg *config.Config) *Handlers {
+	// 创建设备处理器
+	deviceHandler := NewDeviceHandler(services.Device)
+
 	handlers := &Handlers{
 		System:   NewSystemHandler(db, cfg, services),
 		Photo:    NewPhotoHandler(services.Photo, services.Config, cfg),
-		Display:  NewDisplayHandler(services.Display, services.ESP32),
-		ESP32:    NewESP32Handler(services.ESP32),
+		Display:  NewDisplayHandler(services.Display, services.Device), // 改为 Device
+		Device:   deviceHandler,  // 新名称
+		ESP32:    deviceHandler,  // 兼容旧代码（指向同一个实例）
 		Export:   NewExportHandler(services.Export),
 		Config:   NewConfigHandler(services.Config, services.AI, services.Photo, services.Prompt, repos.Photo, cfg),
 		Auth:     NewAuthHandler(services.Auth),

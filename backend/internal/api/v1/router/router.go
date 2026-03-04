@@ -70,12 +70,20 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 			system.GET("/environment", handlers.System.Environment)
 		}
 
-		// ESP32 设备相关（API Key 认证）
+		// 设备相关（API Key 认证）- 新路径（推荐）
+		devices := v1.Group("/devices")
+		devices.Use(middleware.APIKeyAuth(services.APIKey))
+		{
+			devices.POST("/register", handlers.Device.Register)
+			devices.POST("/heartbeat", handlers.Device.Heartbeat)
+		}
+
+		// ESP32 设备相关（API Key 认证）- 旧路径（兼容，deprecated）
 		esp32 := v1.Group("/esp32")
 		esp32.Use(middleware.APIKeyAuth(services.APIKey))
 		{
-			esp32.POST("/register", handlers.ESP32.Register)
-			esp32.POST("/heartbeat", handlers.ESP32.Heartbeat)
+			esp32.POST("/register", handlers.ESP32.Register)      // 指向同一个 handler
+			esp32.POST("/heartbeat", handlers.ESP32.Heartbeat)    // 指向同一个 handler
 		}
 
 		// 展示相关（API Key 认证，设备获取照片）
@@ -132,12 +140,20 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				photos.GET("/:id", handlers.Photo.GetPhotoByID)
 			}
 
-			// ESP32 设备管理（需要 JWT 认证）
+			// 设备管理（需要 JWT 认证）- 新路径（推荐）
+			devicesManage := authorized.Group("/devices")
+			{
+				devicesManage.GET("/stats", handlers.Device.GetDeviceStats)
+				devicesManage.GET("", handlers.Device.GetDevices)
+				devicesManage.GET("/:device_id", handlers.Device.GetDeviceByID)
+			}
+
+			// ESP32 设备管理（需要 JWT 认证）- 旧路径（兼容，deprecated）
 			esp32Manage := authorized.Group("/esp32")
 			{
-				esp32Manage.GET("/stats", handlers.ESP32.GetDeviceStats)
-				esp32Manage.GET("/devices", handlers.ESP32.GetDevices)
-				esp32Manage.GET("/devices/:device_id", handlers.ESP32.GetDeviceByID)
+				esp32Manage.GET("/stats", handlers.ESP32.GetDeviceStats)      // 指向同一个 handler
+				esp32Manage.GET("/devices", handlers.ESP32.GetDevices)        // 指向同一个 handler
+				esp32Manage.GET("/devices/:device_id", handlers.ESP32.GetDeviceByID)  // 指向同一个 handler
 			}
 
 			// AI 分析相关

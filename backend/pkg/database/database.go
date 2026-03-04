@@ -82,7 +82,7 @@ func AutoMigrate(db *gorm.DB) error {
 	models := []interface{}{
 		&model.Photo{},
 		&model.DisplayRecord{},
-		&model.ESP32Device{},
+		&model.Device{}, // 改为 Device
 		&model.AppConfig{},
 		&model.City{},
 		&model.User{},
@@ -91,6 +91,64 @@ func AutoMigrate(db *gorm.DB) error {
 
 	if err := db.AutoMigrate(models...); err != nil {
 		return err
+	}
+
+	// 迁移旧表：如果 esp32_devices 表存在，重命名为 devices
+	if err := migrateESP32DevicesToDevices(db); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// migrateESP32DevicesToDevices 迁移旧的 esp32_devices 表到 devices 表
+func migrateESP32DevicesToDevices(db *gorm.DB) error {
+	// 检查旧表是否存在
+	var oldTableExists bool
+	err := db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='esp32_devices'").Scan(&oldTableExists).Error
+	if err != nil {
+		return err
+	}
+
+	if !oldTableExists {
+		return nil // 旧表不存在，无需迁移
+	}
+
+	// 检查新表是否存在
+	var newTableExists bool
+	err = db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='devices'").Scan(&newTableExists).Error
+	if err != nil {
+		return err
+	}
+
+	if newTableExists {
+		// 新表已存在，可能是已迁移过，跳过
+		return nil
+	}
+
+	// 重命名表
+	if err := db.Exec("ALTER TABLE esp32_devices RENAME TO devices").Error; err != nil {
+		return fmt.Errorf("rename table esp32_devices to devices: %w", err)
+	}
+
+	// 添加新字段（使用默认值）
+	if err := db.Exec("ALTER TABLE devices ADD COLUMN device_type VARCHAR(20) DEFAULT 'esp32'").Error; err != nil {
+		// 字段可能已存在，忽略错误
+		if err.Error() != "duplicate column name: device_type" {
+			return fmt.Errorf("add column device_type: %w", err)
+		}
+	}
+
+	if err := db.Exec("ALTER TABLE devices ADD COLUMN hardware_model VARCHAR(50)").Error; err != nil {
+		if err.Error() != "duplicate column name: hardware_model" {
+			return fmt.Errorf("add column hardware_model: %w", err)
+		}
+	}
+
+	if err := db.Exec("ALTER TABLE devices ADD COLUMN platform VARCHAR(20) DEFAULT 'embedded'").Error; err != nil {
+		if err.Error() != "duplicate column name: platform" {
+			return fmt.Errorf("add column platform: %w", err)
+		}
 	}
 
 	return nil

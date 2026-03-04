@@ -81,40 +81,67 @@ type GetDisplayPhotoResponse struct {
 	OverallScore int       `json:"overall_score"`
 }
 
-// ESP32RegisterRequest ESP32 注册请求
-type ESP32RegisterRequest struct {
+// DeviceRegisterRequest 设备注册请求
+type DeviceRegisterRequest struct {
 	DeviceID        string `json:"device_id" binding:"required"`
 	Name            string `json:"name" binding:"required"`
+	DeviceType      string `json:"device_type"`       // 设备类型：esp32/esp8266/android/ios/web（可选，默认 esp32）
+	HardwareModel   string `json:"hardware_model"`    // 硬件型号：ESP32-S3/iPhone 15（可选）
+	Platform        string `json:"platform"`          // 平台：embedded/mobile/web（可选，默认 embedded）
 	ScreenWidth     int    `json:"screen_width" binding:"required,min=1"`
 	ScreenHeight    int    `json:"screen_height" binding:"required,min=1"`
-	FirmwareVersion string `json:"firmware_version"`
+	FirmwareVersion string `json:"firmware_version"`  // 固件/应用版本
 	IPAddress       string `json:"ip_address"`
 	MACAddress      string `json:"mac_address"`
 }
 
-// ESP32RegisterResponse ESP32 注册响应
-type ESP32RegisterResponse struct {
+// DeviceRegisterResponse 设备注册响应
+type DeviceRegisterResponse struct {
 	DeviceID string                 `json:"device_id"`
 	APIKey   string                 `json:"api_key"`
 	Config   map[string]interface{} `json:"config"`
 }
 
-// ESP32HeartbeatRequest ESP32 心跳请求
-type ESP32HeartbeatRequest struct {
-	DeviceID             string `json:"device_id" binding:"required"`
-	BatteryLevel         int    `json:"battery_level"`
-	WiFiRSSI             int    `json:"wifi_rssi"`
-	FreeHeap             int    `json:"free_heap"`
-	LastDisplayPhotoID   int    `json:"last_display_photo_id"`
-	FirmwareVersion      string `json:"firmware_version"`
+// DeviceHeartbeatRequest 设备心跳请求
+type DeviceHeartbeatRequest struct {
+	DeviceID            string `json:"device_id" binding:"required"`
+	BatteryLevel        int    `json:"battery_level"`
+	WiFiRSSI            int    `json:"wifi_rssi"`
+	FreeHeap            int    `json:"free_heap"`
+	LastDisplayPhotoID  int    `json:"last_display_photo_id"`
+	FirmwareVersion     string `json:"firmware_version"`
 }
 
-// ESP32HeartbeatResponse ESP32 心跳响应
-type ESP32HeartbeatResponse struct {
-	ServerTime          time.Time `json:"server_time"`
+// DeviceHeartbeatResponse 设备心跳响应
+type DeviceHeartbeatResponse struct {
+	ServerTime           time.Time `json:"server_time"`
 	NextRefreshInSeconds int       `json:"next_refresh_in_seconds"`
-	HasNewFirmware      bool      `json:"has_new_firmware"`
+	HasNewFirmware       bool      `json:"has_new_firmware"`
 }
+
+// DeviceStatsResponse 设备统计响应
+type DeviceStatsResponse struct {
+	Total      int64            `json:"total"`
+	Online     int64            `json:"online"`
+	ByType     map[string]int64 `json:"by_type"`     // 按设备类型统计
+	ByPlatform map[string]int64 `json:"by_platform"` // 按平台统计
+}
+
+// ESP32RegisterRequest ESP32 注册请求（兼容旧代码）
+// Deprecated: 使用 DeviceRegisterRequest 代替
+type ESP32RegisterRequest = DeviceRegisterRequest
+
+// ESP32RegisterResponse ESP32 注册响应（兼容旧代码）
+// Deprecated: 使用 DeviceRegisterResponse 代替
+type ESP32RegisterResponse = DeviceRegisterResponse
+
+// ESP32HeartbeatRequest ESP32 心跳请求（兼容旧代码）
+// Deprecated: 使用 DeviceHeartbeatRequest 代替
+type ESP32HeartbeatRequest = DeviceHeartbeatRequest
+
+// ESP32HeartbeatResponse ESP32 心跳响应（兼容旧代码）
+// Deprecated: 使用 DeviceHeartbeatResponse 代替
+type ESP32HeartbeatResponse = DeviceHeartbeatResponse
 
 // RecordDisplayRequest 上报展示记录请求
 type RecordDisplayRequest struct {

@@ -28,8 +28,8 @@ func (DisplayRecord) TableName() string {
 	return "display_records"
 }
 
-// ESP32Device ESP32 设备
-type ESP32Device struct {
+// Device 设备（电子相框、手机、平板等）
+type Device struct {
 	ID        uint           `gorm:"primarykey" json:"id"`
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -41,10 +41,15 @@ type ESP32Device struct {
 	APIKey    string `gorm:"type:varchar(100);not null;uniqueIndex:idx_api_key" json:"-"`          // API Key（不返回）
 	IPAddress string `gorm:"type:varchar(50)" json:"ip_address"`                                   // IP 地址
 
+	// 设备类型信息（新增）
+	DeviceType    string `gorm:"type:varchar(20);default:'esp32';index:idx_device_type" json:"device_type"`    // 设备类型：esp32/esp8266/stm32/android/ios/web
+	HardwareModel string `gorm:"type:varchar(50)" json:"hardware_model"`                                       // 硬件型号：ESP32-S3/iPhone 15/Pixel 8
+	Platform      string `gorm:"type:varchar(20);default:'embedded'" json:"platform"`                          // 平台类型：embedded/mobile/web
+
 	// 硬件信息
 	ScreenWidth     int    `gorm:"not null" json:"screen_width"`                  // 屏幕宽度
 	ScreenHeight    int    `gorm:"not null" json:"screen_height"`                 // 屏幕高度
-	FirmwareVersion string `gorm:"type:varchar(20)" json:"firmware_version"`      // 固件版本
+	FirmwareVersion string `gorm:"type:varchar(20)" json:"firmware_version"`      // 固件/应用版本
 	MACAddress      string `gorm:"type:varchar(20)" json:"mac_address"`           // MAC 地址
 
 	// 状态信息
@@ -61,17 +66,21 @@ type ESP32Device struct {
 }
 
 // TableName 指定表名
-func (ESP32Device) TableName() string {
-	return "esp32_devices"
+func (Device) TableName() string {
+	return "devices"
 }
 
 // IsOnline 判断设备是否在线（5分钟内有心跳）
-func (d *ESP32Device) IsOnline() bool {
+func (d *Device) IsOnline() bool {
 	if d.LastHeartbeat == nil {
 		return false
 	}
 	return time.Since(*d.LastHeartbeat) < 5*time.Minute
 }
+
+// ESP32Device 类型别名，保持向后兼容
+// Deprecated: 使用 Device 代替
+type ESP32Device = Device
 
 // AppConfig 应用配置
 type AppConfig struct {

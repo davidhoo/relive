@@ -1,8 +1,9 @@
-# ESP32 通信协议设计
+# 设备通信协议设计
 
-> ESP32 电子相框与后端服务的通信协议定义
-> 最后更新：2026-02-28
-> 版本：v1.0
+> 电子相框设备与后端服务的通信协议定义
+> 支持多种硬件平台：ESP32、ESP8266、STM32、Android、iOS等
+> 最后更新：2026-03-04
+> 版本：v2.0
 
 ---
 
@@ -25,23 +26,29 @@
 
 ### 1.1 通信方式
 
-**协议**：HTTP/HTTPS over WiFi 2.4GHz
+**协议**：HTTP/HTTPS over WiFi/移动网络
 
 **架构**：
 ```
-┌──────────────┐         WiFi          ┌──────────────┐
+┌──────────────┐         Network       ┌──────────────┐
 │              │  ◄─────────────────►  │              │
-│  ESP32-S3    │    HTTP/HTTPS         │  Relive      │
-│  墨水屏相框   │                       │  Backend     │
-│              │                       │  (NAS)       │
+│   Device     │    HTTP/HTTPS         │   Relive     │
+│ (多种硬件)    │                       │   Backend    │
+│              │                       │   (NAS)      │
 └──────────────┘                       └──────────────┘
+
+支持的设备类型：
+- 嵌入式设备：ESP32-S3、ESP8266、STM32
+- 移动设备：Android、iOS
+- Web 设备：浏览器推送
 ```
 
 **特点**：
 - ✅ 简单可靠（基于 HTTP）
 - ✅ 易于调试
 - ✅ 支持 HTTPS 加密（可选）
-- ✅ 低功耗（深度睡眠 + 定时唤醒）
+- ✅ 跨平台支持（嵌入式/移动/Web）
+- ✅ 低功耗（嵌入式设备支持深度睡眠）
 
 ### 1.2 工作流程
 
@@ -130,21 +137,48 @@ const int SERVER_PORT = 8080;
 
 ### 3.1 接口清单
 
-ESP32 需要调用以下 API：
+设备需要调用以下 API：
 
-| 接口 | 方法 | 路径 | 说明 |
-|------|------|------|------|
-| **设备注册** | POST | `/api/v1/esp32/register` | 首次注册设备 |
-| **设备心跳** | POST | `/api/v1/esp32/heartbeat` | 上报状态 |
-| **获取展示照片** | GET | `/api/v1/esp32/display/photo` | 获取要展示的照片信息 |
-| **下载照片图片** | GET | `/api/v1/esp32/image/{photo_id}` | 下载墨水屏图片 |
-| **上报展示记录** | POST | `/api/v1/esp32/display/record` | 记录展示历史 |
-| **获取配置** | GET | `/api/v1/esp32/config` | 获取设备配置 |
-| **检查更新** | GET | `/api/v1/esp32/ota/check` | 检查固件更新 |
+| 接口 | 方法 | 推荐路径 | 兼容路径（ESP32） | 说明 |
+|------|------|---------|------------------|------|
+| **设备注册** | POST | `/api/v1/devices/register` | `/api/v1/esp32/register` | 首次注册设备 |
+| **设备心跳** | POST | `/api/v1/devices/heartbeat` | `/api/v1/esp32/heartbeat` | 上报状态 |
+| **获取展示照片** | GET | `/api/v1/display/photo` | - | 获取要展示的照片信息 |
+| **下载照片图片** | GET | `/api/v1/photos/{id}/image` | - | 下载照片图片 |
+| **上报展示记录** | POST | `/api/v1/display/record` | - | 记录展示历史 |
+
+**注意**：
+- 新设备推荐使用 `/api/v1/devices/*` 路径
+- ESP32 现有固件可继续使用 `/api/v1/esp32/*` 路径（向后兼容）
+- 两种路径完全等效，只是命名不同
 
 ### 3.2 设备注册
 
-**请求**：
+**请求**（支持多种设备类型）：
+```http
+POST /api/v1/devices/register HTTP/1.1
+Host: 192.168.1.100:8080
+Content-Type: application/json
+
+{
+  "device_id": "ESP32-ABCD1234",
+  "name": "客厅相框",
+  "device_type": "esp32",           // 新增：设备类型（esp32/android/ios/esp8266/stm32）
+  "hardware_model": "ESP32-S3",     // 新增：硬件型号
+  "platform": "embedded",           // 新增：平台类型（embedded/mobile/web）
+  "screen_width": 800,
+  "screen_height": 480,
+  "firmware_version": "1.0.0",
+  "ip_address": "192.168.1.150",
+  "mac_address": "AA:BB:CC:DD:EE:FF"
+}
+```
+
+**注意**：`device_type`、`hardware_model`、`platform` 为可选字段，默认值：
+- `device_type`: "esp32"
+- `platform`: "embedded"
+
+**ESP32 兼容请求**（旧格式仍然有效）：
 ```http
 POST /api/v1/esp32/register HTTP/1.1
 Host: 192.168.1.100:8080

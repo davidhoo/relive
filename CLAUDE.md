@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Relive is an intelligent photo memory frame system that analyzes photos using AI and displays them on e-ink frames. It consists of:
+Relive is an intelligent photo memory frame system that analyzes photos using AI and displays them on various devices. It consists of:
 - **Backend**: Go (Gin + GORM + SQLite) - REST API server
 - **Frontend**: Vue 3 + TypeScript + Vite + Element Plus - Web management interface
 - **relive-analyzer**: Standalone CLI tool for offline AI batch analysis
+- **Devices**: Support for multiple hardware platforms (ESP32, Android, iOS, etc.)
 
 ## Development Commands
 

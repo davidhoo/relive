@@ -12,40 +12,44 @@ import (
 	"github.com/davidhoo/relive/pkg/logger"
 )
 
-// ESP32Service ESP32 设备服务接口
-type ESP32Service interface {
+// DeviceService 设备服务接口
+type DeviceService interface {
 	// 注册
-	Register(req *model.ESP32RegisterRequest) (*model.ESP32RegisterResponse, error)
+	Register(req *model.DeviceRegisterRequest) (*model.DeviceRegisterResponse, error)
 
 	// 心跳
-	Heartbeat(req *model.ESP32HeartbeatRequest) (*model.ESP32HeartbeatResponse, error)
+	Heartbeat(req *model.DeviceHeartbeatRequest) (*model.DeviceHeartbeatResponse, error)
 
 	// 查询
-	GetByDeviceID(deviceID string) (*model.ESP32Device, error)
-	GetByAPIKey(apiKey string) (*model.ESP32Device, error)
-	List(page, pageSize int) ([]*model.ESP32Device, int64, error)
+	GetByDeviceID(deviceID string) (*model.Device, error)
+	GetByAPIKey(apiKey string) (*model.Device, error)
+	List(page, pageSize int) ([]*model.Device, int64, error)
+	ListByDeviceType(deviceType string) ([]*model.Device, error)
+	ListByPlatform(platform string) ([]*model.Device, error)
 
 	// 统计
 	CountAll() (int64, error)
 	CountOnline() (int64, error)
+	CountByDeviceType(deviceType string) (int64, error)
+	CountByPlatform(platform string) (int64, error)
 }
 
-// esp32Service ESP32 设备服务实现
-type esp32Service struct {
-	repo   repository.ESP32DeviceRepository
+// deviceService 设备服务实现
+type deviceService struct {
+	repo   repository.DeviceRepository
 	config *config.Config
 }
 
-// NewESP32Service 创建 ESP32 设备服务
-func NewESP32Service(repo repository.ESP32DeviceRepository, cfg *config.Config) ESP32Service {
-	return &esp32Service{
+// NewDeviceService 创建设备服务
+func NewDeviceService(repo repository.DeviceRepository, cfg *config.Config) DeviceService {
+	return &deviceService{
 		repo:   repo,
 		config: cfg,
 	}
 }
 
 // Register 注册设备
-func (s *esp32Service) Register(req *model.ESP32RegisterRequest) (*model.ESP32RegisterResponse, error) {
+func (s *deviceService) Register(req *model.DeviceRegisterRequest) (*model.DeviceRegisterResponse, error) {
 	// 检查设备是否已存在
 	exists, err := s.repo.ExistsByDeviceID(req.DeviceID)
 	if err != nil {
@@ -59,10 +63,10 @@ func (s *esp32Service) Register(req *model.ESP32RegisterRequest) (*model.ESP32Re
 			return nil, fmt.Errorf("get existing device: %w", err)
 		}
 
-		logger.Infof("Device already registered: %s", req.DeviceID)
+		logger.Infof("Device already registered: %s (type: %s)", req.DeviceID, device.DeviceType)
 
 		// 返回响应（不返回完整 API Key，只返回提示）
-		return &model.ESP32RegisterResponse{
+		return &model.DeviceRegisterResponse{
 			DeviceID: device.DeviceID,
 			APIKey:   device.APIKey, // 注意：实际应该不返回，这里为了测试方便
 			Config:   s.getDefaultConfig(),
@@ -75,12 +79,26 @@ func (s *esp32Service) Register(req *model.ESP32RegisterRequest) (*model.ESP32Re
 		return nil, fmt.Errorf("generate api key: %w", err)
 	}
 
+	// 设置默认值
+	deviceType := req.DeviceType
+	if deviceType == "" {
+		deviceType = "esp32" // 默认 ESP32
+	}
+
+	platform := req.Platform
+	if platform == "" {
+		platform = "embedded" // 默认嵌入式
+	}
+
 	// 创建设备
-	device := &model.ESP32Device{
+	device := &model.Device{
 		DeviceID:        req.DeviceID,
 		Name:            req.Name,
 		APIKey:          apiKey,
 		IPAddress:       req.IPAddress,
+		DeviceType:      deviceType,
+		HardwareModel:   req.HardwareModel,
+		Platform:        platform,
 		ScreenWidth:     req.ScreenWidth,
 		ScreenHeight:    req.ScreenHeight,
 		FirmwareVersion: req.FirmwareVersion,
@@ -95,9 +113,10 @@ func (s *esp32Service) Register(req *model.ESP32RegisterRequest) (*model.ESP32Re
 		return nil, fmt.Errorf("create device: %w", err)
 	}
 
-	logger.Infof("Device registered successfully: %s", req.DeviceID)
+	logger.Infof("Device registered successfully: %s (type: %s, platform: %s)",
+		req.DeviceID, deviceType, platform)
 
-	return &model.ESP32RegisterResponse{
+	return &model.DeviceRegisterResponse{
 		DeviceID: device.DeviceID,
 		APIKey:   apiKey,
 		Config:   s.getDefaultConfig(),
@@ -105,7 +124,7 @@ func (s *esp32Service) Register(req *model.ESP32RegisterRequest) (*model.ESP32Re
 }
 
 // Heartbeat 处理心跳
-func (s *esp32Service) Heartbeat(req *model.ESP32HeartbeatRequest) (*model.ESP32HeartbeatResponse, error) {
+func (s *deviceService) Heartbeat(req *model.DeviceHeartbeatRequest) (*model.DeviceHeartbeatResponse, error) {
 	// 更新心跳信息
 	err := s.repo.UpdateHeartbeat(req.DeviceID, req.BatteryLevel, req.WiFiRSSI)
 	if err != nil {
@@ -115,7 +134,7 @@ func (s *esp32Service) Heartbeat(req *model.ESP32HeartbeatRequest) (*model.ESP32
 	// 计算下次刷新时间
 	nextRefreshIn := s.calculateNextRefresh()
 
-	return &model.ESP32HeartbeatResponse{
+	return &model.DeviceHeartbeatResponse{
 		ServerTime:           time.Now(),
 		NextRefreshInSeconds: nextRefreshIn,
 		HasNewFirmware:       false, // TODO: 实现固件更新检查
@@ -123,17 +142,17 @@ func (s *esp32Service) Heartbeat(req *model.ESP32HeartbeatRequest) (*model.ESP32
 }
 
 // GetByDeviceID 根据设备 ID 获取设备
-func (s *esp32Service) GetByDeviceID(deviceID string) (*model.ESP32Device, error) {
+func (s *deviceService) GetByDeviceID(deviceID string) (*model.Device, error) {
 	return s.repo.GetByDeviceID(deviceID)
 }
 
 // GetByAPIKey 根据 API Key 获取设备
-func (s *esp32Service) GetByAPIKey(apiKey string) (*model.ESP32Device, error) {
+func (s *deviceService) GetByAPIKey(apiKey string) (*model.Device, error) {
 	return s.repo.GetByAPIKey(apiKey)
 }
 
 // List 获取设备列表
-func (s *esp32Service) List(page, pageSize int) ([]*model.ESP32Device, int64, error) {
+func (s *deviceService) List(page, pageSize int) ([]*model.Device, int64, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -147,18 +166,38 @@ func (s *esp32Service) List(page, pageSize int) ([]*model.ESP32Device, int64, er
 	return s.repo.List(page, pageSize)
 }
 
+// ListByDeviceType 根据设备类型查询
+func (s *deviceService) ListByDeviceType(deviceType string) ([]*model.Device, error) {
+	return s.repo.ListByDeviceType(deviceType)
+}
+
+// ListByPlatform 根据平台查询
+func (s *deviceService) ListByPlatform(platform string) ([]*model.Device, error) {
+	return s.repo.ListByPlatform(platform)
+}
+
 // CountAll 统计设备总数
-func (s *esp32Service) CountAll() (int64, error) {
+func (s *deviceService) CountAll() (int64, error) {
 	return s.repo.Count()
 }
 
 // CountOnline 统计在线设备数
-func (s *esp32Service) CountOnline() (int64, error) {
+func (s *deviceService) CountOnline() (int64, error) {
 	return s.repo.CountOnline()
 }
 
+// CountByDeviceType 根据设备类型统计
+func (s *deviceService) CountByDeviceType(deviceType string) (int64, error) {
+	return s.repo.CountByDeviceType(deviceType)
+}
+
+// CountByPlatform 根据平台统计
+func (s *deviceService) CountByPlatform(platform string) (int64, error) {
+	return s.repo.CountByPlatform(platform)
+}
+
 // generateAPIKey 生成 API Key
-func (s *esp32Service) generateAPIKey() (string, error) {
+func (s *deviceService) generateAPIKey() (string, error) {
 	// 生成 32 字节随机数
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
@@ -186,18 +225,18 @@ func (s *esp32Service) generateAPIKey() (string, error) {
 }
 
 // getDefaultConfig 获取默认设备配置
-func (s *esp32Service) getDefaultConfig() map[string]interface{} {
+func (s *deviceService) getDefaultConfig() map[string]interface{} {
 	return map[string]interface{}{
-		"refresh_hour":   []int{8, 20}, // 每天 8:00 和 20:00 刷新
-		"brightness":     100,
-		"sleep_mode":     "deep",
-		"ota_enabled":    true,
-		"timezone":       "Asia/Shanghai",
+		"refresh_hour": []int{8, 20}, // 每天 8:00 和 20:00 刷新
+		"brightness":   100,
+		"sleep_mode":   "deep",
+		"ota_enabled":  true,
+		"timezone":     "Asia/Shanghai",
 	}
 }
 
 // calculateNextRefresh 计算下次刷新时间（秒）
-func (s *esp32Service) calculateNextRefresh() int {
+func (s *deviceService) calculateNextRefresh() int {
 	now := time.Now()
 	currentHour := now.Hour()
 
@@ -219,4 +258,16 @@ func (s *esp32Service) calculateNextRefresh() int {
 
 	duration := nextRefresh.Sub(now)
 	return int(duration.Seconds())
+}
+
+// ============= 向后兼容 =============
+
+// ESP32Service 类型别名，保持向后兼容
+// Deprecated: 使用 DeviceService 代替
+type ESP32Service = DeviceService
+
+// NewESP32Service 创建设备服务（兼容旧代码）
+// Deprecated: 使用 NewDeviceService 代替
+func NewESP32Service(repo repository.DeviceRepository, cfg *config.Config) DeviceService {
+	return NewDeviceService(repo, cfg)
 }
