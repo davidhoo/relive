@@ -215,10 +215,10 @@ docker-compose -f docker-compose.prod.yml up -d
 docker-compose -f docker-compose.prod.yml logs -f
 
 # 健康检查
-curl http://localhost:8080/system/health
+curl http://localhost:8080/api/v1/system/health
 
-# 访问前端
-open http://localhost:8888
+# 访问 Web 界面
+open http://localhost:8080
 ```
 
 ### 多架构测试（可选）

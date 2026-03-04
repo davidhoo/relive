@@ -46,8 +46,7 @@ chmod +x deploy.sh
 ### 3. 访问系统
 
 部署完成后，访问：
-- **前端**: http://your-nas-ip:8888
-- **后端**: http://your-nas-ip:8080
+- **Web 界面**: http://your-nas-ip:8080
 
 **默认账号**：
 - 用户名：`admin`
@@ -61,7 +60,7 @@ chmod +x deploy.sh
 
 ```yaml
 services:
-  relive-backend:
+  relive:
     volumes:
       # 修改为你的照片目录
       - /volume1/photos/2024:/app/photos/2024:ro
@@ -150,7 +149,7 @@ server {
     ssl_certificate_key /path/to/key.pem;
 
     location / {
-        proxy_pass http://127.0.0.1:8888;
+        proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -171,7 +170,7 @@ server {
 
 ```bash
 # 查看日志
-docker logs relive-backend
+docker logs relive
 
 # 检查端口占用
 netstat -tlnp | grep 8080
@@ -181,14 +180,14 @@ netstat -tlnp | grep 8080
 
 检查 `docker-compose.yml` 中的照片路径是否正确：
 ```bash
-docker exec relive-backend ls /app/photos
+docker exec relive ls /app/photos
 ```
 
 ### AI 分析失败
 
 查看 AI 配置是否正确：
 ```bash
-docker logs relive-backend | grep "AI"
+docker logs relive | grep "AI"
 ```
 
 ---
@@ -200,7 +199,7 @@ docker logs relive-backend | grep "AI"
 ```yaml
 # docker-compose.yml
 services:
-  relive-backend:
+  relive:
     deploy:
       resources:
         limits:

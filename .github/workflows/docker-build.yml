@@ -1,4 +1,4 @@
-name: Build and Push Multi-arch Images
+name: Build and Push Multi-arch Image
 
 on:
   push:
@@ -43,71 +43,66 @@ jobs:
             echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Build and push backend
+      - name: Build and push image
         uses: docker/build-push-action@v4
         with:
           context: ./backend
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            davidhu/relive-backend:${{ steps.version.outputs.version }}
-            davidhu/relive-backend:latest
+            davidhu/relive:${{ steps.version.outputs.version }}
+            davidhu/relive:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
 
-      - name: Build and push frontend
-        uses: docker/build-push-action@v4
-        with:
-          context: ./frontend
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            davidhu/relive-frontend:${{ steps.version.outputs.version }}
-            davidhu/relive-frontend:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Verify images
+      - name: Verify image
         run: |
-          echo "Verifying backend image..."
-          docker buildx imagetools inspect davidhu/relive-backend:${{ steps.version.outputs.version }}
+          echo "Verifying image..."
+          docker buildx imagetools inspect davidhu/relive:${{ steps.version.outputs.version }}
 
-          echo "Verifying frontend image..."
-          docker buildx imagetools inspect davidhu/relive-frontend:${{ steps.version.outputs.version }}
-
-      - name: Test images
+      - name: Test image
         run: |
-          echo "Testing amd64 backend..."
-          docker run --rm --platform linux/amd64 davidhu/relive-backend:${{ steps.version.outputs.version }} /app/relive --version || echo "Backend test skipped"
+          echo "Testing amd64..."
+          docker run --rm --platform linux/amd64 davidhu/relive:${{ steps.version.outputs.version }} /app/relive --version || echo "Test skipped"
 
-          echo "Testing arm64 backend..."
-          docker run --rm --platform linux/arm64 davidhu/relive-backend:${{ steps.version.outputs.version }} /app/relive --version || echo "Backend test skipped"
+          echo "Testing arm64..."
+          docker run --rm --platform linux/arm64 davidhu/relive:${{ steps.version.outputs.version }} /app/relive --version || echo "Test skipped"
 
       - name: Create release notes
         run: |
           cat > release-notes.md << EOF
-          ## Docker Images
+          ## Docker Image
 
-          Multi-architecture support for:
+          Single image with embedded frontend, multi-architecture support:
           - ✅ linux/amd64 (Intel/AMD x86_64)
           - ✅ linux/arm64 (Apple Silicon, ARM NAS, Raspberry Pi)
 
-          ### Pull Images
+          ### Pull Image
           \`\`\`bash
-          docker pull davidhu/relive-backend:${{ steps.version.outputs.version }}
-          docker pull davidhu/relive-frontend:${{ steps.version.outputs.version }}
+          docker pull davidhu/relive:${{ steps.version.outputs.version }}
           \`\`\`
 
-          ### Deploy
+          ### Quick Deploy
           \`\`\`bash
           curl -fsSL https://raw.githubusercontent.com/davidhoo/relive/main/install.sh | bash
           \`\`\`
 
-          ### Image Sizes
-          - Backend: ~50MB (per architecture)
-          - Frontend: ~25MB (per architecture)
+          ### Manual Deploy
+          \`\`\`bash
+          docker run -d \
+            -p 8080:8080 \
+            -v ./data:/app/data \
+            -v /path/to/photos:/app/photos:ro \
+            -e JWT_SECRET=your-secret-key \
+            davidhu/relive:${{ steps.version.outputs.version }}
+          \`\`\`
+
+          Access: http://localhost:8080
+
+          ### Image Size
+          ~75MB (per architecture, includes frontend)
 
           See [Deployment Guide](https://github.com/davidhoo/relive/blob/main/docs/DEPLOY_FROM_DOCKERHUB.md) for details.
           EOF

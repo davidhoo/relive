@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/davidhoo/relive/main/install.sh | b
 - ✅ 拉取 DockerHub 镜像
 - ✅ 启动服务
 
-**完成后访问：** `http://your-ip:8888`
+**完成后访问：** `http://your-ip:8080`
 
 ---
 
@@ -45,9 +45,6 @@ curl -fsSL https://raw.githubusercontent.com/davidhoo/relive/main/docker-compose
 
 # 后端配置
 curl -fsSL https://raw.githubusercontent.com/davidhoo/relive/main/backend/config.prod.yaml -o config.prod.yaml
-
-# Nginx 配置（可选）
-curl -fsSL https://raw.githubusercontent.com/davidhoo/relive/main/nginx.conf -o nginx.conf
 ```
 
 #### 步骤 3：创建 .env 文件
@@ -57,8 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/davidhoo/relive/main/nginx.conf -o 
 cat > .env << EOF
 # Relive 环境变量配置
 JWT_SECRET=$(openssl rand -base64 32)
-FRONTEND_PORT=8888
-BACKEND_PORT=8080
+RELIVE_PORT=8080
 AUTO_IMPORT_CITIES=true
 EOF
 ```
@@ -69,7 +65,7 @@ EOF
 
 ```yaml
 services:
-  relive-backend:
+  relive:
     volumes:
       # 取消注释并修改为你的路径
       - /volume1/photos/2024:/app/photos/2024:ro
@@ -110,9 +106,9 @@ docker-compose logs -f
 ```yaml
 version: '3.8'
 services:
-  relive-backend:
-    image: davidhoo/relive-backend:latest
-    container_name: relive-backend
+  relive:
+    image: davidhu/relive:latest
+    container_name: relive
     restart: unless-stopped
     ports:
       - "8080:8080"
@@ -124,15 +120,6 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - JWT_SECRET=${JWT_SECRET}
-
-  relive-frontend:
-    image: davidhoo/relive-frontend:latest
-    container_name: relive-frontend
-    restart: unless-stopped
-    ports:
-      - "8888:80"
-    depends_on:
-      - relive-backend
 ```
 
 4. **设置环境变量**
@@ -148,14 +135,12 @@ services:
 
 1. **下载镜像**
    - 打开 Docker 应用
-   - 注册表 → 搜索 `davidhoo/relive-backend`
-   - 下载 latest 标签
-   - 搜索 `davidhoo/relive-frontend`
+   - 注册表 → 搜索 `davidhu/relive`
    - 下载 latest 标签
 
-2. **创建容器 - 后端**
-   - 映像 → `davidhoo/relive-backend:latest` → 启动
-   - 容器名称：`relive-backend`
+2. **创建容器**
+   - 映像 → `davidhu/relive:latest` → 启动
+   - 容器名称：`relive`
    - 端口设置：
      - 本地端口：`8080` → 容器端口：`8080`
    - 卷：
@@ -165,13 +150,6 @@ services:
    - 环境：
      - `TZ` = `Asia/Shanghai`
      - `JWT_SECRET` = `<生成的密钥>`
-
-3. **创建容器 - 前端**
-   - 映像 → `davidhoo/relive-frontend:latest` → 启动
-   - 容器名称：`relive-frontend`
-   - 端口设置：
-     - 本地端口：`8888` → 容器端口：`80`
-   - 链接：连接到 `relive-backend`
 
 ---
 
@@ -207,7 +185,6 @@ head -c 32 /dev/urandom | base64
 ~/relive/                          # 安装目录
 ├── docker-compose.yml             # Docker Compose 配置
 ├── config.prod.yaml               # 后端配置
-├── nginx.conf                     # Nginx 配置（可选）
 ├── .env                           # 环境变量（包含密钥）
 └── data/                          # 数据目录
     └── backend/
@@ -222,7 +199,7 @@ head -c 32 /dev/urandom | base64
 
 ### 1. 访问系统
 
-打开浏览器访问：`http://your-nas-ip:8888`
+打开浏览器访问：`http://your-nas-ip:8080`
 
 ### 2. 登录
 
@@ -254,12 +231,6 @@ head -c 32 /dev/urandom | base64
 ```bash
 cd ~/relive
 docker-compose logs -f
-
-# 只看后端日志
-docker-compose logs -f relive-backend
-
-# 只看前端日志
-docker-compose logs -f relive-frontend
 ```
 
 ### 重启服务
@@ -308,13 +279,9 @@ sqlite3 ~/relive/data/backend/relive.db ".backup '~/relive-backup.db'"
 
 ```yaml
 services:
-  relive-backend:
+  relive:
     ports:
       - "127.0.0.1:8080:8080"  # 只允许本地访问
-
-  relive-frontend:
-    ports:
-      - "127.0.0.1:8888:80"    # 只允许本地访问
 ```
 
 然后配置 Nginx 反向代理。
@@ -332,7 +299,7 @@ server {
     ssl_certificate_key /path/to/key.pem;
 
     location / {
-        proxy_pass http://127.0.0.1:8888;
+        proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -347,8 +314,8 @@ server {
 
 ```bash
 # iptables 示例
-iptables -A INPUT -p tcp --dport 8888 -s 192.168.1.0/24 -j ACCEPT
-iptables -A INPUT -p tcp --dport 8888 -j DROP
+iptables -A INPUT -p tcp --dport 8080 -s 192.168.1.0/24 -j ACCEPT
+iptables -A INPUT -p tcp --dport 8080 -j DROP
 ```
 
 详见 [SECURITY.md](../SECURITY.md)
@@ -364,12 +331,10 @@ iptables -A INPUT -p tcp --dport 8888 -j DROP
 docker ps -a
 
 # 查看日志
-docker logs relive-backend
-docker logs relive-frontend
+docker logs relive
 
 # 检查端口占用
 netstat -tlnp | grep 8080
-netstat -tlnp | grep 8888
 ```
 
 ### 无法访问服务
@@ -383,7 +348,7 @@ netstat -tlnp | grep 8888
 
 ```bash
 # 进入容器检查
-docker exec -it relive-backend sh
+docker exec -it relive sh
 ls -la /app/photos
 
 # 检查权限
@@ -410,7 +375,7 @@ sqlite3 ~/relive/data/backend/relive.db ".tables"
 
 ```yaml
 services:
-  relive-backend:
+  relive:
     deploy:
       resources:
         limits:
@@ -424,7 +389,7 @@ services:
 
 ```yaml
 services:
-  relive-backend:
+  relive:
     logging:
       driver: "json-file"
       options:
@@ -439,7 +404,6 @@ services:
 - [快速开始](QUICKSTART.md) - 5分钟上手指南
 - [安全指南](../SECURITY.md) - 安全配置和最佳实践
 - [完整部署指南](DEPLOYMENT.md) - 详细配置说明
-- [Docker 发布指南](DOCKER_RELEASE.md) - 镜像构建和发布
 
 ---
 
@@ -452,5 +416,5 @@ services:
 ---
 
 **部署时间**：5-10 分钟
-**镜像大小**：后端 ~50MB + 前端 ~25MB
+**镜像大小**：~75MB（包含前端）
 **推荐配置**：2核4GB内存

@@ -72,11 +72,10 @@ cp .env.example .env
 nano .env  # 修改 PHOTOS_PATH
 
 # 2. 一键启动
-./start.sh
+make deploy
 
 # 3. 访问
-# 前端：http://localhost:8888
-# 后端：http://localhost:8080
+# Web 界面：http://localhost:8080
 ```
 
 ### 方式 2：开发环境
@@ -102,7 +101,8 @@ make dev-frontend # 只前端
 
 # 生产环境
 make build        # 构建镜像
-make start        # 启动服务
+make deploy       # 本地构建并启动
+make prod         # 使用 DockerHub 镜像启动
 make logs         # 查看日志
 make stop         # 停止服务
 ```
@@ -136,7 +136,7 @@ PHOTOS_PATH=/your/photos/directory
 
 #### 3. 扫描照片
 
-访问 http://localhost:8888
+访问 http://localhost:8080
 
 - 点击 **"开始扫描"**
 - 等待扫描完成（约 1000 张/分钟）
@@ -289,10 +289,7 @@ make start
 
 ```bash
 # 检查后端
-curl http://localhost:8080/system/health
-
-# 检查前端
-curl http://localhost:8888/health
+curl http://localhost:8080/api/v1/system/health
 ```
 
 ### 2. 日志管理

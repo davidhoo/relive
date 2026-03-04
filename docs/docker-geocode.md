@@ -38,7 +38,7 @@ unzip cities500.txt
 docker-compose up -d
 
 # 4. 查看导入日志
-docker-compose logs -f relive-backend | grep -E "City|city|导入|import"
+docker-compose logs -f relive | grep -E "City|city|导入|import"
 ```
 
 ### 工作原理
@@ -54,7 +54,7 @@ docker-compose logs -f relive-backend | grep -E "City|city|导入|import"
 `docker-compose.yml` 已预设挂载（默认注释）：
 
 ```yaml
-relive-backend:
+relive:
   volumes:
     # ... 其他挂载
     # 取消下方注释启用自动导入
@@ -107,7 +107,7 @@ exec "$@"
 docker-compose up -d
 
 # 查看导入日志
-docker-compose logs -f relive-backend | grep -E "city|City|导入"
+docker-compose logs -f relive | grep -E "city|City|导入"
 ```
 
 首次启动时会自动检测并导入城市数据，后续启动会跳过。
@@ -118,10 +118,10 @@ docker-compose logs -f relive-backend | grep -E "city|City|导入"
 
 ```bash
 # 1. 复制数据文件到容器
-docker cp cities500.txt relive-backend:/app/data/
+docker cp cities500.txt relive:/app/data/
 
 # 2. 进入容器
-docker exec -it relive-backend sh
+docker exec -it relive sh
 
 # 3. 执行导入
 /app/import-cities --file /app/data/cities500.txt --config /app/config.yaml
@@ -134,10 +134,10 @@ exit
 
 ```bash
 # 检查城市数量
-docker exec relive-backend sqlite3 /app/data/relive.db "SELECT COUNT(*) FROM cities;"
+docker exec relive sqlite3 /app/data/relive.db "SELECT COUNT(*) FROM cities;"
 
 # 查看部分城市
-docker exec relive-backend sqlite3 /app/data/relive.db "SELECT name, country FROM cities LIMIT 10;"
+docker exec relive sqlite3 /app/data/relive.db "SELECT name, country FROM cities LIMIT 10;"
 ```
 
 ## 方案三：预填充数据库（开发/测试）
@@ -196,8 +196,8 @@ wget https://download.geonames.org/export/dump/cities500.zip
 unzip -o cities500.zip
 
 # 2. 复制到容器并重新导入
-docker cp cities500.txt relive-backend:/app/data/
-docker exec relive-backend /app/import-cities --file /app/data/cities500.txt --config /app/config.yaml
+docker cp cities500.txt relive:/app/data/
+docker exec relive /app/import-cities --file /app/data/cities500.txt --config /app/config.yaml
 ```
 
 ## 常见问题
@@ -224,7 +224,7 @@ A: 在系统设置中配置离线模式后，上传带 GPS 的照片，检查位
 
 ```bash
 # 查看日志
-docker-compose logs -f relive-backend | grep -i geocode
+docker-compose logs -f relive | grep -i geocode
 ```
 
 ## 数据表结构

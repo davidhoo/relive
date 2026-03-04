@@ -43,10 +43,10 @@ QWEN_API_KEY=your-qwen-api-key
 OPENAI_API_KEY=your-openai-api-key
 ```
 
-### 3. 运行启动脚本
+### 3. 启动服务
 
 ```bash
-./start.sh
+make deploy
 ```
 
 启动脚本会自动：
@@ -56,16 +56,16 @@ OPENAI_API_KEY=your-openai-api-key
 - ✅ 启动所有服务
 
 等待 30 秒后访问：
-- **前端界面**：http://localhost:8888
-- **后端 API**：http://localhost:8080
+- **Web 界面**：http://localhost:8080
+- **API 健康检查**：http://localhost:8080/api/v1/system/health
 
 ---
 
 ## 🎯 首次使用流程
 
-### 1. 访问前端界面
+### 1. 访问 Web 界面
 
-打开浏览器访问 http://localhost:8888
+打开浏览器访问 http://localhost:8080
 
 ### 2. 扫描照片
 
@@ -175,11 +175,8 @@ docker-compose ps
 # 所有服务
 docker-compose logs -f
 
-# 只看后端
-docker-compose logs -f relive-backend
-
-# 只看前端
-docker-compose logs -f relive-frontend
+# 只看 relive
+docker-compose logs -f relive
 ```
 
 ### 停止服务
@@ -198,7 +195,7 @@ docker-compose restart
 git pull
 
 # 重新构建并启动
-./start.sh
+make deploy
 ```
 
 ---
@@ -207,9 +204,9 @@ git pull
 
 ### 前端无法连接后端
 
-检查后端是否正常运行：
+检查服务是否正常运行：
 ```bash
-curl http://localhost:8080/system/health
+curl http://localhost:8080/api/v1/system/health
 ```
 
 应该返回：
@@ -225,12 +222,12 @@ curl http://localhost:8080/system/health
 
 1. 检查照片目录权限
 ```bash
-docker-compose exec relive-backend ls -la /app/photos
+docker-compose exec relive ls -la /app/photos
 ```
 
 2. 检查日志
 ```bash
-docker-compose logs relive-backend | grep ERROR
+docker-compose logs relive | grep ERROR
 ```
 
 ### AI 分析失败
@@ -247,7 +244,7 @@ curl -H "Authorization: Bearer $QWEN_API_KEY" \
 
 2. 查看详细日志
 ```bash
-docker-compose logs relive-backend | grep "AI Provider"
+docker-compose logs relive | grep "AI Provider"
 ```
 
 ### 容器无法启动
@@ -258,7 +255,6 @@ docker-compose logs
 
 # 检查端口占用
 netstat -an | grep 8080
-netstat -an | grep 8888
 ```
 
 ---

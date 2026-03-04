@@ -21,7 +21,8 @@ make dev-frontend     # Start frontend only (cd frontend && npm run dev)
 
 # Production
 make build            # Build Docker images
-make start            # Start production environment (./start.sh)
+make deploy           # Local build and deploy
+make prod             # Deploy using DockerHub images
 make stop             # Stop all services (docker-compose down)
 make restart          # Restart services
 make logs             # View logs (docker-compose logs -f)
@@ -200,12 +201,14 @@ sqlite3 backend/data/relive.db "SELECT count(*) FROM photos;"
 
 ## Deployment
 
-Production uses Docker Compose:
+Production uses Docker Compose with single image:
 ```bash
-./start.sh    # Builds frontend, builds Docker images, starts services
+make deploy    # Local build and deploy
+# or
+make prod      # Use DockerHub images
 ```
-- Frontend: http://localhost:8888 (served via Nginx)
-- Backend API: http://localhost:8080/api/v1/
+- Web UI: http://localhost:8080
+- API: http://localhost:8080/api/v1/
 
 ## Recent Features
 

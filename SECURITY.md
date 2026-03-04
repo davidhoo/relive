@@ -98,18 +98,13 @@ echo "JWT_SECRET=<生成的密钥>" >> .env
 
 ### 端口配置
 
-**推荐配置**（后端不直接暴露）：
+**推荐配置**（只监听 localhost）：
 ```yaml
 # docker-compose.yml
 services:
-  relive-backend:
-    expose:
-      - "8080"  # 仅容器内部访问
-    # 不要使用 ports:
-
-  relive-frontend:
+  relive:
     ports:
-      - "127.0.0.1:8888:80"  # 只监听 localhost
+      - "127.0.0.1:8080:8080"  # 只监听 localhost
 ```
 
 **如需外部访问**，使用反向代理：
@@ -133,19 +128,12 @@ server {
     server_tokens off;
 
     location / {
-        proxy_pass http://127.0.0.1:8888;
+        proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
-
-    location /api/ {
-        proxy_pass http://relive-backend:8080/api/;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
 
         # 请求频率限制
         limit_req zone=api burst=20 nodelay;
