@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -612,4 +614,215 @@ func (h *ConfigHandler) ResetPromptConfig(c *gin.Context) {
 		Data:    config,
 		Message: "Prompt config reset to defaults successfully",
 	})
+}
+
+// CitiesDataStatus 城市数据状态
+type CitiesDataStatus struct {
+	Exists     bool   `json:"exists"`
+	FilePath   string `json:"file_path"`
+	FileSize   int64  `json:"file_size,omitempty"`
+	CityCount  int    `json:"city_count,omitempty"`
+	DownloadURL string `json:"download_url"`
+}
+
+// GetCitiesDataStatus 获取城市数据状态
+// @Summary 获取城市数据状态
+// @Description 检查离线地理编码城市数据是否存在
+// @Tags Config
+// @Produce json
+// @Success 200 {object} model.Response{data=CitiesDataStatus}
+// @Router /api/v1/config/cities-data/status [get]
+func (h *ConfigHandler) GetCitiesDataStatus(c *gin.Context) {
+	// 使用数据库路径作为数据目录
+	dataDir := filepath.Dir(h.cfg.Database.Path)
+	if dataDir == "" || dataDir == "." {
+		dataDir = "./data"
+	}
+
+	// 检查 cities500.txt 文件
+	citiesFile := filepath.Join(dataDir, "cities500.txt")
+	status := CitiesDataStatus{
+		FilePath:    citiesFile,
+		DownloadURL: "https://download.geonames.org/export/dump/cities500.zip",
+	}
+
+	if info, err := os.Stat(citiesFile); err == nil {
+		status.Exists = true
+		status.FileSize = info.Size()
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Data:    status,
+	})
+}
+
+// DownloadCitiesData 下载城市数据
+// @Summary 下载城市数据
+// @Description 下载并解压 cities500.zip 城市数据
+// @Tags Config
+// @Produce json
+// @Success 200 {object} model.Response
+// @Failure 500 {object} model.Response
+// @Router /api/v1/config/cities-data/download [post]
+func (h *ConfigHandler) DownloadCitiesData(c *gin.Context) {
+	// 使用数据库路径作为数据目录
+	dataDir := filepath.Dir(h.cfg.Database.Path)
+	if dataDir == "" || dataDir == "." {
+		dataDir = "./data"
+	}
+
+	citiesFile := filepath.Join(dataDir, "cities500.txt")
+	zipFile := filepath.Join(dataDir, "cities500.zip")
+
+	// 确保目录存在
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		logger.Errorf("Failed to create data directory: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "CREATE_DIR_FAILED",
+				Message: fmt.Sprintf("Failed to create data directory: %v", err),
+			},
+		})
+		return
+	}
+
+	// 下载文件
+	logger.Info("Downloading cities500.zip...")
+	downloadURL := "https://download.geonames.org/export/dump/cities500.zip"
+
+	resp, err := http.Get(downloadURL)
+	if err != nil {
+		logger.Errorf("Failed to download cities data: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "DOWNLOAD_FAILED",
+				Message: fmt.Sprintf("Failed to download cities data: %v", err),
+			},
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		logger.Errorf("Download returned status: %d", resp.StatusCode)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "DOWNLOAD_FAILED",
+				Message: fmt.Sprintf("Download returned status: %d", resp.StatusCode),
+			},
+		})
+		return
+	}
+
+	// 保存 zip 文件
+	out, err := os.Create(zipFile)
+	if err != nil {
+		logger.Errorf("Failed to create zip file: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "CREATE_FILE_FAILED",
+				Message: fmt.Sprintf("Failed to create zip file: %v", err),
+			},
+		})
+		return
+	}
+
+	_, err = io.Copy(out, resp.Body)
+	out.Close()
+	if err != nil {
+		logger.Errorf("Failed to save zip file: %v", err)
+		os.Remove(zipFile)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "SAVE_FILE_FAILED",
+				Message: fmt.Sprintf("Failed to save zip file: %v", err),
+			},
+		})
+		return
+	}
+
+	// 解压文件
+	logger.Info("Extracting cities500.zip...")
+	if err := unzipFile(zipFile, dataDir); err != nil {
+		logger.Errorf("Failed to extract zip file: %v", err)
+		os.Remove(zipFile)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "EXTRACT_FAILED",
+				Message: fmt.Sprintf("Failed to extract zip file: %v", err),
+			},
+		})
+		return
+	}
+
+	// 删除 zip 文件
+	os.Remove(zipFile)
+
+	// 检查解压后的文件
+	if info, err := os.Stat(citiesFile); err != nil {
+		logger.Errorf("Cities file not found after extraction: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "EXTRACT_FAILED",
+				Message: "Cities file not found after extraction",
+			},
+		})
+		return
+	} else {
+		logger.Infof("Cities data downloaded successfully: %s (%d bytes)", citiesFile, info.Size())
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "Cities data downloaded successfully. Please restart the container to import the data.",
+	})
+}
+
+// unzipFile 解压 zip 文件
+func unzipFile(src, dest string) error {
+	r, err := zip.OpenReader(src)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	for _, f := range r.File {
+		// 只解压 cities500.txt
+		if f.Name != "cities500.txt" {
+			continue
+		}
+
+		dstPath := filepath.Join(dest, f.Name)
+
+		// 创建文件
+		dst, err := os.OpenFile(dstPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+		if err != nil {
+			return err
+		}
+
+		// 解压
+		src, err := f.Open()
+		if err != nil {
+			dst.Close()
+			return err
+		}
+
+		_, err = io.Copy(dst, src)
+		src.Close()
+		dst.Close()
+
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

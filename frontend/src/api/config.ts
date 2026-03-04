@@ -462,3 +462,27 @@ export const regenerateAPIKey = async (id: number): Promise<{ id: number; key: s
   }
   return response.data.data
 }
+
+// ==================== Cities Data interfaces ====================
+
+export interface CitiesDataStatus {
+  exists: boolean
+  file_path: string
+  file_size?: number
+  city_count?: number
+  download_url: string
+}
+
+// Cities data management functions
+export const getCitiesDataStatus = async (): Promise<CitiesDataStatus> => {
+  const response = await http.get<ApiResponse<CitiesDataStatus>>('/config/cities-data/status')
+  return response.data?.data || { exists: false, file_path: '', download_url: '' }
+}
+
+export const downloadCitiesData = async (): Promise<{ message: string }> => {
+  const response = await http.post<ApiResponse<{ message: string }>>('/config/cities-data/download')
+  if (!response.data?.success) {
+    throw new Error(response.data?.message || 'Failed to download cities data')
+  }
+  return response.data.data || { message: 'Download started' }
+}

@@ -207,6 +207,10 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				configGroup.PUT("/api-keys/:id", handlers.APIKey.UpdateAPIKey)
 				configGroup.DELETE("/api-keys/:id", handlers.APIKey.DeleteAPIKey)
 				configGroup.POST("/api-keys/:id/regenerate", handlers.APIKey.RegenerateAPIKey)
+
+				// 城市数据管理
+				configGroup.GET("/cities-data/status", handlers.Config.GetCitiesDataStatus)
+				configGroup.POST("/cities-data/download", handlers.Config.DownloadCitiesData)
 			}
 		}
 	}

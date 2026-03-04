@@ -235,6 +235,32 @@
                 数据源：<a href="https://download.geonames.org/export/dump/" target="_blank">GeoNames</a>
                 (推荐使用 <a href="https://download.geonames.org/export/dump/cities500.zip" target="_blank">cities500.zip</a> - 覆盖面更广)
               </div>
+              <div v-if="!citiesDataStatus.exists" class="download-section" style="margin-top: 16px">
+                <el-button type="primary" @click="handleDownloadCities" :loading="downloadingCities">
+                  <el-icon><Download /></el-icon>
+                  {{ downloadingCities ? '下载中...' : '下载城市数据 (~180MB)' }}
+                </el-button>
+                <div v-if="downloadingCities" class="download-progress" style="margin-top: 16px">
+                  <el-progress :percentage="citiesDownloadProgress" :stroke-width="20" indeterminate />
+                </div>
+              </div>
+              <el-alert
+                v-else-if="citiesDataStatus.exists"
+                title="离线数据库已就绪"
+                type="success"
+                :closable="false"
+                style="margin-top: 16px"
+              >
+                <div>
+                  <el-icon><SuccessFilled /></el-icon>
+                  <span>数据已就绪</span>
+                </div>
+                <div style="margin-top: 8px">
+                  <strong>位置:</strong> {{ citiesDataStatus.file_path }}
+                  <br />
+                  <strong>大小:</strong> {{ formatFileSize(citiesDataStatus.file_size) }}
+                </div>
+              </el-alert>
             </template>
           </el-alert>
         </el-form>
@@ -652,10 +678,10 @@ import { ref, onMounted } from 'vue'
 import ApiKeyManager from './components/ApiKeyManager.vue'
 import PathBrowser from '@/components/PathBrowser.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { configApi, promptApi, type ScanPathConfig, type GeocodeConfig, type AIConfig, type PromptConfig, defaultPrompts } from '@/api/config'
+import { configApi, promptApi, type ScanPathConfig, type GeocodeConfig, type AIConfig, type PromptConfig, defaultPrompts, getCitiesDataStatus, downloadCitiesData, type CitiesDataStatus } from '@/api/config'
 import dayjs from 'dayjs'
 import { v4 as uuidv4 } from 'uuid'
-import { FolderOpened, CircleCheck, CircleClose, Document, RefreshLeft, Check } from '@element-plus/icons-vue'
+import { FolderOpened, CircleCheck, CircleClose, Document, RefreshLeft, Check, Download, SuccessFilled } from '@element-plus/icons-vue'
 
 // Scan paths state
 const scanPaths = ref<ScanPathConfig[]>([])
@@ -666,6 +692,15 @@ const saving = ref(false)
 const validating = ref(false)
 const validationResult = ref<{ valid: boolean; error?: string } | null>(null)
 const pathBrowserVisible = ref(false)
+
+// Cities data state
+const downloadingCities = ref(false)
+const citiesDownloadProgress = ref(0)
+const citiesDataStatus = ref<CitiesDataStatus>({
+  exists: false,
+  file_path: '',
+  download_url: ''
+})
 
 const pathForm = ref<Partial<ScanPathConfig>>({
   name: '',
@@ -936,6 +971,38 @@ const openQwenDocs = () => {
 
 const openOpenAIDocs = () => {
   window.open('https://platform.openai.com/api-keys', '_blank')
+}
+
+// Cities data functions
+const formatFileSize = (bytes?: number): string => {
+  if (!bytes) return '未知'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`
+}
+
+const loadCitiesDataStatus = async () => {
+  try {
+    const status = await getCitiesDataStatus()
+    citiesDataStatus.value = status
+  } catch (error) {
+    console.error('Failed to load cities data status:', error)
+  }
+}
+
+const handleDownloadCities = async () => {
+  downloadingCities.value = true
+  citiesDownloadProgress.value = 0
+  try {
+    await downloadCitiesData()
+    await loadCitiesDataStatus()
+    ElMessage.success('城市数据下载成功！请重启容器以导入数据。')
+  } catch (error: any) {
+    ElMessage.error('下载失败: ' + (error.message || '未知错误'))
+  } finally {
+    downloadingCities.value = false
+  }
 }
 
 // Prompt configuration functions
