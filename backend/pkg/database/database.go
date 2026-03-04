@@ -79,6 +79,12 @@ func Init(cfg config.DatabaseConfig) (*gorm.DB, error) {
 
 // AutoMigrate 自动迁移数据库表
 func AutoMigrate(db *gorm.DB) error {
+	// 重要：先迁移旧表（esp32_devices → devices），再执行 AutoMigrate
+	// 因为 DisplayRecord 表有外键引用 devices 表
+	if err := migrateESP32DevicesToDevices(db); err != nil {
+		return err
+	}
+
 	models := []interface{}{
 		&model.Photo{},
 		&model.DisplayRecord{},
@@ -90,11 +96,6 @@ func AutoMigrate(db *gorm.DB) error {
 	}
 
 	if err := db.AutoMigrate(models...); err != nil {
-		return err
-	}
-
-	// 迁移旧表：如果 esp32_devices 表存在，重命名为 devices
-	if err := migrateESP32DevicesToDevices(db); err != nil {
 		return err
 	}
 
