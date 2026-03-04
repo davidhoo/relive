@@ -509,7 +509,75 @@ relive/
 
 ## 🚀 快速开始
 
-### 查看设计文档
+### 🐳 Docker 部署（推荐）
+
+#### 方式 1：一键安装（最简单）⭐
+
+无需克隆仓库，自动配置一切：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/davidhoo/relive/main/install.sh | bash
+```
+
+**脚本会自动**：
+- ✅ 检查 Docker 环境
+- ✅ 生成安全的 JWT 密钥
+- ✅ 下载配置文件
+- ✅ 拉取 Docker 镜像
+- ✅ 启动服务
+
+#### 方式 2：手动配置
+
+适合需要自定义配置的用户：
+
+```bash
+# 1. 创建目录并下载配置
+mkdir ~/relive && cd ~/relive
+curl -fsSL https://raw.githubusercontent.com/davidhoo/relive/main/docker-compose.prod.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/davidhoo/relive/main/backend/config.prod.yaml -o config.prod.yaml
+
+# 2. 生成 JWT 密钥
+echo "JWT_SECRET=$(openssl rand -base64 32)" > .env
+
+# 3. 配置照片路径（编辑 docker-compose.yml）
+# 取消注释并修改为你的路径：
+#   - /volume1/photos:/app/photos:ro
+
+# 4. 启动服务
+docker-compose up -d
+```
+
+#### 方式 3：从源码部署（开发者）
+
+```bash
+git clone https://github.com/davidhoo/relive.git
+cd relive
+./deploy.sh
+```
+
+#### 支持的平台 🏗️
+
+- ✅ **linux/amd64** - Intel/AMD x86_64（大部分 NAS、PC、服务器）
+- ✅ **linux/arm64** - Apple Silicon、ARM NAS、树莓派
+
+Docker 会自动根据你的平台选择正确的镜像版本。
+
+#### 访问系统
+
+部署完成后：
+- **前端**：http://your-nas-ip:8888
+- **后端**：http://your-nas-ip:8080
+- **默认账号**：admin / admin（首次登录强制修改密码）
+
+📚 **详细文档**：
+- [5分钟快速指南](docs/QUICKSTART.md)
+- [DockerHub 部署](docs/DEPLOY_FROM_DOCKERHUB.md)
+- [多架构支持](docs/MULTIARCH.md)
+- [安全指南](SECURITY.md)
+
+---
+
+### 📖 查看设计文档
 
 ```bash
 # 克隆仓库
@@ -530,17 +598,20 @@ cat API_DESIGN.md          # API 设计
 
 ### 开发计划
 
-**当前阶段**：后端、前端、集成测试全部完成 ✅
+**当前阶段**：生产就绪 🚀
 
 **已完成**：
 - ✅ 后端 API（26 个接口，~6000 行代码）
 - ✅ 前端页面（9 个页面，~2500 行代码）
 - ✅ 集成测试（16/17 通过，94%）
 - ✅ CORS 配置和 AI 路由修复
+- ✅ 生产部署工具（一键安装脚本）
+- ✅ 多架构 Docker 镜像（amd64 + arm64）
+- ✅ 安全审计和文档
 
 **下一步**：
-1. 开始 ESP32 固件开发（硬件驱动、通信协议）
-2. ~~或开发 relive-analyzer 工具（离线分析）~~ ✅ 已完成
+1. ESP32 固件开发（硬件驱动、通信协议）
+2. 移动应用开发（Android/iOS）
 
 ### 使用 relive-analyzer 离线分析工具
 
@@ -601,6 +672,17 @@ go build -o relive-analyzer ./cmd/relive-analyzer
 
 ## 📖 文档索引
 
+### 部署文档 🚀
+
+| 文档 | 说明 | 状态 |
+|------|------|------|
+| [QUICKSTART.md](docs/QUICKSTART.md) | 5分钟快速开始 ⭐ | ✅ |
+| [DEPLOY_FROM_DOCKERHUB.md](docs/DEPLOY_FROM_DOCKERHUB.md) | DockerHub 镜像部署 | ✅ |
+| [MULTIARCH.md](docs/MULTIARCH.md) | 多架构支持说明 | ✅ |
+| [MULTIARCH_BUILD.md](docs/MULTIARCH_BUILD.md) | 多架构构建指南（开发者）| ✅ |
+| [DOCKER_RELEASE.md](docs/DOCKER_RELEASE.md) | Docker 镜像发布流程 | ✅ |
+| [SECURITY.md](SECURITY.md) | 安全指南和审计报告 ⭐ | ✅ |
+
 ### 核心设计文档
 
 | 文档 | 说明 | 状态 |
@@ -626,11 +708,11 @@ go build -o relive-analyzer ./cmd/relive-analyzer
 | [PROJECT_REVIEW_2026-02-28.md](docs/PROJECT_REVIEW_2026-02-28.md) | 项目全面审查报告 | ✅ |
 | [DAILY_SUMMARY_2026-02-28_DESIGN_COMPLETE.md](docs/DAILY_SUMMARY_2026-02-28_DESIGN_COMPLETE.md) | 设计阶段完成总结 | ✅ |
 
-### 待创建文档
+### 部署和运维文档
 
 | 文档 | 说明 | 优先级 |
 |------|------|--------|
-| DEPLOYMENT.md | 部署指南 | 🟡 P1 |
+| ~~DEPLOYMENT.md~~ | ✅ 已完成（见上方部署文档） | - |
 | DEVELOPMENT.md | 开发指南 | 🟢 P2 |
 | TESTING.md | 测试策略 | 🟢 P2 |
 | ESP32_PROTOCOL.md | ESP32 通信协议 | 🟡 P1 |
@@ -663,13 +745,26 @@ go build -o relive-analyzer ./cmd/relive-analyzer
 
 ## 🔒 隐私和安全
 
+### 数据保护
 - ✅ **数据本地化**：照片文件保存在 NAS，不上传云端
 - ✅ **临时分析**：仅在分析时临时上传缩略图（1024px）
 - ✅ **提供者选择**：可使用完全本地的 Ollama（不上传任何数据）
 - ✅ **阿里云承诺**：不保存用户上传的图片（如使用 Qwen）
 - ✅ **排除目录**：支持配置敏感目录排除列表
-- ✅ **访问控制**：Web 界面需要身份认证
-- ✅ **双重认证**：API Key（ESP32）+ JWT（Web）
+
+### 访问控制
+- ✅ **JWT 认证**：Web 界面需要 JWT Token 认证
+- ✅ **API Key 认证**：设备和分析器使用独立 API Key
+- ✅ **首次登录强制修改密码**：防止默认密码风险
+- ✅ **密码加密**：使用 bcrypt 加密存储
+
+### 安全部署
+- ✅ **自动生成密钥**：部署脚本自动生成 32 字节随机 JWT 密钥
+- ✅ **HTTPS 支持**：支持反向代理配置 HTTPS
+- ✅ **安全审计**：完整的安全审计文档（[SECURITY.md](SECURITY.md)）
+- ✅ **多架构镜像验证**：Docker 镜像支持签名验证
+
+📚 **详细安全指南**：[SECURITY.md](SECURITY.md)
 
 ---
 
@@ -730,5 +825,5 @@ go build -o relive-analyzer ./cmd/relive-analyzer
 <p align="center">
   <strong>让每一张照片都重新"活"起来</strong><br>
   <em>Relive - 重温珍贵时刻</em><br><br>
-  后端完成 ✅ | 前端完成 ✅ | 集成测试通过 ✅ | 10,000+ 行设计文档 📚 | ~8,500 行代码 💻 | ESP32 固件开发中 🚧
+  🚀 生产就绪 | 🐳 Docker 多架构 | 🔒 安全审计完成 | 📚 15,000+ 行文档 | 💻 ~12,000 行代码 | ✅ 一键部署
 </p>
