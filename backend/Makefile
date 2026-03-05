@@ -1,26 +1,43 @@
-.PHONY: all build run test clean deps lint fmt
+.PHONY: all build build-analyzer run run-analyzer test clean deps lint fmt
 
 # 变量
 APP_NAME=relive
-VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-BUILD_TIME=$(shell date -u '+%Y-%m-%d_%H:%M:%S')
-LDFLAGS=-ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME}"
+ANALYZER_NAME=relive-analyzer
+VERSION=$(shell cat ../VERSION 2>/dev/null || echo "dev")
+BUILD_TIME=$(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
+GIT_COMMIT=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
-# 默认目标
-all: build
+# 使用 pkg/version 包的 LDFLAGS
+LDFLAGS=-ldflags "-X github.com/davidhoo/relive/pkg/version.BuildTime=${BUILD_TIME} -X github.com/davidhoo/relive/pkg/version.GitCommit=${GIT_COMMIT}"
 
-# 构建
+# 默认目标：构建所有
+all: build build-analyzer
+
+# 构建主程序
 build:
 	@echo "Building $(APP_NAME)..."
 	@mkdir -p bin
 	go build ${LDFLAGS} -o bin/$(APP_NAME) cmd/relive/main.go
 	@echo "Build complete: bin/$(APP_NAME)"
 
-# 运行
+# 构建离线分析工具
+build-analyzer:
+	@echo "Building $(ANALYZER_NAME)..."
+	@mkdir -p bin
+	go build ${LDFLAGS} -o bin/$(ANALYZER_NAME) ./cmd/relive-analyzer
+	@echo "Build complete: bin/$(ANALYZER_NAME)"
+
+# 运行主程序
 run:
 	@echo "Running $(APP_NAME)..."
 	@mkdir -p data/logs data/photos
 	go run cmd/relive/main.go --config config.dev.yaml
+
+# 运行离线分析工具（显示帮助）
+run-analyzer:
+	@echo "Running $(ANALYZER_NAME)..."
+	@mkdir -p bin
+	go run ./cmd/relive-analyzer
 
 # 测试
 test:
@@ -64,18 +81,21 @@ deps:
 # Docker 构建
 docker-build:
 	@echo "Building Docker image..."
-	docker build -t $(APP_NAME):$(VERSION) .
+	docker build -t $(APP_NAME):$(VERSION) ..
 
 # Docker 运行
 docker-run:
 	@echo "Running with Docker Compose..."
-	docker-compose up -d
+	docker-compose -f ../docker-compose.yml up -d
 
 # 帮助
 help:
 	@echo "Relive Development Commands:"
-	@echo "  make build          - Build the application"
-	@echo "  make run            - Run the application"
+	@echo "  make build          - Build the main application (bin/relive)"
+	@echo "  make build-analyzer - Build the analyzer tool (bin/relive-analyzer)"
+	@echo "  make all            - Build both main and analyzer"
+	@echo "  make run            - Run the main application"
+	@echo "  make run-analyzer   - Run the analyzer (help)"
 	@echo "  make test           - Run tests"
 	@echo "  make test-coverage  - Generate coverage report"
 	@echo "  make lint           - Run linter"
