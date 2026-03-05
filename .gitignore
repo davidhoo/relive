@@ -67,3 +67,7 @@ esp32/.pio
 esp32/.vscode
 esp32/build/
 backend/relive
+
+# Config files with sensitive data
+backend/analyzer.yaml
+!backend/analyzer.yaml.example

@@ -1,8 +1,8 @@
-# relive-analyzer API 模式配置
-# 注意：此文件包含敏感信息，请勿提交到 Git！
+# relive-analyzer API 模式配置示例
+# 复制此文件为 analyzer.yaml 并填写实际值
 server:
   endpoint: "http://localhost:8080"
-  api_key: "${RELIVE_API_KEY}"
+  api_key: "${RELIVE_API_KEY}"  # 从配置页面生成的 API Key
   timeout: 30
 
 analyzer:
@@ -15,8 +15,8 @@ analyzer:
 ai:
   provider: "vllm"
   vllm:
-    endpoint: "${VLLM_ENDPOINT}"
-    model: "/workspace/data/modelscope_cache/Qwen/Qwen3.5-9B"
+    endpoint: "${VLLM_ENDPOINT}"  # 例如: http://localhost:8028
+    model: "/path/to/your/model"
     temperature: 0.7
     timeout: 60
 
