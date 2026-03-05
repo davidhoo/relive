@@ -14,7 +14,6 @@ type Services struct {
 	Device    DeviceService // 新名称
 	ESP32     ESP32Service  // 保留兼容（别名）
 	AI        AIService
-	Export    ExportService
 	Config    ConfigService
 	Prompt    PromptService
 	Geocode   GeocodeService
@@ -67,7 +66,6 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		Device:    deviceService,
 		ESP32:     deviceService,
 		AI:        aiService,
-		Export:    NewExportService(repos.Photo),
 		Config:    configService,
 		Prompt:    promptService,
 		Geocode:   geocodeService,

@@ -177,11 +177,6 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				ai.GET("/provider", handlers.AI.GetProviderInfo)
 			}
 
-			// 导出/导入相关
-			authorized.POST("/export", handlers.Export.Export)
-			authorized.POST("/import", handlers.Export.Import)
-			authorized.POST("/export/check", handlers.Export.CheckExport)
-
 			// 配置管理相关
 			configGroup := authorized.Group("/config")
 			{

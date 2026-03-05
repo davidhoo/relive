@@ -15,7 +15,6 @@ type Handlers struct {
 	Device   *DeviceHandler // 新名称
 	ESP32    *ESP32Handler  // 保留兼容（别名）
 	AI       *AIHandler
-	Export   *ExportHandler
 	Config   *ConfigHandler
 	Auth     *AuthHandler
 	Analyzer *AnalyzerHandler
@@ -32,7 +31,6 @@ func NewHandlers(db *gorm.DB, services *service.Services, repos *repository.Repo
 		Display:  NewDisplayHandler(services.Display, services.Device),
 		Device:   deviceHandler,
 		ESP32:    deviceHandler,
-		Export:   NewExportHandler(services.Export),
 		Config:   NewConfigHandler(services.Config, services.AI, services.Photo, services.Prompt, repos.Photo, cfg),
 		Auth:     NewAuthHandler(services.Auth),
 		Analyzer: NewAnalyzerHandler(services.Photo, services.Analysis),

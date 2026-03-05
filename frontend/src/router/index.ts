@@ -28,7 +28,6 @@ const routes: RouteRecordRaw[] = [
       { path: 'analysis', name: 'Analysis', component: () => import('@/views/Analysis/index.vue'), meta: { title: 'AI 分析', icon: 'MagicStick' } },
       { path: 'devices', name: 'Devices', component: () => import('@/views/Devices/index.vue'), meta: { title: '设备管理', icon: 'Monitor' } },
       { path: 'display', name: 'Display', component: () => import('@/views/Display/index.vue'), meta: { title: '展示策略', icon: 'View' } },
-      { path: 'export', name: 'Export', component: () => import('@/views/Export/index.vue'), meta: { title: '导出/导入', icon: 'Download' } },
       { path: 'config', name: 'Config', component: () => import('@/views/Config/index.vue'), meta: { title: '配置管理', icon: 'Setting' } },
       { path: 'system', name: 'System', component: () => import('@/views/System/index.vue'), meta: { title: '系统管理', icon: 'Cpu' } },
     ],

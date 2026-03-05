@@ -267,31 +267,6 @@ type AIAnalyzeProgressResponse struct {
 	Provider      string  `json:"provider"`       // 当前使用的 provider
 }
 
-// ExportRequest 导出请求
-type ExportRequest struct {
-	OutputPath string `json:"output_path" binding:"required"` // 导出路径
-	Analyzed   *bool  `json:"analyzed"`                       // 只导出已分析/未分析的照片
-}
-
-// ExportResponse 导出响应
-type ExportResponse struct {
-	OutputPath   string `json:"output_path"`
-	PhotoCount   int    `json:"photo_count"`
-	DatabaseSize int64  `json:"database_size"`
-	ThumbnailDir string `json:"thumbnail_dir"`
-}
-
-// ImportRequest 导入请求
-type ImportRequest struct {
-	InputPath string `json:"input_path" binding:"required"` // 导入路径
-}
-
-// ImportResponse 导入响应
-type ImportResponse struct {
-	UpdatedCount int `json:"updated_count"` // 更新数量
-	FailedCount  int `json:"failed_count"`  // 失败数量
-}
-
 // SystemHealthResponse 系统健康检查响应
 type SystemHealthResponse struct {
 	Status    string    `json:"status"`    // healthy / unhealthy
