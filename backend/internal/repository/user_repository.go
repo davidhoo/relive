@@ -80,7 +80,7 @@ func (r *userRepository) Count() (int64, error) {
 func (r *userRepository) UpdatePassword(userID uint, PasswordHash string) error {
 	return r.db.Model(&model.User{}).
 		Where("id = ?", userID).
-		Update("Password_hash", PasswordHash).Error
+		Update("password_hash", PasswordHash).Error
 }
 
 // UpdateFirstLoginStatus 更新首次登录状态

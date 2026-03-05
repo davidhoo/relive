@@ -107,9 +107,14 @@ export const useUserStore = defineStore('user', () => {
     }
   }
 
-  const changePassword = async (old_Password: string, new_Password: string) => {
-    await authApi.changePassword({ old_Password, new_Password })
+  const changePassword = async (old_Password: string, new_Password: string, new_username?: string) => {
+    const response = await authApi.changePassword({ old_Password, new_Password, new_username })
     setIsFirstLogin(false)
+    // 如果修改了用户名，更新本地存储的用户信息
+    if (new_username && userInfo.value) {
+      setUserInfo({ ...userInfo.value, username: new_username })
+    }
+    return response
   }
 
   const clearUserState = () => {

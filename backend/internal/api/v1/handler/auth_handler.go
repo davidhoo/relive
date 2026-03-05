@@ -128,7 +128,7 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 		return
 	}
 
-	err := h.authService.ChangePassword(userID.(uint), req.OldPassword, req.NewPassword)
+	err := h.authService.ChangePassword(userID.(uint), req.OldPassword, req.NewPassword, req.NewUsername)
 	if err != nil {
 		switch err {
 		case service.ErrUserNotFound:
@@ -148,6 +148,16 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 				},
 			})
 		default:
+			if err.Error() == "username already exists" {
+				c.JSON(http.StatusConflict, model.Response{
+					Success: false,
+					Error: &model.ErrorInfo{
+						Code:    "USERNAME_EXISTS",
+						Message: "Username already exists",
+					},
+				})
+				return
+			}
 			logger.Errorf("Change Password failed: %v", err)
 			c.JSON(http.StatusInternalServerError, model.Response{
 				Success: false,

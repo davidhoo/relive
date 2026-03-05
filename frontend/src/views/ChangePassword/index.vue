@@ -26,6 +26,17 @@
           :rules="rules"
           @keyup.enter="handleSubmit"
         >
+          <!-- 用户名（可选修改） -->
+          <el-form-item prop="new_username">
+            <el-input
+              v-model="form.new_username"
+              placeholder="用户名（可选修改）"
+              :prefix-icon="User"
+              size="large"
+              clearable
+            />
+          </el-form-item>
+
           <el-form-item prop="old_Password">
             <el-input
               v-model="form.old_Password"
@@ -89,6 +100,11 @@
             <li>建议包含字母和数字</li>
             <li>新密码不能与旧密码相同</li>
           </ul>
+          <p style="margin-top: 12px">用户名（可选）：</p>
+          <ul>
+            <li>可在此修改用户名，留空则保持原用户名</li>
+            <li>用户名需3-32位字符</li>
+          </ul>
         </div>
       </el-card>
     </div>
@@ -99,7 +115,7 @@
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Lock, Key, CircleCheck, PictureFilled } from '@element-plus/icons-vue'
+import { Lock, Key, CircleCheck, PictureFilled, User } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 
 const router = useRouter()
@@ -111,7 +127,8 @@ const loading = ref(false)
 const form = reactive({
   old_Password: '',
   new_Password: '',
-  confirm_Password: ''
+  confirm_Password: '',
+  new_username: ''
 })
 
 const validateConfirmPassword = (rule: any, value: string, callback: any) => {
@@ -142,6 +159,10 @@ const rules = {
   confirm_Password: [
     { required: true, message: '请确认新密码', trigger: 'blur' },
     { validator: validateConfirmPassword, trigger: 'blur' }
+  ],
+  new_username: [
+    { min: 3, message: '用户名至少3位字符', trigger: 'blur' },
+    { max: 32, message: '用户名最多32位字符', trigger: 'blur' }
   ]
 }
 
@@ -151,7 +172,7 @@ const handleSubmit = async () => {
 
   loading.value = true
   try {
-    await userStore.changePassword(form.old_Password, form.new_Password)
+    await userStore.changePassword(form.old_Password, form.new_Password, form.new_username || undefined)
     ElMessage.success('密码修改成功')
     router.push('/')
   } catch (error: any) {

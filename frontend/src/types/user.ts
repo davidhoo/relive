@@ -22,6 +22,7 @@ export interface LoginResponse {
 export interface ChangePasswordRequest {
   old_Password: string
   new_Password: string
+  new_username?: string  // 可选：同时修改用户名
 }
 
 // 用户信息响应

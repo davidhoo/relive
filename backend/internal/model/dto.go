@@ -407,6 +407,7 @@ type UserInfo struct {
 type ChangePasswordRequest struct {
 	OldPassword string `json:"old_Password" binding:"required"`
 	NewPassword string `json:"new_Password" binding:"required,min=6"`
+	NewUsername    string `json:"new_username" binding:"omitempty,min=3,max=32"` // 可选：同时修改用户名
 }
 
 // UserInfoResponse 用户信息响应

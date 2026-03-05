@@ -26,7 +26,7 @@ var (
 // AuthService 认证服务接口
 type AuthService interface {
 	Login(username, Password string) (*model.LoginResponse, error)
-	ChangePassword(userID uint, oldPassword, newPassword string) error
+	ChangePassword(userID uint, oldPassword, newPassword, newUsername string) error
 	GetUserInfo(userID uint) (*model.UserInfoResponse, error)
 	GenerateToken(userID uint, username string) (string, time.Time, error)
 	ValidateToken(tokenString string) (*JWTClaims, error)
@@ -88,8 +88,8 @@ func (s *authService) Login(username, Password string) (*model.LoginResponse, er
 	}, nil
 }
 
-// ChangePassword 修改密码
-func (s *authService) ChangePassword(userID uint, oldPassword, newPassword string) error {
+// ChangePassword 修改密码（可选同时修改用户名）
+func (s *authService) ChangePassword(userID uint, oldPassword, newPassword, newUsername string) error {
 	// 获取用户
 	user, err := s.userRepo.GetByID(userID)
 	if err != nil {
@@ -104,15 +104,28 @@ func (s *authService) ChangePassword(userID uint, oldPassword, newPassword strin
 		return ErrOldPasswordWrong
 	}
 
+	// 如果提供了新用户名，检查是否与其他用户冲突
+	if newUsername != "" && newUsername != user.Username {
+		exists, err := s.userRepo.Exists(newUsername)
+		if err != nil {
+			return fmt.Errorf("failed to check username: %w", err)
+		}
+		if exists {
+			return errors.New("username already exists")
+		}
+		user.Username = newUsername
+	}
+
 	// 生成新密码哈希
 	newHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
 	if err != nil {
 		return fmt.Errorf("failed to hash Password: %w", err)
 	}
+	user.PasswordHash = string(newHash)
 
-	// 更新密码和首次登录状态
-	if err := s.userRepo.UpdatePassword(userID, string(newHash)); err != nil {
-		return fmt.Errorf("failed to update Password: %w", err)
+	// 更新用户信息（用户名和密码）
+	if err := s.userRepo.Update(user); err != nil {
+		return fmt.Errorf("failed to update user: %w", err)
 	}
 
 	// 如果是首次登录，更新状态

@@ -15,7 +15,7 @@ type User struct {
 
 	// 用户信息
 	Username     string `gorm:"type:varchar(50);not null;uniqueIndex:idx_username" json:"username"` // 用户名（唯一）
-	PasswordHash string `gorm:"type:varchar(255);not null" json:"-"`                                // 密码哈希（bcrypt）
+	PasswordHash string `gorm:"column:password_hash;type:varchar(255);not null" json:"-"`                    // 密码哈希（bcrypt）
 
 	// 状态
 	IsFirstLogin bool `gorm:"default:true" json:"is_first_login"` // 是否首次登录
