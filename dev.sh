@@ -96,6 +96,12 @@ case $choice in
         # 等待后端启动
         sleep 3
 
+        # 检查前端依赖
+        if [ ! -d "frontend/node_modules" ]; then
+            echo "安装前端依赖..."
+            (cd frontend && npm install)
+        fi
+
         # 在后台启动前端
         (cd frontend && npm run dev) &
         FRONTEND_PID=$!
