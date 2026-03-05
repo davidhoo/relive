@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 2026-03-05 - 代码审查问题修复 🐛
+
+#### Fixed
+- ✅ **修复 AIHandler Data Race** - 添加互斥锁保护，确保线程安全的 AI 服务访问
+  - `SetAIService()` 使用 `sync.RWMutex` 保护服务更新
+  - 新增 `getAIService()` 方法统一获取服务实例
+  - 所有 handler 方法改为通过线程安全方式访问服务
+- ✅ **清理调试日志** - 将 `fmt.Printf` 替换为结构化日志
+  - `backend/internal/util/exif.go` - exiftool 调试输出改为 `logger.Debugf`
+  - `backend/internal/geocode/offline.go` - 移除强制 INFO 级别的 geocode 调试日志
+
+---
+
 ### 2026-03-05 - 文档同步与代码一致性修复 📝
 
 #### Changed - 文档更新
