@@ -117,7 +117,7 @@ src/
 
 - Development: `backend/data/relive.db`
 - Auto-migration enabled in dev mode (`auto_migrate: true`)
-- Key tables: photos, esp32_devices, display_records, app_config
+- Key tables: photos, devices, display_records, app_config, users, cities
 
 ### AI Provider System
 
@@ -132,6 +132,19 @@ type AIProvider interface {
 
 Supported providers: `ollama`, `qwen`, `openai`, `vllm`, `hybrid`
 Configured in `config.dev.yaml` under `ai:` section.
+
+### Device Model (Simplified)
+
+The `Device` model has been simplified to use a single `device_type` field:
+
+**Device Types:**
+- `embedded` - 嵌入式设备（电子相框等）
+- `mobile` - 移动端（手机、平板）
+- `web` - Web 浏览器
+- `offline` - 离线分析程序
+- `service` - 后台服务
+
+**Removed fields:** hardware_model, platform, screen_width, screen_height, firmware_version, mac_address
 
 ### Configuration System
 
@@ -211,6 +224,12 @@ make prod      # Use DockerHub images
 - API: http://localhost:8080/api/v1/
 
 ## Recent Features
+
+### Simplified Device Management (2026-03-05)
+- Device type and platform merged into single `device_type` field
+- Values: `embedded`, `mobile`, `web`, `offline`, `service`
+- Removed fields: `hardware_model`, `screen_width`, `screen_height`, `firmware_version`, `mac_address`
+- Simplified device creation form with just name, type, and description
 
 ### VLLM Concurrent Analysis (2025-03-03)
 - VLLM provider supports concurrent batch analysis
