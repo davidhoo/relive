@@ -16,7 +16,7 @@ ai:
   provider: "vllm"
   vllm:
     endpoint: "${VLLM_ENDPOINT}"
-    model: "/workspace/data/modelscope_cache/Qwen/Qwen3.5-9B"
+    model: "${VLLM_MODEL}"
     temperature: 0.7
     timeout: 60
 
