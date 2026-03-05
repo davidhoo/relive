@@ -72,5 +72,8 @@ backend/relive
 backend/analyzer.yaml
 !backend/analyzer.yaml.example
 
-# Docker Compose local overrides (personal configurations)
-docker-compose.override.yml
+# Docker Compose personal configurations (use .example templates)
+docker-compose.yml
+docker-compose.prod.yml
+!docker-compose.yml.example
+!docker-compose.prod.yml.example

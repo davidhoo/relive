@@ -17,6 +17,11 @@ sync-version:
 help:
 	@echo "Relive 项目管理命令"
 	@echo ""
+	@echo "首次使用 Docker 部署:"
+	@echo "  cp docker-compose.yml.example docker-compose.yml"
+	@echo "  cp docker-compose.prod.yml.example docker-compose.prod.yml"
+	@echo "  # 编辑配置文件，设置你的照片路径等"
+	@echo ""
 	@echo "开发环境:"
 	@echo "  make dev          - 启动开发环境（交互式菜单）"
 	@echo "  make dev-backend  - 只启动后端开发服务"
@@ -46,28 +51,33 @@ dev-backend: sync-version
 dev-frontend:
 	cd frontend && npm run dev
 
+# Docker Compose 配置检查
+check-compose:
+	@test -f docker-compose.yml || (echo "错误: docker-compose.yml 不存在"; echo "请运行: cp docker-compose.yml.example docker-compose.yml"; exit 1)
+
 # 生产部署
-build: sync-version
+build: sync-version check-compose
 	@echo "构建 Docker 镜像..."
 	docker-compose build
 
-deploy:
+deploy: check-compose
 	@echo "本地构建并部署..."
 	./deploy.sh
 
 prod:
+	@test -f docker-compose.prod.yml || (echo "错误: docker-compose.prod.yml 不存在"; echo "请运行: cp docker-compose.prod.yml.example docker-compose.prod.yml"; exit 1)
 	@echo "使用 DockerHub 镜像部署..."
 	docker-compose -f docker-compose.prod.yml up -d
 
-stop:
+stop: check-compose
 	@echo "停止服务..."
 	docker-compose down
 
-restart:
+restart: check-compose
 	@echo "重启服务..."
 	docker-compose restart
 
-logs:
+logs: check-compose
 	docker-compose logs -f
 
 # 测试
