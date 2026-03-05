@@ -9,6 +9,126 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 2026-03-05 - 文档同步与代码一致性修复 📝
+
+#### Changed - 文档更新
+- ✅ **CLAUDE.md 文档修正**
+  - 修正 `relive-analyzer` 描述：从直接数据库模式改为 API 模式
+  - 更新命令示例：`gen-config`、`analyze`、`check`、`version`
+  - 修正 Device Model 说明：区分 `CreateDeviceRequest`（已简化）和 `DeviceRegisterRequest`（向后兼容）
+  - 移除已不存在的 `estimate` 命令
+
+---
+
+### 2026-03-05 - relive-analyzer 改进 🛠️
+
+#### Added
+- ✅ **分析器重试机制** - 失败提交自动重试，提高可靠性
+- ✅ **analyzer.yaml.example 配置模板** - 提供配置示例文件
+
+#### Changed
+- ✅ **Makefile 优化** - 根 Makefile 添加 analyzer 构建目标（`build-analyzer`、`analyzer`）
+- ✅ **CORS 简化** - 精简开发环境 CORS 源头，只保留必要端口
+
+---
+
+### 2026-03-05 - 统一版本管理系统 🏷️
+
+#### Added
+- ✅ **单一版本来源** - 根目录 `VERSION` 文件作为唯一版本号来源
+- ✅ **Go 版本嵌入** - `pkg/version` 包使用 `//go:embed` 读取 VERSION 文件
+- ✅ **前端版本注入** - `vite.config.ts` 构建时读取 VERSION，通过 `__APP_VERSION__` 注入
+- ✅ **版本同步机制** - Makefile `sync-version` 目标自动同步版本到各组件
+- ✅ **analyzer 版本统一** - 离线分析工具版本与主程序一致
+
+#### Changed
+- ✅ **Health API** - 返回正确的版本号，不再硬编码
+- ✅ **Docker 构建** - 通过 build-args 注入 VERSION 和 BUILD_TIME
+
+---
+
+### 2026-03-05 - 设备管理简化 🔧
+
+#### Changed
+- ✅ **Device 模型简化** - 合并 device type 和 platform 为单一 `device_type` 字段
+- ✅ **支持的设备类型**: `embedded`, `mobile`, `web`, `offline`, `service`
+- ✅ **Admin 创建设备简化** - `CreateDeviceRequest` 仅需要 name, device_type, description
+- ✅ **移除字段**: hardware_model, screen_width, screen_height, firmware_version, mac_address
+- ✅ **保留向后兼容** - `DeviceRegisterRequest` 仍保留旧字段供现有设备使用
+
+---
+
+### 2026-03-02 - 单镜像架构迁移 🐳
+
+#### Changed
+- ✅ **单镜像部署** - 合并前后端为单一 Docker 镜像
+- ✅ **简化部署流程** - 只需一个 `docker-compose.yml` 文件
+- ✅ **统一端口** - 8080 端口同时服务前端和后端 API
+- ✅ **部署脚本优化** - 简化 `deploy.sh`，支持自动拉取镜像
+
+---
+
+### 2026-03-02 - 设备管理架构重构 🔧
+
+#### Changed
+- ✅ **ESP32 抽象为 Device** - 支持多平台（ESP32、Android、iOS、Web）
+- ✅ **统一设备类型**: `embedded`, `mobile`, `web`, `offline`, `service`
+- ✅ **前端术语更新** - 从 "ESP32" 改为通用 "设备" 术语
+- ✅ **API 端点变更** - `/esp32/*` → `/devices/*`
+
+---
+
+### 2026-03-02 - API Key 管理改进 🔐
+
+#### Changed
+- ✅ **API Key 存储迁移** - 从环境变量改为数据库存储
+- ✅ **移除默认 API Key** - 不再自动生成 `DEFAULT_ESP32_API_KEY`
+- ✅ **前缀更新** - API Key 前缀从 `sk-esp32-` 改为 `sk-relive-`
+- ✅ **配置简化** - `config.yaml` 中移除 API Key 相关配置
+
+---
+
+### 2026-03-02 - 系统管理功能增强 ⚙️
+
+#### Added
+- ✅ **系统重置功能** - `POST /system/reset` 一键还原系统
+  - 清除数据库（保留城市和配置）
+  - 清除缩略图缓存
+  - 重置管理员密码
+- ✅ **系统环境端点** - `GET /system/environment` 获取运行环境信息
+- ✅ **城市数据下载** - Web UI 支持下载 cities500.txt
+- ✅ **异步扫描任务** - 照片扫描使用异步任务系统，防止超时
+
+---
+
+### 2026-03-02 - AI 分析优化 🤖
+
+#### Added
+- ✅ **双会话分析架构** - 先分析后评分，提高准确性
+- ✅ **可配置提示词** - 支持自定义 AI 分析提示词
+- ✅ **VLLM 思考模式** - 新增 `enable_thinking` 配置选项
+- ✅ **中文分类映射** - 强制 AI 返回中文分类
+- ✅ **评分理由** - AI 分析结果包含评分理由说明
+
+#### Changed
+- ✅ **提示词优化** - 基于 InkTime 最佳实践优化提示词
+- ✅ **统一中文提示词** - 所有 Provider 使用中文提示词
+
+---
+
+### 2026-03-02 - 前端改进 🎨
+
+#### Added
+- ✅ **标签折叠功能** - 照片管理页面标签列表可折叠
+- ✅ **扫描状态显示** - 照片页面显示扫描任务状态
+- ✅ **响应式配置页面** - 配置页面适配移动端
+
+#### Fixed
+- ✅ **用户信息持久化** - localStorage 保存 userInfo 和 isFirstLogin
+- ✅ **重新分析功能** - 修复重新分析单张照片的功能
+
+---
+
 ### 2026-03-03 - AI 提供商显示修复 🐛
 
 #### Bug 修复

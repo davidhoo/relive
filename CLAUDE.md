@@ -56,17 +56,23 @@ npm run build         # Type check and build for production
 npm run preview       # Preview production build
 ```
 
-### relive-analyzer (Offline Analysis Tool)
+### relive-analyzer (API Analysis Tool)
 ```bash
 # Build
 cd backend
 go build -o relive-analyzer ./cmd/relive-analyzer
 
-# Usage
-./relive-analyzer check -db export.db                                    # Check database status
-./relive-analyzer estimate -config configs/analyzer.yaml -db export.db    # Estimate cost/time
-./relive-analyzer analyze -config configs/analyzer.yaml -db export.db     # Run batch analysis
-./relive-analyzer analyze -config configs/analyzer.yaml -db export.db -workers 10  # Custom concurrency
+# Generate sample config
+./relive-analyzer gen-config > analyzer.yaml
+
+# Usage (API Mode - requires running server)
+./relive-analyzer check -config analyzer.yaml                           # Check server connection
+./relive-analyzer analyze -config analyzer.yaml                         # Run batch analysis
+./relive-analyzer analyze -config analyzer.yaml -workers 10             # Custom concurrency
+./relive-analyzer analyze -config analyzer.yaml -verbose                # Verbose logging
+./relive-analyzer version                                               # Show version info
+
+# Config file location: backend/configs/analyzer.yaml (sample)
 ```
 
 ## Architecture
@@ -135,7 +141,7 @@ Configured in `config.dev.yaml` under `ai:` section.
 
 ### Device Model (Simplified)
 
-The `Device` model has been simplified to use a single `device_type` field:
+The `Device` model and `CreateDeviceRequest` have been simplified to use a single `device_type` field:
 
 **Device Types:**
 - `embedded` - 嵌入式设备（电子相框等）
@@ -144,7 +150,9 @@ The `Device` model has been simplified to use a single `device_type` field:
 - `offline` - 离线分析程序
 - `service` - 后台服务
 
-**Removed fields:** hardware_model, platform, screen_width, screen_height, firmware_version, mac_address
+**Admin Device Creation** (`CreateDeviceRequest`): Uses simplified fields - name, device_type, description only.
+
+**Device Registration** (`DeviceRegisterRequest`): Still contains legacy fields (hardware_model, platform, screen_width, screen_height, firmware_version, mac_address) for backward compatibility with existing devices, but only device_id, name, device_type, and ip_address are actively used.
 
 ### Configuration System
 
@@ -289,8 +297,8 @@ Docker 构建时通过 build-args 注入额外信息：
 ### Simplified Device Management (2026-03-05)
 - Device type and platform merged into single `device_type` field
 - Values: `embedded`, `mobile`, `web`, `offline`, `service`
-- Removed fields: `hardware_model`, `screen_width`, `screen_height`, `firmware_version`, `mac_address`
-- Simplified device creation form with just name, type, and description
+- Admin device creation (`CreateDeviceRequest`) simplified to: name, device_type, description
+- Legacy fields in `DeviceRegisterRequest` retained for backward compatibility with existing devices
 
 ### VLLM Concurrent Analysis (2025-03-03)
 - VLLM provider supports concurrent batch analysis
