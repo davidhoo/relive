@@ -84,17 +84,17 @@
             <div class="scan-time-cell">
               <!-- 扫描中状态 -->
               <template v-if="isPathScanning(row)">
-                <el-tag type="primary" size="small" effect="light">
+                <span class="scan-time scanning">
                   <el-icon class="is-loading"><Loading /></el-icon>
                   扫描中...
-                </el-tag>
+                </span>
               </template>
               <!-- 重建中状态 -->
               <template v-else-if="isPathRebuilding(row)">
-                <el-tag type="warning" size="small" effect="light">
+                <span class="scan-time rebuilding">
                   <el-icon class="is-loading"><Loading /></el-icon>
                   重建中...
-                </el-tag>
+                </span>
               </template>
               <!-- 已扫描状态 -->
               <template v-else-if="row.last_scanned_at">
@@ -368,6 +368,7 @@ const scanningPathId = ref<string>('')
 const rebuildingPathId = ref<string>('')
 const currentScanPath = ref<string>('') // 当前正在扫描的路径
 const currentScanType = ref<'scan' | 'rebuild' | ''>('') // 当前扫描类型
+const cleaningUp = ref(false)
 const categories = ref<string[]>([])
 const tags = ref<string[]>([])
 
@@ -1008,6 +1009,30 @@ defineExpose({
 .scan-time {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.scan-time.scanning {
+  color: var(--color-primary);
+}
+
+.scan-time.rebuilding {
+  color: var(--color-warning);
+}
+
+.scan-time .is-loading {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* 照片数量 */
