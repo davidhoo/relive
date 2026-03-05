@@ -995,9 +995,9 @@ const handleDownloadCities = async () => {
   downloadingCities.value = true
   citiesDownloadProgress.value = 0
   try {
-    await downloadCitiesData()
+    const result = await downloadCitiesData()
     await loadCitiesDataStatus()
-    ElMessage.success('城市数据下载成功！请重启容器以导入数据。')
+    ElMessage.success(result.message || '城市数据下载并导入成功！')
   } catch (error: any) {
     ElMessage.error('下载失败: ' + (error.message || '未知错误'))
   } finally {

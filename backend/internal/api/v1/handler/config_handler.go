@@ -630,7 +630,7 @@ type CitiesDataStatus struct {
 
 // GetCitiesDataStatus 获取城市数据状态
 // @Summary 获取城市数据状态
-// @Description 检查离线地理编码城市数据是否存在
+// @Description 检查离线地理编码城市数据是否存在以及数据库中城市数量
 // @Tags Config
 // @Produce json
 // @Success 200 {object} model.Response{data=CitiesDataStatus}
@@ -649,10 +649,24 @@ func (h *ConfigHandler) GetCitiesDataStatus(c *gin.Context) {
 		DownloadURL: "https://download.geonames.org/export/dump/cities500.zip",
 	}
 
+	// 检查文件是否存在
+	fileExists := false
 	if info, err := os.Stat(citiesFile); err == nil {
-		status.Exists = true
+		fileExists = true
 		status.FileSize = info.Size()
 	}
+
+	// 查询数据库中的城市数量
+	db := database.GetDB()
+	if db != nil {
+		var count int64
+		if err := db.Model(&model.City{}).Count(&count).Error; err == nil {
+			status.CityCount = int(count)
+		}
+	}
+
+	// 文件存在或数据库有数据都认为已就绪
+	status.Exists = fileExists || status.CityCount > 0
 
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
