@@ -43,43 +43,37 @@
       <template #header>
         <span><el-icon><MagicStick /></el-icon> 批量分析</span>
       </template>
-      <el-row :gutter="20">
-        <el-col :span="12">
-          <el-form label-width="120px">
-            <el-form-item label="分析数量">
-              <el-input-number
-                v-model="batchLimit"
-                :min="1"
-                :max="1000"
-                :step="10"
-                style="width: 200px"
-              />
-            </el-form-item>
-            <el-form-item>
-              <el-button
-                type="primary"
-                size="large"
-                @click="handleBatchAnalyze"
-                :loading="analyzing"
-                :disabled="!providerInfo"
-              >
-                {{ analyzing ? '分析中...' : '开始批量分析' }}
-              </el-button>
-              <el-text v-if="!providerInfo" type="info" style="margin-left: 10px">
-                请先配置 AI Provider
-              </el-text>
-            </el-form-item>
-          </el-form>
-        </el-col>
-        <el-col :span="12">
-          <el-alert
-            title="批量分析说明"
-            type="info"
-            :closable="false"
-            description="批量分析将按照队列顺序处理未分析的照片。建议每次处理数量不超过 500 张，避免长时间占用资源。"
+      <div class="batch-analyze-form">
+        <div class="batch-analyze-row">
+          <span class="batch-label">分析数量：</span>
+          <el-input-number
+            v-model="batchLimit"
+            :min="1"
+            :max="1000"
+            :step="10"
+            style="width: 200px"
           />
-        </el-col>
-      </el-row>
+          <el-button
+            type="primary"
+            size="large"
+            @click="handleBatchAnalyze"
+            :loading="analyzing"
+            :disabled="!providerInfo"
+          >
+            {{ analyzing ? '分析中...' : '开始批量分析' }}
+          </el-button>
+          <el-text v-if="!providerInfo" type="info" style="margin-left: 10px">
+            请先配置 AI Provider
+          </el-text>
+        </div>
+        <el-alert
+          title="批量分析说明"
+          type="info"
+          :closable="false"
+          description="批量分析将按照队列顺序处理未分析的照片。建议每次处理数量不超过 500 张，避免长时间占用资源。"
+          style="margin-top: 16px"
+        />
+      </div>
     </el-card>
 
     <!-- 分析进度 -->
@@ -259,5 +253,20 @@ onUnmounted(() => {
 <style scoped>
 .analysis-page {
   padding: 20px;
+}
+
+.batch-analyze-form {
+  width: 100%;
+}
+
+.batch-analyze-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.batch-label {
+  font-size: 14px;
+  color: var(--color-text-secondary);
 }
 </style>
