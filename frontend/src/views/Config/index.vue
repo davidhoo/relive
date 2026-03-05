@@ -1060,6 +1060,7 @@ onMounted(() => {
   loadGeocodeConfig()
   loadAIConfig()
   loadPromptConfig()
+  loadCitiesDataStatus()
 })
 </script>
 
