@@ -82,11 +82,27 @@
         <el-table-column prop="last_scanned_at" label="上次扫描" width="140" align="center">
           <template #default="{ row }">
             <div class="scan-time-cell">
-              <template v-if="row.last_scanned_at">
+              <!-- 扫描中状态 -->
+              <template v-if="isPathScanning(row)">
+                <el-tag type="primary" size="small" effect="light">
+                  <el-icon class="is-loading"><Loading /></el-icon>
+                  扫描中...
+                </el-tag>
+              </template>
+              <!-- 重建中状态 -->
+              <template v-else-if="isPathRebuilding(row)">
+                <el-tag type="warning" size="small" effect="light">
+                  <el-icon class="is-loading"><Loading /></el-icon>
+                  重建中...
+                </el-tag>
+              </template>
+              <!-- 已扫描状态 -->
+              <template v-else-if="row.last_scanned_at">
                 <el-tooltip :content="formatDateTime(row.last_scanned_at)" placement="top">
                   <span class="scan-time">{{ formatRelativeTime(row.last_scanned_at) }}</span>
                 </el-tooltip>
               </template>
+              <!-- 未扫描状态 -->
               <el-tag v-else type="warning" size="small" effect="light">未扫描</el-tag>
             </div>
           </template>
@@ -350,7 +366,8 @@ const scanPaths = ref<ScanPathConfig[]>([])
 const scanPathLoading = ref(false)
 const scanningPathId = ref<string>('')
 const rebuildingPathId = ref<string>('')
-const cleaningUp = ref(false)
+const currentScanPath = ref<string>('') // 当前正在扫描的路径
+const currentScanType = ref<'scan' | 'rebuild' | ''>('') // 当前扫描类型
 const categories = ref<string[]>([])
 const tags = ref<string[]>([])
 
@@ -587,6 +604,8 @@ const handleScanPath = async (path: ScanPathConfig) => {
 
   try {
     scanningPathId.value = path.id
+    currentScanPath.value = path.path
+    currentScanType.value = 'scan'
     const res = await photoApi.startScan({ path: path.path })
     ElMessage.info(`「${path.name}」扫描任务已启动，正在后台处理...`)
 
@@ -594,6 +613,8 @@ const handleScanPath = async (path: ScanPathConfig) => {
     startPollingScanProgress(path.name)
   } catch (error: any) {
     scanningPathId.value = ''
+    currentScanPath.value = ''
+    currentScanType.value = ''
     ElMessage.error(error.message || '扫描照片失败')
   }
 }
@@ -607,6 +628,8 @@ const handleRebuildPath = async (path: ScanPathConfig) => {
 
   try {
     rebuildingPathId.value = path.id
+    currentScanPath.value = path.path
+    currentScanType.value = 'rebuild'
     const res = await photoApi.startRebuild({ path: path.path })
     ElMessage.info(`「${path.name}」重建任务已启动，正在后台处理...`)
 
@@ -614,6 +637,8 @@ const handleRebuildPath = async (path: ScanPathConfig) => {
     startPollingScanProgress(path.name)
   } catch (error: any) {
     rebuildingPathId.value = ''
+    currentScanPath.value = ''
+    currentScanType.value = ''
     ElMessage.error(error.message || '重建照片失败')
   }
 }
@@ -639,6 +664,8 @@ const startPollingScanProgress = (pathName: string) => {
         scanProgressTimer = null
         scanningPathId.value = ''
         rebuildingPathId.value = ''
+        currentScanPath.value = ''
+        currentScanType.value = ''
         return
       }
 
@@ -654,6 +681,8 @@ const startPollingScanProgress = (pathName: string) => {
         scanProgressTimer = null
         scanningPathId.value = ''
         rebuildingPathId.value = ''
+        currentScanPath.value = ''
+        currentScanType.value = ''
 
         // 显示结果
         if (task.type === 'scan') {
@@ -725,6 +754,45 @@ const gotoDetail = (photoId: number) => {
   })
 }
 
+// 检查是否有正在进行的扫描任务
+const checkOngoingScanTask = async () => {
+  try {
+    const res = await photoApi.getScanTask()
+    const { task, is_running } = res.data?.data || {}
+
+    if (is_running && task) {
+      // 有正在进行的任务，设置状态
+      currentScanPath.value = task.path
+      currentScanType.value = task.type
+
+      // 找到对应的路径并设置扫描状态
+      const pathConfig = scanPaths.value.find(p => p.path === task.path)
+      if (pathConfig) {
+        if (task.type === 'scan') {
+          scanningPathId.value = pathConfig.id
+        } else if (task.type === 'rebuild') {
+          rebuildingPathId.value = pathConfig.id
+        }
+      }
+
+      // 开始轮询进度
+      startPollingScanProgress(pathConfig?.name || task.path)
+    }
+  } catch (error) {
+    console.error('Failed to check ongoing scan task:', error)
+  }
+}
+
+// 判断路径是否正在扫描
+const isPathScanning = (path: ScanPathConfig) => {
+  return currentScanPath.value === path.path && currentScanType.value === 'scan'
+}
+
+// 判断路径是否正在重建
+const isPathRebuilding = (path: ScanPathConfig) => {
+  return currentScanPath.value === path.path && currentScanType.value === 'rebuild'
+}
+
 onMounted(() => {
   // Load scan paths first
   loadScanPaths()
@@ -734,6 +802,9 @@ onMounted(() => {
 
   // 加载分类和标签
   loadCategoriesAndTags()
+
+  // 检查是否有正在进行的扫描任务
+  checkOngoingScanTask()
 
   // 从 URL 参数恢复状态
   const query = router.currentRoute.value.query
