@@ -62,10 +62,19 @@ router.beforeEach(async (to, from, next) => {
 
   // 检查是否有 token
   if (!userStore.isLoggedIn) {
-    // 尝试从服务器获取用户信息（token 可能有效）
+    // 没有 token，尝试从服务器获取用户信息（可能有 cookie）
     const userInfo = await userStore.fetchUserInfo()
     if (!userInfo) {
       ElMessage.warning('请先登录')
+      next('/login')
+      return
+    }
+  } else if (!userStore.userInfo) {
+    // 有 token 但没有用户信息，需要从服务器获取（包括 isFirstLogin 状态）
+    const userInfo = await userStore.fetchUserInfo()
+    if (!userInfo) {
+      // token 无效，重新登录
+      ElMessage.warning('登录已过期，请重新登录')
       next('/login')
       return
     }

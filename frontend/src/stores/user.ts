@@ -4,12 +4,31 @@ import type { UserInfo, UserInfoResponse } from '@/types/user'
 import { authApi } from '@/api/auth'
 
 const TOKEN_KEY = 'relive_token'
+const USER_INFO_KEY = 'relive_user_info'
+const IS_FIRST_LOGIN_KEY = 'relive_is_first_login'
+
+// 从 localStorage 恢复用户信息
+const restoreUserInfo = (): UserInfo | null => {
+  const stored = localStorage.getItem(USER_INFO_KEY)
+  if (stored) {
+    try {
+      return JSON.parse(stored)
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+const restoreIsFirstLogin = (): boolean => {
+  return localStorage.getItem(IS_FIRST_LOGIN_KEY) === 'true'
+}
 
 export const useUserStore = defineStore('user', () => {
   // State
   const token = ref<string | null>(localStorage.getItem(TOKEN_KEY))
-  const userInfo = ref<UserInfo | null>(null)
-  const isFirstLogin = ref(false)
+  const userInfo = ref<UserInfo | null>(restoreUserInfo())
+  const isFirstLogin = ref(restoreIsFirstLogin())
   const loading = ref(false)
 
   // Getters
@@ -26,13 +45,31 @@ export const useUserStore = defineStore('user', () => {
     }
   }
 
+  const setUserInfo = (info: UserInfo | null) => {
+    userInfo.value = info
+    if (info) {
+      localStorage.setItem(USER_INFO_KEY, JSON.stringify(info))
+    } else {
+      localStorage.removeItem(USER_INFO_KEY)
+    }
+  }
+
+  const setIsFirstLogin = (value: boolean) => {
+    isFirstLogin.value = value
+    if (value) {
+      localStorage.setItem(IS_FIRST_LOGIN_KEY, 'true')
+    } else {
+      localStorage.removeItem(IS_FIRST_LOGIN_KEY)
+    }
+  }
+
   const login = async (username: string, Password: string) => {
     loading.value = true
     try {
       const response = await authApi.login({ username, Password })
       setToken(response.token)
-      userInfo.value = response.user
-      isFirstLogin.value = response.is_first_login
+      setUserInfo(response.user)
+      setIsFirstLogin(response.is_first_login)
       return response
     } finally {
       loading.value = false
@@ -46,8 +83,8 @@ export const useUserStore = defineStore('user', () => {
       // 忽略错误
     } finally {
       setToken(null)
-      userInfo.value = null
-      isFirstLogin.value = false
+      setUserInfo(null)
+      setIsFirstLogin(false)
     }
   }
 
@@ -55,28 +92,30 @@ export const useUserStore = defineStore('user', () => {
     if (!token.value) return null
     try {
       const data = await authApi.getCurrentUser()
-      userInfo.value = {
+      setUserInfo({
         id: data.id,
         username: data.username
-      }
-      isFirstLogin.value = data.is_first_login
+      })
+      setIsFirstLogin(data.is_first_login)
       return data
     } catch (error) {
       // Token 可能已过期，清除登录状态
       setToken(null)
+      setUserInfo(null)
+      setIsFirstLogin(false)
       return null
     }
   }
 
   const changePassword = async (old_Password: string, new_Password: string) => {
     await authApi.changePassword({ old_Password, new_Password })
-    isFirstLogin.value = false
+    setIsFirstLogin(false)
   }
 
   const clearUserState = () => {
     setToken(null)
-    userInfo.value = null
-    isFirstLogin.value = false
+    setUserInfo(null)
+    setIsFirstLogin(false)
   }
 
   return {
