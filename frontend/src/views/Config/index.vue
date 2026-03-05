@@ -1075,7 +1075,7 @@ onMounted(() => {
 .geocode-card,
 .ai-card,
 .prompt-card {
-  max-width: 1200px;
+  /* 移除 max-width 限制，允许卡片自适应宽度 */
 }
 
 .card-header {
@@ -1174,7 +1174,7 @@ onMounted(() => {
 /* Geocode configuration styles */
 .geocode-form,
 .ai-form {
-  max-width: 800px;
+  /* 移除 max-width 限制，允许表单自适应宽度 */
 }
 
 .form-hint {
@@ -1230,7 +1230,7 @@ onMounted(() => {
 
 /* Prompt configuration styles */
 .prompt-form {
-  max-width: 900px;
+  /* 移除 max-width 限制，允许表单自适应宽度 */
 }
 
 .prompt-textarea-wrapper {
