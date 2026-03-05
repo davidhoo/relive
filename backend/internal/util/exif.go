@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/davidhoo/relive/pkg/logger"
 	"github.com/rwcarlsen/goexif/exif"
 )
 
@@ -39,12 +40,12 @@ func ExtractEXIF(filePath string) (*EXIFData, error) {
 		// 先尝试 exiftool（Docker/Linux 环境）
 		data, err := extractEXIFWithExifTool(filePath)
 		if err != nil {
-			fmt.Printf("[EXIF] exiftool failed for %s: %v\n", filePath, err)
+			logger.Debugf("exiftool failed for %s: %v", filePath, err)
 		} else if data.TakenAt != nil || data.GPSLatitude != nil || data.CameraModel != "" {
-			fmt.Printf("[EXIF] exiftool success for %s: GPS=%v,%v\n", filePath, data.GPSLatitude, data.GPSLongitude)
+			logger.Debugf("exiftool success for %s: GPS=%v,%v", filePath, data.GPSLatitude, data.GPSLongitude)
 			return data, nil
 		} else {
-			fmt.Printf("[EXIF] exiftool returned empty data for %s\n", filePath)
+			logger.Debugf("exiftool returned empty data for %s", filePath)
 		}
 		// exiftool 失败或无数据，尝试 sips（macOS）
 		return extractEXIFWithSips(filePath)
@@ -174,21 +175,16 @@ func extractEXIFWithExifTool(filePath string) (*EXIFData, error) {
 	}
 
 	// 提取 GPS - 使用 -GPSLatitude# -GPSLongitude# 输出十进制数值
-	fmt.Printf("[EXIF DEBUG] exiftool output for %s: %+v\n", filePath, result)
-
 	if latVal, ok := result["GPSLatitude"].(float64); ok {
 		data.GPSLatitude = &latVal
-		fmt.Printf("[EXIF DEBUG] Got GPSLatitude as float64: %f\n", latVal)
 	}
 	if lonVal, ok := result["GPSLongitude"].(float64); ok {
 		data.GPSLongitude = &lonVal
-		fmt.Printf("[EXIF DEBUG] Got GPSLongitude as float64: %f\n", lonVal)
 	}
 
 	// 如果没有获取到，尝试字符串格式
 	if data.GPSLatitude == nil {
 		if latStr, ok := result["GPSLatitude"].(string); ok && latStr != "" {
-			fmt.Printf("[EXIF DEBUG] GPSLatitude as string: %s\n", latStr)
 			lat := parseGPSCoordinate(latStr)
 			if lat != nil {
 				data.GPSLatitude = lat
@@ -197,7 +193,6 @@ func extractEXIFWithExifTool(filePath string) (*EXIFData, error) {
 	}
 	if data.GPSLongitude == nil {
 		if lonStr, ok := result["GPSLongitude"].(string); ok && lonStr != "" {
-			fmt.Printf("[EXIF DEBUG] GPSLongitude as string: %s\n", lonStr)
 			lon := parseGPSCoordinate(lonStr)
 			if lon != nil {
 				data.GPSLongitude = lon
@@ -205,7 +200,7 @@ func extractEXIFWithExifTool(filePath string) (*EXIFData, error) {
 		}
 	}
 
-	fmt.Printf("[EXIF DEBUG] Final GPS data: lat=%v, lon=%v\n", data.GPSLatitude, data.GPSLongitude)
+	logger.Debugf("exiftool GPS result for %s: lat=%v, lon=%v", filePath, data.GPSLatitude, data.GPSLongitude)
 
 	return data, nil
 }

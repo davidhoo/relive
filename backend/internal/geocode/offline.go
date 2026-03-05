@@ -214,10 +214,6 @@ func (p *OfflineProvider) ReverseGeocode(lat, lon float64) (*Location, error) {
 	logger.Debugf("Offline geocode result: City=%s, Province=%s, Country=%s, FullName=%s",
 		location.City, location.Province, location.Country, location.FullName)
 
-	// Temporary: force INFO level
-	logger.Infof("[GEOCODE-DEBUG] Location constructed: City=%s, Province=%s, Country=%s, FullName=%s",
-		location.City, location.Province, location.Country, location.FullName)
-
 	logger.Debugf("Offline geocode: (%.6f,%.6f) -> %s (%.2f km, took %v)",
 		lat, lon, location.FormatShort(), minDist, location.Duration)
 

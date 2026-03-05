@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"sync"
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/service"
@@ -13,6 +14,7 @@ import (
 
 // AIHandler AI 分析处理器
 type AIHandler struct {
+	mu        sync.RWMutex
 	aiService service.AIService
 }
 
@@ -25,7 +27,16 @@ func NewAIHandler(aiService service.AIService) *AIHandler {
 
 // SetAIService 动态更新 AI 服务（用于配置变更后热重载）
 func (h *AIHandler) SetAIService(aiService service.AIService) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.aiService = aiService
+}
+
+// getAIService 线程安全地获取 AI 服务
+func (h *AIHandler) getAIService() service.AIService {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.aiService
 }
 
 // Analyze 分析单张照片
@@ -40,7 +51,8 @@ func (h *AIHandler) SetAIService(aiService service.AIService) {
 // @Failure 500 {object} model.Response
 // @Router /api/v1/ai/analyze [post]
 func (h *AIHandler) Analyze(c *gin.Context) {
-	if h.aiService == nil {
+	svc := h.getAIService()
+	if svc == nil {
 		c.JSON(http.StatusServiceUnavailable, model.Response{
 			Success: false,
 			Error: &model.ErrorInfo{
@@ -65,7 +77,7 @@ func (h *AIHandler) Analyze(c *gin.Context) {
 	}
 
 	// 分析照片
-	if err := h.aiService.AnalyzePhoto(req.PhotoID); err != nil {
+	if err := svc.AnalyzePhoto(req.PhotoID); err != nil {
 		logger.Errorf("Analyze photo failed: %v", err)
 		c.JSON(http.StatusInternalServerError, model.Response{
 			Success: false,
@@ -95,7 +107,8 @@ func (h *AIHandler) Analyze(c *gin.Context) {
 // @Failure 500 {object} model.Response
 // @Router /api/v1/ai/analyze/batch [post]
 func (h *AIHandler) AnalyzeBatch(c *gin.Context) {
-	if h.aiService == nil {
+	svc := h.getAIService()
+	if svc == nil {
 		c.JSON(http.StatusServiceUnavailable, model.Response{
 			Success: false,
 			Error: &model.ErrorInfo{
@@ -128,7 +141,7 @@ func (h *AIHandler) AnalyzeBatch(c *gin.Context) {
 	}
 
 	// 异步启动批量分析
-	task, err := h.aiService.AnalyzeBatch(req.Limit)
+	task, err := svc.AnalyzeBatch(req.Limit)
 	if err != nil {
 		logger.Errorf("Batch analyze failed: %v", err)
 		c.JSON(http.StatusInternalServerError, model.Response{
@@ -163,7 +176,8 @@ func (h *AIHandler) AnalyzeBatch(c *gin.Context) {
 // @Failure 500 {object} model.Response
 // @Router /api/v1/ai/progress [get]
 func (h *AIHandler) GetProgress(c *gin.Context) {
-	if h.aiService == nil {
+	svc := h.getAIService()
+	if svc == nil {
 		c.JSON(http.StatusServiceUnavailable, model.Response{
 			Success: false,
 			Error: &model.ErrorInfo{
@@ -175,7 +189,7 @@ func (h *AIHandler) GetProgress(c *gin.Context) {
 	}
 
 	// 获取总体进度
-	progress, err := h.aiService.GetAnalyzeProgress()
+	progress, err := svc.GetAnalyzeProgress()
 	if err != nil {
 		logger.Errorf("Get progress failed: %v", err)
 		c.JSON(http.StatusInternalServerError, model.Response{
@@ -189,7 +203,7 @@ func (h *AIHandler) GetProgress(c *gin.Context) {
 	}
 
 	// 获取当前任务状态
-	task := h.aiService.GetTaskStatus()
+	task := svc.GetTaskStatus()
 
 	// 构建响应，兼容前端期望的格式
 	responseData := map[string]interface{}{
@@ -230,7 +244,8 @@ func (h *AIHandler) GetProgress(c *gin.Context) {
 // @Failure 500 {object} model.Response
 // @Router /api/v1/ai/task [get]
 func (h *AIHandler) GetTaskStatus(c *gin.Context) {
-	if h.aiService == nil {
+	svc := h.getAIService()
+	if svc == nil {
 		c.JSON(http.StatusServiceUnavailable, model.Response{
 			Success: false,
 			Error: &model.ErrorInfo{
@@ -241,7 +256,7 @@ func (h *AIHandler) GetTaskStatus(c *gin.Context) {
 		return
 	}
 
-	task := h.aiService.GetTaskStatus()
+	task := svc.GetTaskStatus()
 	if task == nil {
 		c.JSON(http.StatusOK, model.Response{
 			Success: true,
@@ -270,7 +285,8 @@ func (h *AIHandler) GetTaskStatus(c *gin.Context) {
 // @Failure 500 {object} model.Response
 // @Router /api/v1/ai/reanalyze/{id} [post]
 func (h *AIHandler) ReAnalyze(c *gin.Context) {
-	if h.aiService == nil {
+	svc := h.getAIService()
+	if svc == nil {
 		c.JSON(http.StatusServiceUnavailable, model.Response{
 			Success: false,
 			Error: &model.ErrorInfo{
@@ -296,7 +312,7 @@ func (h *AIHandler) ReAnalyze(c *gin.Context) {
 	}
 
 	// 重新分析（强制重新分析已分析的照片）
-	if err := h.aiService.ReAnalyzePhoto(uint(id)); err != nil {
+	if err := svc.ReAnalyzePhoto(uint(id)); err != nil {
 		logger.Errorf("Re-analyze photo failed: %v", err)
 		c.JSON(http.StatusInternalServerError, model.Response{
 			Success: false,
@@ -324,7 +340,8 @@ func (h *AIHandler) ReAnalyze(c *gin.Context) {
 // @Failure 500 {object} model.Response
 // @Router /api/v1/ai/provider [get]
 func (h *AIHandler) GetProviderInfo(c *gin.Context) {
-	if h.aiService == nil {
+	svc := h.getAIService()
+	if svc == nil {
 		c.JSON(http.StatusServiceUnavailable, model.Response{
 			Success: false,
 			Error: &model.ErrorInfo{
@@ -335,7 +352,7 @@ func (h *AIHandler) GetProviderInfo(c *gin.Context) {
 		return
 	}
 
-	provider, err := h.aiService.GetProvider()
+	provider, err := svc.GetProvider()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, model.Response{
 			Success: false,
@@ -358,7 +375,7 @@ func (h *AIHandler) GetProviderInfo(c *gin.Context) {
 	}
 
 	// 计算预估成本
-	progress, _ := h.aiService.GetAnalyzeProgress()
+	progress, _ := svc.GetAnalyzeProgress()
 	if progress != nil && progress.EstimatedCost > 0 {
 		info["estimated_cost"] = fmt.Sprintf("¥%.2f", progress.EstimatedCost)
 	} else {
