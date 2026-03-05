@@ -71,3 +71,6 @@ backend/relive
 # Config files with sensitive data
 backend/analyzer.yaml
 !backend/analyzer.yaml.example
+
+# Docker Compose local overrides (personal configurations)
+docker-compose.override.yml
