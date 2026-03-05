@@ -53,7 +53,8 @@ type Device struct {
 	MACAddress      string `gorm:"type:varchar(20)" json:"mac_address"`           // MAC 地址
 
 	// 状态信息
-	Online        bool       `gorm:"default:false" json:"online"`                        // 是否在线
+	IsEnabled     bool       `gorm:"default:true" json:"is_enabled"`                     // 是否可用（服务端控制）
+	Online        bool       `gorm:"default:false" json:"online"`                        // 是否在线（自动检测）
 	LastHeartbeat *time.Time `gorm:"index:idx_last_heartbeat" json:"last_heartbeat"`     // 最后心跳时间
 	BatteryLevel  int        `gorm:"default:0" json:"battery_level"`                     // 电池电量（0-100）
 	WiFiRSSI      int        `gorm:"column:wifi_rssi;default:0" json:"wifi_rssi"`        // WiFi 信号强度（dBm）

@@ -25,8 +25,8 @@ type AnalysisService interface {
 	GetPendingTasks(limit int, analyzerID string) ([]model.AnalysisTask, int64, error)
 	ExtendTaskLock(taskID, analyzerID string) (time.Time, error)
 	ReleaseTask(taskID, analyzerID, reason, errorMsg string, retryLater bool) error
-	SubmitResults(results []model.AnalysisResult, apiKeyID uint) (*model.SubmitResultsResponse, error)
-	GetStats(apiKeyID uint) (*model.AnalyzerStatsResponse, error)
+	SubmitResults(results []model.AnalysisResult, deviceID uint) (*model.SubmitResultsResponse, error)
+	GetStats(deviceID uint) (*model.AnalyzerStatsResponse, error)
 	CleanExpiredLocks() (int64, error)
 }
 
@@ -207,7 +207,7 @@ func (s *analysisService) ReleaseTask(taskID, analyzerID, reason, errorMsg strin
 }
 
 // SubmitResults 提交分析结果（幂等性处理）
-func (s *analysisService) SubmitResults(results []model.AnalysisResult, apiKeyID uint) (*model.SubmitResultsResponse, error) {
+func (s *analysisService) SubmitResults(results []model.AnalysisResult, deviceID uint) (*model.SubmitResultsResponse, error) {
 	resp := &model.SubmitResultsResponse{
 		Accepted:      0,
 		Rejected:      0,
@@ -307,7 +307,7 @@ func (s *analysisService) SubmitResults(results []model.AnalysisResult, apiKeyID
 }
 
 // GetStats 获取分析统计
-func (s *analysisService) GetStats(apiKeyID uint) (*model.AnalyzerStatsResponse, error) {
+func (s *analysisService) GetStats(deviceID uint) (*model.AnalyzerStatsResponse, error) {
 	var stats model.AnalyzerStatsResponse
 
 	// 统计总数

@@ -83,25 +83,37 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 			system.GET("/environment", handlers.System.Environment)
 		}
 
-		// 设备相关（API Key 认证）- 新路径（推荐）
-		devices := v1.Group("/devices")
-		devices.Use(middleware.APIKeyAuth(services.APIKey))
+		// 设备管理（JWT 认证 - 管理员操作）
+		devicesManage := v1.Group("/devices")
+		devicesManage.Use(middleware.JWTAuth(services.Auth))
+		devicesManage.Use(middleware.FirstLoginCheck(services.Auth))
 		{
-			devices.POST("/register", handlers.Device.Register)
-			devices.POST("/heartbeat", handlers.Device.Heartbeat)
+			devicesManage.POST("", handlers.Device.CreateDevice)             // 创建设备
+			devicesManage.DELETE("/:id", handlers.Device.DeleteDevice)       // 删除设备
+			devicesManage.PUT("/:id/enabled", handlers.Device.UpdateDeviceEnabled) // 启用/禁用设备
+			devicesManage.GET("/stats", handlers.Device.GetDeviceStats)
+			devicesManage.GET("", handlers.Device.GetDevices)
+			devicesManage.GET("/:device_id", handlers.Device.GetDeviceByID)
 		}
 
-		// ESP32 设备相关（API Key 认证）- 旧路径（兼容，deprecated）
-		esp32 := v1.Group("/esp32")
-		esp32.Use(middleware.APIKeyAuth(services.APIKey))
+		// 设备 API（API Key 认证 - 设备使用）
+		// 认证中间件会自动更新设备的 IP 和最后请求时间
+		devicesAPI := v1.Group("/devices")
+		devicesAPI.Use(middleware.APIKeyAuth(services.Device))
 		{
-			esp32.POST("/register", handlers.ESP32.Register)      // 指向同一个 handler
-			esp32.POST("/heartbeat", handlers.ESP32.Heartbeat)    // 指向同一个 handler
+			devicesAPI.POST("/activate", handlers.Device.Activate)    // 设备激活
+		}
+
+		// ESP32 兼容路径（API Key 认证）
+		esp32 := v1.Group("/esp32")
+		esp32.Use(middleware.APIKeyAuth(services.Device))
+		{
+			esp32.POST("/activate", handlers.ESP32.Activate)      // 兼容：指向 Activate
 		}
 
 		// 展示相关（API Key 认证，设备获取照片）
 		display := v1.Group("/display")
-		display.Use(middleware.APIKeyAuth(services.APIKey))
+		display.Use(middleware.APIKeyAuth(services.Device))
 		{
 			display.GET("/photo", handlers.Display.GetDisplayPhoto)
 			display.POST("/record", handlers.Display.RecordDisplay)
@@ -109,7 +121,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 
 		// 分析器相关（API Key 认证，离线分析器使用）
 		analyzer := v1.Group("/analyzer")
-		analyzer.Use(middleware.APIKeyAuth(services.APIKey))
+		analyzer.Use(middleware.APIKeyAuth(services.Device))
 		{
 			analyzer.GET("/tasks", handlers.Analyzer.GetTasks)
 			analyzer.POST("/tasks/:task_id/heartbeat", handlers.Analyzer.Heartbeat)
@@ -153,22 +165,6 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				photos.GET("/:id", handlers.Photo.GetPhotoByID)
 			}
 
-			// 设备管理（需要 JWT 认证）- 新路径（推荐）
-			devicesManage := authorized.Group("/devices")
-			{
-				devicesManage.GET("/stats", handlers.Device.GetDeviceStats)
-				devicesManage.GET("", handlers.Device.GetDevices)
-				devicesManage.GET("/:device_id", handlers.Device.GetDeviceByID)
-			}
-
-			// ESP32 设备管理（需要 JWT 认证）- 旧路径（兼容，deprecated）
-			esp32Manage := authorized.Group("/esp32")
-			{
-				esp32Manage.GET("/stats", handlers.ESP32.GetDeviceStats)      // 指向同一个 handler
-				esp32Manage.GET("/devices", handlers.ESP32.GetDevices)        // 指向同一个 handler
-				esp32Manage.GET("/devices/:device_id", handlers.ESP32.GetDeviceByID)  // 指向同一个 handler
-			}
-
 			// AI 分析相关
 			ai := authorized.Group("/ai")
 			{
@@ -200,13 +196,6 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				configGroup.GET("/prompts", handlers.Config.GetPromptConfig)
 				configGroup.PUT("/prompts", handlers.Config.SetPromptConfig)
 				configGroup.POST("/prompts/reset", handlers.Config.ResetPromptConfig)
-
-				// API Key 管理
-				configGroup.GET("/api-keys", handlers.APIKey.GetAPIKeys)
-				configGroup.POST("/api-keys", handlers.APIKey.CreateAPIKey)
-				configGroup.PUT("/api-keys/:id", handlers.APIKey.UpdateAPIKey)
-				configGroup.DELETE("/api-keys/:id", handlers.APIKey.DeleteAPIKey)
-				configGroup.POST("/api-keys/:id/regenerate", handlers.APIKey.RegenerateAPIKey)
 
 				// 城市数据管理
 				configGroup.GET("/cities-data/status", handlers.Config.GetCitiesDataStatus)

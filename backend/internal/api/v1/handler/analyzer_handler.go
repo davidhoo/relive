@@ -51,11 +51,11 @@ func (h *AnalyzerHandler) GetTasks(c *gin.Context) {
 		analyzerID = uuid.New().String()
 	}
 
-	// 获取 API Key ID
-	apiKeyID, _ := c.Get("api_key_id")
-	apiKeyName, _ := c.Get("api_key_name")
+	// 获取设备信息
+	deviceID, _ := c.Get("device_id")
+	deviceName, _ := c.Get("device_name")
 
-	logger.Infof("Analyzer %s requesting %d tasks (API Key: %v)", analyzerID, limit, apiKeyName)
+	logger.Infof("Analyzer %s requesting %d tasks (Device: %v)", analyzerID, limit, deviceName)
 
 	// 获取待分析任务
 	tasks, totalRemaining, err := h.analysisService.GetPendingTasks(limit, analyzerID)
@@ -94,11 +94,11 @@ func (h *AnalyzerHandler) GetTasks(c *gin.Context) {
 		Success: true,
 		Message: "Tasks retrieved successfully",
 		Data: model.AnalyzerTasksResponse{
-			Tasks:           tasks,
-			TotalRemaining:  totalRemaining,
-			LockDuration:    300,
-			AnalyzerID:      analyzerID,
-			APIKeyID:        apiKeyID.(uint),
+			Tasks:          tasks,
+			TotalRemaining: totalRemaining,
+			LockDuration:   300,
+			AnalyzerID:     analyzerID,
+			DeviceID:       deviceID.(uint),
 		},
 	})
 }
@@ -283,14 +283,14 @@ func (h *AnalyzerHandler) SubmitResults(c *gin.Context) {
 		return
 	}
 
-	// 获取 API Key 信息
-	apiKeyID, _ := c.Get("api_key_id")
-	apiKeyName, _ := c.Get("api_key_name")
+	// 获取设备信息
+	deviceID, _ := c.Get("device_id")
+	deviceName, _ := c.Get("device_name")
 
-	logger.Infof("Submitting %d results from analyzer (API Key: %v)", len(req.Results), apiKeyName)
+	logger.Infof("Submitting %d results from analyzer (Device: %v)", len(req.Results), deviceName)
 
 	// 提交结果
-	resp, err := h.analysisService.SubmitResults(req.Results, apiKeyID.(uint))
+	resp, err := h.analysisService.SubmitResults(req.Results, deviceID.(uint))
 	if err != nil {
 		logger.Errorf("Failed to submit results: %v", err)
 		c.JSON(http.StatusInternalServerError, model.Response{
@@ -318,14 +318,14 @@ func (h *AnalyzerHandler) SubmitResults(c *gin.Context) {
 // @Success 200 {object} model.Response{data=model.AnalyzerStatsResponse}
 // @Router /api/v1/analyzer/stats [get]
 func (h *AnalyzerHandler) GetStats(c *gin.Context) {
-	// 获取 API Key 信息
-	apiKeyID, apiKeyIDExists := c.Get("api_key_id")
-	var apiKeyIDUint uint
-	if apiKeyIDExists {
-		apiKeyIDUint = apiKeyID.(uint)
+	// 获取设备信息
+	deviceID, deviceIDExists := c.Get("device_id")
+	var deviceIDUint uint
+	if deviceIDExists {
+		deviceIDUint = deviceID.(uint)
 	}
 
-	stats, err := h.analysisService.GetStats(apiKeyIDUint)
+	stats, err := h.analysisService.GetStats(deviceIDUint)
 	if err != nil {
 		logger.Errorf("Failed to get stats: %v", err)
 		c.JSON(http.StatusInternalServerError, model.Response{
@@ -381,7 +381,7 @@ type AnalysisService interface {
 	GetPendingTasks(limit int, analyzerID string) ([]model.AnalysisTask, int64, error)
 	ExtendTaskLock(taskID, analyzerID string) (time.Time, error)
 	ReleaseTask(taskID, analyzerID, reason, errorMsg string, retryLater bool) error
-	SubmitResults(results []model.AnalysisResult, apiKeyID uint) (*model.SubmitResultsResponse, error)
-	GetStats(apiKeyID uint) (*model.AnalyzerStatsResponse, error)
+	SubmitResults(results []model.AnalysisResult, deviceID uint) (*model.SubmitResultsResponse, error)
+	GetStats(deviceID uint) (*model.AnalyzerStatsResponse, error)
 	CleanExpiredLocks() (int64, error)
 }

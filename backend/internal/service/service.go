@@ -11,15 +11,14 @@ import (
 type Services struct {
 	Photo     PhotoService
 	Display   DisplayService
-	Device    DeviceService       // 新名称
-	ESP32     ESP32Service        // 保留兼容（别名）
+	Device    DeviceService // 新名称
+	ESP32     ESP32Service  // 保留兼容（别名）
 	AI        AIService
 	Export    ExportService
 	Config    ConfigService
 	Prompt    PromptService
 	Geocode   GeocodeService
 	Auth      AuthService
-	APIKey    APIKeyService
 	Analysis  AnalysisService
 	Scheduler *TaskScheduler
 }
@@ -50,9 +49,6 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		logger.Warnf("Failed to initialize default user: %v", err)
 	}
 
-	// 创建 API Key 服务
-	apiKeyService := NewAPIKeyService(repos.APIKey, cfg)
-
 	// 创建分析服务
 	analysisService := NewAnalysisService(db, repos.Photo, cfg)
 
@@ -66,22 +62,16 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	deviceService := NewDeviceService(repos.Device, cfg)
 
 	return &Services{
-		Photo:    NewPhotoService(repos.Photo, cfg, configService, geocodeService),
-		Display:  NewDisplayService(
-			repos.Photo,
-			repos.DisplayRecord,
-			repos.Device, // 改为 Device
-			cfg,
-		),
-		Device:    deviceService,        // 新名称
-		ESP32:     deviceService,        // 兼容旧代码（指向同一个实例）
+		Photo:     NewPhotoService(repos.Photo, cfg, configService, geocodeService),
+		Display:   NewDisplayService(repos.Photo, repos.DisplayRecord, repos.Device, cfg),
+		Device:    deviceService,
+		ESP32:     deviceService,
 		AI:        aiService,
 		Export:    NewExportService(repos.Photo),
 		Config:    configService,
 		Prompt:    promptService,
 		Geocode:   geocodeService,
 		Auth:      authService,
-		APIKey:    apiKeyService,
 		Analysis:  analysisService,
 		Scheduler: scheduler,
 	}

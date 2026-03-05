@@ -97,7 +97,6 @@ func AutoMigrate(db *gorm.DB) error {
         &model.AppConfig{},
         &model.City{},
         &model.User{},
-        &model.APIKey{},
     }
 
     if err := db.AutoMigrate(models...); err != nil {

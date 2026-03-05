@@ -25,7 +25,7 @@ type AnalyzerTasksResponse struct {
 	TotalRemaining int64          `json:"total_remaining"` // 剩余任务数
 	LockDuration   int            `json:"lock_duration"`   // 锁定期（秒）
 	AnalyzerID     string         `json:"analyzer_id"`     // 分析器实例ID
-	APIKeyID       uint           `json:"api_key_id"`      // API Key ID
+	DeviceID       uint           `json:"device_id"`       // 设备ID
 }
 
 // HeartbeatRequest 心跳请求
@@ -100,7 +100,7 @@ type AnalyzerStatsResponse struct {
 	Pending           int64   `json:"pending"`             // 待分析数
 	Locked            int64   `json:"locked"`              // 当前被锁定数
 	Failed            int64   `json:"failed"`              // 失败数
-	MyTasks           *MyTasksStats `json:"my_tasks,omitempty"` // 当前API Key的任务统计
+	MyTasks           *MyTasksStats `json:"my_tasks,omitempty"` // 当前设备的任务统计
 	AvgAnalysisTime   float64 `json:"avg_analysis_time"`   // 平均分析时间（秒）
 	QueuePressure     string  `json:"queue_pressure"`      // 队列压力：low, normal, high
 }

@@ -121,8 +121,9 @@ func FirstLoginCheck(authService service.AuthService) gin.HandlerFunc {
 	}
 }
 
-// APIKeyAuth API Key 认证中间件（用于 ESP32 设备和 Analyzer）
-func APIKeyAuth(apiKeyService service.APIKeyService) gin.HandlerFunc {
+// APIKeyAuth API Key 认证中间件（用于设备和 Analyzer）
+// 统一从 devices 表验证 API Key
+func APIKeyAuth(deviceService service.DeviceService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var apiKey string
 
@@ -157,23 +158,40 @@ func APIKeyAuth(apiKeyService service.APIKeyService) gin.HandlerFunc {
 			return
 		}
 
-		// 验证 API Key
-		key, err := apiKeyService.ValidateKey(apiKey)
+		// 从设备表验证 API Key
+		device, err := deviceService.GetByAPIKey(apiKey)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, model.Response{
 				Success: false,
 				Error: &model.ErrorInfo{
 					Code:    "UNAUTHORIZED",
-					Message: "Invalid or expired API Key",
+					Message: "Invalid API Key",
 				},
 			})
 			c.Abort()
 			return
 		}
 
-		// 将 API Key 信息存入上下文
-		c.Set("api_key_id", key.ID)
-		c.Set("api_key_name", key.Name)
+		// 检查设备是否可用
+		if !device.IsEnabled {
+			c.JSON(http.StatusForbidden, model.Response{
+				Success: false,
+				Error: &model.ErrorInfo{
+					Code:    "DEVICE_DISABLED",
+					Message: "Device is disabled",
+				},
+			})
+			c.Abort()
+			return
+		}
+
+		// 更新设备最后请求时间和 IP（异步，不阻塞请求）
+		deviceService.UpdateLastSeen(device.ID, c.ClientIP())
+
+		// 将设备信息存入上下文
+		c.Set("device_id", device.ID)
+		c.Set("device_id_str", device.DeviceID)
+		c.Set("device_name", device.Name)
 
 		c.Next()
 	}

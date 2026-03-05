@@ -14,13 +14,20 @@ import (
 
 // DeviceService 设备服务接口
 type DeviceService interface {
-	// 注册
-	Register(req *model.DeviceRegisterRequest) (*model.DeviceRegisterResponse, error)
+	// 设备管理（管理员操作）
+	Create(req *model.CreateDeviceRequest) (*model.CreateDeviceResponse, error)
+	Delete(id uint) error
+	Update(device *model.Device) error
+	UpdateEnabled(id uint, enabled bool) error // 更新设备可用状态
+
+	// 设备激活（设备使用预分配的 API Key 激活）
+	Activate(req *model.DeviceActivateRequest) (*model.DeviceActivateResponse, error)
 
 	// 心跳
 	Heartbeat(req *model.DeviceHeartbeatRequest) (*model.DeviceHeartbeatResponse, error)
 
 	// 查询
+	GetByID(id uint) (*model.Device, error)
 	GetByDeviceID(deviceID string) (*model.Device, error)
 	GetByAPIKey(apiKey string) (*model.Device, error)
 	List(page, pageSize int) ([]*model.Device, int64, error)
@@ -32,6 +39,9 @@ type DeviceService interface {
 	CountOnline() (int64, error)
 	CountByDeviceType(deviceType string) (int64, error)
 	CountByPlatform(platform string) (int64, error)
+
+	// 更新最后请求时间（异步）
+	UpdateLastSeen(deviceID uint, ip string)
 }
 
 // deviceService 设备服务实现
@@ -48,54 +58,35 @@ func NewDeviceService(repo repository.DeviceRepository, cfg *config.Config) Devi
 	}
 }
 
-// Register 注册设备
-func (s *deviceService) Register(req *model.DeviceRegisterRequest) (*model.DeviceRegisterResponse, error) {
-	// 检查设备是否已存在
-	exists, err := s.repo.ExistsByDeviceID(req.DeviceID)
-	if err != nil {
-		return nil, fmt.Errorf("check device exists: %w", err)
-	}
-
-	if exists {
-		// 设备已存在，返回现有信息
-		device, err := s.repo.GetByDeviceID(req.DeviceID)
-		if err != nil {
-			return nil, fmt.Errorf("get existing device: %w", err)
-		}
-
-		logger.Infof("Device already registered: %s (type: %s)", req.DeviceID, device.DeviceType)
-
-		// 返回响应（不返回完整 API Key，只返回提示）
-		return &model.DeviceRegisterResponse{
-			DeviceID: device.DeviceID,
-			APIKey:   device.APIKey, // 注意：实际应该不返回，这里为了测试方便
-			Config:   s.getDefaultConfig(),
-		}, nil
-	}
-
+// Create 创建设备（管理员操作）
+func (s *deviceService) Create(req *model.CreateDeviceRequest) (*model.CreateDeviceResponse, error) {
 	// 生成 API Key
 	apiKey, err := s.generateAPIKey()
 	if err != nil {
 		return nil, fmt.Errorf("generate api key: %w", err)
 	}
 
+	// 生成设备 ID（短格式，便于显示和输入）
+	deviceID, err := s.generateDeviceID()
+	if err != nil {
+		return nil, fmt.Errorf("generate device id: %w", err)
+	}
+
 	// 设置默认值
 	deviceType := req.DeviceType
 	if deviceType == "" {
-		deviceType = "esp32" // 默认 ESP32
+		deviceType = "esp32"
 	}
-
 	platform := req.Platform
 	if platform == "" {
-		platform = "embedded" // 默认嵌入式
+		platform = "embedded"
 	}
 
-	// 创建设备
+	// 创建设备记录
 	device := &model.Device{
-		DeviceID:        req.DeviceID,
+		DeviceID:        deviceID,
 		Name:            req.Name,
 		APIKey:          apiKey,
-		IPAddress:       req.IPAddress,
 		DeviceType:      deviceType,
 		HardwareModel:   req.HardwareModel,
 		Platform:        platform,
@@ -103,22 +94,119 @@ func (s *deviceService) Register(req *model.DeviceRegisterRequest) (*model.Devic
 		ScreenHeight:    req.ScreenHeight,
 		FirmwareVersion: req.FirmwareVersion,
 		MACAddress:      req.MACAddress,
-		Online:          true,
+		IsEnabled:       true,  // 新设备默认可用
+		Online:          false, // 新设备默认离线，等待激活
 	}
-
-	now := time.Now()
-	device.LastHeartbeat = &now
 
 	if err := s.repo.Create(device); err != nil {
 		return nil, fmt.Errorf("create device: %w", err)
 	}
 
-	logger.Infof("Device registered successfully: %s (type: %s, platform: %s)",
-		req.DeviceID, deviceType, platform)
+	logger.Infof("Device created by admin: %s (name: %s, type: %s, platform: %s)",
+		deviceID, req.Name, deviceType, platform)
 
-	return &model.DeviceRegisterResponse{
+	return &model.CreateDeviceResponse{
+		ID:              device.ID,
+		CreatedAt:       device.CreatedAt,
+		DeviceID:        device.DeviceID,
+		Name:            device.Name,
+		APIKey:          apiKey, // ⚠️ 仅创建时返回
+		DeviceType:      device.DeviceType,
+		Platform:        device.Platform,
+		ScreenWidth:     device.ScreenWidth,
+		ScreenHeight:    device.ScreenHeight,
+		FirmwareVersion: device.FirmwareVersion,
+		MACAddress:      device.MACAddress,
+		Description:     req.Description,
+	}, nil
+}
+
+// Delete 删除设备
+func (s *deviceService) Delete(id uint) error {
+	return s.repo.Delete(id)
+}
+
+// Update 更新设备信息
+func (s *deviceService) Update(device *model.Device) error {
+	return s.repo.Update(device)
+}
+
+// UpdateEnabled 更新设备可用状态
+func (s *deviceService) UpdateEnabled(id uint, enabled bool) error {
+	device, err := s.repo.GetByID(id)
+	if err != nil {
+		return fmt.Errorf("device not found: %w", err)
+	}
+
+	device.IsEnabled = enabled
+	if err := s.repo.Update(device); err != nil {
+		return fmt.Errorf("update device enabled status: %w", err)
+	}
+
+	status := "disabled"
+	if enabled {
+		status = "enabled"
+	}
+	logger.Infof("Device %s %s by admin", device.DeviceID, status)
+	return nil
+}
+
+// GetByID 根据 ID 获取设备
+func (s *deviceService) GetByID(id uint) (*model.Device, error) {
+	return s.repo.GetByID(id)
+}
+
+// Activate 设备激活（设备使用预分配的 API Key 激活）
+func (s *deviceService) Activate(req *model.DeviceActivateRequest) (*model.DeviceActivateResponse, error) {
+	// 查找设备
+	device, err := s.repo.GetByDeviceID(req.DeviceID)
+	if err != nil {
+		return nil, fmt.Errorf("device not found: %w", err)
+	}
+
+	// 更新设备信息（设备上报的信息）
+	if req.Name != "" {
+		device.Name = req.Name
+	}
+	if req.DeviceType != "" {
+		device.DeviceType = req.DeviceType
+	}
+	if req.HardwareModel != "" {
+		device.HardwareModel = req.HardwareModel
+	}
+	if req.Platform != "" {
+		device.Platform = req.Platform
+	}
+	if req.ScreenWidth > 0 {
+		device.ScreenWidth = req.ScreenWidth
+	}
+	if req.ScreenHeight > 0 {
+		device.ScreenHeight = req.ScreenHeight
+	}
+	if req.FirmwareVersion != "" {
+		device.FirmwareVersion = req.FirmwareVersion
+	}
+	if req.MACAddress != "" {
+		device.MACAddress = req.MACAddress
+	}
+
+	// 激活时更新状态
+	device.Online = true
+	now := time.Now()
+	device.LastHeartbeat = &now
+	if req.IPAddress != "" {
+		device.IPAddress = req.IPAddress
+	}
+
+	if err := s.repo.Update(device); err != nil {
+		return nil, fmt.Errorf("update device: %w", err)
+	}
+
+	logger.Infof("Device activated: %s (IP: %s)", req.DeviceID, req.IPAddress)
+
+	return &model.DeviceActivateResponse{
 		DeviceID: device.DeviceID,
-		APIKey:   apiKey,
+		Name:     device.Name,
 		Config:   s.getDefaultConfig(),
 	}, nil
 }
@@ -196,18 +284,67 @@ func (s *deviceService) CountByPlatform(platform string) (int64, error) {
 	return s.repo.CountByPlatform(platform)
 }
 
-// generateAPIKey 生成 API Key
+// UpdateLastSeen 更新设备最后请求时间和 IP（异步调用）
+func (s *deviceService) UpdateLastSeen(deviceID uint, ip string) {
+	// 异步更新，不阻塞请求
+	go func() {
+		device, err := s.repo.GetByID(deviceID)
+		if err != nil {
+			return
+		}
+
+		now := time.Now()
+		device.LastHeartbeat = &now
+		device.Online = true
+		if ip != "" {
+			device.IPAddress = ip
+		}
+
+		_ = s.repo.Update(device)
+	}()
+}
+
+// generateDeviceID 生成设备 ID（8位随机字符串，便于显示和输入）
+func (s *deviceService) generateDeviceID() (string, error) {
+	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	const length = 8
+
+	for {
+		result := make([]byte, length)
+		if _, err := rand.Read(result); err != nil {
+			return "", err
+		}
+
+		for i := range result {
+			result[i] = charset[int(result[i])%len(charset)]
+		}
+
+		deviceID := string(result)
+
+		// 检查是否已存在（极低概率）
+		exists, err := s.repo.ExistsByDeviceID(deviceID)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return deviceID, nil
+		}
+		// 已存在则重新生成
+	}
+}
+
+// generateAPIKey 生成 API Key（格式: sk-relive- + 32位十六进制）
 func (s *deviceService) generateAPIKey() (string, error) {
-	// 生成 32 字节随机数
-	bytes := make([]byte, 32)
+	// 生成 16 字节随机数 → 32 位十六进制字符串
+	bytes := make([]byte, 16)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}
 
-	// 转换为十六进制字符串
+	// 转换为十六进制字符串（32位）
 	randomStr := hex.EncodeToString(bytes)
 
-	// 添加前缀
+	// 添加前缀（使用配置中的前缀，如 sk-relive-）
 	apiKey := s.config.Security.APIKeyPrefix + randomStr
 
 	// 检查是否已存在（极低概率）

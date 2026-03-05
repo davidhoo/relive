@@ -22,20 +22,166 @@ func NewDeviceHandler(deviceService service.DeviceService) *DeviceHandler {
 	}
 }
 
-// Register 注册设备
-// @Summary 注册设备
-// @Description 设备注册到系统（支持多种设备类型）
+// CreateDevice 创建设备（管理员操作）
+// @Summary 创建设备
+// @Description 管理员在后台创建设备，系统自动生成 API Key
 // @Tags devices
 // @Accept json
 // @Produce json
-// @Param request body model.DeviceRegisterRequest true "注册请求"
-// @Success 200 {object} model.Response{data=model.DeviceRegisterResponse}
+// @Param request body model.CreateDeviceRequest true "创建设备请求"
+// @Success 200 {object} model.Response{data=model.CreateDeviceResponse}
 // @Failure 400 {object} model.Response
 // @Failure 500 {object} model.Response
-// @Router /api/v1/devices/register [post]
-// @Router /api/v1/esp32/register [post]
-func (h *DeviceHandler) Register(c *gin.Context) {
-	var req model.DeviceRegisterRequest
+// @Router /api/v1/devices [post]
+func (h *DeviceHandler) CreateDevice(c *gin.Context) {
+	var req model.CreateDeviceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		logger.Warnf("Invalid request: %v", err)
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INVALID_REQUEST",
+				Message: "Invalid request",
+			},
+		})
+		return
+	}
+
+	// 创建设备
+	resp, err := h.deviceService.Create(&req)
+	if err != nil {
+		logger.Errorf("Create device failed: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "CREATE_FAILED",
+				Message: "Failed to create device: " + err.Error(),
+			},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "Device created successfully. Please save the API Key, it will not be shown again.",
+		Data:    resp,
+	})
+}
+
+// DeleteDevice 删除设备
+// @Summary 删除设备
+// @Description 删除指定的设备
+// @Tags devices
+// @Produce json
+// @Param id path int true "设备 ID"
+// @Success 200 {object} model.Response
+// @Failure 400 {object} model.Response
+// @Failure 500 {object} model.Response
+// @Router /api/v1/devices/{id} [delete]
+func (h *DeviceHandler) DeleteDevice(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INVALID_ID",
+				Message: "Invalid device ID",
+			},
+		})
+		return
+	}
+
+	if err := h.deviceService.Delete(uint(id)); err != nil {
+		logger.Errorf("Delete device failed: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "DELETE_FAILED",
+				Message: "Failed to delete device",
+			},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "Device deleted successfully",
+	})
+}
+
+// UpdateDeviceEnabled 更新设备可用状态
+// @Summary 更新设备可用状态
+// @Description 启用或禁用设备
+// @Tags devices
+// @Accept json
+// @Produce json
+// @Param id path int true "设备 ID"
+// @Param request body model.UpdateDeviceEnabledRequest true "更新请求"
+// @Success 200 {object} model.Response
+// @Failure 400 {object} model.Response
+// @Failure 500 {object} model.Response
+// @Router /api/v1/devices/{id}/enabled [put]
+func (h *DeviceHandler) UpdateDeviceEnabled(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INVALID_ID",
+				Message: "Invalid device ID",
+			},
+		})
+		return
+	}
+
+	var req model.UpdateDeviceEnabledRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INVALID_REQUEST",
+				Message: "Invalid request",
+			},
+		})
+		return
+	}
+
+	if err := h.deviceService.UpdateEnabled(uint(id), req.Enabled); err != nil {
+		logger.Errorf("Update device enabled status failed: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "UPDATE_FAILED",
+				Message: "Failed to update device status",
+			},
+		})
+		return
+	}
+
+	status := "disabled"
+	if req.Enabled {
+		status = "enabled"
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "Device " + status + " successfully",
+	})
+}
+
+// Activate 设备激活
+// @Summary 设备激活
+// @Description 设备使用预分配的 API Key 激活并获取配置
+// @Tags devices
+// @Accept json
+// @Produce json
+// @Param request body model.DeviceActivateRequest true "激活请求"
+// @Success 200 {object} model.Response{data=model.DeviceActivateResponse}
+// @Failure 400 {object} model.Response
+// @Failure 500 {object} model.Response
+// @Router /api/v1/devices/activate [post]
+func (h *DeviceHandler) Activate(c *gin.Context) {
+	var req model.DeviceActivateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.Warnf("Invalid request: %v", err)
 		c.JSON(http.StatusBadRequest, model.Response{
@@ -60,15 +206,15 @@ func (h *DeviceHandler) Register(c *gin.Context) {
 		return
 	}
 
-	// 注册设备
-	resp, err := h.deviceService.Register(&req)
+	// 激活设备
+	resp, err := h.deviceService.Activate(&req)
 	if err != nil {
-		logger.Errorf("Register device failed: %v", err)
+		logger.Errorf("Activate device failed: %v", err)
 		c.JSON(http.StatusInternalServerError, model.Response{
 			Success: false,
 			Error: &model.ErrorInfo{
-				Code:    "CREATE_FAILED",
-				Message: "Failed to register device: " + err.Error(),
+				Code:    "ACTIVATE_FAILED",
+				Message: "Failed to activate device: " + err.Error(),
 			},
 		})
 		return
@@ -76,7 +222,7 @@ func (h *DeviceHandler) Register(c *gin.Context) {
 
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
-		Message: "Success",
+		Message: "Device activated successfully",
 		Data:    resp,
 	})
 }
@@ -235,6 +381,11 @@ func (h *DeviceHandler) GetDevices(c *gin.Context) {
 		}
 	}
 
+	// 实时计算每个设备的在线状态
+	for _, device := range devices {
+		device.Online = device.IsOnline()
+	}
+
 	// 构建分页响应
 	pagedResp := model.PagedResponse{
 		Items:    devices,
@@ -290,10 +441,38 @@ func (h *DeviceHandler) GetDeviceByID(c *gin.Context) {
 		return
 	}
 
+	// 实时计算在线状态
+	device.Online = device.IsOnline()
+
+	// 构建详情响应（包含 API Key）
+	resp := model.DeviceDetailResponse{
+		ID:              device.ID,
+		CreatedAt:       device.CreatedAt,
+		UpdatedAt:       device.UpdatedAt,
+		DeviceID:        device.DeviceID,
+		Name:            device.Name,
+		APIKey:          device.APIKey,
+		IPAddress:       device.IPAddress,
+		DeviceType:      device.DeviceType,
+		HardwareModel:   device.HardwareModel,
+		Platform:        device.Platform,
+		ScreenWidth:     device.ScreenWidth,
+		ScreenHeight:    device.ScreenHeight,
+		FirmwareVersion: device.FirmwareVersion,
+		MACAddress:      device.MACAddress,
+		IsEnabled:       device.IsEnabled,
+		Online:          device.Online,
+		BatteryLevel:    device.BatteryLevel,
+		WiFiRSSI:        device.WiFiRSSI,
+	}
+	if device.LastHeartbeat != nil {
+		resp.LastHeartbeat = *device.LastHeartbeat
+	}
+
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
 		Message: "Success",
-		Data:    device,
+		Data:    resp,
 	})
 }
 
@@ -379,4 +558,10 @@ type ESP32Handler = DeviceHandler
 // Deprecated: 使用 NewDeviceHandler 代替
 func NewESP32Handler(deviceService service.DeviceService) *DeviceHandler {
 	return NewDeviceHandler(deviceService)
+}
+
+// Register 注册设备（兼容旧接口，重定向到 Activate）
+// @Deprecated: 使用 /activate 接口
+func (h *DeviceHandler) Register(c *gin.Context) {
+	h.Activate(c)
 }

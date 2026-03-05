@@ -665,9 +665,6 @@
       </template>
     </el-dialog>
 
-    <!-- API Key 管理 -->
-    <ApiKeyManager />
-
     <!-- Path Browser Dialog -->
     <PathBrowser v-model="pathBrowserVisible" :initial-path="pathForm.path" @select="handlePathSelected" />
   </div>
@@ -675,7 +672,6 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import ApiKeyManager from './components/ApiKeyManager.vue'
 import PathBrowser from '@/components/PathBrowser.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { configApi, promptApi, type ScanPathConfig, type GeocodeConfig, type AIConfig, type PromptConfig, defaultPrompts, getCitiesDataStatus, downloadCitiesData, type CitiesDataStatus } from '@/api/config'
