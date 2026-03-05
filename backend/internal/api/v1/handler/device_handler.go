@@ -446,24 +446,18 @@ func (h *DeviceHandler) GetDeviceByID(c *gin.Context) {
 
 	// 构建详情响应（包含 API Key）
 	resp := model.DeviceDetailResponse{
-		ID:              device.ID,
-		CreatedAt:       device.CreatedAt,
-		UpdatedAt:       device.UpdatedAt,
-		DeviceID:        device.DeviceID,
-		Name:            device.Name,
-		APIKey:          device.APIKey,
-		IPAddress:       device.IPAddress,
-		DeviceType:      device.DeviceType,
-		HardwareModel:   device.HardwareModel,
-		Platform:        device.Platform,
-		ScreenWidth:     device.ScreenWidth,
-		ScreenHeight:    device.ScreenHeight,
-		FirmwareVersion: device.FirmwareVersion,
-		MACAddress:      device.MACAddress,
-		IsEnabled:       device.IsEnabled,
-		Online:          device.Online,
-		BatteryLevel:    device.BatteryLevel,
-		WiFiRSSI:        device.WiFiRSSI,
+		ID:           device.ID,
+		CreatedAt:    device.CreatedAt,
+		UpdatedAt:    device.UpdatedAt,
+		DeviceID:     device.DeviceID,
+		Name:         device.Name,
+		APIKey:       device.APIKey,
+		IPAddress:    device.IPAddress,
+		DeviceType:   device.DeviceType,
+		IsEnabled:    device.IsEnabled,
+		Online:       device.Online,
+		BatteryLevel: device.BatteryLevel,
+		WiFiRSSI:     device.WiFiRSSI,
 	}
 	if device.LastHeartbeat != nil {
 		resp.LastHeartbeat = *device.LastHeartbeat
@@ -516,7 +510,7 @@ func (h *DeviceHandler) GetDeviceStats(c *gin.Context) {
 
 	// 按设备类型统计
 	byType := make(map[string]int64)
-	deviceTypes := []string{"esp32", "esp8266", "stm32", "android", "ios", "web"}
+	deviceTypes := []string{"embedded", "mobile", "web", "offline", "service"}
 	for _, dt := range deviceTypes {
 		count, err := h.deviceService.CountByDeviceType(dt)
 		if err == nil && count > 0 {
@@ -524,21 +518,10 @@ func (h *DeviceHandler) GetDeviceStats(c *gin.Context) {
 		}
 	}
 
-	// 按平台统计
-	byPlatform := make(map[string]int64)
-	platforms := []string{"embedded", "mobile", "web"}
-	for _, p := range platforms {
-		count, err := h.deviceService.CountByPlatform(p)
-		if err == nil && count > 0 {
-			byPlatform[p] = count
-		}
-	}
-
 	stats := model.DeviceStatsResponse{
-		Total:      total,
-		Online:     online,
-		ByType:     byType,
-		ByPlatform: byPlatform,
+		Total:  total,
+		Online: online,
+		ByType: byType,
 	}
 
 	c.JSON(http.StatusOK, model.Response{

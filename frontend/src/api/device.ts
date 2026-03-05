@@ -39,12 +39,6 @@ export const deviceApi = {
 export interface CreateDeviceRequest {
   name: string
   device_type?: string
-  hardware_model?: string
-  platform?: string
-  screen_width?: number
-  screen_height?: number
-  firmware_version?: string
-  mac_address?: string
   description?: string
 }
 
@@ -61,10 +55,5 @@ export interface CreateDeviceResponse {
   name: string
   api_key: string  // ⚠️ 仅创建时返回
   device_type: string
-  platform: string
-  screen_width: number
-  screen_height: number
-  firmware_version: string
-  mac_address: string
   description: string
 }

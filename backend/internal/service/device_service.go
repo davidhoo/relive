@@ -75,49 +75,33 @@ func (s *deviceService) Create(req *model.CreateDeviceRequest) (*model.CreateDev
 	// 设置默认值
 	deviceType := req.DeviceType
 	if deviceType == "" {
-		deviceType = "esp32"
-	}
-	platform := req.Platform
-	if platform == "" {
-		platform = "embedded"
+		deviceType = "embedded"
 	}
 
 	// 创建设备记录
 	device := &model.Device{
-		DeviceID:        deviceID,
-		Name:            req.Name,
-		APIKey:          apiKey,
-		DeviceType:      deviceType,
-		HardwareModel:   req.HardwareModel,
-		Platform:        platform,
-		ScreenWidth:     req.ScreenWidth,
-		ScreenHeight:    req.ScreenHeight,
-		FirmwareVersion: req.FirmwareVersion,
-		MACAddress:      req.MACAddress,
-		IsEnabled:       true,  // 新设备默认可用
-		Online:          false, // 新设备默认离线，等待激活
+		DeviceID:   deviceID,
+		Name:       req.Name,
+		APIKey:     apiKey,
+		DeviceType: deviceType,
+		IsEnabled:  true,  // 新设备默认可用
+		Online:     false, // 新设备默认离线，等待激活
 	}
 
 	if err := s.repo.Create(device); err != nil {
 		return nil, fmt.Errorf("create device: %w", err)
 	}
 
-	logger.Infof("Device created by admin: %s (name: %s, type: %s, platform: %s)",
-		deviceID, req.Name, deviceType, platform)
+	logger.Infof("Device created by admin: %s (name: %s, type: %s)",
+		deviceID, req.Name, deviceType)
 
 	return &model.CreateDeviceResponse{
-		ID:              device.ID,
-		CreatedAt:       device.CreatedAt,
-		DeviceID:        device.DeviceID,
-		Name:            device.Name,
-		APIKey:          apiKey, // ⚠️ 仅创建时返回
-		DeviceType:      device.DeviceType,
-		Platform:        device.Platform,
-		ScreenWidth:     device.ScreenWidth,
-		ScreenHeight:    device.ScreenHeight,
-		FirmwareVersion: device.FirmwareVersion,
-		MACAddress:      device.MACAddress,
-		Description:     req.Description,
+		ID:         device.ID,
+		CreatedAt:  device.CreatedAt,
+		DeviceID:   device.DeviceID,
+		Name:       device.Name,
+		APIKey:     apiKey, // ⚠️ 仅创建时返回
+		DeviceType: device.DeviceType,
 	}, nil
 }
 
@@ -170,24 +154,6 @@ func (s *deviceService) Activate(req *model.DeviceActivateRequest) (*model.Devic
 	}
 	if req.DeviceType != "" {
 		device.DeviceType = req.DeviceType
-	}
-	if req.HardwareModel != "" {
-		device.HardwareModel = req.HardwareModel
-	}
-	if req.Platform != "" {
-		device.Platform = req.Platform
-	}
-	if req.ScreenWidth > 0 {
-		device.ScreenWidth = req.ScreenWidth
-	}
-	if req.ScreenHeight > 0 {
-		device.ScreenHeight = req.ScreenHeight
-	}
-	if req.FirmwareVersion != "" {
-		device.FirmwareVersion = req.FirmwareVersion
-	}
-	if req.MACAddress != "" {
-		device.MACAddress = req.MACAddress
 	}
 
 	// 激活时更新状态

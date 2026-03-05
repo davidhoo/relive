@@ -52,9 +52,9 @@
       <el-table :data="devices" stripe>
         <el-table-column prop="device_id" label="设备 ID" width="120" />
         <el-table-column prop="name" label="设备名称" />
-        <el-table-column label="类型" width="90">
+        <el-table-column label="类型" width="100">
           <template #default="{ row }">
-            <el-tag size="small">{{ row.device_type || 'esp32' }}</el-tag>
+            <el-tag size="small">{{ formatDeviceType(row.device_type) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="可用" width="70">
@@ -113,37 +113,12 @@
         </el-form-item>
         <el-form-item label="设备类型">
           <el-select v-model="createForm.device_type" placeholder="选择设备类型" style="width: 100%">
-            <el-option label="ESP32" value="esp32" />
-            <el-option label="ESP8266" value="esp8266" />
-            <el-option label="Android" value="android" />
-            <el-option label="iOS" value="ios" />
+            <el-option label="嵌入式" value="embedded" />
+            <el-option label="移动端" value="mobile" />
             <el-option label="Web" value="web" />
-            <el-option label="Analyzer" value="analyzer" />
+            <el-option label="离线程序" value="offline" />
+            <el-option label="服务" value="service" />
           </el-select>
-        </el-form-item>
-        <el-form-item label="平台">
-          <el-select v-model="createForm.platform" placeholder="选择平台" style="width: 100%">
-            <el-option label="嵌入式 (Embedded)" value="embedded" />
-            <el-option label="移动端 (Mobile)" value="mobile" />
-            <el-option label="Web" value="web" />
-            <el-option label="服务 (Service)" value="service" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="屏幕尺寸">
-          <div style="display: flex; gap: 12px; align-items: center">
-            <el-input-number v-model="createForm.screen_width" :min="1" placeholder="宽" />
-            <span>×</span>
-            <el-input-number v-model="createForm.screen_height" :min="1" placeholder="高" />
-          </div>
-        </el-form-item>
-        <el-form-item label="硬件型号">
-          <el-input v-model="createForm.hardware_model" placeholder="例如: ESP32-S3" />
-        </el-form-item>
-        <el-form-item label="MAC 地址">
-          <el-input v-model="createForm.mac_address" placeholder="例如: AA:BB:CC:DD:EE:FF" />
-        </el-form-item>
-        <el-form-item label="固件版本">
-          <el-input v-model="createForm.firmware_version" placeholder="例如: 1.0.0" />
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="createForm.description" type="textarea" rows="2" placeholder="可选" />
@@ -221,17 +196,8 @@
             {{ currentDevice.online ? '在线' : '离线' }}
           </el-tag>
         </el-descriptions-item>
-        <el-descriptions-item label="设备类型">{{ currentDevice.device_type || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="平台">{{ currentDevice.platform || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="设备类型">{{ formatDeviceType(currentDevice.device_type) }}</el-descriptions-item>
         <el-descriptions-item label="IP 地址">{{ currentDevice.ip_address || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="硬件型号">{{ currentDevice.hardware_model || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="MAC 地址">{{ currentDevice.mac_address || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="固件版本">{{ currentDevice.firmware_version || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="屏幕尺寸">
-          {{ currentDevice.screen_width && currentDevice.screen_height
-            ? `${currentDevice.screen_width} × ${currentDevice.screen_height}`
-            : '-' }}
-        </el-descriptions-item>
         <el-descriptions-item label="最后请求">{{ formatTime(currentDevice.last_heartbeat) }}</el-descriptions-item>
         <el-descriptions-item label="创建时间">{{ formatTime(currentDevice.created_at) }}</el-descriptions-item>
       </el-descriptions>
@@ -262,13 +228,7 @@ const creating = ref(false)
 const createFormRef = ref()
 const createForm = reactive<CreateDeviceRequest>({
   name: '',
-  device_type: 'esp32',
-  platform: 'embedded',
-  screen_width: 800,
-  screen_height: 600,
-  hardware_model: '',
-  mac_address: '',
-  firmware_version: '',
+  device_type: 'embedded',
   description: ''
 })
 
@@ -312,15 +272,21 @@ const loadStats = async () => {
 // 打开创建设备对话框
 const openCreateDialog = () => {
   createForm.name = ''
-  createForm.device_type = 'esp32'
-  createForm.platform = 'embedded'
-  createForm.screen_width = 800
-  createForm.screen_height = 600
-  createForm.hardware_model = ''
-  createForm.mac_address = ''
-  createForm.firmware_version = ''
+  createForm.device_type = 'embedded'
   createForm.description = ''
   createDialogVisible.value = true
+}
+
+// 格式化设备类型显示
+const formatDeviceType = (type?: string) => {
+  const typeMap: Record<string, string> = {
+    'embedded': '嵌入式',
+    'mobile': '移动端',
+    'web': 'Web',
+    'offline': '离线程序',
+    'service': '服务'
+  }
+  return typeMap[type || ''] || type || '-'
 }
 
 // 创建设备

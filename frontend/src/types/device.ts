@@ -4,13 +4,7 @@ export interface ESP32Device {
   device_id: string
   device_name?: string
   name?: string
-  device_type?: string      // 设备类型：esp32, android, ios等
-  hardware_model?: string   // 硬件型号：ESP32-S3, Pixel 8等
-  platform?: string         // 平台类型：embedded, mobile, web
-  screen_width?: number
-  screen_height?: number
-  firmware_version?: string
-  mac_address?: string
+  device_type?: string      // 设备类型：embedded, mobile, web, offline, service
   ip_address?: string
   is_enabled?: boolean      // 是否可用（服务端控制）
   online?: boolean

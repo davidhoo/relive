@@ -121,10 +121,9 @@ type DeviceHeartbeatResponse struct {
 
 // DeviceStatsResponse 设备统计响应
 type DeviceStatsResponse struct {
-	Total      int64            `json:"total"`
-	Online     int64            `json:"online"`
-	ByType     map[string]int64 `json:"by_type"`     // 按设备类型统计
-	ByPlatform map[string]int64 `json:"by_platform"` // 按平台统计
+	Total  int64            `json:"total"`
+	Online int64            `json:"online"`
+	ByType map[string]int64 `json:"by_type"` // 按设备类型统计
 }
 
 // ESP32RegisterRequest ESP32 注册请求（兼容旧代码）
@@ -142,45 +141,28 @@ type ESP32RegisterResponse = DeviceRegisterResponse
 
 // CreateDeviceRequest 创建设备请求（管理员）
 type CreateDeviceRequest struct {
-	Name            string `json:"name" binding:"required"` // 设备名称（用户填写）
-	DeviceType      string `json:"device_type"`             // 设备类型：esp32/esp8266/android/ios/web/analyzer
-	HardwareModel   string `json:"hardware_model"`          // 硬件型号
-	Platform        string `json:"platform"`                // 平台：embedded/mobile/web/service
-	ScreenWidth     int    `json:"screen_width"`
-	ScreenHeight    int    `json:"screen_height"`
-	FirmwareVersion string `json:"firmware_version"`
-	MACAddress      string `json:"mac_address"`
-	Description     string `json:"description"` // 描述/备注
+	Name        string `json:"name" binding:"required"` // 设备名称（用户填写）
+	DeviceType  string `json:"device_type"`             // 设备类型：embedded/mobile/web/offline/service
+	Description string `json:"description"`             // 描述/备注
 }
 
 // CreateDeviceResponse 创建设备响应（包含 API Key，仅创建时返回）
 type CreateDeviceResponse struct {
-	ID              uint      `json:"id"`
-	CreatedAt       time.Time `json:"created_at"`
-	DeviceID        string    `json:"device_id"`
-	Name            string    `json:"name"`
-	APIKey          string    `json:"api_key"` // ⚠️ 仅创建时返回，之后无法查看
-	DeviceType      string    `json:"device_type"`
-	Platform        string    `json:"platform"`
-	ScreenWidth     int       `json:"screen_width"`
-	ScreenHeight    int       `json:"screen_height"`
-	FirmwareVersion string    `json:"firmware_version"`
-	MACAddress      string    `json:"mac_address"`
-	Description     string    `json:"description"`
+	ID          uint      `json:"id"`
+	CreatedAt   time.Time `json:"created_at"`
+	DeviceID    string    `json:"device_id"`
+	Name        string    `json:"name"`
+	APIKey      string    `json:"api_key"` // ⚠️ 仅创建时返回，之后无法查看
+	DeviceType  string    `json:"device_type"`
+	Description string    `json:"description"`
 }
 
 // DeviceActivateRequest 设备激活请求（设备使用 API Key 激活）
 type DeviceActivateRequest struct {
-	DeviceID        string `json:"device_id" binding:"required"`
-	Name            string `json:"name"`
-	DeviceType      string `json:"device_type"`
-	HardwareModel   string `json:"hardware_model"`
-	Platform        string `json:"platform"`
-	ScreenWidth     int    `json:"screen_width"`
-	ScreenHeight    int    `json:"screen_height"`
-	FirmwareVersion string `json:"firmware_version"`
-	IPAddress       string `json:"ip_address"`
-	MACAddress      string `json:"mac_address"`
+	DeviceID   string `json:"device_id" binding:"required"`
+	Name       string `json:"name"`
+	DeviceType string `json:"device_type"`
+	IPAddress  string `json:"ip_address"`
 }
 
 // DeviceActivateResponse 设备激活响应
@@ -197,25 +179,19 @@ type ESP32HeartbeatResponse = DeviceHeartbeatResponse
 
 // DeviceDetailResponse 设备详情响应（包含 API Key）
 type DeviceDetailResponse struct {
-	ID              uint      `json:"id"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
-	DeviceID        string    `json:"device_id"`
-	Name            string    `json:"name"`
-	APIKey          string    `json:"api_key"`          // 设备的 API Key
-	IPAddress       string    `json:"ip_address"`
-	DeviceType      string    `json:"device_type"`
-	HardwareModel   string    `json:"hardware_model"`
-	Platform        string    `json:"platform"`
-	ScreenWidth     int       `json:"screen_width"`
-	ScreenHeight    int       `json:"screen_height"`
-	FirmwareVersion string    `json:"firmware_version"`
-	MACAddress      string    `json:"mac_address"`
-	IsEnabled       bool      `json:"is_enabled"`       // 是否可用
-	Online          bool      `json:"online"`           // 是否在线
-	LastHeartbeat   time.Time `json:"last_heartbeat,omitempty"`
-	BatteryLevel    int       `json:"battery_level"`
-	WiFiRSSI        int       `json:"wifi_rssi"`
+	ID            uint      `json:"id"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	DeviceID      string    `json:"device_id"`
+	Name          string    `json:"name"`
+	APIKey        string    `json:"api_key"` // 设备的 API Key
+	IPAddress     string    `json:"ip_address"`
+	DeviceType    string    `json:"device_type"`
+	IsEnabled     bool      `json:"is_enabled"` // 是否可用
+	Online        bool      `json:"online"`     // 是否在线
+	LastHeartbeat time.Time `json:"last_heartbeat,omitempty"`
+	BatteryLevel  int       `json:"battery_level"`
+	WiFiRSSI      int       `json:"wifi_rssi"`
 }
 
 // RecordDisplayRequest 上报展示记录请求

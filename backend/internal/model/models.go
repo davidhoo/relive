@@ -41,16 +41,11 @@ type Device struct {
 	APIKey    string `gorm:"type:varchar(100);not null;uniqueIndex:idx_api_key" json:"-"`          // API Key（不返回）
 	IPAddress string `gorm:"type:varchar(50)" json:"ip_address"`                                   // IP 地址
 
-	// 设备类型信息（新增）
-	DeviceType    string `gorm:"type:varchar(20);default:'esp32';index:idx_device_type" json:"device_type"`    // 设备类型：esp32/esp8266/stm32/android/ios/web
-	HardwareModel string `gorm:"type:varchar(50)" json:"hardware_model"`                                       // 硬件型号：ESP32-S3/iPhone 15/Pixel 8
-	Platform      string `gorm:"type:varchar(20);default:'embedded'" json:"platform"`                          // 平台类型：embedded/mobile/web
+	// 设备类型：embedded/mobile/web/offline/service
+	DeviceType string `gorm:"type:varchar(20);default:'embedded';index:idx_device_type" json:"device_type"`
 
-	// 硬件信息
-	ScreenWidth     int    `gorm:"not null" json:"screen_width"`                  // 屏幕宽度
-	ScreenHeight    int    `gorm:"not null" json:"screen_height"`                 // 屏幕高度
-	FirmwareVersion string `gorm:"type:varchar(20)" json:"firmware_version"`      // 固件/应用版本
-	MACAddress      string `gorm:"type:varchar(20)" json:"mac_address"`           // MAC 地址
+	// 描述/备注
+	Description string `gorm:"type:varchar(500)" json:"description"`
 
 	// 状态信息
 	IsEnabled     bool       `gorm:"default:true" json:"is_enabled"`                     // 是否可用（服务端控制）
