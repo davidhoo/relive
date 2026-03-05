@@ -4,7 +4,7 @@ bin/
 *.dll
 *.so
 *.dylib
-relive-analyzer
+/relive-analyzer
 
 # Test binary
 *.test

@@ -451,14 +451,21 @@ func submitResultsFunc(client *analyzerClient.APIClient) func(ctx context.Contex
 			return err
 		}
 
+		// 记录被拒绝的项
 		if resp.Rejected > 0 {
 			for _, item := range resp.RejectedItems {
 				logger.Warnf("Result rejected: photo_id=%d, reason=%s", item.PhotoID, item.Reason)
 			}
 		}
 
-		logger.Infof("Submitted %d results (accepted: %d, rejected: %d)",
-			len(results), resp.Accepted, resp.Rejected)
+		logger.Infof("Submitted %d results (accepted: %d, rejected: %d, failed: %d)",
+			len(results), resp.Accepted, resp.Rejected, len(resp.FailedPhotos))
+
+		// 如果有失败的照片，返回错误让缓冲区恢复数据以便重试
+		if len(resp.FailedPhotos) > 0 {
+			logger.Errorf("Failed to submit %d results, will retry", len(resp.FailedPhotos))
+			return fmt.Errorf("server failed to process %d results", len(resp.FailedPhotos))
+		}
 
 		return nil
 	}
