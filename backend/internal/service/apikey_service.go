@@ -25,9 +25,6 @@ type APIKeyService interface {
 
 	// 重新生成
 	Regenerate(id uint) (*model.RegenerateAPIKeyResponse, error)
-
-	// 初始化
-	InitializeDefaultKey() error
 }
 
 // apiKeyService API Key服务实现
@@ -188,40 +185,6 @@ func (s *apiKeyService) Regenerate(id uint) (*model.RegenerateAPIKeyResponse, er
 		ID:  apiKey.ID,
 		Key: newKey,
 	}, nil
-}
-
-// InitializeDefaultKey 初始化默认的ESP32 API Key
-func (s *apiKeyService) InitializeDefaultKey() error {
-	// 检查是否已存在API Key
-	count, err := s.repo.Count()
-	if err != nil {
-		return fmt.Errorf("count api keys: %w", err)
-	}
-
-	// 如果已存在，不创建默认Key
-	if count > 0 {
-		return nil
-	}
-
-	// 生成默认Key
-	key, err := s.generateKey()
-	if err != nil {
-		return fmt.Errorf("generate default api key: %w", err)
-	}
-
-	apiKey := &model.APIKey{
-		Name:        "ESP32设备",
-		Key:         key,
-		Description: "系统默认ESP32设备API Key",
-		IsActive:    true,
-	}
-
-	if err := s.repo.Create(apiKey); err != nil {
-		return fmt.Errorf("create default api key: %w", err)
-	}
-
-	logger.Infof("Default API Key created: %s", apiKey.Name)
-	return nil
 }
 
 // generateKey 生成API Key

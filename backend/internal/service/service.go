@@ -50,11 +50,8 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		logger.Warnf("Failed to initialize default user: %v", err)
 	}
 
-	// 创建 API Key 服务并初始化默认Key
+	// 创建 API Key 服务
 	apiKeyService := NewAPIKeyService(repos.APIKey, cfg)
-	if err := apiKeyService.InitializeDefaultKey(); err != nil {
-		logger.Warnf("Failed to initialize default API key: %v", err)
-	}
 
 	// 创建分析服务
 	analysisService := NewAnalysisService(db, repos.Photo, cfg)
