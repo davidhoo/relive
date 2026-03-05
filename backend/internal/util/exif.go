@@ -120,7 +120,8 @@ func extractEXIFWithExifTool(filePath string) (*EXIFData, error) {
 		return nil, fmt.Errorf("exiftool not found in PATH")
 	}
 
-	cmd := exec.Command("exiftool", "-DateTimeOriginal", "-GPSLatitude", "-GPSLongitude",
+	// 使用 -c 参数输出坐标格式为十进制
+	cmd := exec.Command("exiftool", "-DateTimeOriginal", "-GPSLatitude#", "-GPSLongitude#",
 		"-GPSLatitudeRef", "-GPSLongitudeRef", "-Model", "-ImageWidth", "-ImageHeight",
 		"-Orientation", "-j", "-charset", "UTF8", filePath)
 	output, err := cmd.Output()
@@ -172,30 +173,39 @@ func extractEXIFWithExifTool(filePath string) (*EXIFData, error) {
 		}
 	}
 
-	// 提取 GPS - exiftool 返回格式: "39.9042 N"
-	if latStr, ok := result["GPSLatitude"].(string); ok && latStr != "" {
-		lat := parseGPSCoordinate(latStr)
-		if lat != nil {
-			// 检查参考方向
-			if latRef, ok := result["GPSLatitudeRef"].(string); ok && latRef == "S" {
-				latValue := -*lat
-				lat = &latValue
+	// 提取 GPS - 使用 -GPSLatitude# -GPSLongitude# 输出十进制数值
+	fmt.Printf("[EXIF DEBUG] exiftool output for %s: %+v\n", filePath, result)
+
+	if latVal, ok := result["GPSLatitude"].(float64); ok {
+		data.GPSLatitude = &latVal
+		fmt.Printf("[EXIF DEBUG] Got GPSLatitude as float64: %f\n", latVal)
+	}
+	if lonVal, ok := result["GPSLongitude"].(float64); ok {
+		data.GPSLongitude = &lonVal
+		fmt.Printf("[EXIF DEBUG] Got GPSLongitude as float64: %f\n", lonVal)
+	}
+
+	// 如果没有获取到，尝试字符串格式
+	if data.GPSLatitude == nil {
+		if latStr, ok := result["GPSLatitude"].(string); ok && latStr != "" {
+			fmt.Printf("[EXIF DEBUG] GPSLatitude as string: %s\n", latStr)
+			lat := parseGPSCoordinate(latStr)
+			if lat != nil {
+				data.GPSLatitude = lat
 			}
-			data.GPSLatitude = lat
+		}
+	}
+	if data.GPSLongitude == nil {
+		if lonStr, ok := result["GPSLongitude"].(string); ok && lonStr != "" {
+			fmt.Printf("[EXIF DEBUG] GPSLongitude as string: %s\n", lonStr)
+			lon := parseGPSCoordinate(lonStr)
+			if lon != nil {
+				data.GPSLongitude = lon
+			}
 		}
 	}
 
-	if lonStr, ok := result["GPSLongitude"].(string); ok && lonStr != "" {
-		lon := parseGPSCoordinate(lonStr)
-		if lon != nil {
-			// 检查参考方向
-			if lonRef, ok := result["GPSLongitudeRef"].(string); ok && lonRef == "W" {
-				lonValue := -*lon
-				lon = &lonValue
-			}
-			data.GPSLongitude = lon
-		}
-	}
+	fmt.Printf("[EXIF DEBUG] Final GPS data: lat=%v, lon=%v\n", data.GPSLatitude, data.GPSLongitude)
 
 	return data, nil
 }
