@@ -223,7 +223,68 @@ make prod      # Use DockerHub images
 - Web UI: http://localhost:8080
 - API: http://localhost:8080/api/v1/
 
+## Version Management
+
+版本号使用单一来源管理（Single Source of Truth）：
+
+### 版本文件
+- **根目录 `VERSION` 文件**：唯一的版本号来源（格式：`1.0.0`）
+- **Go 代码**：通过 `pkg/version` 包读取，使用 `//go:embed` 嵌入
+- **前端**：`vite.config.ts` 构建时读取 VERSION 文件，通过 `__APP_VERSION__` 全局变量注入
+
+### 使用方式
+
+**Go 代码中获取版本：**
+```go
+import "github.com/davidhoo/relive/pkg/version"
+
+// 获取版本号
+fmt.Println(version.Version)        // 1.0.0
+fmt.Println(version.Info())         // 1.0.0 (built: 2025-03-05T12:00:00Z)
+fmt.Println(version.FullInfo())     // 1.0.0, commit: v1.0.0, built: 2025-03-05T12:00:00Z
+```
+
+**前端获取版本：**
+```typescript
+// vite.config.ts 中定义
+const appVersion = __APP_VERSION__  // 1.0.0
+```
+
+### 发布新版本
+
+1. **更新版本号**：
+   ```bash
+   echo "1.1.0" > VERSION
+   ```
+
+2. **构建前同步版本**（Makefile 会自动处理）：
+   ```bash
+   make sync-version  # 复制 VERSION 到 backend/pkg/version/VERSION
+   ```
+
+3. **Git 打标签**：
+   ```bash
+   git add VERSION
+   git commit -m "chore: bump version to 1.1.0"
+   git tag v1.1.0
+   git push origin v1.1.0  # 触发 Docker 构建
+   ```
+
+### CI/CD 构建信息
+
+Docker 构建时通过 build-args 注入额外信息：
+- `VERSION`: Git tag（如 `v1.0.0`）
+- `BUILD_TIME`: ISO 8601 格式构建时间
+
+这些信息通过 `-ldflags` 注入到 `version.BuildTime` 和 `version.GitCommit`。
+
 ## Recent Features
+
+### Unified Version Management (2026-03-05)
+- 单一 VERSION 文件管理所有组件版本号
+- Go 使用 `//go:embed` 读取，前端使用 Vite 注入
+- Health API 返回正确版本号，不再硬编码
+- analyzer 版本与主程序一致
 
 ### Simplified Device Management (2026-03-05)
 - Device type and platform merged into single `device_type` field

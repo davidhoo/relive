@@ -2,7 +2,16 @@
 # 禁用隐式规则，避免 deploy.sh 被自动转换为 deploy
 MAKEFLAGS += --no-builtin-rules
 
-.PHONY: help dev build deploy prod stop restart logs clean test deps
+.PHONY: help dev build deploy prod stop restart logs clean test deps sync-version
+
+# 版本管理
+VERSION_FILE := VERSION
+VERSION_PKG_DIR := backend/pkg/version
+
+# 同步版本文件到 go package
+sync-version:
+	@cp $(VERSION_FILE) $(VERSION_PKG_DIR)/VERSION
+	@echo "Version synced: $$(cat $(VERSION_FILE))"
 
 # 默认目标
 help:
@@ -31,14 +40,14 @@ help:
 dev:
 	./dev.sh
 
-dev-backend:
+dev-backend: sync-version
 	cd backend && go run cmd/relive/main.go --config config.dev.yaml
 
 dev-frontend:
 	cd frontend && npm run dev
 
 # 生产部署
-build:
+build: sync-version
 	@echo "构建 Docker 镜像..."
 	docker-compose build
 

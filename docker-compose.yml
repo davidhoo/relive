@@ -8,6 +8,7 @@ services:
       dockerfile: Dockerfile
       args:
         VERSION: ${VERSION:-dev}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
         GOPROXY: https://goproxy.cn,https://proxy.golang.org,direct
     image: relive:local
     container_name: relive

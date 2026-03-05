@@ -9,11 +9,7 @@ import (
 	analyzerConfig "github.com/davidhoo/relive/cmd/relive-analyzer/internal/config"
 	pkgConfig "github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/logger"
-)
-
-var (
-	Version   = "2.0.0"
-	BuildTime = "unknown"
+	"github.com/davidhoo/relive/pkg/version"
 )
 
 func main() {
@@ -80,12 +76,13 @@ Examples:
 Environment Variables:
   RELIVE_API_KEY    API Key for authentication
 
-`, Version)
+`, version.Version)
 }
 
 func runVersion() {
-	fmt.Printf("relive-analyzer version %s\n", Version)
-	fmt.Printf("Build time: %s\n", BuildTime)
+	fmt.Printf("relive-analyzer version %s\n", version.Version)
+	fmt.Printf("Build time: %s\n", version.BuildTime)
+	fmt.Printf("Git commit: %s\n", version.GitCommit)
 	fmt.Println("\nAPI Mode - Compatible with Relive Server v1.5.0+")
 }
 
@@ -150,7 +147,7 @@ func runAnalyze() {
 	// Initialize logger
 	initLogger(cfg)
 
-	logger.Infof("Starting relive-analyzer v%s", Version)
+	logger.Infof("Starting relive-analyzer v%s", version.Version)
 	logger.Infof("Server: %s", cfg.Server.Endpoint)
 	logger.Infof("Analyzer ID: %s", getAnalyzerID(cfg))
 	// 打印 API Key 前 10 位用于调试（不打印完整 Key）

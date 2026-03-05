@@ -15,13 +15,8 @@ import (
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/database"
 	"github.com/davidhoo/relive/pkg/logger"
+	"github.com/davidhoo/relive/pkg/version"
 	"github.com/gin-gonic/gin"
-)
-
-var (
-	// 版本信息（编译时注入）
-	Version   = "1.0.0"
-	BuildTime = "unknown"
 )
 
 func main() {
@@ -33,8 +28,8 @@ func main() {
 	// 显示版本
 	if *showVersion {
 		fmt.Printf("Relive Backend\n")
-		fmt.Printf("Version: %s\n", Version)
-		fmt.Printf("Build Time: %s\n", BuildTime)
+		fmt.Printf("Version: %s\n", version.Version)
+		fmt.Printf("Build Time: %s\n", version.BuildTime)
 		os.Exit(0)
 	}
 
@@ -51,7 +46,7 @@ func main() {
 	defer logger.Sync()
 
 	logger.Info("Starting Relive Backend...")
-	logger.Infof("Version: %s, Build Time: %s", Version, BuildTime)
+	logger.Infof("Version: %s, Build Time: %s", version.Version, version.BuildTime)
 
 	// 初始化数据库
 	db, err := database.Init(cfg.Database)

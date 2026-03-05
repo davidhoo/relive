@@ -12,6 +12,7 @@ import (
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/logger"
+	"github.com/davidhoo/relive/pkg/version"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -72,7 +73,7 @@ func (h *SystemHandler) Health(c *gin.Context) {
 		Success: true,
 		Data: model.SystemHealthResponse{
 			Status:    "healthy",
-			Version:   "1.0.0",
+			Version:   version.Version,
 			Uptime:    uptime,
 			Timestamp: time.Now(),
 		},

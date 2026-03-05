@@ -43,6 +43,10 @@ jobs:
             echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Set build time
+        id: buildtime
+        run: echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
+
       - name: Build and push image
         uses: docker/build-push-action@v4
         with:
@@ -56,6 +60,7 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
+            BUILD_TIME=${{ steps.buildtime.outputs.build_time }}
 
       - name: Verify image
         run: |

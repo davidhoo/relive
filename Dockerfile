@@ -11,6 +11,9 @@ RUN npm ci
 # 复制前端源代码
 COPY frontend/ ./
 
+# 复制 VERSION 文件（vite.config.ts 需要读取）
+COPY VERSION ../VERSION
+
 # 构建前端（生产环境）
 RUN npm run build
 
@@ -33,24 +36,30 @@ RUN go mod download
 # 复制后端源代码
 COPY backend/ ./
 
-# 构建后端
+# 复制 VERSION 文件到 version package（用于 //go:embed）
+COPY VERSION ./pkg/version/VERSION
+
+# 构建参数
 ARG VERSION=dev
+ARG BUILD_TIME
+
+# 构建后端
 RUN CGO_ENABLED=1 GOOS=linux go build \
-    -ldflags "-X main.Version=${VERSION} -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    -ldflags "-X github.com/davidhoo/relive/pkg/version.BuildTime=${BUILD_TIME} -X github.com/davidhoo/relive/pkg/version.GitCommit=${VERSION}" \
     -o relive \
     ./cmd/relive/main.go
 
 # 构建 relive-analyzer
 WORKDIR /app/cmd/relive-analyzer
 RUN CGO_ENABLED=1 GOOS=linux go build \
-    -ldflags "-X main.Version=${VERSION} -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    -ldflags "-X github.com/davidhoo/relive/pkg/version.BuildTime=${BUILD_TIME} -X github.com/davidhoo/relive/pkg/version.GitCommit=${VERSION}" \
     -o /app/relive-analyzer \
     .
 WORKDIR /app
 
 # 构建 import-cities 工具
 RUN CGO_ENABLED=1 GOOS=linux go build \
-    -ldflags "-X main.Version=${VERSION} -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    -ldflags "-X github.com/davidhoo/relive/pkg/version.BuildTime=${BUILD_TIME} -X github.com/davidhoo/relive/pkg/version.GitCommit=${VERSION}" \
     -o /app/import-cities \
     ./cmd/import-cities/main.go
 
