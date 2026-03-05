@@ -67,10 +67,7 @@ RUN apk add --no-cache \
     tzdata \
     libstdc++ \
     perl \
-    perl-image-exiftool
-
-# 验证 exiftool 安装
-RUN which exiftool && exiftool -ver
+    exiftool
 
 # 从构建阶段复制后端二进制文件
 COPY --from=backend-builder /app/relive /app/relive
