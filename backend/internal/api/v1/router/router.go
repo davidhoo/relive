@@ -21,17 +21,11 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
 
-	// CORS 中间件配置
+	// CORS 中间件配置（仅开发环境使用，生产环境建议使用反向代理）
 	corsConfig := cors.Config{
 		AllowOrigins: []string{
-			"http://localhost:5173",
-			"http://localhost:5174",
-			"http://localhost:3000",
-			"http://localhost:8888",
-			"http://127.0.0.1:5173",
-			"http://127.0.0.1:5174",
-			"http://127.0.0.1:3000",
-			"http://127.0.0.1:8888",
+			"http://localhost:5173",  // Vite 默认开发服务器
+			"http://127.0.0.1:5173",  // IP 形式
 		},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "Accept", "X-Requested-With", "X-API-Key"},
