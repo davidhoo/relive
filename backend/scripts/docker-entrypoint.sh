@@ -41,7 +41,7 @@ import_cities_if_needed() {
     # 检查数据库是否已有城市数据
     local city_count=0
     if [ -f "$DB_PATH" ]; then
-        city_count=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM cities WHERE deleted_at IS NULL;" 2>/dev/null || echo "0")
+        city_count=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM cities;" 2>/dev/null || echo "0")
     fi
 
     if [ "$city_count" -gt "1000" ]; then

@@ -1,6 +1,8 @@
 package util
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,9 +33,20 @@ func ExtractEXIF(filePath string) (*EXIFData, error) {
 		return data, nil
 	}
 
-	// 如果失败或数据为空，尝试用 sips（macOS）
+	// 如果失败或数据为空，尝试用 exiftool（支持 HEIC）
 	ext := strings.ToLower(filepath.Ext(filePath))
 	if ext == ".heic" || ext == ".heif" {
+		// 先尝试 exiftool（Docker/Linux 环境）
+		data, err := extractEXIFWithExifTool(filePath)
+		if err != nil {
+			fmt.Printf("[EXIF] exiftool failed for %s: %v\n", filePath, err)
+		} else if data.TakenAt != nil || data.GPSLatitude != nil || data.CameraModel != "" {
+			fmt.Printf("[EXIF] exiftool success for %s: GPS=%v,%v\n", filePath, data.GPSLatitude, data.GPSLongitude)
+			return data, nil
+		} else {
+			fmt.Printf("[EXIF] exiftool returned empty data for %s\n", filePath)
+		}
+		// exiftool 失败或无数据，尝试 sips（macOS）
 		return extractEXIFWithSips(filePath)
 	}
 
@@ -98,6 +111,109 @@ func extractEXIFWithGoExif(filePath string) (*EXIFData, error) {
 	}
 
 	return data, nil
+}
+
+// extractEXIFWithExifTool 使用 exiftool 提取 EXIF（支持 HEIC，适用于 Linux/Docker）
+func extractEXIFWithExifTool(filePath string) (*EXIFData, error) {
+	// 检查 exiftool 是否可用
+	if _, err := exec.LookPath("exiftool"); err != nil {
+		return nil, fmt.Errorf("exiftool not found in PATH")
+	}
+
+	cmd := exec.Command("exiftool", "-DateTimeOriginal", "-GPSLatitude", "-GPSLongitude",
+		"-GPSLatitudeRef", "-GPSLongitudeRef", "-Model", "-ImageWidth", "-ImageHeight",
+		"-Orientation", "-j", "-charset", "UTF8", filePath)
+	output, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("exiftool failed: %w, stderr: %s", err, string(exitErr.Stderr))
+		}
+		return nil, fmt.Errorf("exiftool failed: %w", err)
+	}
+
+	// exiftool -j 输出 JSON 数组
+	var results []map[string]interface{}
+	if err := json.Unmarshal(output, &results); err != nil {
+		return nil, fmt.Errorf("parse exiftool output: %w", err)
+	}
+
+	if len(results) == 0 {
+		return &EXIFData{}, nil
+	}
+
+	result := results[0]
+	data := &EXIFData{}
+
+	// 提取拍摄时间
+	if dateStr, ok := result["DateTimeOriginal"].(string); ok && dateStr != "" {
+		// 格式: "2023:10:15 14:30:00"
+		if tm, err := time.Parse("2006:01:02 15:04:05", dateStr); err == nil {
+			data.TakenAt = &tm
+		}
+	}
+
+	// 提取相机型号
+	if model, ok := result["Model"].(string); ok {
+		data.CameraModel = model
+	}
+
+	// 提取尺寸
+	if width, ok := result["ImageWidth"].(float64); ok {
+		data.Width = int(width)
+	}
+	if height, ok := result["ImageHeight"].(float64); ok {
+		data.Height = int(height)
+	}
+
+	// 提取方向
+	if orientation, ok := result["Orientation"].(string); ok {
+		if o, err := strconv.Atoi(orientation); err == nil {
+			data.Orientation = o
+		}
+	}
+
+	// 提取 GPS - exiftool 返回格式: "39.9042 N"
+	if latStr, ok := result["GPSLatitude"].(string); ok && latStr != "" {
+		lat := parseGPSCoordinate(latStr)
+		if lat != nil {
+			// 检查参考方向
+			if latRef, ok := result["GPSLatitudeRef"].(string); ok && latRef == "S" {
+				latValue := -*lat
+				lat = &latValue
+			}
+			data.GPSLatitude = lat
+		}
+	}
+
+	if lonStr, ok := result["GPSLongitude"].(string); ok && lonStr != "" {
+		lon := parseGPSCoordinate(lonStr)
+		if lon != nil {
+			// 检查参考方向
+			if lonRef, ok := result["GPSLongitudeRef"].(string); ok && lonRef == "W" {
+				lonValue := -*lon
+				lon = &lonValue
+			}
+			data.GPSLongitude = lon
+		}
+	}
+
+	return data, nil
+}
+
+// parseGPSCoordinate 解析 GPS 坐标字符串，如 "39.9042 N" 或 "116.4074 E"
+func parseGPSCoordinate(coord string) *float64 {
+	coord = strings.TrimSpace(coord)
+	// 移除方向标记
+	coord = strings.TrimSuffix(coord, " N")
+	coord = strings.TrimSuffix(coord, " S")
+	coord = strings.TrimSuffix(coord, " E")
+	coord = strings.TrimSuffix(coord, " W")
+	coord = strings.TrimSpace(coord)
+
+	if value, err := strconv.ParseFloat(coord, 64); err == nil {
+		return &value
+	}
+	return nil
 }
 
 // extractEXIFWithSips 使用 macOS sips 命令提取 EXIF（用于 HEIC）

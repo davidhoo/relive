@@ -130,8 +130,8 @@ func isHEIC(filePath string) bool {
 	return ext == ".heic" || ext == ".heif"
 }
 
-// openImage 打开图片（支持 JPEG、PNG、HEIC 等格式）
-func openImage(filePath string) (image.Image, error) {
+// OpenImage 打开图片（支持 JPEG、PNG、HEIC 等格式）
+func OpenImage(filePath string) (image.Image, error) {
 	// 如果是 HEIC 格式，使用专门的解码器
 	if isHEIC(filePath) {
 		file, err := os.Open(filePath)
@@ -168,7 +168,7 @@ func NewThumbnailGenerator(maxWidth, maxHeight, jpegQuality int, outputDir strin
 // 返回缩略图的相对路径和错误
 func (g *ThumbnailGenerator) GenerateThumbnail(filePath string) (string, error) {
 	// 打开原图（支持 HEIC 等格式）
-	img, err := openImage(filePath)
+	img, err := OpenImage(filePath)
 	if err != nil {
 		return "", err
 	}

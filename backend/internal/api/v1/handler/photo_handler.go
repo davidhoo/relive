@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -13,8 +12,10 @@ import (
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/service"
+	"github.com/davidhoo/relive/internal/util"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/logger"
+	"github.com/disintegration/imaging"
 	"github.com/gin-gonic/gin"
 )
 
@@ -680,7 +681,6 @@ func (h *PhotoHandler) GetPhotoImage(c *gin.Context) {
 	// 检查是否是 HEIC/HEIF 格式
 	ext := strings.ToLower(filepath.Ext(photo.FilePath))
 	if ext == ".heic" || ext == ".heif" {
-		// 尝试使用 sips 转换 HEIC 到 JPEG（macOS 自带工具）
 		// 使用配置的缩略图路径
 		thumbnailPath := h.cfg.Photos.ThumbnailPath
 		if thumbnailPath == "" {
@@ -710,11 +710,17 @@ func (h *PhotoHandler) GetPhotoImage(c *gin.Context) {
 			return
 		}
 
-		// 使用 sips 转换
-		cmd := exec.Command("sips", "-s", "format", "jpeg", photo.FilePath, "--out", thumbnailFile)
-		if err := cmd.Run(); err != nil {
-			logger.Warnf("Failed to convert HEIC to JPEG with sips: %v, trying direct serve", err)
-			// 如果转换失败，尝试直接返回原文件（某些浏览器可能支持）
+		// 使用 imaging 库转换 HEIC 到 JPEG（跨平台，支持 Docker）
+		img, err := util.OpenImage(photo.FilePath)
+		if err != nil {
+			logger.Warnf("Failed to open HEIC image %s: %v, trying direct serve", photo.FilePath, err)
+			c.File(photo.FilePath)
+			return
+		}
+
+		// 保存为 JPEG
+		if err := imaging.Save(img, thumbnailFile, imaging.JPEGQuality(85)); err != nil {
+			logger.Warnf("Failed to save HEIC as JPEG %s: %v, trying direct serve", thumbnailFile, err)
 			c.File(photo.FilePath)
 			return
 		}
