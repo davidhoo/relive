@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Relive 统一服务（包含前端和后端）
   relive:

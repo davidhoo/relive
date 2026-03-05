@@ -1,0 +1,32 @@
+# Docker Compose 本地覆盖配置
+# 此文件用于本地开发/部署时的个性化配置
+#
+# 使用方法：
+# 1. 复制此文件为 docker-compose.override.yml（该文件已被 .gitignore 忽略）
+#    cp docker-compose.override.yml.example docker-compose.override.yml
+# 2. 修改下方的照片路径为你实际的照片目录
+# 3. 运行 docker-compose up -d 时会自动加载此配置
+
+services:
+  relive:
+    volumes:
+      # =============================================================================
+      # 照片目录挂载（请修改为你实际的照片目录）
+      # =============================================================================
+      # macOS 示例：
+      # - /Users/username/Pictures:/app/photos:ro
+      #
+      # Linux 示例：
+      # - /home/username/photos:/app/photos:ro
+      #
+      # NAS/群晖示例：
+      # - /volume1/photos:/app/photos:ro
+      # =============================================================================
+      # - /path/to/your/photos:/app/photos:ro
+
+      # 如果需要多个照片目录，可以添加多个挂载：
+      # - /another/photo/path:/app/photos2:ro
+
+    # 如果需要覆盖其他配置，可以在此添加
+    # environment:
+    #   - SOME_VAR=value
