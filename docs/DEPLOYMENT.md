@@ -1,8 +1,8 @@
 # Relive 部署指南
 
 > 详细的部署步骤和配置说明
-> 最后更新：2026-02-28
-> 版本：v1.0
+> 最后更新：2026-03-05
+> 版本：v1.1
 
 ---
 
@@ -14,10 +14,11 @@
 - [四、relive-analyzer 部署](#四relive-analyzer-部署)
 - [五、数据库初始化](#五数据库初始化)
 - [六、配置说明](#六配置说明)
-- [七、AI 提供者配置](#七ai-提供者配置)
-- [八、反向代理配置](#八反向代理配置)
-- [九、监控和日志](#九监控和日志)
-- [十、故障排查](#十故障排查)
+- [七、版本管理](#七版本管理)
+- [八、AI 提供者配置](#八ai-提供者配置)
+- [九、反向代理配置](#九反向代理配置)
+- [十、监控和日志](#十监控和日志)
+- [十一、故障排查](#十一故障排查)
 
 ---
 
@@ -57,9 +58,9 @@
 │  ┌──────────────────────────────────────────────┐  │
 │  │  relive-analyzer                             │  │
 │  │                                               │  │
-│  │  1. 读取 export.db                           │  │
+│  │  1. 通过 API 获取待分析照片列表              │  │
 │  │  2. 调用 AI 服务（任意提供者）                │  │
-│  │  3. 生成 import.db                           │  │
+│  │  3. 通过 API 提交分析结果                    │  │
 │  └──────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
 
@@ -218,13 +219,25 @@ docker pull davidhoo/relive:latest
 
 ### 3.2 Docker Compose 部署
 
+> **注意**：从 v1.1 版本开始，使用 `docker-compose.yml.example` 模板文件。你需要先复制并修改配置。
+
 **创建部署目录**：
 ```bash
 mkdir -p /volume1/docker/relive
 cd /volume1/docker/relive
 ```
 
-**创建 docker-compose.yml**：
+**复制并编辑配置文件**：
+```bash
+# 从仓库复制模板
+cp docker-compose.yml.example docker-compose.yml
+cp docker-compose.prod.yml.example docker-compose.prod.yml  # 生产环境
+
+# 编辑配置文件，修改照片路径等
+nano docker-compose.yml
+```
+
+**创建 docker-compose.yml**（基于模板）：
 ```yaml
 version: '3.8'
 
@@ -609,9 +622,68 @@ photos:
 
 ---
 
-## 七、AI 提供者配置
+## 七、版本管理
 
-### 7.1 Ollama 配置
+### 7.1 统一版本号
+
+Relive 使用单一版本号管理所有组件：
+
+**版本文件**：`VERSION`（位于项目根目录）
+- 格式：`MAJOR.MINOR.PATCH`（如 `1.0.0`）
+- 这是唯一的版本来源
+
+**各组件版本获取**：
+- **Go 后端**：通过 `//go:embed` 嵌入 VERSION 文件
+- **前端**：Vite 构建时读取 VERSION 并注入 `__APP_VERSION__`
+- **relive-analyzer**：与主程序共享相同版本
+
+### 7.2 查看版本
+
+**通过 API**：
+```bash
+curl http://localhost:8080/api/v1/system/health
+# 返回中包含 "version": "1.0.0"
+```
+
+**通过前端**：
+- 在 Web 界面底部查看版本信息
+
+**通过命令行**：
+```bash
+./relive-analyzer version
+```
+
+### 7.3 版本升级
+
+**升级前准备**：
+```bash
+# 1. 查看当前版本
+curl http://localhost:8080/api/v1/system/health | jq .data.version
+
+# 2. 备份数据
+./backup.sh
+```
+
+**升级步骤**：
+```bash
+# 1. 拉取新镜像
+docker-compose pull
+
+# 2. 停止服务
+docker-compose down
+
+# 3. 启动新版本
+docker-compose up -d
+
+# 4. 验证版本
+curl http://localhost:8080/api/v1/system/health | jq .data.version
+```
+
+---
+
+## 八、AI 提供者配置
+
+### 8.1 Ollama 配置
 
 **本地部署 Ollama**：
 ```bash
@@ -634,7 +706,7 @@ ai:
     model: "llava:13b"
 ```
 
-### 7.2 Qwen API 配置
+### 8.2 Qwen API 配置
 
 **获取 API Key**：
 1. 访问 [阿里云百炼平台](https://bailian.console.aliyun.com/)
@@ -650,7 +722,7 @@ ai:
     model: "qwen-vl-max"
 ```
 
-### 7.3 OpenAI 配置
+### 8.3 OpenAI 配置
 
 **获取 API Key**：
 1. 访问 [OpenAI Platform](https://platform.openai.com/)
@@ -666,7 +738,7 @@ ai:
     model: "gpt-4-vision-preview"
 ```
 
-### 7.4 混合模式配置
+### 8.4 混合模式配置
 
 **配置多个提供者**：
 ```yaml
@@ -689,9 +761,9 @@ ai:
 
 ---
 
-## 八、反向代理配置
+## 九、反向代理配置
 
-### 8.1 Nginx 配置
+### 9.1 Nginx 配置
 
 **场景**：通过 HTTPS 访问 Relive
 
@@ -745,7 +817,7 @@ server {
 }
 ```
 
-### 8.2 群晖 反向代理
+### 9.2 群晖 反向代理
 
 **DSM 控制面板配置**：
 
@@ -765,9 +837,9 @@ server {
 
 ---
 
-## 九、监控和日志
+## 十、监控和日志
 
-### 9.1 日志查看
+### 10.1 日志查看
 
 **Docker 日志**：
 ```bash
@@ -790,7 +862,7 @@ tail -f /volume1/docker/relive/logs/relive.log
 grep "ERROR" /volume1/docker/relive/logs/relive.log
 ```
 
-### 9.2 性能监控
+### 10.2 性能监控
 
 **系统资源**：
 ```bash
@@ -819,7 +891,7 @@ GROUP BY name;
 "
 ```
 
-### 9.3 健康检查
+### 10.3 健康检查
 
 **API 端点**：
 ```bash
@@ -844,9 +916,9 @@ services:
 
 ---
 
-## 十、故障排查
+## 十一、故障排查
 
-### 10.1 常见问题
+### 11.1 常见问题
 
 #### 问题 1：容器无法启动
 
@@ -935,7 +1007,7 @@ sqlite3 /volume1/docker/relive/data/relive.db .dump > backup.sql
 sqlite3 /volume1/docker/relive/data/relive_new.db < backup.sql
 ```
 
-### 10.2 日志级别
+### 11.2 日志级别
 
 **调整日志级别**（config.yaml）：
 ```yaml
@@ -948,7 +1020,7 @@ logging:
 docker-compose restart relive
 ```
 
-### 10.3 性能问题
+### 11.3 性能问题
 
 **症状**：
 - 扫描照片很慢
@@ -976,9 +1048,9 @@ database:
 
 ---
 
-## 十一、备份和恢复
+## 十二、备份和恢复
 
-### 11.1 数据备份
+### 12.1 数据备份
 
 **备份脚本** `backup.sh`：
 ```bash
@@ -1014,7 +1086,7 @@ echo "备份完成：$BACKUP_DIR/relive_backup_$DATE.tar.gz"
 2. 设置每天凌晨 2:00 执行
 3. 用户定义的脚本：`/volume1/docker/relive/backup.sh`
 
-### 11.2 数据恢复
+### 12.2 数据恢复
 
 ```bash
 # 解压备份
@@ -1035,9 +1107,9 @@ docker-compose up -d
 
 ---
 
-## 十二、升级指南
+## 十三、升级指南
 
-### 12.1 升级准备
+### 13.1 升级准备
 
 **备份数据**：
 ```bash
@@ -1053,7 +1125,7 @@ curl -s https://api.github.com/repos/davidhoo/relive/releases/latest | grep tag_
 curl -s https://raw.githubusercontent.com/davidhoo/relive/main/CHANGELOG.md
 ```
 
-### 12.2 升级步骤
+### 13.2 升级步骤
 
 **拉取新镜像**：
 ```bash
@@ -1079,7 +1151,7 @@ curl http://localhost:8080/api/v1/system/health | jq .data.version
 docker logs -f relive
 ```
 
-### 12.3 回滚
+### 13.3 回滚
 
 **如果升级失败**：
 ```bash
@@ -1095,9 +1167,9 @@ cp backups/relive_backup_latest.db data/relive.db
 
 ---
 
-## 十三、总结
+## 十四、总结
 
-### 13.1 部署检查清单
+### 14.1 部署检查清单
 
 - [ ] NAS 环境满足要求
 - [ ] Docker 和 Docker Compose 已安装
@@ -1112,7 +1184,7 @@ cp backups/relive_backup_latest.db data/relive.db
 - [ ] ESP32 设备可连接
 - [ ] 备份脚本已设置
 
-### 13.2 常用命令
+### 14.2 常用命令
 
 ```bash
 # 启动服务

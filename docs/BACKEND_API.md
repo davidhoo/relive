@@ -17,10 +17,9 @@
   - [2.5 获取照片详情](#25-获取照片详情-)
   - [2.6 照片统计](#26-照片统计-)
 - [3. 展示策略 API](#3-展示策略-api)
-- [4. ESP32 设备 API](#4-esp32-设备-api)
+- [4. 设备管理 API](#4-设备管理-api)
 - [5. AI 分析 API](#5-ai-分析-api)
-- [6. 导出/导入 API](#6-导出导入-api)
-- [7. 配置管理 API](#7-配置管理-api)
+- [6. 配置管理 API](#6-配置管理-api)
 - [统一响应格式](#统一响应格式)
 - [错误码说明](#错误码说明)
 
@@ -407,36 +406,37 @@ Content-Type: application/json
 
 ---
 
-## 4. ESP32 设备 API
+## 4. 设备管理 API
 
 ### 4.1 设备注册 ✅
 
-ESP32 设备首次连接时注册到系统。
+设备首次连接时注册到系统。支持多种设备类型（嵌入式设备、移动端、Web浏览器、离线分析程序、后台服务）。
 
 **请求**
 ```http
-POST /api/v1/esp32/register
+POST /api/v1/devices/register
 Content-Type: application/json
 
 {
   "device_id": "ESP32-001",
   "name": "客厅相框",
-  "screen_width": 800,
-  "screen_height": 480,
-  "firmware_version": "1.0.0",
-  "ip_address": "192.168.1.100",
-  "mac_address": "AA:BB:CC:DD:EE:FF"
+  "device_type": "embedded",
+  "description": "客厅7.3寸墨水屏相框",
+  "ip_address": "192.168.1.100"
 }
 ```
 
 **请求字段**
 - `device_id`: 设备唯一 ID（必填，如 MAC 地址）
 - `name`: 设备名称（必填）
-- `screen_width`: 屏幕宽度（必填，像素）
-- `screen_height`: 屏幕高度（必填，像素）
-- `firmware_version`: 固件版本（可选）
+- `device_type`: 设备类型（可选，默认 `embedded`）
+  - `embedded`: 嵌入式设备（电子相框等）
+  - `mobile`: 移动端（手机、平板）
+  - `web`: Web 浏览器
+  - `offline`: 离线分析程序
+  - `service`: 后台服务
+- `description`: 设备描述（可选）
 - `ip_address`: IP 地址（可选）
-- `mac_address`: MAC 地址（可选）
 
 **响应**
 ```json
@@ -466,28 +466,24 @@ Content-Type: application/json
 
 ### 4.2 设备心跳 ✅
 
-ESP32 设备定期发送心跳以更新在线状态。
+设备定期发送心跳以更新在线状态。
 
 **请求**
 ```http
-POST /api/v1/esp32/heartbeat
+POST /api/v1/devices/heartbeat
 Content-Type: application/json
 
 {
   "device_id": "ESP32-001",
   "battery_level": 85,
-  "wifi_rssi": -45,
-  "free_heap": 180000,
-  "firmware_version": "1.0.0"
+  "wifi_rssi": -45
 }
 ```
 
 **请求字段**
 - `device_id`: 设备 ID（必填）
-- `battery_level`: 电池电量（0-100）
-- `wifi_rssi`: WiFi 信号强度（dBm，负值）
-- `free_heap`: 空闲堆内存（字节）
-- `firmware_version`: 固件版本
+- `battery_level`: 电池电量（0-100，可选）
+- `wifi_rssi`: WiFi 信号强度（dBm，负值，可选）
 
 **响应**
 ```json
@@ -505,17 +501,16 @@ Content-Type: application/json
 **说明**
 - 更新设备的在线状态和最后心跳时间
 - 计算距离下次刷新的秒数（8:00 或 20:00）
-- 检查是否有新固件（TODO）
 
 ---
 
 ### 4.3 获取设备列表 ✅
 
-分页获取 ESP32 设备列表。
+分页获取设备列表。
 
 **请求**
 ```http
-GET /api/v1/esp32/devices?page=1&page_size=20
+GET /api/v1/devices?page=1&page_size=20
 ```
 
 **查询参数**
@@ -532,11 +527,10 @@ GET /api/v1/esp32/devices?page=1&page_size=20
         "id": 1,
         "device_id": "ESP32-001",
         "name": "客厅相框",
-        "screen_width": 800,
-        "screen_height": 480,
-        "firmware_version": "1.0.0",
-        "mac_address": "AA:BB:CC:DD:EE:FF",
+        "device_type": "embedded",
+        "description": "客厅7.3寸墨水屏相框",
         "ip_address": "192.168.1.100",
+        "is_enabled": true,
         "online": true,
         "last_heartbeat": "2026-02-28T17:59:00+08:00",
         "battery_level": 85,
@@ -560,7 +554,7 @@ GET /api/v1/esp32/devices?page=1&page_size=20
 
 **请求**
 ```http
-GET /api/v1/esp32/devices/{device_id}
+GET /api/v1/devices/{device_id}
 ```
 
 **响应**
@@ -571,11 +565,10 @@ GET /api/v1/esp32/devices/{device_id}
     "id": 1,
     "device_id": "ESP32-001",
     "name": "客厅相框",
-    "screen_width": 800,
-    "screen_height": 480,
-    "firmware_version": "1.0.0",
-    "mac_address": "AA:BB:CC:DD:EE:FF",
+    "device_type": "embedded",
+    "description": "客厅7.3寸墨水屏相框",
     "ip_address": "192.168.1.100",
+    "is_enabled": true,
     "online": true,
     "last_heartbeat": "2026-02-28T17:59:00+08:00",
     "battery_level": 85,
@@ -589,13 +582,72 @@ GET /api/v1/esp32/devices/{device_id}
 
 ---
 
-### 4.5 设备统计 ✅
+### 4.5 更新设备 ✅
+
+更新设备信息。
+
+**请求**
+```http
+PUT /api/v1/devices/{device_id}
+Content-Type: application/json
+
+{
+  "name": "卧室相框",
+  "description": "卧室新安装的相框",
+  "is_enabled": true
+}
+```
+
+**请求字段**
+- `name`: 设备名称（可选）
+- `description`: 设备描述（可选）
+- `is_enabled`: 是否启用（可选）
+
+**响应**
+```json
+{
+  "success": true,
+  "data": {
+    "id": 1,
+    "device_id": "ESP32-001",
+    "name": "卧室相框",
+    "device_type": "embedded",
+    "description": "卧室新安装的相框",
+    "is_enabled": true,
+    "updated_at": "2026-02-28T18:00:00Z"
+  },
+  "message": "Success"
+}
+```
+
+---
+
+### 4.6 删除设备 ✅
+
+删除设备。
+
+**请求**
+```http
+DELETE /api/v1/devices/{device_id}
+```
+
+**响应**
+```json
+{
+  "success": true,
+  "message": "Success"
+}
+```
+
+---
+
+### 4.7 设备统计 ✅
 
 获取设备的统计信息。
 
 **请求**
 ```http
-GET /api/v1/esp32/stats
+GET /api/v1/devices/stats
 ```
 
 **响应**
@@ -604,7 +656,11 @@ GET /api/v1/esp32/stats
   "success": true,
   "data": {
     "total": 3,
-    "online": 2
+    "online": 2,
+    "by_type": {
+      "embedded": 2,
+      "mobile": 1
+    }
   },
   "message": "Success"
 }
@@ -613,6 +669,7 @@ GET /api/v1/esp32/stats
 **字段说明**
 - `total`: 设备总数
 - `online`: 在线设备数（5分钟内有心跳）
+- `by_type`: 按设备类型统计
 
 ---
 
@@ -768,116 +825,9 @@ GET /api/v1/ai/provider
 
 ---
 
-## 6. 导出/导入 API
+## 6. 配置管理 API
 
-### 6.1 导出数据 ✅
-
-导出照片数据到独立的 SQLite 数据库文件。
-
-**请求**
-```http
-POST /api/v1/export
-Content-Type: application/json
-
-{
-  "output_path": "/volume1/temp/export",
-  "analyzed": false
-}
-```
-
-**响应**
-```json
-{
-  "success": true,
-  "data": {
-    "output_path": "/volume1/temp/export/export.db",
-    "photo_count": 1000,
-    "database_size": 524288,
-    "thumbnail_dir": ""
-  },
-  "message": "Export completed successfully"
-}
-```
-
-**字段说明**
-- `output_path`: 导出数据库的完整路径
-- `photo_count`: 导出的照片数量
-- `database_size`: 数据库文件大小（字节）
-- `analyzed`: 是否仅导出已分析的照片（默认 false）
-
-**使用场景**
-- 离线分析：导出未分析的照片到有 GPU 的主机
-- 备份：导出已分析的数据用于备份
-
----
-
-### 6.2 导入数据 ✅
-
-从导出文件导入 AI 分析结果。
-
-**请求**
-```http
-POST /api/v1/import
-Content-Type: application/json
-
-{
-  "input_path": "/volume1/temp/export/export.db"
-}
-```
-
-**响应**
-```json
-{
-  "success": true,
-  "data": {
-    "updated_count": 980,
-    "failed_count": 20
-  },
-  "message": "Import completed successfully"
-}
-```
-
-**字段说明**
-- `updated_count`: 成功导入的照片数
-- `failed_count`: 导入失败的照片数
-
-**说明**
-- 使用 file_hash 匹配照片，确保准确导入
-- 只导入已分析的照片（ai_analyzed=true）
-- 失败的照片会记录日志
-
----
-
-### 6.3 检查导出 ✅
-
-检查导出数据的完整性。
-
-**请求**
-```http
-POST /api/v1/export/check
-Content-Type: application/json
-
-{
-  "export_path": "/volume1/temp/export"
-}
-```
-
-**响应**
-```json
-{
-  "success": true,
-  "message": "Export data is valid"
-}
-```
-
-**说明**
-- 验证 export.db 是否存在
-- 检查数据库是否可以打开
-- 验证 photos 表是否有数据
-
----
-
-## 7. 配置管理 API
+> **注意**：原导出/导入 API 已移除，请使用 relive-analyzer 工具进行离线分析。
 
 ### 7.1 获取配置 ✅
 
@@ -1115,17 +1065,16 @@ curl http://localhost:8080/api/v1/system/stats
 curl http://localhost:8080/api/v1/photos/stats
 
 # 设备注册
-curl -X POST http://localhost:8080/api/v1/esp32/register \
+curl -X POST http://localhost:8080/api/v1/devices/register \
   -H "Content-Type: application/json" \
   -d '{
     "device_id": "ESP32-001",
     "name": "客厅相框",
-    "screen_width": 800,
-    "screen_height": 480
+    "device_type": "embedded"
   }'
 
 # 设备心跳
-curl -X POST http://localhost:8080/api/v1/esp32/heartbeat \
+curl -X POST http://localhost:8080/api/v1/devices/heartbeat \
   -H "Content-Type: application/json" \
   -d '{
     "device_id": "ESP32-001",
@@ -1141,6 +1090,16 @@ curl "http://localhost:8080/api/v1/display/photo?device_id=ESP32-001"
 
 ## 更新日志
 
+- **2026-03-05**: 重大更新
+  - 🗑️ 移除导出/导入 API（功能迁移至 relive-analyzer）
+  - 🔄 ESP32 设备 API 重构为通用设备管理 API
+    - 简化设备注册（移除 screen_width/height、firmware_version、mac_address 等字段）
+    - 新增 device_type 字段（embedded/mobile/web/offline/service）
+    - 新增 description、is_enabled 字段
+    - 路径从 `/api/v1/esp32/*` 改为 `/api/v1/devices/*`
+    - 新增更新、删除设备接口
+  - 📊 设备统计新增按类型统计
+
 - **2026-02-28**: 完成 Handler 层实现（15个接口）
   - ✅ 系统管理 API（2个）
   - ✅ 照片管理 API（4个）
@@ -1151,6 +1110,6 @@ curl "http://localhost:8080/api/v1/display/photo?device_id=ESP32-001"
 
 ---
 
-**文档版本**: v0.2.0
-**最后更新**: 2026-02-28
+**文档版本**: v0.3.0
+**最后更新**: 2026-03-05
 **API 基准地址**: `http://localhost:8080/api/v1`

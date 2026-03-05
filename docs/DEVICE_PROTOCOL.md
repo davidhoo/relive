@@ -3,7 +3,7 @@
 > 电子相框设备与后端服务的通信协议定义
 > 支持多种硬件平台：ESP32、ESP8266、STM32、Android、iOS等
 > 最后更新：2026-03-04
-> 版本：v2.0
+> 版本：v3.0
 
 ---
 
@@ -139,18 +139,17 @@ const int SERVER_PORT = 8080;
 
 设备需要调用以下 API：
 
-| 接口 | 方法 | 推荐路径 | 兼容路径（ESP32） | 说明 |
-|------|------|---------|------------------|------|
-| **设备注册** | POST | `/api/v1/devices/register` | `/api/v1/esp32/register` | 首次注册设备 |
-| **设备心跳** | POST | `/api/v1/devices/heartbeat` | `/api/v1/esp32/heartbeat` | 上报状态 |
-| **获取展示照片** | GET | `/api/v1/display/photo` | - | 获取要展示的照片信息 |
-| **下载照片图片** | GET | `/api/v1/photos/{id}/image` | - | 下载照片图片 |
-| **上报展示记录** | POST | `/api/v1/display/record` | - | 记录展示历史 |
+| 接口 | 方法 | 路径 | 说明 |
+|------|------|---------|------|
+| **设备注册** | POST | `/api/v1/devices/register` | 首次注册设备 |
+| **设备心跳** | POST | `/api/v1/devices/heartbeat` | 上报状态 |
+| **获取展示照片** | GET | `/api/v1/display/photo` | 获取要展示的照片信息 |
+| **下载照片图片** | GET | `/api/v1/photos/{id}/image` | 下载照片图片 |
+| **上报展示记录** | POST | `/api/v1/display/record` | 记录展示历史 |
 
 **注意**：
-- 新设备推荐使用 `/api/v1/devices/*` 路径
-- ESP32 现有固件可继续使用 `/api/v1/esp32/*` 路径（向后兼容）
-- 两种路径完全等效，只是命名不同
+- 设备注册和心跳统一使用 `/api/v1/devices/*` 路径
+- 支持多种设备类型：嵌入式设备、移动端、Web浏览器等
 
 ### 3.2 设备注册
 
@@ -163,35 +162,31 @@ Content-Type: application/json
 {
   "device_id": "ESP32-ABCD1234",
   "name": "客厅相框",
-  "device_type": "esp32",           // 新增：设备类型（esp32/android/ios/esp8266/stm32）
-  "hardware_model": "ESP32-S3",     // 新增：硬件型号
-  "platform": "embedded",           // 新增：平台类型（embedded/mobile/web）
-  "screen_width": 800,
-  "screen_height": 480,
-  "firmware_version": "1.0.0",
-  "ip_address": "192.168.1.150",
-  "mac_address": "AA:BB:CC:DD:EE:FF"
+  "device_type": "embedded",        // 设备类型（embedded/mobile/web/offline/service）
+  "description": "客厅7.3寸墨水屏相框",
+  "ip_address": "192.168.1.150"
 }
 ```
 
-**注意**：`device_type`、`hardware_model`、`platform` 为可选字段，默认值：
-- `device_type`: "esp32"
-- `platform`: "embedded"
+**设备类型说明**：
+- `embedded`: 嵌入式设备（电子相框、ESP32等）
+- `mobile`: 移动端（手机、平板）
+- `web`: Web 浏览器
+- `offline`: 离线分析程序
+- `service`: 后台服务
 
-**ESP32 兼容请求**（旧格式仍然有效）：
+**注意**：`device_type` 为可选字段，默认值为 `embedded`
+
+**简化请求**（推荐格式）：
 ```http
-POST /api/v1/esp32/register HTTP/1.1
+POST /api/v1/devices/register HTTP/1.1
 Host: 192.168.1.100:8080
 Content-Type: application/json
 
 {
   "device_id": "ESP32-ABCD1234",
   "name": "客厅相框",
-  "screen_width": 800,
-  "screen_height": 480,
-  "firmware_version": "1.0.0",
-  "ip_address": "192.168.1.150",
-  "mac_address": "AA:BB:CC:DD:EE:FF"
+  "device_type": "embedded"
 }
 ```
 
@@ -215,7 +210,7 @@ Content-Type: application/json
 
 **请求**：
 ```http
-POST /api/v1/esp32/heartbeat HTTP/1.1
+POST /api/v1/devices/heartbeat HTTP/1.1
 Host: 192.168.1.100:8080
 Authorization: Bearer sk-relive-xxxxxxxxxxxxxxxx
 Content-Type: application/json
@@ -223,10 +218,7 @@ Content-Type: application/json
 {
   "device_id": "ESP32-ABCD1234",
   "battery_level": 85,
-  "wifi_rssi": -45,
-  "free_heap": 120000,
-  "last_display_photo_id": 12345,
-  "firmware_version": "1.0.0"
+  "wifi_rssi": -45
 }
 ```
 
@@ -451,7 +443,7 @@ void displayCachedPhoto() {
 
 ### 6.2 设备标识
 
-**device_id 生成**：
+**device_id 生成**（建议使用 MAC 地址后四位）：
 ```cpp
 String generateDeviceID() {
   uint8_t mac[6];
@@ -464,6 +456,8 @@ String generateDeviceID() {
 ```
 
 示例：`ESP32-ABCD1234`
+
+**注意**：device_id 只需在设备端唯一即可，后端会根据此 ID 识别设备。
 
 ### 6.3 设备配置
 

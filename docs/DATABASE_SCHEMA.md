@@ -300,7 +300,94 @@ type DisplayHistory struct {
 
 ---
 
-### 2.5 settings（配置表）
+### 2.5 devices（设备表）⭐
+
+**用途**：存储设备信息（电子相框、移动端、Web浏览器等）
+
+```sql
+CREATE TABLE devices (
+    -- 主键
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    -- 设备信息
+    device_id TEXT NOT NULL UNIQUE,          -- 设备唯一ID（如MAC地址）
+    name TEXT NOT NULL,                       -- 设备名称
+    api_key TEXT NOT NULL UNIQUE,             -- API Key
+    ip_address TEXT,                          -- IP地址
+
+    -- 设备类型
+    device_type TEXT DEFAULT 'embedded',      -- 设备类型（embedded/mobile/web/offline/service）
+
+    -- 描述/备注
+    description TEXT,                         -- 设备描述
+
+    -- 状态信息
+    is_enabled BOOLEAN DEFAULT TRUE,          -- 是否可用（服务端控制）
+    online BOOLEAN DEFAULT FALSE,             -- 是否在线（自动检测）
+    last_heartbeat DATETIME,                  -- 最后心跳时间
+    battery_level INTEGER DEFAULT 0,          -- 电池电量（0-100）
+    wifi_rssi INTEGER DEFAULT 0,              -- WiFi信号强度（dBm）
+
+    -- 配置信息
+    config TEXT,                              -- 设备配置（JSON）
+
+    -- 时间戳
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+    -- 索引
+    INDEX idx_device_id (device_id),
+    INDEX idx_api_key (api_key),
+    INDEX idx_device_type (device_type),
+    INDEX idx_last_heartbeat (last_heartbeat)
+);
+```
+
+**设备类型说明**：
+- `embedded` - 嵌入式设备（电子相框、ESP32等）
+- `mobile` - 移动端（手机、平板）
+- `web` - Web浏览器
+- `offline` - 离线分析程序
+- `service` - 后台服务
+
+**GORM 模型**：
+```go
+type Device struct {
+    ID        uint           `gorm:"primarykey" json:"id"`
+    CreatedAt time.Time      `json:"created_at"`
+    UpdatedAt time.Time      `json:"updated_at"`
+    DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+
+    // 设备信息
+    DeviceID  string `gorm:"type:varchar(50);not null;uniqueIndex:idx_device_id" json:"device_id"`
+    Name      string `gorm:"type:varchar(100);not null" json:"name"`
+    APIKey    string `gorm:"type:varchar(100);not null;uniqueIndex:idx_api_key" json:"-"`
+    IPAddress string `gorm:"type:varchar(50)" json:"ip_address"`
+
+    // 设备类型
+    DeviceType string `gorm:"type:varchar(20);default:'embedded';index:idx_device_type" json:"device_type"`
+
+    // 描述/备注
+    Description string `gorm:"type:varchar(500)" json:"description"`
+
+    // 状态信息
+    IsEnabled     bool       `gorm:"default:true" json:"is_enabled"`
+    Online        bool       `gorm:"default:false" json:"online"`
+    LastHeartbeat *time.Time `gorm:"index:idx_last_heartbeat" json:"last_heartbeat"`
+    BatteryLevel  int        `gorm:"default:0" json:"battery_level"`
+    WiFiRSSI      int        `gorm:"column:wifi_rssi;default:0" json:"wifi_rssi"`
+
+    // 配置信息
+    Config string `gorm:"type:text" json:"config"`
+
+    // 关联
+    DisplayRecords []DisplayRecord `gorm:"foreignKey:DeviceID" json:"-"`
+}
+```
+
+---
+
+### 2.6 settings（配置表）
 
 **用途**：存储系统配置
 
@@ -517,6 +604,7 @@ func InitDB(dbPath string) (*gorm.DB, error) {
         &Photo{},
         &Tag{},
         &DisplayHistory{},
+        &Device{},
         &Setting{},
         &ScanJob{},
     )
@@ -761,6 +849,7 @@ db.Raw("PRAGMA integrity_check").Scan(&result)
 | tags | 标签 | 100-500 |
 | photo_tags | 照片标签关联 | 50万+ |
 | display_history | 展示历史 | 1万+ |
+| devices | 设备管理 | < 100 |
 | settings | 配置 | < 50 |
 | scan_jobs | 扫描任务 | < 1000 |
 
@@ -771,6 +860,7 @@ photos 表：11万 × 5KB = ~550MB
 tags 表：500 × 1KB = ~500KB
 photo_tags 表：50万 × 0.1KB = ~50MB
 display_history 表：1万 × 0.5KB = ~5MB
+devices 表：100 × 1KB = ~100KB
 索引：~100MB
 
 总计：~700MB
