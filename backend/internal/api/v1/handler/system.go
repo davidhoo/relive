@@ -229,6 +229,18 @@ func (h *SystemHandler) Reset(c *gin.Context) {
 	// 1. 清除数据库表数据（保留 cities 表，因为城市数据是离线地理编码的基础）
 	tables := []string{"display_records", "devices", "photos", "app_config", "api_keys"}
 	for _, table := range tables {
+		// 检查表是否存在（SQLite 中使用 sqlite_master 表查询）
+		var count int64
+		typeCheckQuery := "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?"
+		if err := h.db.Raw(typeCheckQuery, table).Scan(&count).Error; err != nil {
+			logger.Warnf("Failed to check if table %s exists: %v", table, err)
+			continue
+		}
+		if count == 0 {
+			logger.Infof("Table %s does not exist, skipping", table)
+			continue
+		}
+
 		if err := h.db.Exec(fmt.Sprintf("DELETE FROM %s", table)).Error; err != nil {
 			logger.Errorf("Failed to clear table %s: %v", table, err)
 			response.DatabaseCleared = false
