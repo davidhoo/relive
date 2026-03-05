@@ -1,6 +1,6 @@
 ---
 name: auto-approve-safe-operations
-enabled: true
+enabled: false
 event: bash
 action: approve
 conditions:

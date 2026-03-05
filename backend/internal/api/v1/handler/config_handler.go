@@ -2,6 +2,7 @@ package handler
 
 import (
 	"archive/zip"
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,11 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/internal/service"
 	"github.com/davidhoo/relive/pkg/config"
+	"github.com/davidhoo/relive/pkg/database"
 	"github.com/davidhoo/relive/pkg/logger"
 	"github.com/gin-gonic/gin"
 )
@@ -780,10 +783,134 @@ func (h *ConfigHandler) DownloadCitiesData(c *gin.Context) {
 		logger.Infof("Cities data downloaded successfully: %s (%d bytes)", citiesFile, info.Size())
 	}
 
+	// 自动导入城市数据
+	logger.Info("Importing cities data into database...")
+	importedCount, err := h.importCitiesFromFile(citiesFile)
+	if err != nil {
+		logger.Errorf("Failed to import cities data: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "IMPORT_FAILED",
+				Message: fmt.Sprintf("Downloaded successfully but failed to import: %v", err),
+			},
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
-		Message: "Cities data downloaded successfully. Please restart the container to import the data.",
+		Message: fmt.Sprintf("Cities data downloaded and imported successfully. Total %d cities in database.", importedCount),
 	})
+}
+
+// importCitiesFromFile 从文件导入城市数据到数据库
+func (h *ConfigHandler) importCitiesFromFile(filePath string) (int, error) {
+	// 获取数据库连接
+	db := database.GetDB()
+	if db == nil {
+		return 0, fmt.Errorf("database not initialized")
+	}
+
+	// 打开文件
+	file, err := os.Open(filePath)
+	if err != nil {
+		return 0, fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	// 清空现有数据
+	logger.Info("Clearing existing city data...")
+	if err := db.Exec("DELETE FROM cities").Error; err != nil {
+		return 0, fmt.Errorf("failed to clear cities table: %w", err)
+	}
+
+	logger.Info("Parsing and importing cities...")
+	scanner := bufio.NewScanner(file)
+	var cities []model.City
+	totalCount := 0
+	insertedCount := 0
+	batchSize := 1000
+
+	// 逐行读取
+	for scanner.Scan() {
+		line := scanner.Text()
+		totalCount++
+
+		// 解析行
+		city, err := parseCityLine(line)
+		if err != nil {
+			continue // 跳过无效行
+		}
+
+		cities = append(cities, *city)
+
+		// 批量插入
+		if len(cities) >= batchSize {
+			if err := db.Create(&cities).Error; err != nil {
+				logger.Errorf("Failed to insert batch: %v", err)
+			} else {
+				insertedCount += len(cities)
+			}
+			cities = cities[:0] // 清空切片
+		}
+	}
+
+	// 插入剩余的
+	if len(cities) > 0 {
+		if err := db.Create(&cities).Error; err != nil {
+			logger.Errorf("Failed to insert final batch: %v", err)
+		} else {
+			insertedCount += len(cities)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return 0, fmt.Errorf("error reading file: %w", err)
+	}
+
+	logger.Infof("Import completed: %d cities imported", insertedCount)
+	return insertedCount, nil
+}
+
+// parseCityLine 解析 GeoNames cities500.txt 文件的一行
+func parseCityLine(line string) (*model.City, error) {
+	fields := strings.Split(line, "\t")
+	if len(fields) < 19 {
+		return nil, fmt.Errorf("invalid line format: expected 19 fields, got %d", len(fields))
+	}
+
+	// 解析 geonameid
+	geonameID, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return nil, fmt.Errorf("invalid geoname_id: %s", fields[0])
+	}
+
+	// 解析纬度
+	latitude, err := strconv.ParseFloat(fields[4], 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid latitude: %s", fields[4])
+	}
+
+	// 解析经度
+	longitude, err := strconv.ParseFloat(fields[5], 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid longitude: %s", fields[5])
+	}
+
+	// 获取 admin1 (省/州) 名称
+	adminName := fields[10] // admin1 code
+
+	city := &model.City{
+		GeonameID: geonameID,
+		Name:      fields[1], // name
+		AdminName: adminName,
+		Country:   fields[8], // country code
+		Latitude:  latitude,
+		Longitude: longitude,
+	}
+
+	return city, nil
 }
 
 // unzipFile 解压 zip 文件
