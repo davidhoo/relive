@@ -196,19 +196,26 @@ func (p *OfflineProvider) ReverseGeocode(lat, lon float64) (*Location, error) {
 	countryName := getCountryName(nearestCity.Country)
 	provinceName := getProvinceName(nearestCity.Country, nearestCity.AdminName)
 
-	// 构建完整地址（使用逗号分隔）
-	// 格式：国家，省份，城市
-	fullName := fmt.Sprintf("%s，%s，%s", countryName, provinceName, nearestCity.Name)
-
 	location := &Location{
 		City:      nearestCity.Name,
 		Country:   countryName,
 		Province:  provinceName,
-		FullName:  fullName,
 		Latitude:  lat,
 		Longitude: lon,
 		Provider:  p.Name(),
 		Duration:  time.Since(startTime),
+	}
+
+	// 离线数据库显示格式：省份 + 城市（城市名可能是英文）
+	// 例如：四川省Chengdu，北京市Beijing
+	if location.Province != "" && location.City != "" {
+		location.FullName = location.Province + location.City
+	} else if location.Province != "" {
+		location.FullName = location.Province
+	} else if location.City != "" {
+		location.FullName = location.City
+	} else {
+		location.FullName = location.Country
 	}
 
 	logger.Debugf("Offline geocode result: City=%s, Province=%s, Country=%s, FullName=%s",

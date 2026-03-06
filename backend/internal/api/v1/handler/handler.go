@@ -31,7 +31,7 @@ func NewHandlers(db *gorm.DB, services *service.Services, repos *repository.Repo
 		Display:  NewDisplayHandler(services.Display, services.Device),
 		Device:   deviceHandler,
 		ESP32:    deviceHandler,
-		Config:   NewConfigHandler(services.Config, services.AI, services.Photo, services.Prompt, repos.Photo, cfg),
+		Config:   NewConfigHandler(services.Config, services.AI, services.Photo, services.Prompt, services.Geocode, repos.Photo, cfg, db),
 		Auth:     NewAuthHandler(services.Auth),
 		Analyzer: NewAnalyzerHandler(services.Photo, services.Analysis),
 	}

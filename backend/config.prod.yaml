@@ -104,30 +104,16 @@ performance:
   max_analyze_workers: 5  # AI 分析的并发数
   cache_size: 1000  # 缓存的照片数量
 
-# 逆地理编码配置（GPS 坐标转位置信息）
+# 逆地理编码配置（启动默认值，运行时通过管理后台配置后以数据库为准）
 geocode:
-  # provider: 可选值 - offline (离线), amap (高德), nominatim (OpenStreetMap), hybrid (混合)
-  # 推荐使用 offline，因为已导入 23万+ 城市数据，无需联网
-  provider: "offline"
+  provider: "offline"  # 启动默认：离线，无需联网。可选: offline / amap / nominatim / weibo
 
-  # 离线模式配置
+  # 离线模式（推荐，已内置 23 万+ 城市数据，无需联网）
   offline:
-    max_distance: 100  # 最大搜索距离（公里），默认 100km
+    max_distance: 100  # 最大搜索半径（公里）
 
-  # 高德地图配置（在线，国内精度高）
-  # 需要申请 API Key: https://lbs.amap.com/
-  # 注意：如需使用，通过管理页面配置
-  amap:
-    api_key: ""
-    timeout: 10
-
-  # OpenStreetMap Nominatim 配置（在线，免费）
+  # 自建 Nominatim 端点（如使用公共服务无需修改）
   nominatim:
     endpoint: "https://nominatim.openstreetmap.org/reverse"
-    timeout: 10
-    # 注意：生产环境使用请遵守使用政策，建议自建 Nominatim 服务
 
-  # 混合模式配置（优先离线，失败时回退到在线）
-  hybrid:
-    primary: "offline"     # 主要 provider
-    fallback: "nominatim"  # 离线失败时的备用 provider
+  # API Key 等敏感配置请在管理后台「GPS 逆地理编码配置」中填写

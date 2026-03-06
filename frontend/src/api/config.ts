@@ -17,7 +17,7 @@ export interface ScanPathsConfig {
 
 // Geocode provider configuration
 export interface GeocodeConfig {
-  provider: string          // Current active provider: offline / amap / nominatim
+  provider: string          // Current active provider: offline / amap / nominatim / weibo
   fallback: string          // Fallback provider
   cache_enabled: boolean    // Enable caching
   cache_ttl: number        // Cache TTL in seconds
@@ -32,6 +32,10 @@ export interface GeocodeConfig {
 
   // Offline configuration
   offline_max_distance: number
+
+  // Weibo configuration
+  weibo_api_key: string
+  weibo_timeout: number
 }
 
 // AI Provider configuration
@@ -142,7 +146,9 @@ export const configApi = {
         amap_timeout: 10,
         nominatim_endpoint: 'https://nominatim.openstreetmap.org/reverse',
         nominatim_timeout: 10,
-        offline_max_distance: 100
+        offline_max_distance: 100,
+        weibo_api_key: '',
+        weibo_timeout: 10
       }
     } catch (error) {
       // Config doesn't exist yet, return defaults
@@ -155,7 +161,9 @@ export const configApi = {
         amap_timeout: 10,
         nominatim_endpoint: 'https://nominatim.openstreetmap.org/reverse',
         nominatim_timeout: 10,
-        offline_max_distance: 100
+        offline_max_distance: 100,
+        weibo_api_key: '',
+        weibo_timeout: 10
       }
     }
   },

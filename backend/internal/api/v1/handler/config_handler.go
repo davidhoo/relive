@@ -19,28 +19,33 @@ import (
 	"github.com/davidhoo/relive/pkg/database"
 	"github.com/davidhoo/relive/pkg/logger"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // ConfigHandler 配置处理器
 type ConfigHandler struct {
-	service       service.ConfigService
-	aiService     service.AIService
-	photoService  service.PhotoService
-	promptService service.PromptService
-	cfg           *config.Config
-	photoRepo     repository.PhotoRepository
-	aiHandler     *AIHandler // 用于更新 AIHandler 的 aiService
+	service        service.ConfigService
+	aiService      service.AIService
+	photoService   service.PhotoService
+	promptService  service.PromptService
+	geocodeService service.GeocodeService
+	cfg            *config.Config
+	photoRepo      repository.PhotoRepository
+	aiHandler      *AIHandler // 用于更新 AIHandler 的 aiService
+	db             *gorm.DB
 }
 
 // NewConfigHandler 创建配置处理器
-func NewConfigHandler(service service.ConfigService, aiService service.AIService, photoService service.PhotoService, promptService service.PromptService, photoRepo repository.PhotoRepository, cfg *config.Config) *ConfigHandler {
+func NewConfigHandler(service service.ConfigService, aiService service.AIService, photoService service.PhotoService, promptService service.PromptService, geocodeService service.GeocodeService, photoRepo repository.PhotoRepository, cfg *config.Config, db *gorm.DB) *ConfigHandler {
 	return &ConfigHandler{
-		service:       service,
-		aiService:     aiService,
-		photoService:  photoService,
-		promptService: promptService,
-		photoRepo:     photoRepo,
-		cfg:           cfg,
+		service:        service,
+		aiService:      aiService,
+		photoService:   photoService,
+		promptService:  promptService,
+		geocodeService: geocodeService,
+		photoRepo:      photoRepo,
+		cfg:            cfg,
+		db:             db,
 	}
 }
 
@@ -182,6 +187,40 @@ func (h *ConfigHandler) SetConfig(c *gin.Context) {
 			if h.aiHandler != nil {
 				h.aiHandler.SetAIService(newAIService)
 			}
+		}
+	}
+
+	// 检查是否是 Geocode 配置变更，如果是则重新加载 Geocode service
+	if key == "geocode" {
+		if h.geocodeService != nil {
+			logger.Info("Geocode configuration changed, reloading geocode service...")
+			// 将数据库中的 JSON 配置同步到内存 cfg，确保 Reload 使用最新配置
+			var newGeocodeConfig config.GeocodeConfig
+			if err := json.Unmarshal([]byte(req.Value), &newGeocodeConfig); err == nil {
+				h.cfg.Geocode.Provider = newGeocodeConfig.Provider
+				h.cfg.Geocode.Fallback = newGeocodeConfig.Fallback
+				h.cfg.Geocode.CacheEnabled = newGeocodeConfig.CacheEnabled
+				h.cfg.Geocode.CacheTTL = newGeocodeConfig.CacheTTL
+				h.cfg.Geocode.AMapAPIKey = newGeocodeConfig.AMapAPIKey
+				h.cfg.Geocode.AMapTimeout = newGeocodeConfig.AMapTimeout
+				h.cfg.Geocode.NominatimEndpoint = newGeocodeConfig.NominatimEndpoint
+				h.cfg.Geocode.NominatimTimeout = newGeocodeConfig.NominatimTimeout
+				h.cfg.Geocode.OfflineMaxDistance = newGeocodeConfig.OfflineMaxDistance
+				h.cfg.Geocode.WeiboAPIKey = newGeocodeConfig.WeiboAPIKey
+				h.cfg.Geocode.WeiboTimeout = newGeocodeConfig.WeiboTimeout
+				logger.Infof("Geocode config updated in memory: provider=%s, fallback=%s", newGeocodeConfig.Provider, newGeocodeConfig.Fallback)
+			} else {
+				logger.Warnf("Failed to parse geocode config from request: %v", err)
+			}
+			if err := h.geocodeService.Reload(h.db, h.cfg); err != nil {
+				logger.Warnf("Failed to reload geocode service after config change: %v", err)
+				c.JSON(http.StatusOK, model.Response{
+					Success: true,
+					Message: "Config saved, but failed to reload geocode service: " + err.Error(),
+				})
+				return
+			}
+			logger.Info("Geocode service reloaded successfully")
 		}
 	}
 
@@ -346,6 +385,40 @@ func (h *ConfigHandler) SetBatchConfigs(c *gin.Context) {
 			if h.aiHandler != nil {
 				h.aiHandler.SetAIService(newAIService)
 			}
+		}
+	}
+
+	// 检查是否包含 Geocode 配置变更，如果是则重新加载 Geocode service
+	if geocodeValue, hasGeocodeConfig := configs["geocode"]; hasGeocodeConfig {
+		if h.geocodeService != nil {
+			logger.Info("Geocode configuration changed, reloading geocode service...")
+			// 将数据库中的 JSON 配置同步到内存 cfg，确保 Reload 使用最新配置
+			var newGeocodeConfig config.GeocodeConfig
+			if err := json.Unmarshal([]byte(geocodeValue), &newGeocodeConfig); err == nil {
+				h.cfg.Geocode.Provider = newGeocodeConfig.Provider
+				h.cfg.Geocode.Fallback = newGeocodeConfig.Fallback
+				h.cfg.Geocode.CacheEnabled = newGeocodeConfig.CacheEnabled
+				h.cfg.Geocode.CacheTTL = newGeocodeConfig.CacheTTL
+				h.cfg.Geocode.AMapAPIKey = newGeocodeConfig.AMapAPIKey
+				h.cfg.Geocode.AMapTimeout = newGeocodeConfig.AMapTimeout
+				h.cfg.Geocode.NominatimEndpoint = newGeocodeConfig.NominatimEndpoint
+				h.cfg.Geocode.NominatimTimeout = newGeocodeConfig.NominatimTimeout
+				h.cfg.Geocode.OfflineMaxDistance = newGeocodeConfig.OfflineMaxDistance
+				h.cfg.Geocode.WeiboAPIKey = newGeocodeConfig.WeiboAPIKey
+				h.cfg.Geocode.WeiboTimeout = newGeocodeConfig.WeiboTimeout
+				logger.Infof("Geocode config updated in memory: provider=%s, fallback=%s", newGeocodeConfig.Provider, newGeocodeConfig.Fallback)
+			} else {
+				logger.Warnf("Failed to parse geocode config from batch request: %v", err)
+			}
+			if err := h.geocodeService.Reload(h.db, h.cfg); err != nil {
+				logger.Warnf("Failed to reload geocode service after config change: %v", err)
+				c.JSON(http.StatusOK, model.Response{
+					Success: true,
+					Message: "Configs saved, but failed to reload geocode service: " + err.Error(),
+				})
+				return
+			}
+			logger.Info("Geocode service reloaded successfully")
 		}
 	}
 

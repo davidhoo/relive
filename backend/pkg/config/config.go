@@ -123,23 +123,134 @@ type SecurityConfig struct {
 	APIKeyPrefix string `yaml:"api_key_prefix"` // API Key 前缀
 }
 
+// AMapNestedConfig 高德地图嵌套配置
+type AMapNestedConfig struct {
+	APIKey  string `yaml:"api_key"`
+	Timeout int    `yaml:"timeout"`
+}
+
+// NominatimNestedConfig Nominatim 嵌套配置
+type NominatimNestedConfig struct {
+	Endpoint string `yaml:"endpoint"`
+	Timeout  int    `yaml:"timeout"`
+}
+
+// OfflineNestedConfig 离线模式嵌套配置
+type OfflineNestedConfig struct {
+	MaxDistance float64 `yaml:"max_distance"`
+}
+
+// WeiboNestedConfig 微博地图RGC嵌套配置
+type WeiboNestedConfig struct {
+	APIKey  string `yaml:"api_key"`
+	Timeout int    `yaml:"timeout"`
+}
+
+// HybridNestedConfig 混合模式嵌套配置
+type HybridNestedConfig struct {
+	Primary  string `yaml:"primary"`
+	Fallback string `yaml:"fallback"`
+}
+
 // GeocodeConfig 地理编码配置
 type GeocodeConfig struct {
-	Provider     string `yaml:"provider"`      // 主要提供商：amap / nominatim / offline
-	Fallback     string `yaml:"fallback"`      // 备用提供商
-	CacheEnabled bool   `yaml:"cache_enabled"` // 是否启用缓存
-	CacheTTL     int    `yaml:"cache_ttl"`     // 缓存有效期（秒）
+	Provider     string `yaml:"provider"      json:"provider"`       // 主要提供商：amap / nominatim / offline / weibo
+	Fallback     string `yaml:"fallback"      json:"fallback"`        // 备用提供商
+	CacheEnabled bool   `yaml:"cache_enabled" json:"cache_enabled"`   // 是否启用缓存
+	CacheTTL     int    `yaml:"cache_ttl"     json:"cache_ttl"`       // 缓存有效期（秒）
 
-	// AMap 高德地图
-	AMapAPIKey  string `yaml:"amap_api_key"`
-	AMapTimeout int    `yaml:"amap_timeout"`
+	// AMap 高德地图（扁平结构，兼容旧配置）
+	AMapAPIKey  string `yaml:"amap_api_key" json:"amap_api_key"`
+	AMapTimeout int    `yaml:"amap_timeout" json:"amap_timeout"`
 
-	// Nominatim (OpenStreetMap)
-	NominatimEndpoint string `yaml:"nominatim_endpoint"`
-	NominatimTimeout  int    `yaml:"nominatim_timeout"`
+	// Nominatim (OpenStreetMap)（扁平结构，兼容旧配置）
+	NominatimEndpoint string `yaml:"nominatim_endpoint" json:"nominatim_endpoint"`
+	NominatimTimeout  int    `yaml:"nominatim_timeout"  json:"nominatim_timeout"`
 
-	// Offline
-	OfflineMaxDistance float64 `yaml:"offline_max_distance"` // 最大搜索距离（km）
+	// Offline（扁平结构，兼容旧配置）
+	OfflineMaxDistance float64 `yaml:"offline_max_distance" json:"offline_max_distance"` // 最大搜索距离（km）
+
+	// Weibo 微博地图RGC（扁平结构，兼容旧配置）
+	WeiboAPIKey  string `yaml:"weibo_api_key" json:"weibo_api_key"` // 微博API Key
+	WeiboTimeout int    `yaml:"weibo_timeout" json:"weibo_timeout"` // 超时时间（秒）
+
+	// 嵌套结构（兼容生产配置文件，不参与 JSON 序列化）
+	AMap      AMapNestedConfig      `yaml:"amap"      json:"-"`
+	Nominatim NominatimNestedConfig `yaml:"nominatim" json:"-"`
+	Offline   OfflineNestedConfig   `yaml:"offline"   json:"-"`
+	Weibo     WeiboNestedConfig     `yaml:"weibo"     json:"-"`
+	Hybrid    HybridNestedConfig    `yaml:"hybrid"    json:"-"`
+}
+
+// GetAMapAPIKey 获取高德API Key（优先扁平结构，其次嵌套结构）
+func (g *GeocodeConfig) GetAMapAPIKey() string {
+	if g.AMapAPIKey != "" {
+		return g.AMapAPIKey
+	}
+	return g.AMap.APIKey
+}
+
+// GetAMapTimeout 获取高德超时时间
+func (g *GeocodeConfig) GetAMapTimeout() int {
+	if g.AMapTimeout > 0 {
+		return g.AMapTimeout
+	}
+	if g.AMap.Timeout > 0 {
+		return g.AMap.Timeout
+	}
+	return 10 // 默认10秒
+}
+
+// GetNominatimEndpoint 获取Nominatim端点
+func (g *GeocodeConfig) GetNominatimEndpoint() string {
+	if g.NominatimEndpoint != "" {
+		return g.NominatimEndpoint
+	}
+	if g.Nominatim.Endpoint != "" {
+		return g.Nominatim.Endpoint
+	}
+	return "https://nominatim.openstreetmap.org/reverse"
+}
+
+// GetNominatimTimeout 获取Nominatim超时时间
+func (g *GeocodeConfig) GetNominatimTimeout() int {
+	if g.NominatimTimeout > 0 {
+		return g.NominatimTimeout
+	}
+	if g.Nominatim.Timeout > 0 {
+		return g.Nominatim.Timeout
+	}
+	return 10
+}
+
+// GetOfflineMaxDistance 获取离线最大搜索距离
+func (g *GeocodeConfig) GetOfflineMaxDistance() float64 {
+	if g.OfflineMaxDistance > 0 {
+		return g.OfflineMaxDistance
+	}
+	if g.Offline.MaxDistance > 0 {
+		return g.Offline.MaxDistance
+	}
+	return 100 // 默认100km
+}
+
+// GetWeiboAPIKey 获取微博API Key
+func (g *GeocodeConfig) GetWeiboAPIKey() string {
+	if g.WeiboAPIKey != "" {
+		return g.WeiboAPIKey
+	}
+	return g.Weibo.APIKey
+}
+
+// GetWeiboTimeout 获取微博超时时间
+func (g *GeocodeConfig) GetWeiboTimeout() int {
+	if g.WeiboTimeout > 0 {
+		return g.WeiboTimeout
+	}
+	if g.Weibo.Timeout > 0 {
+		return g.Weibo.Timeout
+	}
+	return 10
 }
 
 

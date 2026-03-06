@@ -44,6 +44,7 @@ type PhotoService interface {
 
 	// 地理编码
 	GeocodePhotoIfNeeded(photo *model.Photo) error
+	RegeocodeAllPhotos() (int, error) // 重新解析所有有GPS照片的位置
 
 	// 删除路径相关
 	DeletePhotosByPathPrefix(pathPrefix string) (int64, error)
@@ -399,8 +400,8 @@ func (s *photoService) processPhoto(filePath string, info os.FileInfo) (*model.P
 		if err != nil {
 			logger.Warnf("Geocode failed for (%f, %f): %v", *photo.GPSLatitude, *photo.GPSLongitude, err)
 		} else {
-			// 设置位置信息 - 使用完整格式（国家 省 市 区）
-			photo.Location = location.FormatFull()
+			// 设置位置信息 - 使用标准显示格式（城市+区县+商圈/街道）
+			photo.Location = location.FormatDisplay()
 			logger.Debugf("Geocoded: (%f, %f) -> %s", *photo.GPSLatitude, *photo.GPSLongitude, photo.Location)
 		}
 	}
@@ -509,8 +510,8 @@ func (s *photoService) GeocodePhotoIfNeeded(photo *model.Photo) error {
 		return nil // 不返回错误，允许继续显示照片
 	}
 
-	// 设置位置信息（立即返回给前端）- 使用完整格式
-	photo.Location = location.FormatFull()
+	// 设置位置信息（立即返回给前端）- 使用标准显示格式
+	photo.Location = location.FormatDisplay()
 	logger.Debugf("Real-time geocoded photo %d: (%f, %f) -> %s",
 		photo.ID, *photo.GPSLatitude, *photo.GPSLongitude, photo.Location)
 
@@ -889,4 +890,55 @@ func (s *photoService) updateScanPathTimestamp(scanPath string) error {
 
 	logger.Infof("Updated last_scanned_at for scan path: %s", scanPath)
 	return nil
+}
+
+// RegeocodeAllPhotos 重新解析所有有GPS照片的位置
+// 返回成功更新的照片数量
+func (s *photoService) RegeocodeAllPhotos() (int, error) {
+	if s.geocodeService == nil {
+		return 0, fmt.Errorf("geocode service not available")
+	}
+
+	// 获取所有有GPS坐标的照片
+	photos, err := s.repo.ListWithGPS()
+	if err != nil {
+		return 0, fmt.Errorf("list photos with GPS: %w", err)
+	}
+
+	logger.Infof("Starting re-geocoding for %d photos", len(photos))
+
+	updated := 0
+	failed := 0
+	for _, photo := range photos {
+		if photo.GPSLatitude == nil || photo.GPSLongitude == nil {
+			continue
+		}
+
+		// 重新解析位置
+		location, err := s.geocodeService.ReverseGeocode(*photo.GPSLatitude, *photo.GPSLongitude)
+		if err != nil {
+			logger.Warnf("Re-geocode failed for photo %d: %v", photo.ID, err)
+			failed++
+			continue
+		}
+
+		newLocation := location.FormatDisplay()
+		if newLocation == photo.Location {
+			// 位置没变，跳过
+			continue
+		}
+
+		// 更新数据库
+		if err := s.repo.UpdateLocation(photo.ID, newLocation); err != nil {
+			logger.Errorf("Failed to update location for photo %d: %v", photo.ID, err)
+			failed++
+			continue
+		}
+
+		logger.Debugf("Re-geocoded photo %d: %s -> %s", photo.ID, photo.Location, newLocation)
+		updated++
+	}
+
+	logger.Infof("Re-geocoding completed: updated=%d, failed=%d, total=%d", updated, failed, len(photos))
+	return updated, nil
 }

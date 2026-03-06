@@ -100,6 +100,12 @@
                   <el-tag size="small" type="info">全球覆盖</el-tag>
                 </div>
               </el-option>
+              <el-option value="weibo" label="微博地图RGC (Weibo)">
+                <div class="provider-option">
+                  <span>微博地图RGC (Weibo)</span>
+                  <el-tag size="small" type="warning">国内+海外</el-tag>
+                </div>
+              </el-option>
             </el-select>
             <div class="form-hint">
               当前使用的地理编码服务提供商，优先级最高
@@ -113,6 +119,7 @@
               <el-option value="offline" label="离线数据库 (Offline)"></el-option>
               <el-option value="amap" label="高德地图 (AMap)"></el-option>
               <el-option value="nominatim" label="OpenStreetMap (Nominatim)"></el-option>
+              <el-option value="weibo" label="微博地图RGC (Weibo)"></el-option>
             </el-select>
             <div class="form-hint">
               主提供商失败时自动切换到备用提供商
@@ -202,6 +209,55 @@
             />
             <span style="margin-left: 12px">秒</span>
           </el-form-item>
+
+          <!-- Weibo Configuration -->
+          <el-divider content-position="left">
+            <el-icon><Location /></el-icon>
+            微博地图RGC (Weibo) 配置
+          </el-divider>
+
+          <el-form-item label="API Key">
+            <div class="input-with-button">
+              <el-input
+                v-model="geocodeConfig.weibo_api_key"
+                placeholder="请输入微博地图RGC API Key"
+                type="password"
+                show-password
+              />
+              <el-button @click="openWeiboDocs">
+                <el-icon><Link /></el-icon>
+                申请
+              </el-button>
+            </div>
+            <div class="form-hint">
+              访问 GitHub 项目 <a href="https://github.com/laochai-beijing/map-reverse-geocoding-skill" target="_blank">map-reverse-geocoding-skill</a> 申请 API Key
+            </div>
+          </el-form-item>
+
+          <el-form-item label="超时时间">
+            <el-input-number
+              v-model="geocodeConfig.weibo_timeout"
+              :min="5"
+              :max="60"
+              style="width: 150px"
+            />
+            <span style="margin-left: 12px">秒</span>
+          </el-form-item>
+
+          <el-alert
+            title="微博地图RGC 说明"
+            type="info"
+            :closable="false"
+            style="margin-top: 16px; margin-bottom: 16px"
+          >
+            <template #default>
+              <ul style="margin: 8px 0; padding-left: 20px">
+                <li>全球覆盖：支持国内+海外全区域逆地理编码</li>
+                <li>坐标自适应：国内自动适配WGS84坐标、海外自动切换GCJ02坐标</li>
+                <li>合规内置：接口层自动完成台湾、三沙群岛等国土敏感区域政策校验</li>
+              </ul>
+            </template>
+          </el-alert>
 
           <!-- Offline Configuration -->
           <el-divider content-position="left">
@@ -677,7 +733,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { configApi, promptApi, type ScanPathConfig, type GeocodeConfig, type AIConfig, type PromptConfig, defaultPrompts, getCitiesDataStatus, downloadCitiesData, type CitiesDataStatus } from '@/api/config'
 import dayjs from 'dayjs'
 import { v4 as uuidv4 } from 'uuid'
-import { FolderOpened, CircleCheck, CircleClose, Document, RefreshLeft, Check, Download, SuccessFilled } from '@element-plus/icons-vue'
+import { FolderOpened, CircleCheck, CircleClose, Document, RefreshLeft, Check, Download, SuccessFilled, Link, Location } from '@element-plus/icons-vue'
 
 // Scan paths state
 const scanPaths = ref<ScanPathConfig[]>([])
@@ -715,7 +771,9 @@ const geocodeConfig = ref<GeocodeConfig>({
   amap_timeout: 10,
   nominatim_endpoint: 'https://nominatim.openstreetmap.org/reverse',
   nominatim_timeout: 10,
-  offline_max_distance: 100
+  offline_max_distance: 100,
+  weibo_api_key: '',
+  weibo_timeout: 10
 })
 const loadingGeocode = ref(false)
 const savingGeocode = ref(false)
@@ -934,6 +992,10 @@ const handleSaveGeocodeConfig = async () => {
 
 const openAmapDocs = () => {
   window.open('https://lbs.amap.com/', '_blank')
+}
+
+const openWeiboDocs = () => {
+  window.open('https://github.com/laochai-beijing/map-reverse-geocoding-skill', '_blank')
 }
 
 // AI configuration functions

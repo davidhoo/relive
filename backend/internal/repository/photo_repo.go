@@ -51,6 +51,7 @@ type PhotoRepository interface {
 
 	// 地理编码
 	UpdateLocation(id uint, location string) error
+	ListWithGPS() ([]*model.Photo, error) // 获取所有有GPS坐标的照片
 
 	// 重建相关
 	ListByPathPrefix(prefix string) ([]*model.Photo, error)
@@ -418,4 +419,11 @@ func (r *photoRepository) GetTags() ([]string, error) {
 	sort.Strings(result)
 
 	return result, nil
+}
+
+// ListWithGPS 获取所有有GPS坐标的照片
+func (r *photoRepository) ListWithGPS() ([]*model.Photo, error) {
+	var photos []*model.Photo
+	err := r.db.Where("gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL").Find(&photos).Error
+	return photos, err
 }

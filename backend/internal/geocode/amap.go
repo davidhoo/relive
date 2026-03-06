@@ -114,12 +114,16 @@ func (p *AmapProvider) ReverseGeocode(lat, lon float64) (*Location, error) {
 		Province:  result.Regeocode.AddressComponent.Province,
 		City:      city,
 		District:  result.Regeocode.AddressComponent.District,
-		FullName:  result.Regeocode.FormattedAddress,
+		Street:    result.Regeocode.AddressComponent.Township, // 乡镇/街道
+		FullName:  "", // 使用 FormatDisplay 生成
 		Latitude:  lat,
 		Longitude: lon,
 		Provider:  p.Name(),
 		Duration:  time.Since(startTime),
 	}
+
+	// 构建显示格式地址
+	location.FullName = location.FormatDisplay()
 
 	logger.Debugf("AMap geocode: (%.6f,%.6f) -> %s (took %v)",
 		lat, lon, location.FormatShort(), location.Duration)

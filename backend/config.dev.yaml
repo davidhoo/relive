@@ -72,23 +72,15 @@ ai:
     primary: "ollama"    # 主要 provider
     fallback: "qwen"     # 备用 provider（当主 provider 失败时使用）
 
-# 地理编码配置
+# 地理编码配置（启动默认值，运行时通过管理后台配置后以数据库为准）
 geocode:
-  provider: "offline"  # offline / amap / nominatim
-  fallback: "nominatim"  # 备用提供商
+  provider: "offline"       # 启动默认：离线，无需联网。可选: offline / amap / nominatim / weibo
+  fallback: "nominatim"     # 备用提供商（API key 为空时自动降级）
   cache_enabled: true
-  cache_ttl: 86400  # 缓存有效期（秒），默认 24 小时
-
-  # 高德地图配置
-  amap_api_key: ""  # 需要填写真实的 API Key（申请地址：https://lbs.amap.com/）
-  amap_timeout: 10  # 超时时间（秒）
-
-  # Nominatim (OpenStreetMap) 配置
-  nominatim_endpoint: "https://nominatim.openstreetmap.org/reverse"
-  nominatim_timeout: 10
-
-  # 离线数据库配置
-  offline_max_distance: 100  # 最大搜索距离（km）
+  cache_ttl: 86400          # 缓存有效期（秒），默认 24 小时
+  offline_max_distance: 100 # 离线模式最大搜索半径（km）
+  nominatim_endpoint: "https://nominatim.openstreetmap.org/reverse"  # 自建 Nominatim 可修改此处
+  # API Key 等敏感配置请在管理后台「GPS 逆地理编码配置」中填写
 
 # 展示策略
 display:

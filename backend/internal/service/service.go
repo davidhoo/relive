@@ -37,7 +37,8 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	}
 
 	// 创建 Geocode 服务（可能失败，不阻塞其他服务）
-	geocodeService, err := NewGeocodeService(db, cfg)
+	// 传入 configService，以便优先从数据库读取用户保存的 geocode 配置
+	geocodeService, err := NewGeocodeService(db, cfg, configService)
 	if err != nil {
 		logger.Warnf("Failed to initialize Geocode service: %v", err)
 		geocodeService = nil
