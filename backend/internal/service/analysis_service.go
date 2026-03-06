@@ -26,15 +26,18 @@ type AnalysisService interface {
 	ExtendTaskLock(taskID, analyzerID string) (time.Time, error)
 	ReleaseTask(taskID, analyzerID, reason, errorMsg string, retryLater bool) error
 	SubmitResults(results []model.AnalysisResult, deviceID uint) (*model.SubmitResultsResponse, error)
+	SubmitResultsDirectly(results []model.AnalysisResult, deviceID uint) (*model.SubmitResultsResponse, error)
 	GetStats(deviceID uint) (*model.AnalyzerStatsResponse, error)
 	CleanExpiredLocks() (int64, error)
+	SetResultQueue(queue *ResultQueue)
 }
 
 // analysisService 分析服务实现
 type analysisService struct {
-	db         *gorm.DB
-	photoRepo  repository.PhotoRepository
-	cfg        *config.Config
+	db          *gorm.DB
+	photoRepo   repository.PhotoRepository
+	cfg         *config.Config
+	resultQueue *ResultQueue
 }
 
 // NewAnalysisService 创建分析服务
@@ -44,6 +47,11 @@ func NewAnalysisService(db *gorm.DB, photoRepo repository.PhotoRepository, cfg *
 		photoRepo: photoRepo,
 		cfg:       cfg,
 	}
+}
+
+// SetResultQueue 设置结果队列（必须在 Start 之前调用）
+func (s *analysisService) SetResultQueue(queue *ResultQueue) {
+	s.resultQueue = queue
 }
 
 // GetPendingTasks 获取待分析任务列表
@@ -206,8 +214,22 @@ func (s *analysisService) ReleaseTask(taskID, analyzerID, reason, errorMsg strin
 	return nil
 }
 
-// SubmitResults 提交分析结果（幂等性处理）
+// SubmitResults 提交分析结果（使用队列，立即返回）
 func (s *analysisService) SubmitResults(results []model.AnalysisResult, deviceID uint) (*model.SubmitResultsResponse, error) {
+	// 如果队列未初始化，直接写入（向后兼容）
+	if s.resultQueue == nil {
+		logger.Warn("ResultQueue not set, using direct write")
+		return s.SubmitResultsDirectly(results, deviceID)
+	}
+
+	// 入队（立即返回，不等待数据库写入）
+	return s.resultQueue.Enqueue(results, deviceID)
+}
+
+// SubmitResultsDirectly 直接提交分析结果（供 BatchProcessor 内部使用）
+func (s *analysisService) SubmitResultsDirectly(results []model.AnalysisResult, deviceID uint) (*model.SubmitResultsResponse, error) {
+	logger.Infof("SubmitResultsDirectly called with %d results", len(results))
+
 	resp := &model.SubmitResultsResponse{
 		Accepted:      0,
 		Rejected:      0,
@@ -215,85 +237,107 @@ func (s *analysisService) SubmitResults(results []model.AnalysisResult, deviceID
 		FailedPhotos:  make([]uint, 0),
 	}
 
+	// 第一阶段：验证和预筛选（在事务外做验证，减少事务持有时间）
+	type validResult struct {
+		result       model.AnalysisResult
+		overallScore int
+		aiProvider   string
+	}
+	validResults := make([]validResult, 0, len(results))
+
+	for _, result := range results {
+		// 验证结果
+		if err := validateResult(result); err != nil {
+			resp.Rejected++
+			resp.RejectedItems = append(resp.RejectedItems, model.RejectedItem{
+				PhotoID: result.PhotoID,
+				Reason:  "validation_failed",
+				Message: err.Error(),
+			})
+			continue
+		}
+
+		overallScore := int(float64(result.MemoryScore)*0.7 + float64(result.BeautyScore)*0.3)
+		aiProvider := result.AIProvider
+		if aiProvider == "" {
+			aiProvider = "analyzer"
+		}
+
+		validResults = append(validResults, validResult{
+			result:       result,
+			overallScore: overallScore,
+			aiProvider:   aiProvider,
+		})
+	}
+
+	if len(validResults) == 0 {
+		return resp, nil
+	}
+
+	// 第二阶段：批量处理（使用 CASE WHEN 减少锁定时间）
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		for _, result := range results {
-			// 验证结果
-			if err := validateResult(result); err != nil {
+		// 获取所有待更新的照片（一次性查询）
+		photoIDs := make([]uint, 0, len(validResults))
+		for _, vr := range validResults {
+			photoIDs = append(photoIDs, vr.result.PhotoID)
+		}
+
+		var photos []model.Photo
+		if err := tx.Where("id IN ?", photoIDs).Find(&photos).Error; err != nil {
+			return fmt.Errorf("fetch photos: %w", err)
+		}
+
+		// 构建照片状态映射
+		photoMap := make(map[uint]model.Photo)
+		for _, p := range photos {
+			photoMap[p.ID] = p
+		}
+
+		// 筛选出可以更新的结果（未分析过的）
+		toUpdate := make([]struct {
+			result       model.AnalysisResult
+			overallScore int
+			aiProvider   string
+		}, 0, len(validResults))
+		for _, vr := range validResults {
+			photo, exists := photoMap[vr.result.PhotoID]
+			if !exists {
 				resp.Rejected++
 				resp.RejectedItems = append(resp.RejectedItems, model.RejectedItem{
-					PhotoID: result.PhotoID,
-					Reason:  "validation_failed",
-					Message: err.Error(),
+					PhotoID: vr.result.PhotoID,
+					Reason:  "invalid_photo_id",
+					Message: "Photo not found",
 				})
 				continue
 			}
-
-			// 获取照片
-			var photo model.Photo
-			err := tx.First(&photo, result.PhotoID).Error
-			if err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					resp.Rejected++
-					resp.RejectedItems = append(resp.RejectedItems, model.RejectedItem{
-						PhotoID: result.PhotoID,
-						Reason:  "invalid_photo_id",
-						Message: "Photo not found",
-					})
-				} else {
-					resp.FailedPhotos = append(resp.FailedPhotos, result.PhotoID)
-				}
-				continue
-			}
-
-			// 如果照片已经分析过了（幂等性）
 			if photo.AIAnalyzed {
 				resp.Rejected++
 				resp.RejectedItems = append(resp.RejectedItems, model.RejectedItem{
-					PhotoID: result.PhotoID,
+					PhotoID: vr.result.PhotoID,
 					Reason:  "duplicate_result",
 					Message: "Photo already analyzed",
 				})
 				continue
 			}
-
-			// 计算综合评分
-			overallScore := int(float64(result.MemoryScore)*0.7 + float64(result.BeautyScore)*0.3)
-			now := time.Now()
-
-			// 使用提交结果中的 AI provider，如果没有提供则使用 "analyzer"
-			aiProvider := result.AIProvider
-			if aiProvider == "" {
-				aiProvider = "analyzer"
-			}
-
-			// 更新照片分析结果
-			updates := map[string]interface{}{
-				"ai_analyzed":              true,
-				"analyzed_at":              now,
-				"ai_provider":              aiProvider,
-				"description":              result.Description,
-				"caption":                  result.Caption,
-				"memory_score":             result.MemoryScore,
-				"beauty_score":             result.BeautyScore,
-				"overall_score":            overallScore,
-				"score_reason":             result.ScoreReason,
-				"main_category":            result.MainCategory,
-				"tags":                     result.Tags,
-				"analysis_lock_id":         nil,
-				"analysis_lock_expired_at": nil,
-				"analysis_retry_count":     0,
-			}
-
-			err = tx.Model(&photo).Updates(updates).Error
-			if err != nil {
-				logger.Errorf("Failed to update photo %d: %v", result.PhotoID, err)
-				resp.FailedPhotos = append(resp.FailedPhotos, result.PhotoID)
-				continue
-			}
-
-			resp.Accepted++
+			toUpdate = append(toUpdate, vr)
 		}
 
+		if len(toUpdate) == 0 {
+			return nil
+		}
+
+		// 构建批量 CASE WHEN 更新 SQL
+		now := time.Now()
+		if err := s.batchUpdatePhotos(tx, toUpdate, now); err != nil {
+			logger.Errorf("Batch update failed: %v", err)
+			// 批量失败，记录所有为失败（会触发客户端重试）
+			for _, vr := range toUpdate {
+				resp.FailedPhotos = append(resp.FailedPhotos, vr.result.PhotoID)
+			}
+			return err
+		}
+
+		resp.Accepted = len(toUpdate)
 		return nil
 	})
 
@@ -301,10 +345,94 @@ func (s *analysisService) SubmitResults(results []model.AnalysisResult, deviceID
 		return nil, err
 	}
 
-	logger.Infof("Submitted %d results: accepted=%d, rejected=%d, failed=%d",
+	logger.Debugf("Directly submitted %d results: accepted=%d, rejected=%d, failed=%d",
 		len(results), resp.Accepted, resp.Rejected, len(resp.FailedPhotos))
 
 	return resp, nil
+}
+
+// batchUpdatePhotos 使用单条 SQL 批量更新所有照片
+// 使用 CASE WHEN 语句，直接嵌入值避免参数绑定问题
+func (s *analysisService) batchUpdatePhotos(tx *gorm.DB, results []struct {
+	result       model.AnalysisResult
+	overallScore int
+	aiProvider   string
+}, now time.Time) error {
+	if len(results) == 0 {
+		return nil
+	}
+
+	// 构建 CASE WHEN 子句
+	var (
+		idCases        []string
+		descCases      []string
+		captionCases   []string
+		memoryCases    []string
+		beautyCases    []string
+		overallCases   []string
+		reasonCases    []string
+		categoryCases  []string
+		tagsCases      []string
+		providerCases  []string
+		analyzedCases  []string
+		photoIDList    []string
+	)
+
+	for _, vr := range results {
+		id := vr.result.PhotoID
+		idCases = append(idCases, fmt.Sprintf("WHEN %d THEN 1", id))
+		// 转义字符串，直接嵌入 SQL
+		descCases = append(descCases, fmt.Sprintf("WHEN %d THEN '%s'", id, escapeSQL(vr.result.Description)))
+		captionCases = append(captionCases, fmt.Sprintf("WHEN %d THEN '%s'", id, escapeSQL(vr.result.Caption)))
+		memoryCases = append(memoryCases, fmt.Sprintf("WHEN %d THEN %d", id, vr.result.MemoryScore))
+		beautyCases = append(beautyCases, fmt.Sprintf("WHEN %d THEN %d", id, vr.result.BeautyScore))
+		overallCases = append(overallCases, fmt.Sprintf("WHEN %d THEN %d", id, vr.overallScore))
+		reasonCases = append(reasonCases, fmt.Sprintf("WHEN %d THEN '%s'", id, escapeSQL(vr.result.ScoreReason)))
+		categoryCases = append(categoryCases, fmt.Sprintf("WHEN %d THEN '%s'", id, escapeSQL(vr.result.MainCategory)))
+		tagsCases = append(tagsCases, fmt.Sprintf("WHEN %d THEN '%s'", id, escapeSQL(vr.result.Tags)))
+		providerCases = append(providerCases, fmt.Sprintf("WHEN %d THEN '%s'", id, escapeSQL(vr.aiProvider)))
+		analyzedCases = append(analyzedCases, fmt.Sprintf("WHEN %d THEN '%s'", id, now.Format("2006-01-02 15:04:05")))
+		photoIDList = append(photoIDList, fmt.Sprintf("%d", id))
+	}
+
+	// 构建完整 SQL（所有值直接嵌入，无参数绑定）
+	sql := fmt.Sprintf(`UPDATE photos SET
+		ai_analyzed = CASE id %s ELSE ai_analyzed END,
+		description = CASE id %s ELSE description END,
+		caption = CASE id %s ELSE caption END,
+		memory_score = CASE id %s ELSE memory_score END,
+		beauty_score = CASE id %s ELSE beauty_score END,
+		overall_score = CASE id %s ELSE overall_score END,
+		score_reason = CASE id %s ELSE score_reason END,
+		main_category = CASE id %s ELSE main_category END,
+		tags = CASE id %s ELSE tags END,
+		ai_provider = CASE id %s ELSE ai_provider END,
+		analyzed_at = CASE id %s ELSE analyzed_at END,
+		analysis_lock_id = NULL,
+		analysis_lock_expired_at = NULL,
+		analysis_retry_count = 0
+	WHERE id IN (%s)`,
+		strings.Join(idCases, " "),
+		strings.Join(descCases, " "),
+		strings.Join(captionCases, " "),
+		strings.Join(memoryCases, " "),
+		strings.Join(beautyCases, " "),
+		strings.Join(overallCases, " "),
+		strings.Join(reasonCases, " "),
+		strings.Join(categoryCases, " "),
+		strings.Join(tagsCases, " "),
+		strings.Join(providerCases, " "),
+		strings.Join(analyzedCases, " "),
+		strings.Join(photoIDList, ","),
+	)
+
+	return tx.Exec(sql).Error
+}
+
+// escapeSQL 转义 SQL 字符串中的单引号
+func escapeSQL(s string) string {
+	// 单引号转义为两个单引号
+	return strings.ReplaceAll(s, "'", "''")
 }
 
 // GetStats 获取分析统计

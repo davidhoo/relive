@@ -65,6 +65,16 @@ func main() {
 	services.Scheduler.Start()
 	defer services.Scheduler.Stop()
 
+	// 启动结果队列
+	if services.ResultQueue != nil {
+		if err := services.ResultQueue.Start(); err != nil {
+			logger.Errorf("Failed to start result queue: %v", err)
+		} else {
+			logger.Info("Result queue started")
+			defer services.ResultQueue.Stop()
+		}
+	}
+
 	// 启动服务器
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	logger.Infof("Server listening on %s", addr)

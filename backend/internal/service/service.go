@@ -9,17 +9,18 @@ import (
 
 // Services 所有服务的集合
 type Services struct {
-	Photo     PhotoService
-	Display   DisplayService
-	Device    DeviceService // 新名称
-	ESP32     ESP32Service  // 保留兼容（别名）
-	AI        AIService
-	Config    ConfigService
-	Prompt    PromptService
-	Geocode   GeocodeService
-	Auth      AuthService
-	Analysis  AnalysisService
-	Scheduler *TaskScheduler
+	Photo       PhotoService
+	Display     DisplayService
+	Device      DeviceService // 新名称
+	ESP32       ESP32Service  // 保留兼容（别名）
+	AI          AIService
+	Config      ConfigService
+	Prompt      PromptService
+	Geocode     GeocodeService
+	Auth        AuthService
+	Analysis    AnalysisService
+	Scheduler   *TaskScheduler
+	ResultQueue *ResultQueue // 结果队列服务
 }
 
 // NewServices 创建所有服务
@@ -60,17 +61,38 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	// 创建设备服务
 	deviceService := NewDeviceService(repos.Device, cfg)
 
+	// 创建结果队列存储
+	var resultStorage repository.ResultStorage
+	if cfg.Database.Type == "sqlite" {
+		// 使用数据库存储
+		resultStorage = repository.NewDBResultStorage(db)
+		// 迁移队列表
+		if err := repository.MigrateResultQueue(db); err != nil {
+			logger.Warnf("Failed to migrate result queue table: %v", err)
+		}
+	} else {
+		// 使用文件存储（备用）
+		resultStorage = repository.NewFileResultStorage(cfg.Database.Path)
+	}
+
+	// 创建结果队列
+	resultQueue := NewResultQueue(resultStorage, analysisService, DefaultResultQueueConfig())
+
+	// 将队列设置到分析服务
+	analysisService.SetResultQueue(resultQueue)
+
 	return &Services{
-		Photo:     NewPhotoService(repos.Photo, cfg, configService, geocodeService),
-		Display:   NewDisplayService(repos.Photo, repos.DisplayRecord, repos.Device, cfg),
-		Device:    deviceService,
-		ESP32:     deviceService,
-		AI:        aiService,
-		Config:    configService,
-		Prompt:    promptService,
-		Geocode:   geocodeService,
-		Auth:      authService,
-		Analysis:  analysisService,
-		Scheduler: scheduler,
+		Photo:       NewPhotoService(repos.Photo, cfg, configService, geocodeService),
+		Display:     NewDisplayService(repos.Photo, repos.DisplayRecord, repos.Device, cfg),
+		Device:      deviceService,
+		ESP32:       deviceService,
+		AI:          aiService,
+		Config:      configService,
+		Prompt:      promptService,
+		Geocode:     geocodeService,
+		Auth:        authService,
+		Analysis:    analysisService,
+		Scheduler:   scheduler,
+		ResultQueue: resultQueue,
 	}
 }
