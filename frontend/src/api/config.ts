@@ -1,5 +1,7 @@
 import http from '@/utils/request'
 import type { ApiResponse } from '@/types/api'
+import type { PagedResponse } from '@/types/api'
+import type { Photo } from '@/types/photo'
 
 export interface ScanPathConfig {
   id: string
@@ -87,6 +89,143 @@ interface BackendConfigResponse {
   updated_at: string
   key: string
   value: string
+}
+
+interface DisplayPreviewResponse {
+  algorithm: string
+  count: number
+  photos: Photo[]
+}
+
+const shufflePhotos = (photos: Photo[]) => {
+  const result = [...photos]
+  for (let i = result.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1))
+    const current = result[i]
+    result[i] = result[j] as Photo
+    result[j] = current as Photo
+  }
+  return result
+}
+
+const getMonthDayKey = (date: Date) => {
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${month}-${day}`
+}
+
+const isAboveThreshold = (photo: Photo, config: DisplayStrategyConfig) => {
+  const beautyScore = photo.beauty_score ?? 0
+  const memoryScore = photo.memory_score ?? 0
+  return photo.ai_analyzed && beautyScore >= config.minBeautyScore && memoryScore >= config.minMemoryScore
+}
+
+const pickTopMemoryPhoto = (photos: Photo[]) => {
+  if (photos.length === 0) return []
+
+  const best = [...photos].sort((a, b) => {
+    const memoryDiff = (b.memory_score ?? 0) - (a.memory_score ?? 0)
+    if (memoryDiff !== 0) return memoryDiff
+
+    const overallDiff = (b.overall_score ?? 0) - (a.overall_score ?? 0)
+    if (overallDiff !== 0) return overallDiff
+
+    return new Date(b.taken_at || 0).getTime() - new Date(a.taken_at || 0).getTime()
+  })[0]
+
+  return best ? [best] : []
+}
+
+const previewSmartByPhotoList = (items: Photo[], config: DisplayStrategyConfig): DisplayPreviewResponse => {
+  const byMonthDay = new Map<string, Photo[]>()
+  const analyzedPhotos = items.filter((photo) => photo.ai_analyzed)
+
+  for (const photo of analyzedPhotos) {
+    if (!photo.taken_at || !isAboveThreshold(photo, config)) continue
+
+    const monthDay = getMonthDayKey(new Date(photo.taken_at))
+    const existing = byMonthDay.get(monthDay) || []
+    existing.push(photo)
+    byMonthDay.set(monthDay, existing)
+  }
+
+  const today = new Date()
+  for (let offset = 0; offset <= 365; offset += 1) {
+    const target = new Date(today)
+    target.setDate(today.getDate() - offset)
+
+    const candidates = byMonthDay.get(getMonthDayKey(target)) || []
+    if (candidates.length > 0) {
+      const selected = shufflePhotos(candidates).slice(0, config.dailyCount)
+      return {
+        algorithm: config.algorithm,
+        count: selected.length,
+        photos: selected,
+      }
+    }
+  }
+
+  const fallback = pickTopMemoryPhoto(analyzedPhotos)
+  return {
+    algorithm: config.algorithm,
+    count: fallback.length,
+    photos: fallback,
+  }
+}
+
+const previewRandomByPhotoList = (items: Photo[], config: DisplayStrategyConfig): DisplayPreviewResponse => {
+  const filtered = items.filter((photo) => isAboveThreshold(photo, config))
+  const selected = shufflePhotos(filtered).slice(0, config.dailyCount)
+
+  return {
+    algorithm: config.algorithm,
+    count: selected.length,
+    photos: selected,
+  }
+}
+
+const fetchAllPhotosForDisplayPreview = async (): Promise<Photo[]> => {
+  const pageSize = 100
+  const items: Photo[] = []
+  let page = 1
+  let total = 0
+
+  do {
+    const response = await http.get<ApiResponse<PagedResponse<Photo>>>('/photos', {
+      params: {
+        page,
+        page_size: pageSize,
+        analyzed: true,
+        sort_by: 'taken_at',
+        sort_desc: true,
+      }
+    })
+
+    const data = response.data?.data
+    const pageItems = data?.items || []
+    total = data?.total || 0
+    items.push(...pageItems)
+    page += 1
+  } while (items.length < total)
+
+  return items
+}
+
+const previewByPhotoListFallback = async (config: DisplayStrategyConfig): Promise<DisplayPreviewResponse> => {
+  const items = await fetchAllPhotosForDisplayPreview()
+
+  switch (config.algorithm) {
+    case 'random':
+      return previewRandomByPhotoList(items, config)
+    case 'smart':
+      return previewSmartByPhotoList(items, config)
+    default:
+      return {
+        algorithm: config.algorithm,
+        count: 0,
+        photos: [],
+      }
+  }
 }
 
 export const configApi = {
@@ -264,6 +403,19 @@ export const displayStrategyApi = {
   updateConfig: async (config: DisplayStrategyConfig): Promise<void> => {
     const value = JSON.stringify(config)
     await http.put('/config/display.strategy', { value })
+  },
+
+  // Preview strategy with current form data
+  previewConfig: async (config: DisplayStrategyConfig): Promise<DisplayPreviewResponse> => {
+    try {
+      const response = await http.post<ApiResponse<DisplayPreviewResponse>>('/display/preview', config)
+      return response.data?.data || { algorithm: config.algorithm, count: 0, photos: [] }
+    } catch (error: any) {
+      if (error?.response?.status === 404) {
+        return previewByPhotoListFallback(config)
+      }
+      throw error
+    }
   },
 
   // Reset to defaults

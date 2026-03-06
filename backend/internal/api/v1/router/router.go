@@ -24,8 +24,8 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 	// CORS 中间件配置（仅开发环境使用，生产环境建议使用反向代理）
 	corsConfig := cors.Config{
 		AllowOrigins: []string{
-			"http://localhost:5173",  // Vite 默认开发服务器
-			"http://127.0.0.1:5173",  // IP 形式
+			"http://localhost:5173", // Vite 默认开发服务器
+			"http://127.0.0.1:5173", // IP 形式
 		},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "Accept", "X-Requested-With", "X-API-Key"},
@@ -82,8 +82,8 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 		devicesManage.Use(middleware.JWTAuth(services.Auth))
 		devicesManage.Use(middleware.FirstLoginCheck(services.Auth))
 		{
-			devicesManage.POST("", handlers.Device.CreateDevice)             // 创建设备
-			devicesManage.DELETE("/:id", handlers.Device.DeleteDevice)       // 删除设备
+			devicesManage.POST("", handlers.Device.CreateDevice)                   // 创建设备
+			devicesManage.DELETE("/:id", handlers.Device.DeleteDevice)             // 删除设备
 			devicesManage.PUT("/:id/enabled", handlers.Device.UpdateDeviceEnabled) // 启用/禁用设备
 			devicesManage.GET("/stats", handlers.Device.GetDeviceStats)
 			devicesManage.GET("", handlers.Device.GetDevices)
@@ -95,14 +95,14 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 		devicesAPI := v1.Group("/devices")
 		devicesAPI.Use(middleware.APIKeyAuth(services.Device))
 		{
-			devicesAPI.POST("/activate", handlers.Device.Activate)    // 设备激活
+			devicesAPI.POST("/activate", handlers.Device.Activate) // 设备激活
 		}
 
 		// ESP32 兼容路径（API Key 认证）
 		esp32 := v1.Group("/esp32")
 		esp32.Use(middleware.APIKeyAuth(services.Device))
 		{
-			esp32.POST("/activate", handlers.ESP32.Activate)      // 兼容：指向 Activate
+			esp32.POST("/activate", handlers.ESP32.Activate) // 兼容：指向 Activate
 		}
 
 		// 展示相关（API Key 认证，设备获取照片）
@@ -141,6 +141,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 			// 系统相关（需要认证）
 			authorized.GET("/system/stats", handlers.System.Stats)
 			authorized.POST("/system/reset", handlers.System.Reset)
+			authorized.POST("/display/preview", handlers.Display.PreviewPhotos)
 
 			// 照片相关
 			photos := authorized.Group("/photos")

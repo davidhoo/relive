@@ -35,6 +35,7 @@ type PhotoRepository interface {
 	// 展示策略相关
 	GetByDateRange(start, end time.Time) ([]*model.Photo, error)
 	GetTopByScore(limit int, excludePhotoIDs []uint) ([]*model.Photo, error)
+	GetRandom(limit, minBeautyScore, minMemoryScore int, excludePhotoIDs []uint) ([]*model.Photo, error)
 	GetByLocation(location string, limit int) ([]*model.Photo, error)
 
 	// 统计
@@ -261,6 +262,25 @@ func (r *photoRepository) GetTopByScore(limit int, excludePhotoIDs []uint) ([]*m
 	var photos []*model.Photo
 	query := r.db.Where("ai_analyzed = ?", true).
 		Order("overall_score DESC, taken_at DESC")
+
+	if len(excludePhotoIDs) > 0 {
+		query = query.Where("id NOT IN ?", excludePhotoIDs)
+	}
+
+	err := query.Limit(limit).Find(&photos).Error
+	return photos, err
+}
+
+// GetRandom 随机获取满足阈值的照片
+func (r *photoRepository) GetRandom(limit, minBeautyScore, minMemoryScore int, excludePhotoIDs []uint) ([]*model.Photo, error) {
+	var photos []*model.Photo
+
+	query := r.db.Where(
+		"ai_analyzed = ? AND beauty_score >= ? AND memory_score >= ?",
+		true,
+		minBeautyScore,
+		minMemoryScore,
+	).Order("RANDOM()")
 
 	if len(excludePhotoIDs) > 0 {
 		query = query.Where("id NOT IN ?", excludePhotoIDs)

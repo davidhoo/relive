@@ -54,8 +54,10 @@ http.interceptors.response.use(
       // 404 错误对于配置类接口是预期的（如 geocode 配置不存在）
       const isConfigNotFound = status === 404 &&
         (error.config?.url?.includes('/config/') || data?.error?.code === 'CONFIG_NOT_FOUND')
+      const isDisplayPreviewFallback = status === 404 &&
+        error.config?.url?.includes('/display/preview')
 
-      if (!isConfigNotFound) {
+      if (!isConfigNotFound && !isDisplayPreviewFallback) {
         const message = data?.error?.message || data?.message || `请求失败 (${status})`
         ElMessage.error(message)
       }

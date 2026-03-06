@@ -80,10 +80,10 @@ func (h *DisplayHandler) GetDisplayPhoto(c *gin.Context) {
 
 	// 记录展示
 	record := &model.DisplayRecord{
-		PhotoID:      photo.ID,
-		DeviceID:     device.ID,
-		DisplayedAt:  time.Now(),
-		TriggerType:  "scheduled",
+		PhotoID:     photo.ID,
+		DeviceID:    device.ID,
+		DisplayedAt: time.Now(),
+		TriggerType: "scheduled",
 	}
 	if err := h.displayService.RecordDisplay(record); err != nil {
 		logger.Errorf("Record display failed: %v", err)
@@ -112,6 +112,43 @@ func (h *DisplayHandler) GetDisplayPhoto(c *gin.Context) {
 		Success: true,
 		Message: "Success",
 		Data:    resp,
+	})
+}
+
+// PreviewPhotos 预览展示策略结果
+func (h *DisplayHandler) PreviewPhotos(c *gin.Context) {
+	var req model.DisplayStrategyConfig
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INVALID_REQUEST",
+				Message: "Invalid request",
+			},
+		})
+		return
+	}
+
+	photos, err := h.displayService.PreviewPhotos(&req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "PREVIEW_FAILED",
+				Message: err.Error(),
+			},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "Success",
+		Data: model.PreviewDisplayPhotosResponse{
+			Algorithm: req.Algorithm,
+			Count:     len(photos),
+			Photos:    photos,
+		},
 	})
 }
 
@@ -155,10 +192,10 @@ func (h *DisplayHandler) RecordDisplay(c *gin.Context) {
 
 	// 创建展示记录
 	record := &model.DisplayRecord{
-		PhotoID:      req.PhotoID,
-		DeviceID:     device.ID,
-		DisplayedAt:  time.Now(),
-		TriggerType:  "manual", // API 手动上报
+		PhotoID:     req.PhotoID,
+		DeviceID:    device.ID,
+		DisplayedAt: time.Now(),
+		TriggerType: "manual", // API 手动上报
 	}
 
 	if err := h.displayService.RecordDisplay(record); err != nil {

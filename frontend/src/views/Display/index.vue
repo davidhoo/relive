@@ -18,9 +18,6 @@
         <el-form-item label="展示策略">
           <el-select v-model="form.algorithm" placeholder="请选择策略" style="width: 100%">
             <el-option label="随机选择" value="random" />
-            <el-option label="回忆优先" value="memory_first" />
-            <el-option label="美观优先" value="beauty_first" />
-            <el-option label="年度最佳" value="best_of_year" />
             <el-option label="智能推荐" value="smart" />
           </el-select>
         </el-form-item>
@@ -63,34 +60,116 @@
             保存配置
           </el-button>
           <el-button @click="handleReset">重置</el-button>
+          <el-button @click="handlePreview" :loading="previewLoading">
+            刷新预览
+          </el-button>
         </el-form-item>
       </el-form>
+    </el-card>
+
+    <el-card shadow="never" class="preview-card">
+      <template #header>
+        <div class="preview-header">
+          <span><el-icon><Picture /></el-icon> 策略预览</span>
+          <el-tag type="info">已找到 {{ previewPhotos.length }} / {{ form.dailyCount }} 张</el-tag>
+        </div>
+      </template>
+
+      <el-alert
+        v-if="!previewSupported"
+        title="当前策略暂不支持预览。"
+        type="warning"
+        :closable="false"
+      />
+
+      <el-skeleton v-else-if="previewLoading" :rows="4" animated />
+
+      <el-empty
+        v-else-if="previewPhotos.length === 0"
+        description="没有找到符合当前阈值条件的照片"
+      />
+
+      <div v-else class="preview-grid">
+        <div
+          v-for="photo in previewPhotos"
+          :key="photo.id"
+          class="preview-item"
+        >
+          <img
+            class="preview-image"
+            :src="getPhotoThumbnailUrl(photo.id)"
+            :alt="photo.caption || getFileName(photo.file_path)"
+          />
+          <div class="preview-meta">
+            <div class="preview-title">
+              {{ photo.caption || getFileName(photo.file_path) }}
+            </div>
+            <div class="preview-subtitle">
+              {{ formatDate(photo.taken_at) || '未知时间' }}
+              <span v-if="photo.location"> · {{ photo.location }}</span>
+            </div>
+            <div class="preview-score">
+              回忆 {{ photo.memory_score ?? 0 }} / 美观 {{ photo.beauty_score ?? 0 }}
+            </div>
+          </div>
+        </div>
+      </div>
     </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { displayStrategyApi, defaultDisplayStrategyConfig } from '@/api/config'
 import type { DisplayStrategyConfig } from '@/api/config'
+import type { Photo } from '@/types/photo'
+import { useUserStore } from '@/stores/user'
 
-const form = ref<DisplayStrategyConfig>({
-  algorithm: 'smart',
-  minBeautyScore: 60,
-  minMemoryScore: 60,
-  dailyCount: 3,
-})
+const userStore = useUserStore()
+
+const form = ref<DisplayStrategyConfig>({ ...defaultDisplayStrategyConfig })
 
 const saving = ref(false)
 const loading = ref(false)
+const previewLoading = ref(false)
+const previewPhotos = ref<Photo[]>([])
+let previewTimer: number | undefined
+
+const previewSupported = computed(() => supportedAlgorithms.includes(form.value.algorithm))
+const supportedAlgorithms = ['random', 'smart']
+
+const getPhotoThumbnailUrl = (photoId: number) => {
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
+  const token = userStore.token
+  return `${baseUrl}/photos/${photoId}/thumbnail${token ? `?token=${token}` : ''}`
+}
+
+const getFileName = (filePath: string) => filePath.split('/').pop() || filePath
+
+const formatDate = (dateStr?: string) => {
+  if (!dateStr) return ''
+  try {
+    return new Date(dateStr).toLocaleDateString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    })
+  } catch {
+    return ''
+  }
+}
 
 // 从 API 加载配置
 const loadConfig = async () => {
   loading.value = true
   try {
     const config = await displayStrategyApi.getConfig()
-    form.value = config
+    form.value = { ...defaultDisplayStrategyConfig, ...config }
+    if (!supportedAlgorithms.includes(form.value.algorithm)) {
+      form.value.algorithm = defaultDisplayStrategyConfig.algorithm
+    }
+    await handlePreview()
   } catch (error: any) {
     ElMessage.error('加载配置失败：' + (error.message || '未知错误'))
   } finally {
@@ -103,6 +182,7 @@ const handleSave = async () => {
   saving.value = true
   try {
     await displayStrategyApi.updateConfig(form.value)
+    await handlePreview()
     ElMessage.success('配置已保存')
   } catch (error: any) {
     ElMessage.error(error.message || '保存配置失败')
@@ -128,6 +208,7 @@ const handleReset = async () => {
     // 保存重置后的配置
     try {
       await displayStrategyApi.updateConfig(form.value)
+      await handlePreview()
       ElMessage.success('配置已重置为默认值')
     } catch (apiError: any) {
       ElMessage.error(apiError.message || '保存重置配置失败')
@@ -140,19 +221,118 @@ const handleReset = async () => {
   }
 }
 
+const handlePreview = async () => {
+  if (!previewSupported.value) {
+    previewPhotos.value = []
+    return
+  }
+
+  previewLoading.value = true
+  try {
+    const response = await displayStrategyApi.previewConfig(form.value)
+    previewPhotos.value = response.photos || []
+  } catch (error: any) {
+    previewPhotos.value = []
+    ElMessage.error(error.message || '加载预览失败')
+  } finally {
+    previewLoading.value = false
+  }
+}
+
+const schedulePreview = () => {
+  if (typeof window === 'undefined') return
+  if (previewTimer) {
+    window.clearTimeout(previewTimer)
+  }
+  previewTimer = window.setTimeout(() => {
+    handlePreview()
+  }, 250)
+}
+
+watch(
+  () => [
+    form.value.algorithm,
+    form.value.dailyCount,
+    form.value.minBeautyScore,
+    form.value.minMemoryScore,
+  ],
+  () => {
+    if (loading.value) return
+    schedulePreview()
+  }
+)
+
 onMounted(() => {
   loadConfig()
+})
+
+onUnmounted(() => {
+  if (previewTimer && typeof window !== 'undefined') {
+    window.clearTimeout(previewTimer)
+  }
 })
 </script>
 
 <style scoped>
 .display-page {
   padding: 20px;
+  display: grid;
+  gap: 20px;
 }
 
 .help-text {
   margin-left: 10px;
   color: #909399;
   font-size: 12px;
+}
+
+.preview-card {
+  min-height: 240px;
+}
+
+.preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.preview-item {
+  border: 1px solid #ebeef5;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.preview-image {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  display: block;
+  background: #f5f7fa;
+}
+
+.preview-meta {
+  padding: 12px;
+}
+
+.preview-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+  line-height: 1.5;
+}
+
+.preview-subtitle,
+.preview-score {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #909399;
 }
 </style>

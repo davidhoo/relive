@@ -84,7 +84,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 
 	return &Services{
 		Photo:       NewPhotoService(repos.Photo, cfg, configService, geocodeService),
-		Display:     NewDisplayService(repos.Photo, repos.DisplayRecord, repos.Device, cfg),
+		Display:     NewDisplayService(repos.Photo, repos.DisplayRecord, repos.Device, configService, cfg),
 		Device:      deviceService,
 		ESP32:       deviceService,
 		AI:          aiService,

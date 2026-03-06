@@ -56,10 +56,10 @@ type CleanupPhotosResponse struct {
 type GetPhotosRequest struct {
 	Page     int    `form:"page" binding:"omitempty,min=1"`
 	PageSize int    `form:"page_size" binding:"omitempty,min=1,max=100"`
-	Analyzed *bool  `form:"analyzed"` // 是否已分析（可选）
-	Location string `form:"location"` // 位置筛选（可选）
-	Search   string `form:"search"`   // 搜索关键词（可选，搜索路径、设备ID、标签）
-	SortBy   string `form:"sort_by"`  // 排序字段（taken_at/overall_score）
+	Analyzed *bool  `form:"analyzed"`  // 是否已分析（可选）
+	Location string `form:"location"`  // 位置筛选（可选）
+	Search   string `form:"search"`    // 搜索关键词（可选，搜索路径、设备ID、标签）
+	SortBy   string `form:"sort_by"`   // 排序字段（taken_at/overall_score）
 	SortDesc bool   `form:"sort_desc"` // 是否降序
 }
 
@@ -81,16 +81,31 @@ type GetDisplayPhotoResponse struct {
 	OverallScore int       `json:"overall_score"`
 }
 
+// DisplayStrategyConfig 展示策略配置
+type DisplayStrategyConfig struct {
+	Algorithm      string `json:"algorithm"`
+	MinBeautyScore int    `json:"minBeautyScore"`
+	MinMemoryScore int    `json:"minMemoryScore"`
+	DailyCount     int    `json:"dailyCount"`
+}
+
+// PreviewDisplayPhotosResponse 展示策略预览响应
+type PreviewDisplayPhotosResponse struct {
+	Algorithm string   `json:"algorithm"`
+	Count     int      `json:"count"`
+	Photos    []*Photo `json:"photos"`
+}
+
 // DeviceRegisterRequest 设备注册请求
 type DeviceRegisterRequest struct {
 	DeviceID        string `json:"device_id" binding:"required"`
 	Name            string `json:"name" binding:"required"`
-	DeviceType      string `json:"device_type"`       // 设备类型：esp32/esp8266/android/ios/web（可选，默认 esp32）
-	HardwareModel   string `json:"hardware_model"`    // 硬件型号：ESP32-S3/iPhone 15（可选）
-	Platform        string `json:"platform"`          // 平台：embedded/mobile/web（可选，默认 embedded）
+	DeviceType      string `json:"device_type"`    // 设备类型：esp32/esp8266/android/ios/web（可选，默认 esp32）
+	HardwareModel   string `json:"hardware_model"` // 硬件型号：ESP32-S3/iPhone 15（可选）
+	Platform        string `json:"platform"`       // 平台：embedded/mobile/web（可选，默认 embedded）
 	ScreenWidth     int    `json:"screen_width" binding:"required,min=1"`
 	ScreenHeight    int    `json:"screen_height" binding:"required,min=1"`
-	FirmwareVersion string `json:"firmware_version"`  // 固件/应用版本
+	FirmwareVersion string `json:"firmware_version"` // 固件/应用版本
 	IPAddress       string `json:"ip_address"`
 	MACAddress      string `json:"mac_address"`
 }
@@ -104,12 +119,12 @@ type DeviceRegisterResponse struct {
 
 // DeviceHeartbeatRequest 设备心跳请求
 type DeviceHeartbeatRequest struct {
-	DeviceID            string `json:"device_id" binding:"required"`
-	BatteryLevel        int    `json:"battery_level"`
-	WiFiRSSI            int    `json:"wifi_rssi"`
-	FreeHeap            int    `json:"free_heap"`
-	LastDisplayPhotoID  int    `json:"last_display_photo_id"`
-	FirmwareVersion     string `json:"firmware_version"`
+	DeviceID           string `json:"device_id" binding:"required"`
+	BatteryLevel       int    `json:"battery_level"`
+	WiFiRSSI           int    `json:"wifi_rssi"`
+	FreeHeap           int    `json:"free_heap"`
+	LastDisplayPhotoID int    `json:"last_display_photo_id"`
+	FirmwareVersion    string `json:"firmware_version"`
 }
 
 // DeviceHeartbeatResponse 设备心跳响应
@@ -245,7 +260,7 @@ type AIAnalyzeProgressResponse struct {
 
 // SystemHealthResponse 系统健康检查响应
 type SystemHealthResponse struct {
-	Status    string    `json:"status"`    // healthy / unhealthy
+	Status    string    `json:"status"` // healthy / unhealthy
 	Version   string    `json:"version"`
 	Uptime    int64     `json:"uptime"`    // 运行时间（秒）
 	Timestamp time.Time `json:"timestamp"` // 检查时间
@@ -263,7 +278,7 @@ type SystemResetResponse struct {
 	DatabaseCleared   bool   `json:"database_cleared"`   // 数据库是否已清除
 	ThumbnailsCleared bool   `json:"thumbnails_cleared"` // 缩略图是否已清除
 	CacheCleared      bool   `json:"cache_cleared"`      // 缓存是否已清除
-	PasswordReset      bool   `json:"password_reset"`       // 密码是否已重置
+	PasswordReset     bool   `json:"password_reset"`     // 密码是否已重置
 }
 
 // SystemStatsResponse 系统统计响应
@@ -274,27 +289,27 @@ type SystemStatsResponse struct {
 	TotalDevices     int64     `json:"total_devices"`
 	OnlineDevices    int64     `json:"online_devices"`
 	TotalDisplays    int64     `json:"total_displays"`
-	StorageSize      int64     `json:"storage_size"`   // 存储空间（字节）
-	DatabaseSize     int64     `json:"database_size"`  // 数据库大小（字节）
-	GoVersion        string    `json:"go_version"`     // Go 版本
-	Uptime           int64     `json:"uptime"`         // 运行时长（秒）
-	Timestamp        time.Time `json:"timestamp"`      // 统计时间
+	StorageSize      int64     `json:"storage_size"`  // 存储空间（字节）
+	DatabaseSize     int64     `json:"database_size"` // 数据库大小（字节）
+	GoVersion        string    `json:"go_version"`    // Go 版本
+	Uptime           int64     `json:"uptime"`        // 运行时长（秒）
+	Timestamp        time.Time `json:"timestamp"`     // 统计时间
 }
 
 // SystemEnvironmentResponse 系统环境信息响应
 type SystemEnvironmentResponse struct {
-	IsDocker    bool   `json:"is_docker"`     // 是否在 Docker 中运行
-	DefaultPath string `json:"default_path"`  // 默认路径（Docker 中为 /app，否则为当前工作目录）
-	WorkDir     string `json:"work_dir"`      // 当前工作目录
+	IsDocker    bool   `json:"is_docker"`    // 是否在 Docker 中运行
+	DefaultPath string `json:"default_path"` // 默认路径（Docker 中为 /app，否则为当前工作目录）
+	WorkDir     string `json:"work_dir"`     // 当前工作目录
 }
 
 // ScanPathConfig represents a single scan path configuration
 type ScanPathConfig struct {
-	ID            string     `json:"id"`                         // UUID
-	Name          string     `json:"name"`                       // User-friendly name
-	Path          string     `json:"path"`                       // Absolute file path
-	IsDefault     bool       `json:"is_default"`                 // Only one can be true
-	Enabled       bool       `json:"enabled"`                    // Can be scanned
+	ID            string     `json:"id"`         // UUID
+	Name          string     `json:"name"`       // User-friendly name
+	Path          string     `json:"path"`       // Absolute file path
+	IsDefault     bool       `json:"is_default"` // Only one can be true
+	Enabled       bool       `json:"enabled"`    // Can be scanned
 	CreatedAt     time.Time  `json:"created_at"`
 	LastScannedAt *time.Time `json:"last_scanned_at,omitempty"` // Updated after each scan
 }
@@ -329,9 +344,9 @@ type DirectoryEntry struct {
 
 // ListDirectoriesResponse 列出目录内容响应
 type ListDirectoriesResponse struct {
-	Entries    []DirectoryEntry `json:"entries"`
-	ParentPath string           `json:"parent_path,omitempty"`
-	CurrentPath string          `json:"current_path"`
+	Entries     []DirectoryEntry `json:"entries"`
+	ParentPath  string           `json:"parent_path,omitempty"`
+	CurrentPath string           `json:"current_path"`
 }
 
 // CountPhotosByPathsRequest 按路径统计照片数量请求
@@ -346,18 +361,18 @@ type CountPhotosByPathsResponse struct {
 
 // ScanTask 扫描任务状态
 type ScanTask struct {
-	ID            string     `json:"id"`
-	Status        string     `json:"status"` // pending, running, completed, failed
-	Type          string     `json:"type"`   // scan, rebuild
-	Path          string     `json:"path"`
-	TotalFiles    int        `json:"total_files"`
-	ProcessedFiles int       `json:"processed_files"`
-	NewPhotos     int        `json:"new_photos"`
-	UpdatedPhotos int        `json:"updated_photos"`
-	CurrentFile   string     `json:"current_file,omitempty"`
-	ErrorMessage  string     `json:"error_message,omitempty"`
-	StartedAt     time.Time  `json:"started_at"`
-	CompletedAt   *time.Time `json:"completed_at,omitempty"`
+	ID             string     `json:"id"`
+	Status         string     `json:"status"` // pending, running, completed, failed
+	Type           string     `json:"type"`   // scan, rebuild
+	Path           string     `json:"path"`
+	TotalFiles     int        `json:"total_files"`
+	ProcessedFiles int        `json:"processed_files"`
+	NewPhotos      int        `json:"new_photos"`
+	UpdatedPhotos  int        `json:"updated_photos"`
+	CurrentFile    string     `json:"current_file,omitempty"`
+	ErrorMessage   string     `json:"error_message,omitempty"`
+	StartedAt      time.Time  `json:"started_at"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
 }
 
 // IsRunning 检查任务是否运行中
@@ -407,7 +422,7 @@ type UserInfo struct {
 type ChangePasswordRequest struct {
 	OldPassword string `json:"old_Password" binding:"required"`
 	NewPassword string `json:"new_Password" binding:"required,min=6"`
-	NewUsername    string `json:"new_username" binding:"omitempty,min=3,max=32"` // 可选：同时修改用户名
+	NewUsername string `json:"new_username" binding:"omitempty,min=3,max=32"` // 可选：同时修改用户名
 }
 
 // UserInfoResponse 用户信息响应
