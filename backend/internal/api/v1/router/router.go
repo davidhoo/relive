@@ -131,6 +131,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 		{
 			photoAuth.GET("/photos/:id/image", handlers.Photo.GetPhotoImage)
 			photoAuth.GET("/photos/:id/thumbnail", handlers.Photo.GetPhotoThumbnail)
+			photoAuth.GET("/photos/:id/frame-preview", handlers.Photo.GetPhotoFramePreview)
 		}
 
 		// 以下接口需要 JWT 认证

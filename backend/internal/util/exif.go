@@ -168,8 +168,8 @@ func extractEXIFWithExifTool(filePath string) (*EXIFData, error) {
 	}
 
 	// 提取方向
-	if orientation, ok := result["Orientation"].(string); ok {
-		if o, err := strconv.Atoi(orientation); err == nil {
+	if orientation, ok := result["Orientation"]; ok {
+		if o := parseOrientationValue(orientation); o > 0 {
 			data.Orientation = o
 		}
 	}
@@ -221,6 +221,46 @@ func parseGPSCoordinate(coord string) *float64 {
 	return nil
 }
 
+func parseOrientationValue(value interface{}) int {
+	switch v := value.(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case string:
+		normalized := strings.ToLower(strings.TrimSpace(v))
+		if normalized == "" {
+			return 0
+		}
+		if orientation, err := strconv.Atoi(normalized); err == nil {
+			return orientation
+		}
+
+		switch {
+		case strings.Contains(normalized, "horizontal (normal)"):
+			return 1
+		case strings.Contains(normalized, "mirror horizontal"):
+			if strings.Contains(normalized, "270") || strings.Contains(normalized, "90 ccw") {
+				return 5
+			}
+			if strings.Contains(normalized, "90 cw") || strings.Contains(normalized, "270 ccw") {
+				return 7
+			}
+			return 2
+		case strings.Contains(normalized, "rotate 180"):
+			return 3
+		case strings.Contains(normalized, "mirror vertical"):
+			return 4
+		case strings.Contains(normalized, "rotate 90 cw"):
+			return 6
+		case strings.Contains(normalized, "rotate 270 cw"), strings.Contains(normalized, "rotate 90 ccw"):
+			return 8
+		}
+	}
+
+	return 0
+}
+
 // extractEXIFWithSips 使用 macOS sips 命令提取 EXIF（用于 HEIC）
 func extractEXIFWithSips(filePath string) (*EXIFData, error) {
 	cmd := exec.Command("sips", "-g", "all", filePath)
@@ -263,6 +303,13 @@ func extractEXIFWithSips(filePath string) (*EXIFData, error) {
 			heightStr := strings.TrimPrefix(line, "pixelHeight:")
 			if h, err := strconv.Atoi(strings.TrimSpace(heightStr)); err == nil {
 				data.Height = h
+			}
+		}
+
+		if strings.HasPrefix(strings.ToLower(line), "orientation:") {
+			orientationValue := strings.TrimSpace(strings.SplitN(line, ":", 2)[1])
+			if orientation := parseOrientationValue(orientationValue); orientation > 0 {
+				data.Orientation = orientation
 			}
 		}
 

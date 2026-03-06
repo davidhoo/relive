@@ -131,11 +131,17 @@
             :key="photo.id"
             class="preview-item"
           >
-            <img
-              class="preview-image"
-              :src="getPhotoThumbnailUrl(photo.id)"
-              :alt="photo.caption || getFileName(photo.file_path)"
-            />
+            <button
+              type="button"
+              class="preview-image-trigger"
+              @click="openFramePreview(photo)"
+            >
+              <img
+                class="preview-image"
+                :src="getPhotoThumbnailUrl(photo.id)"
+                :alt="photo.caption || getFileName(photo.file_path)"
+              />
+            </button>
             <div class="preview-meta">
               <div class="preview-title">
                 {{ photo.caption || getFileName(photo.file_path) }}
@@ -152,6 +158,37 @@
         </div>
       </el-card>
     </div>
+
+    <el-dialog
+      v-model="framePreviewVisible"
+      title="相框预览"
+      width="min(680px, calc(100vw - 24px))"
+      align-center
+      destroy-on-close
+      @closed="resetFramePreview"
+    >
+      <div v-if="framePreviewPhoto" class="frame-preview-body">
+        <div class="frame-preview-frame">
+          <div class="frame-preview-stage">
+            <el-image
+              class="frame-preview-image"
+              :src="getPhotoFramePreviewUrl(framePreviewPhoto.id)"
+              :alt="framePreviewPhoto.caption || getFileName(framePreviewPhoto.file_path)"
+              fit="cover"
+            />
+            <div class="frame-preview-info">
+              <div class="frame-preview-title">
+                {{ framePreviewPhoto.caption || getFileName(framePreviewPhoto.file_path) }}
+              </div>
+              <div class="frame-preview-subtitle">
+                {{ formatPhotoDate(framePreviewPhoto.taken_at) || '未知时间' }}
+                <span v-if="framePreviewPhoto.location"> · {{ framePreviewPhoto.location }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -175,6 +212,8 @@ const saving = ref(false)
 const loading = ref(false)
 const previewLoading = ref(false)
 const previewResult = ref<DisplayPreviewResponse | null>(null)
+const framePreviewVisible = ref(false)
+const framePreviewPhoto = ref<Photo | null>(null)
 let previewTimer: number | undefined
 
 const previewSupported = computed(() => supportedAlgorithms.includes(form.value.algorithm))
@@ -199,13 +238,26 @@ const emptyPreviewText = computed(() => {
   return '没有找到符合当前策略条件的照片'
 })
 
-const getPhotoThumbnailUrl = (photoId: number) => {
+const getPhotoAssetUrl = (photoId: number, asset: 'thumbnail' | 'frame-preview') => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
   const token = userStore.token
-  return `${baseUrl}/photos/${photoId}/thumbnail${token ? `?token=${token}` : ''}`
+  return `${baseUrl}/photos/${photoId}/${asset}${token ? `?token=${token}` : ''}`
 }
 
+const getPhotoThumbnailUrl = (photoId: number) => getPhotoAssetUrl(photoId, 'thumbnail')
+
+const getPhotoFramePreviewUrl = (photoId: number) => getPhotoAssetUrl(photoId, 'frame-preview')
+
 const getFileName = (filePath: string) => filePath.split('/').pop() || filePath
+
+const openFramePreview = (photo: Photo) => {
+  framePreviewPhoto.value = photo
+  framePreviewVisible.value = true
+}
+
+const resetFramePreview = () => {
+  framePreviewPhoto.value = null
+}
 
 const toPreviewDateValue = (date: Date) => {
   const resolved = new Date(date)
@@ -496,6 +548,14 @@ onUnmounted(() => {
   background: #fff;
 }
 
+.preview-image-trigger {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
 .preview-image {
   width: 100%;
   aspect-ratio: 4 / 3;
@@ -522,9 +582,125 @@ onUnmounted(() => {
   color: #909399;
 }
 
+.frame-preview-body {
+  --frame-display-width: min(480px, calc(100vw - 168px));
+  --frame-shell-padding: clamp(18px, 2.8vw, 26px);
+  display: flex;
+  justify-content: center;
+}
+
+.frame-preview-frame {
+  position: relative;
+  width: calc(var(--frame-display-width) + (var(--frame-shell-padding) * 2));
+  padding: var(--frame-shell-padding);
+  border-radius: 34px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.22) 0%, rgba(255, 255, 255, 0) 32%),
+    linear-gradient(145deg, #d3a16d 0%, #b87743 24%, #8b552f 52%, #c98b58 76%, #8d5a32 100%);
+  box-shadow:
+    0 26px 54px rgba(52, 29, 11, 0.28),
+    inset 0 1px 0 rgba(255, 244, 226, 0.5),
+    inset 0 -1px 0 rgba(82, 45, 18, 0.3);
+}
+
+.frame-preview-frame::before,
+.frame-preview-frame::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+}
+
+.frame-preview-frame::before {
+  inset: 10px;
+  border-radius: 26px;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 240, 220, 0.2),
+    inset 0 12px 20px rgba(255, 230, 195, 0.24),
+    inset 0 -14px 18px rgba(94, 53, 25, 0.28);
+}
+
+.frame-preview-frame::after {
+  inset: calc(var(--frame-shell-padding) - 6px);
+  border-radius: 24px;
+  box-shadow:
+    inset 0 0 0 1px rgba(111, 67, 36, 0.22),
+    0 0 0 1px rgba(255, 244, 230, 0.08);
+}
+
+.frame-preview-stage {
+  position: relative;
+  z-index: 1;
+  width: var(--frame-display-width);
+  aspect-ratio: 3 / 5;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 14px;
+  border-radius: 24px;
+  background: linear-gradient(180deg, #fbfaf6 0%, #f1eadf 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(180, 157, 126, 0.28),
+    inset 0 16px 24px rgba(255, 255, 255, 0.82),
+    0 18px 34px rgba(15, 23, 42, 0.08);
+}
+
+.frame-preview-image {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  flex: 0 0 auto;
+  border-radius: 14px 14px 0 0;
+  background: #f5f7fa;
+}
+
+.frame-preview-image :deep(img) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.frame-preview-info {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  align-content: center;
+  gap: 12px;
+  padding: 20px 24px 24px;
+  border-radius: 0 0 14px 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, #f8f5ee 100%);
+  box-shadow: inset 0 1px 0 rgba(191, 172, 143, 0.22);
+}
+
+.frame-preview-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #303133;
+  text-align: center;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.frame-preview-subtitle {
+  font-size: 14px;
+  color: #909399;
+  text-align: center;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 @media (max-width: 960px) {
   .preview-layout {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .frame-preview-body {
+    --frame-display-width: min(480px, calc(100vw - 112px));
+    --frame-shell-padding: 16px;
   }
 }
 </style>

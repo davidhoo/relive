@@ -735,6 +735,63 @@ func (h *PhotoHandler) GetPhotoImage(c *gin.Context) {
 	c.File(photo.FilePath)
 }
 
+// GetPhotoFramePreview 获取相框预览图
+// @Summary 获取相框预览图
+// @Description 返回为相框预览生成的 480x640 JPEG 图片
+// @Tags photos
+// @Accept json
+// @Produce image/jpeg
+// @Param id path int true "照片 ID"
+// @Success 200 {file} binary
+// @Failure 400 {object} model.Response
+// @Failure 404 {object} model.Response
+// @Failure 500 {object} model.Response
+// @Router /api/v1/photos/{id}/frame-preview [get]
+func (h *PhotoHandler) GetPhotoFramePreview(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INVALID_REQUEST",
+				Message: "Invalid photo ID",
+			},
+		})
+		return
+	}
+
+	photo, err := h.photoService.GetPhotoByID(uint(id))
+	if err != nil {
+		logger.Errorf("Get photo by ID failed: %v", err)
+		c.JSON(http.StatusNotFound, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "NOT_FOUND",
+				Message: "Photo not found",
+			},
+		})
+		return
+	}
+
+	framePreviewPath, err := h.generateFramePreviewFile(photo, 480, 640)
+	if err != nil {
+		logger.Errorf("Generate frame preview failed for photo %d: %v", photo.ID, err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "FRAME_PREVIEW_FAILED",
+				Message: "Failed to generate frame preview",
+			},
+		})
+		return
+	}
+
+	c.Header("Content-Type", "image/jpeg")
+	c.Header("Cache-Control", "private, max-age=86400")
+	c.File(framePreviewPath)
+}
+
 // GetPhotoThumbnail 获取照片缩略图
 // @Summary 获取照片缩略图
 // @Description 返回预生成的缩略图，如果没有则返回原图
@@ -790,6 +847,62 @@ func (h *PhotoHandler) GetPhotoThumbnail(c *gin.Context) {
 
 	// 没有缩略图或缩略图不存在，返回原图
 	c.File(photo.FilePath)
+}
+
+func (h *PhotoHandler) generateFramePreviewFile(photo *model.Photo, targetWidth, targetHeight int) (string, error) {
+	fileInfo, err := os.Stat(photo.FilePath)
+	if err != nil {
+		return "", fmt.Errorf("stat photo file: %w", err)
+	}
+
+	cacheKey := fmt.Sprintf(
+		"frame-preview:v2:%s:%d:%d:%dx%d",
+		photo.FilePath,
+		fileInfo.Size(),
+		fileInfo.ModTime().UnixNano(),
+		targetWidth,
+		targetHeight,
+	)
+	cachePath := filepath.Join(
+		h.getThumbnailRoot(),
+		"frame-previews",
+		util.GenerateDerivedImagePath(cacheKey),
+	)
+
+	if _, err := os.Stat(cachePath); err == nil {
+		return cachePath, nil
+	}
+
+	img, err := util.OpenImage(photo.FilePath)
+	if err != nil {
+		return "", fmt.Errorf("open image: %w", err)
+	}
+
+	orientation := photo.Orientation
+	if exifData, exifErr := util.ExtractEXIF(photo.FilePath); exifErr != nil {
+		logger.Debugf("Extract orientation for frame preview failed: %v", exifErr)
+	} else if exifData != nil && exifData.Orientation > 0 {
+		orientation = exifData.Orientation
+	}
+
+	img = util.NormalizeOrientation(img, orientation)
+	framePreview := util.GenerateFramePreview(img, targetWidth, targetHeight)
+
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0755); err != nil {
+		return "", fmt.Errorf("create frame preview directory: %w", err)
+	}
+	if err := imaging.Save(framePreview, cachePath, imaging.JPEGQuality(88)); err != nil {
+		return "", fmt.Errorf("save frame preview: %w", err)
+	}
+
+	return cachePath, nil
+}
+
+func (h *PhotoHandler) getThumbnailRoot() string {
+	if h.cfg.Photos.ThumbnailPath != "" {
+		return h.cfg.Photos.ThumbnailPath
+	}
+	return "./data/thumbnails"
 }
 
 // GetPhotoStats 获取照片统计

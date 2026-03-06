@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"image"
+	"image/color"
 	"image/jpeg"
 	_ "image/png" // 支持 PNG 格式
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,6 +117,14 @@ func max(a, b int) int {
 	return b
 }
 
+// min 返回两个整数中的较小值
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // init 注册 HEIC 解码器
 func init() {
 	// 注册 HEIC/HEIF 格式解码器
@@ -144,6 +154,237 @@ func OpenImage(filePath string) (image.Image, error) {
 
 	// 其他格式使用 imaging 库
 	return imaging.Open(filePath)
+}
+
+// NormalizeOrientation 根据 EXIF orientation 将图片旋正。
+func NormalizeOrientation(img image.Image, orientation int) image.Image {
+	switch orientation {
+	case 2:
+		return imaging.FlipH(img)
+	case 3:
+		return imaging.Rotate180(img)
+	case 4:
+		return imaging.FlipV(img)
+	case 5:
+		return imaging.Transpose(img)
+	case 6:
+		return imaging.Rotate270(img)
+	case 7:
+		return imaging.Transverse(img)
+	case 8:
+		return imaging.Rotate90(img)
+	default:
+		return img
+	}
+}
+
+// GenerateFramePreview 按目标比例生成尽量保住主体的预览图。
+func GenerateFramePreview(img image.Image, targetWidth, targetHeight int) image.Image {
+	if targetWidth <= 0 || targetHeight <= 0 {
+		return imaging.Clone(img)
+	}
+
+	bounds := img.Bounds()
+	sourceWidth := bounds.Dx()
+	sourceHeight := bounds.Dy()
+	if sourceWidth == 0 || sourceHeight == 0 {
+		return imaging.New(targetWidth, targetHeight, color.NRGBA{R: 245, G: 247, B: 250, A: 255})
+	}
+
+	cropRect := calculateSmartCropRect(sourceWidth, sourceHeight, targetWidth, targetHeight, buildSaliencyMap(img))
+	cropped := imaging.Crop(img, cropRect)
+	return imaging.Resize(cropped, targetWidth, targetHeight, imaging.Lanczos)
+}
+
+type saliencyMap struct {
+	integral [][]float64
+	width    int
+	height   int
+	scaleX   float64
+	scaleY   float64
+	total    float64
+}
+
+func buildSaliencyMap(img image.Image) saliencyMap {
+	bounds := img.Bounds()
+	sourceWidth := bounds.Dx()
+	sourceHeight := bounds.Dy()
+	if sourceWidth == 0 || sourceHeight == 0 {
+		return saliencyMap{}
+	}
+
+	analysis := imaging.Clone(img)
+	const maxAnalysisSide = 160
+	if max(sourceWidth, sourceHeight) > maxAnalysisSide {
+		analysis = imaging.Fit(img, maxAnalysisSide, maxAnalysisSide, imaging.Linear)
+	}
+
+	analysisBounds := analysis.Bounds()
+	analysisWidth := analysisBounds.Dx()
+	analysisHeight := analysisBounds.Dy()
+	integral := make([][]float64, analysisHeight+1)
+	for i := range integral {
+		integral[i] = make([]float64, analysisWidth+1)
+	}
+
+	total := 0.0
+	for y := 0; y < analysisHeight; y++ {
+		rowSum := 0.0
+		for x := 0; x < analysisWidth; x++ {
+			current := analysis.NRGBAAt(analysisBounds.Min.X+x, analysisBounds.Min.Y+y)
+			right := current
+			down := current
+			if x+1 < analysisWidth {
+				right = analysis.NRGBAAt(analysisBounds.Min.X+x+1, analysisBounds.Min.Y+y)
+			}
+			if y+1 < analysisHeight {
+				down = analysis.NRGBAAt(analysisBounds.Min.X+x, analysisBounds.Min.Y+y+1)
+			}
+
+			edgeStrength := math.Abs(luminance(current)-luminance(right)) + math.Abs(luminance(current)-luminance(down))
+			saliency := edgeStrength + colorfulness(current)*0.35
+
+			rowSum += saliency
+			integral[y+1][x+1] = integral[y][x+1] + rowSum
+			total += saliency
+		}
+	}
+
+	return saliencyMap{
+		integral: integral,
+		width:    analysisWidth,
+		height:   analysisHeight,
+		scaleX:   float64(analysisWidth) / float64(sourceWidth),
+		scaleY:   float64(analysisHeight) / float64(sourceHeight),
+		total:    total,
+	}
+}
+
+func calculateSmartCropRect(sourceWidth, sourceHeight, targetWidth, targetHeight int, saliency saliencyMap) image.Rectangle {
+	targetRatio := float64(targetWidth) / float64(targetHeight)
+	sourceRatio := float64(sourceWidth) / float64(sourceHeight)
+
+	if math.Abs(sourceRatio-targetRatio) < 1e-6 {
+		return image.Rect(0, 0, sourceWidth, sourceHeight)
+	}
+
+	if sourceRatio > targetRatio {
+		cropWidth := int(math.Round(float64(sourceHeight) * targetRatio))
+		if cropWidth <= 0 || cropWidth >= sourceWidth {
+			return image.Rect(0, 0, sourceWidth, sourceHeight)
+		}
+
+		maxOffset := sourceWidth - cropWidth
+		bestOffset := chooseBestCropOffset(maxOffset, func(offset int) float64 {
+			rect := image.Rect(offset, 0, offset+cropWidth, sourceHeight)
+			return scoreCropRect(rect, saliency, sourceWidth, sourceHeight, 0.5, 0.5)
+		})
+		return image.Rect(bestOffset, 0, bestOffset+cropWidth, sourceHeight)
+	}
+
+	cropHeight := int(math.Round(float64(sourceWidth) / targetRatio))
+	if cropHeight <= 0 || cropHeight >= sourceHeight {
+		return image.Rect(0, 0, sourceWidth, sourceHeight)
+	}
+
+	maxOffset := sourceHeight - cropHeight
+	bestOffset := chooseBestCropOffset(maxOffset, func(offset int) float64 {
+		rect := image.Rect(0, offset, sourceWidth, offset+cropHeight)
+		return scoreCropRect(rect, saliency, sourceWidth, sourceHeight, 0.5, 0.42)
+	})
+	return image.Rect(0, bestOffset, sourceWidth, bestOffset+cropHeight)
+}
+
+func chooseBestCropOffset(maxOffset int, score func(int) float64) int {
+	if maxOffset <= 0 {
+		return 0
+	}
+
+	bestOffset := 0
+	bestScore := math.Inf(-1)
+	for _, offset := range buildCropOffsets(maxOffset) {
+		currentScore := score(offset)
+		if currentScore > bestScore {
+			bestScore = currentScore
+			bestOffset = offset
+		}
+	}
+	return bestOffset
+}
+
+func buildCropOffsets(maxOffset int) []int {
+	step := max(1, maxOffset/64)
+	offsets := make([]int, 0, maxOffset/step+3)
+	seen := make(map[int]struct{})
+
+	appendOffset := func(offset int) {
+		offset = clampInt(offset, 0, maxOffset)
+		if _, ok := seen[offset]; ok {
+			return
+		}
+		seen[offset] = struct{}{}
+		offsets = append(offsets, offset)
+	}
+
+	for offset := 0; offset <= maxOffset; offset += step {
+		appendOffset(offset)
+	}
+	appendOffset(maxOffset / 2)
+	appendOffset(maxOffset)
+	return offsets
+}
+
+func scoreCropRect(rect image.Rectangle, saliency saliencyMap, sourceWidth, sourceHeight int, preferredCenterX, preferredCenterY float64) float64 {
+	centerX := float64(rect.Min.X+rect.Max.X) / 2 / float64(sourceWidth)
+	centerY := float64(rect.Min.Y+rect.Max.Y) / 2 / float64(sourceHeight)
+	compositionPenalty := math.Abs(centerX-preferredCenterX)*0.18 + math.Abs(centerY-preferredCenterY)*0.28
+
+	if saliency.total <= 0 {
+		return -compositionPenalty
+	}
+
+	coverage := saliency.sum(rect) / saliency.total
+	return coverage - compositionPenalty
+}
+
+func (m saliencyMap) sum(rect image.Rectangle) float64 {
+	if m.width == 0 || m.height == 0 {
+		return 0
+	}
+
+	x0 := clampInt(int(math.Floor(float64(rect.Min.X)*m.scaleX)), 0, m.width)
+	y0 := clampInt(int(math.Floor(float64(rect.Min.Y)*m.scaleY)), 0, m.height)
+	x1 := clampInt(int(math.Ceil(float64(rect.Max.X)*m.scaleX)), 0, m.width)
+	y1 := clampInt(int(math.Ceil(float64(rect.Max.Y)*m.scaleY)), 0, m.height)
+
+	if x1 <= x0 {
+		x1 = min(m.width, x0+1)
+	}
+	if y1 <= y0 {
+		y1 = min(m.height, y0+1)
+	}
+
+	return m.integral[y1][x1] - m.integral[y0][x1] - m.integral[y1][x0] + m.integral[y0][x0]
+}
+
+func luminance(c color.NRGBA) float64 {
+	return 0.299*float64(c.R) + 0.587*float64(c.G) + 0.114*float64(c.B)
+}
+
+func colorfulness(c color.NRGBA) float64 {
+	maxChannel := max(int(c.R), max(int(c.G), int(c.B)))
+	minChannel := min(int(c.R), min(int(c.G), int(c.B)))
+	return float64(maxChannel - minChannel)
+}
+
+func clampInt(value, minValue, maxValue int) int {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
 }
 
 // ThumbnailGenerator 缩略图生成器
@@ -241,8 +482,17 @@ func (g *ThumbnailGenerator) calculateSize(width, height int) (newWidth, newHeig
 // generateThumbnailPath 生成缩略图路径
 // 使用文件路径的哈希作为文件名，避免特殊字符问题
 func generateThumbnailPath(filePath string) string {
+	return generateHashedJPEGPath(filePath)
+}
+
+// GenerateDerivedImagePath 生成图片派生资源路径。
+func GenerateDerivedImagePath(cacheKey string) string {
+	return generateHashedJPEGPath(cacheKey)
+}
+
+func generateHashedJPEGPath(cacheKey string) string {
 	// 计算文件路径的哈希
-	hash := sha256.Sum256([]byte(filePath))
+	hash := sha256.Sum256([]byte(cacheKey))
 	hashStr := hex.EncodeToString(hash[:])[:16]
 
 	// 使用两级目录结构避免单目录文件过多
