@@ -72,6 +72,8 @@ backend/relive-analyzer
 # Config files with sensitive data
 analyzer.yaml
 !analyzer.yaml.example
+backend/config.dev.yaml
+!backend/config.dev.yaml.example
 
 # Docker Compose personal configurations (use .example templates)
 docker-compose.yml

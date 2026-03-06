@@ -9,14 +9,14 @@ server:
 # 数据库配置
 database:
   type: "sqlite"
-  path: "./data/relive.db"
+  path: "../data/backend/relive.db"
   auto_migrate: true
   log_mode: true  # 开发环境打印 SQL
 
 # 照片目录
 photos:
-  root_path: "./data/photos"  # 开发环境使用测试照片
-  thumbnail_path: "./data/thumbnails"  # 缩略图存储路径（HEIC转换等）
+  root_path: "/path/to/your/photos"  # 与 docker-compose.yml 中挂载的宿主机路径保持一致
+  thumbnail_path: "../data/backend/thumbnails"  # 缩略图存储路径（HEIC转换等）
   exclude_dirs:
     - ".sync"
     - "@eaDir"
@@ -91,7 +91,7 @@ display:
 # 日志配置
 logging:
   level: "debug"
-  file: "./data/logs/relive.log"
+  file: "../data/backend/logs/relive.log"
   max_size: 100  # MB
   max_backups: 10
   max_age: 30  # days
@@ -99,5 +99,5 @@ logging:
 
 # 安全配置
 security:
-  jwt_Secret: "dev-secret-change-in-production"
+  jwt_secret: "dev-secret-change-in-production"
   api_key_prefix: "sk-relive-"
