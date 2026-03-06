@@ -2,7 +2,6 @@ package geocode
 
 import (
 	"fmt"
-	"sort"
 	"sync"
 	"time"
 
@@ -22,11 +21,6 @@ func NewService(config *Config, providers ...Provider) *Service {
 		providers: providers,
 		config:    config,
 	}
-
-	// 按优先级排序
-	sort.Slice(s.providers, func(i, j int) bool {
-		return s.providers[i].Priority() < s.providers[j].Priority()
-	})
 
 	// 初始化缓存
 	if config.CacheEnabled {

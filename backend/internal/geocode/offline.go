@@ -137,7 +137,7 @@ func (p *OfflineProvider) Name() string {
 }
 
 func (p *OfflineProvider) Priority() int {
-	return 5 // 最高优先级（快、离线）
+	return 50 // 保留接口，执行顺序由 buildGeocodeService 中的添加顺序决定
 }
 
 func (p *OfflineProvider) IsAvailable() bool {
