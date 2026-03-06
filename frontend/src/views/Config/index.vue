@@ -432,7 +432,10 @@
             <el-select v-model="aiConfig.qwen_model" style="width: 100%">
               <el-option value="qwen-vl-max" label="qwen-vl-max (推荐)" />
               <el-option value="qwen-vl-plus" label="qwen-vl-plus (经济)" />
+              <el-option value="qwen3.5-flash" label="qwen3.5-flash (更快更便宜)" />
               <el-option value="qwen3.5-plus" label="qwen3.5-plus (最新，需更长超时)" />
+              <el-option value="qwen3-vl-plus" label="qwen3-vl-plus (新一代视觉增强)" />
+              <el-option value="qwen3-vl-flash" label="qwen3-vl-flash (新一代视觉快速版)" />
             </el-select>
           </el-form-item>
 
