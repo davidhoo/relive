@@ -36,9 +36,20 @@
           <span class="help-text">每天为设备挑选展示的照片数量</span>
         </el-form-item>
 
-        <el-form-item label="最小评分阈值">
+        <el-form-item label="美学评分阈值">
           <el-slider
-            v-model="form.minScore"
+            v-model="form.minBeautyScore"
+            :min="0"
+            :max="100"
+            :step="5"
+            show-stops
+            show-input
+          />
+        </el-form-item>
+
+        <el-form-item label="回忆价值阈值">
+          <el-slider
+            v-model="form.minMemoryScore"
             :min="0"
             :max="100"
             :step="5"
@@ -60,22 +71,38 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { displayStrategyApi, defaultDisplayStrategyConfig } from '@/api/config'
+import type { DisplayStrategyConfig } from '@/api/config'
 
-const form = ref({
+const form = ref<DisplayStrategyConfig>({
   algorithm: 'smart',
-  minScore: 60,
+  minBeautyScore: 60,
+  minMemoryScore: 60,
   dailyCount: 3,
 })
 
 const saving = ref(false)
+const loading = ref(false)
+
+// 从 API 加载配置
+const loadConfig = async () => {
+  loading.value = true
+  try {
+    const config = await displayStrategyApi.getConfig()
+    form.value = config
+  } catch (error: any) {
+    ElMessage.error('加载配置失败：' + (error.message || '未知错误'))
+  } finally {
+    loading.value = false
+  }
+}
 
 // 保存配置
 const handleSave = async () => {
   saving.value = true
   try {
-    // TODO: 调用配置保存 API
-    await new Promise(resolve => setTimeout(resolve, 500))
+    await displayStrategyApi.updateConfig(form.value)
     ElMessage.success('配置已保存')
   } catch (error: any) {
     ElMessage.error(error.message || '保存配置失败')
@@ -85,16 +112,36 @@ const handleSave = async () => {
 }
 
 // 重置配置
-const handleReset = () => {
-  form.value = {
-    algorithm: 'smart',
-    minScore: 60,
-    dailyCount: 3,
+const handleReset = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '确定要重置为默认配置吗？',
+      '确认重置',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    )
+    // 先重置表单
+    form.value = { ...defaultDisplayStrategyConfig }
+    // 保存重置后的配置
+    try {
+      await displayStrategyApi.updateConfig(form.value)
+      ElMessage.success('配置已重置为默认值')
+    } catch (apiError: any) {
+      ElMessage.error(apiError.message || '保存重置配置失败')
+    }
+  } catch (error: any) {
+    // 用户取消操作，不处理
+    if (error === 'cancel') return
+    // 其他错误（如弹窗异常）
+    console.error('Reset dialog error:', error)
   }
 }
 
 onMounted(() => {
-  // TODO: 从 API 加载当前配置
+  loadConfig()
 })
 </script>
 

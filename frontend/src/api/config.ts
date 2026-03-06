@@ -228,6 +228,51 @@ export const configApi = {
   }
 }
 
+// ==================== Display Strategy interfaces ====================
+
+export interface DisplayStrategyConfig {
+  algorithm: string       // 展示策略: random, memory_first, beauty_first, best_of_year, smart
+  minBeautyScore: number  // 最小美学评分阈值 (0-100)
+  minMemoryScore: number  // 最小回忆价值评分阈值 (0-100)
+  dailyCount: number      // 每日挑选数量 (1-20)
+}
+
+export const defaultDisplayStrategyConfig: DisplayStrategyConfig = {
+  algorithm: 'smart',
+  minBeautyScore: 70,
+  minMemoryScore: 60,
+  dailyCount: 3
+}
+
+// Display strategy API functions
+export const displayStrategyApi = {
+  // Get display strategy configuration
+  getConfig: async (): Promise<DisplayStrategyConfig> => {
+    try {
+      const response = await http.get<ApiResponse<BackendConfigResponse>>('/config/display.strategy')
+      if (response.data?.data?.value) {
+        const savedConfig = JSON.parse(response.data.data.value)
+        return { ...defaultDisplayStrategyConfig, ...savedConfig }
+      }
+      return defaultDisplayStrategyConfig
+    } catch (error) {
+      return defaultDisplayStrategyConfig
+    }
+  },
+
+  // Update display strategy configuration
+  updateConfig: async (config: DisplayStrategyConfig): Promise<void> => {
+    const value = JSON.stringify(config)
+    await http.put('/config/display.strategy', { value })
+  },
+
+  // Reset to defaults
+  resetConfig: async (): Promise<DisplayStrategyConfig> => {
+    await http.delete('/config/display.strategy')
+    return defaultDisplayStrategyConfig
+  }
+}
+
 // ==================== Prompt Configuration interfaces ====================
 
 export interface PromptConfig {

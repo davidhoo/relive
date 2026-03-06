@@ -133,6 +133,7 @@ func (s *configService) validateConfigKey(key string) error {
 		"display.refresh_interval":  true,
 		"display.avoid_repeat_days": true,
 		"display.fallback_days":     true,
+		"display.strategy":          true,
 		"ai.provider":               true,
 		"ai.temperature":            true,
 		"ai.timeout":                true,
