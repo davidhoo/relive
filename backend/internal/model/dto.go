@@ -89,11 +89,21 @@ type DisplayStrategyConfig struct {
 	DailyCount     int    `json:"dailyCount"`
 }
 
+// PreviewDisplayPhotosRequest 展示策略预览请求
+type PreviewDisplayPhotosRequest struct {
+	Algorithm      string `json:"algorithm"`
+	MinBeautyScore int    `json:"minBeautyScore"`
+	MinMemoryScore int    `json:"minMemoryScore"`
+	DailyCount     int    `json:"dailyCount"`
+	PreviewDate    string `json:"previewDate"`
+}
+
 // PreviewDisplayPhotosResponse 展示策略预览响应
 type PreviewDisplayPhotosResponse struct {
-	Algorithm string   `json:"algorithm"`
-	Count     int      `json:"count"`
-	Photos    []*Photo `json:"photos"`
+	Algorithm   string   `json:"algorithm"`
+	Count       int      `json:"count"`
+	PreviewDate string   `json:"previewDate,omitempty"`
+	Photos      []*Photo `json:"photos"`
 }
 
 // DeviceRegisterRequest 设备注册请求

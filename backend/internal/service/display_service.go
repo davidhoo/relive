@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
+	"sort"
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
@@ -18,7 +19,7 @@ type DisplayService interface {
 	GetDisplayPhoto(deviceID string) (*model.Photo, error)
 
 	// 预览展示策略结果
-	PreviewPhotos(cfg *model.DisplayStrategyConfig) ([]*model.Photo, error)
+	PreviewPhotos(cfg *model.DisplayStrategyConfig, previewDate *time.Time) ([]*model.Photo, error)
 
 	// 记录展示
 	RecordDisplay(record *model.DisplayRecord) error
@@ -84,19 +85,22 @@ func (s *displayService) GetDisplayPhoto(deviceIDStr string) (*model.Photo, erro
 }
 
 // PreviewPhotos 预览展示策略结果
-func (s *displayService) PreviewPhotos(cfg *model.DisplayStrategyConfig) ([]*model.Photo, error) {
+func (s *displayService) PreviewPhotos(cfg *model.DisplayStrategyConfig, previewDate *time.Time) ([]*model.Photo, error) {
 	if cfg == nil {
 		defaultCfg := defaultDisplayStrategyConfig()
 		cfg = &defaultCfg
 	}
 
 	normalizeDisplayStrategyConfig(cfg)
+	targetDate := resolvePreviewDate(previewDate)
 
 	switch cfg.Algorithm {
 	case "random":
 		return s.photoRepo.GetRandom(cfg.DailyCount, cfg.MinBeautyScore, cfg.MinMemoryScore, nil)
 	case "smart":
-		return s.getSmartPhotos(*cfg, nil, cfg.DailyCount)
+		return s.getSmartPhotos(*cfg, nil, cfg.DailyCount, targetDate)
+	case "on_this_day":
+		return s.getOnThisDayPhotos(targetDate, nil, cfg.DailyCount)
 	default:
 		return nil, fmt.Errorf("preview for algorithm %s is not implemented", cfg.Algorithm)
 	}
@@ -117,56 +121,15 @@ func (s *displayService) GetOnThisDayPhoto(deviceIDStr string) (*model.Photo, er
 		excludePhotoIDs = []uint{}
 	}
 
-	// 当前日期
-	now := time.Now()
-
-	// 尝试多种降级策略
-	fallbackDays := s.config.Display.FallbackDays // [3, 7, 30, 365]
-
-	for _, days := range fallbackDays {
-		logger.Debugf("Trying fallback: ±%d days", days)
-
-		// 逐年查找（从最近的年份开始）
-		for year := 1; year <= 100; year++ {
-			start := now.AddDate(-year, 0, -days)
-			end := now.AddDate(-year, 0, days)
-
-			// 查询该日期范围的照片
-			photos, err := s.photoRepo.GetByDateRange(start, end)
-			if err != nil {
-				logger.Warnf("Get photos by date range failed: %v", err)
-				continue
-			}
-
-			// 过滤已分析且未被最近展示的照片
-			var candidates []*model.Photo
-			for _, photo := range photos {
-				if photo.AIAnalyzed && !contains(excludePhotoIDs, photo.ID) {
-					candidates = append(candidates, photo)
-				}
-			}
-
-			if len(candidates) > 0 {
-				// 找到候选照片，选择评分最高的
-				bestPhoto := s.selectBestPhoto(candidates)
-				logger.Infof("Found photo with fallback ±%d days, year=%d, photo_id=%d", days, year, bestPhoto.ID)
-				return bestPhoto, nil
-			}
-		}
-	}
-
-	// 所有降级策略都失败，返回评分最高的照片
-	logger.Warn("All fallback strategies failed, selecting top scored photo")
-	topPhotos, err := s.photoRepo.GetTopByScore(1, excludePhotoIDs)
+	photos, err := s.getOnThisDayPhotos(time.Now(), excludePhotoIDs, 1)
 	if err != nil {
-		return nil, fmt.Errorf("get top scored photo: %w", err)
+		return nil, err
 	}
-
-	if len(topPhotos) == 0 {
+	if len(photos) == 0 {
 		return nil, fmt.Errorf("no photos available")
 	}
 
-	return topPhotos[0], nil
+	return photos[0], nil
 }
 
 func (s *displayService) getRandomPhoto(deviceIDStr string, cfg model.DisplayStrategyConfig) (*model.Photo, error) {
@@ -213,7 +176,7 @@ func (s *displayService) getSmartPhoto(deviceIDStr string, cfg model.DisplayStra
 		excludePhotoIDs = []uint{}
 	}
 
-	photos, err := s.getSmartPhotos(cfg, excludePhotoIDs, 1)
+	photos, err := s.getSmartPhotos(cfg, excludePhotoIDs, 1, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("get smart photo: %w", err)
 	}
@@ -245,7 +208,7 @@ func (s *displayService) RecordDisplay(record *model.DisplayRecord) error {
 	return s.displayRecordRepo.Create(record)
 }
 
-func (s *displayService) getSmartPhotos(cfg model.DisplayStrategyConfig, excludePhotoIDs []uint, limit int) ([]*model.Photo, error) {
+func (s *displayService) getSmartPhotos(cfg model.DisplayStrategyConfig, excludePhotoIDs []uint, limit int, referenceDate time.Time) ([]*model.Photo, error) {
 	if limit <= 0 {
 		limit = 1
 	}
@@ -283,9 +246,8 @@ func (s *displayService) getSmartPhotos(cfg model.DisplayStrategyConfig, exclude
 		candidatesByMonthDay[monthDay] = append(candidatesByMonthDay[monthDay], photo)
 	}
 
-	now := time.Now()
 	for offset := 0; offset <= 365; offset++ {
-		monthDay := now.AddDate(0, 0, -offset).Format("01-02")
+		monthDay := referenceDate.AddDate(0, 0, -offset).Format("01-02")
 		candidates := candidatesByMonthDay[monthDay]
 		if len(candidates) > 0 {
 			return pickRandomPhotos(candidates, limit), nil
@@ -308,6 +270,60 @@ func (s *displayService) getSmartPhotos(cfg model.DisplayStrategyConfig, exclude
 		if fallback != nil {
 			return []*model.Photo{fallback}, nil
 		}
+	}
+
+	return nil, nil
+}
+
+func (s *displayService) getOnThisDayPhotos(targetDate time.Time, excludePhotoIDs []uint, limit int) ([]*model.Photo, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+
+	// 尝试多种降级策略
+	fallbackDays := s.config.Display.FallbackDays // [3, 7, 30, 365]
+
+	for _, days := range fallbackDays {
+		logger.Debugf("Trying on_this_day fallback: target=%s, ±%d days", targetDate.Format("2006-01-02"), days)
+
+		// 逐年查找（从最近的年份开始）
+		for year := 1; year <= 100; year++ {
+			start := targetDate.AddDate(-year, 0, -days)
+			end := targetDate.AddDate(-year, 0, days)
+
+			photos, err := s.photoRepo.GetByDateRange(start, end)
+			if err != nil {
+				logger.Warnf("Get photos by date range failed: %v", err)
+				continue
+			}
+
+			var candidates []*model.Photo
+			for _, photo := range photos {
+				if photo.AIAnalyzed && !contains(excludePhotoIDs, photo.ID) {
+					candidates = append(candidates, photo)
+				}
+			}
+
+			if len(candidates) > 0 {
+				selected := selectTopPhotos(candidates, limit)
+				logger.Infof(
+					"Found on_this_day candidates with fallback ±%d days, year=%d, count=%d",
+					days,
+					year,
+					len(selected),
+				)
+				return selected, nil
+			}
+		}
+	}
+
+	logger.Warn("All on_this_day fallback strategies failed, selecting top scored photo")
+	topPhotos, err := s.photoRepo.GetTopByScore(limit, excludePhotoIDs)
+	if err != nil {
+		return nil, fmt.Errorf("get top scored photo: %w", err)
+	}
+	if len(topPhotos) > 0 {
+		return topPhotos, nil
 	}
 
 	return nil, nil
@@ -409,6 +425,42 @@ func selectTopMemoryPhoto(photos []*model.Photo) *model.Photo {
 	}
 
 	return best
+}
+
+func selectTopPhotos(photos []*model.Photo, limit int) []*model.Photo {
+	if len(photos) == 0 || limit <= 0 {
+		return nil
+	}
+
+	result := append([]*model.Photo(nil), photos...)
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].OverallScore != result[j].OverallScore {
+			return result[i].OverallScore > result[j].OverallScore
+		}
+		if result[i].MemoryScore != result[j].MemoryScore {
+			return result[i].MemoryScore > result[j].MemoryScore
+		}
+		if result[i].TakenAt == nil {
+			return false
+		}
+		if result[j].TakenAt == nil {
+			return true
+		}
+		return result[i].TakenAt.After(*result[j].TakenAt)
+	})
+
+	if limit >= len(result) {
+		return result
+	}
+
+	return result[:limit]
+}
+
+func resolvePreviewDate(previewDate *time.Time) time.Time {
+	if previewDate == nil || previewDate.IsZero() {
+		return time.Now()
+	}
+	return *previewDate
 }
 
 // contains 检查切片中是否包含元素

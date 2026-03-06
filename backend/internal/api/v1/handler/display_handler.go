@@ -117,7 +117,7 @@ func (h *DisplayHandler) GetDisplayPhoto(c *gin.Context) {
 
 // PreviewPhotos 预览展示策略结果
 func (h *DisplayHandler) PreviewPhotos(c *gin.Context) {
-	var req model.DisplayStrategyConfig
+	var req model.PreviewDisplayPhotosRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, model.Response{
 			Success: false,
@@ -129,7 +129,30 @@ func (h *DisplayHandler) PreviewPhotos(c *gin.Context) {
 		return
 	}
 
-	photos, err := h.displayService.PreviewPhotos(&req)
+	cfg := &model.DisplayStrategyConfig{
+		Algorithm:      req.Algorithm,
+		MinBeautyScore: req.MinBeautyScore,
+		MinMemoryScore: req.MinMemoryScore,
+		DailyCount:     req.DailyCount,
+	}
+
+	var previewDate *time.Time
+	if req.PreviewDate != "" {
+		parsedDate, err := time.ParseInLocation("2006-01-02", req.PreviewDate, time.Local)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, model.Response{
+				Success: false,
+				Error: &model.ErrorInfo{
+					Code:    "INVALID_REQUEST",
+					Message: "Invalid previewDate, expected format YYYY-MM-DD",
+				},
+			})
+			return
+		}
+		previewDate = &parsedDate
+	}
+
+	photos, err := h.displayService.PreviewPhotos(cfg, previewDate)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, model.Response{
 			Success: false,
@@ -145,9 +168,10 @@ func (h *DisplayHandler) PreviewPhotos(c *gin.Context) {
 		Success: true,
 		Message: "Success",
 		Data: model.PreviewDisplayPhotosResponse{
-			Algorithm: req.Algorithm,
-			Count:     len(photos),
-			Photos:    photos,
+			Algorithm:   cfg.Algorithm,
+			Count:       len(photos),
+			PreviewDate: req.PreviewDate,
+			Photos:      photos,
 		},
 	})
 }

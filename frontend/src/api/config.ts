@@ -91,10 +91,15 @@ interface BackendConfigResponse {
   value: string
 }
 
-interface DisplayPreviewResponse {
+export interface DisplayPreviewResponse {
   algorithm: string
   count: number
+  previewDate?: string
   photos: Photo[]
+}
+
+interface DisplayPreviewRequest extends DisplayStrategyConfig {
+  previewDate?: string
 }
 
 const shufflePhotos = (photos: Photo[]) => {
@@ -112,6 +117,17 @@ const getMonthDayKey = (date: Date) => {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${month}-${day}`
+}
+
+const resolvePreviewDate = (previewDate?: string) => {
+  if (!previewDate) return new Date()
+
+  const resolved = new Date(`${previewDate}T00:00:00`)
+  if (Number.isNaN(resolved.getTime())) {
+    return new Date()
+  }
+
+  return resolved
 }
 
 const isAboveThreshold = (photo: Photo, config: DisplayStrategyConfig) => {
@@ -136,7 +152,25 @@ const pickTopMemoryPhoto = (photos: Photo[]) => {
   return best ? [best] : []
 }
 
-const previewSmartByPhotoList = (items: Photo[], config: DisplayStrategyConfig): DisplayPreviewResponse => {
+const previewTopPhotos = (photos: Photo[], limit: number) => {
+  return [...photos]
+    .sort((a, b) => {
+      const overallDiff = (b.overall_score ?? 0) - (a.overall_score ?? 0)
+      if (overallDiff !== 0) return overallDiff
+
+      const memoryDiff = (b.memory_score ?? 0) - (a.memory_score ?? 0)
+      if (memoryDiff !== 0) return memoryDiff
+
+      return new Date(b.taken_at || 0).getTime() - new Date(a.taken_at || 0).getTime()
+    })
+    .slice(0, limit)
+}
+
+const previewSmartByPhotoList = (
+  items: Photo[],
+  config: DisplayStrategyConfig,
+  previewDate?: string
+): DisplayPreviewResponse => {
   const byMonthDay = new Map<string, Photo[]>()
   const analyzedPhotos = items.filter((photo) => photo.ai_analyzed)
 
@@ -149,10 +183,10 @@ const previewSmartByPhotoList = (items: Photo[], config: DisplayStrategyConfig):
     byMonthDay.set(monthDay, existing)
   }
 
-  const today = new Date()
+  const targetDate = resolvePreviewDate(previewDate)
   for (let offset = 0; offset <= 365; offset += 1) {
-    const target = new Date(today)
-    target.setDate(today.getDate() - offset)
+    const target = new Date(targetDate)
+    target.setDate(targetDate.getDate() - offset)
 
     const candidates = byMonthDay.get(getMonthDayKey(target)) || []
     if (candidates.length > 0) {
@@ -160,6 +194,7 @@ const previewSmartByPhotoList = (items: Photo[], config: DisplayStrategyConfig):
       return {
         algorithm: config.algorithm,
         count: selected.length,
+        previewDate,
         photos: selected,
       }
     }
@@ -169,18 +204,69 @@ const previewSmartByPhotoList = (items: Photo[], config: DisplayStrategyConfig):
   return {
     algorithm: config.algorithm,
     count: fallback.length,
+    previewDate,
     photos: fallback,
   }
 }
 
-const previewRandomByPhotoList = (items: Photo[], config: DisplayStrategyConfig): DisplayPreviewResponse => {
+const previewRandomByPhotoList = (
+  items: Photo[],
+  config: DisplayStrategyConfig,
+  previewDate?: string
+): DisplayPreviewResponse => {
   const filtered = items.filter((photo) => isAboveThreshold(photo, config))
   const selected = shufflePhotos(filtered).slice(0, config.dailyCount)
 
   return {
     algorithm: config.algorithm,
     count: selected.length,
+    previewDate,
     photos: selected,
+  }
+}
+
+const previewOnThisDayByPhotoList = (
+  items: Photo[],
+  config: DisplayStrategyConfig,
+  previewDate?: string
+): DisplayPreviewResponse => {
+  const targetDate = resolvePreviewDate(previewDate)
+  const analyzedPhotos = items.filter((photo) => photo.ai_analyzed && photo.taken_at)
+  const fallbackWindows = [3, 7, 30, 365]
+
+  for (const windowDays of fallbackWindows) {
+    for (let yearOffset = 1; yearOffset <= 100; yearOffset += 1) {
+      const start = new Date(targetDate)
+      start.setFullYear(start.getFullYear() - yearOffset)
+      start.setDate(start.getDate() - windowDays)
+
+      const end = new Date(targetDate)
+      end.setFullYear(end.getFullYear() - yearOffset)
+      end.setDate(end.getDate() + windowDays)
+
+      const candidates = analyzedPhotos.filter((photo) => {
+        const takenAt = new Date(photo.taken_at as string)
+        return takenAt >= start && takenAt <= end
+      })
+
+      if (candidates.length > 0) {
+        const selected = previewTopPhotos(candidates, config.dailyCount)
+        return {
+          algorithm: config.algorithm,
+          count: selected.length,
+          previewDate,
+          photos: selected,
+        }
+      }
+    }
+  }
+
+  const fallback = previewTopPhotos(analyzedPhotos, config.dailyCount)
+  return {
+    algorithm: config.algorithm,
+    count: fallback.length,
+    previewDate,
+    photos: fallback,
   }
 }
 
@@ -211,18 +297,24 @@ const fetchAllPhotosForDisplayPreview = async (): Promise<Photo[]> => {
   return items
 }
 
-const previewByPhotoListFallback = async (config: DisplayStrategyConfig): Promise<DisplayPreviewResponse> => {
+const previewByPhotoListFallback = async (
+  config: DisplayStrategyConfig,
+  previewDate?: string
+): Promise<DisplayPreviewResponse> => {
   const items = await fetchAllPhotosForDisplayPreview()
 
   switch (config.algorithm) {
     case 'random':
-      return previewRandomByPhotoList(items, config)
+      return previewRandomByPhotoList(items, config, previewDate)
     case 'smart':
-      return previewSmartByPhotoList(items, config)
+      return previewSmartByPhotoList(items, config, previewDate)
+    case 'on_this_day':
+      return previewOnThisDayByPhotoList(items, config, previewDate)
     default:
       return {
         algorithm: config.algorithm,
         count: 0,
+        previewDate,
         photos: [],
       }
   }
@@ -370,7 +462,7 @@ export const configApi = {
 // ==================== Display Strategy interfaces ====================
 
 export interface DisplayStrategyConfig {
-  algorithm: string       // 展示策略: random, memory_first, beauty_first, best_of_year, smart
+  algorithm: string       // 展示策略: random / smart / on_this_day
   minBeautyScore: number  // 最小美学评分阈值 (0-100)
   minMemoryScore: number  // 最小回忆价值评分阈值 (0-100)
   dailyCount: number      // 每日挑选数量 (1-20)
@@ -406,13 +498,21 @@ export const displayStrategyApi = {
   },
 
   // Preview strategy with current form data
-  previewConfig: async (config: DisplayStrategyConfig): Promise<DisplayPreviewResponse> => {
+  previewConfig: async (
+    config: DisplayStrategyConfig,
+    previewDate?: string
+  ): Promise<DisplayPreviewResponse> => {
+    const request: DisplayPreviewRequest = {
+      ...config,
+      previewDate,
+    }
+
     try {
-      const response = await http.post<ApiResponse<DisplayPreviewResponse>>('/display/preview', config)
-      return response.data?.data || { algorithm: config.algorithm, count: 0, photos: [] }
+      const response = await http.post<ApiResponse<DisplayPreviewResponse>>('/display/preview', request)
+      return response.data?.data || { algorithm: config.algorithm, count: 0, previewDate, photos: [] }
     } catch (error: any) {
       if (error?.response?.status === 404) {
-        return previewByPhotoListFallback(config)
+        return previewByPhotoListFallback(config, previewDate)
       }
       throw error
     }
