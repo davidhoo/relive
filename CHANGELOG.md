@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 2026-03-06 - 展示策略合并与文档同步 ✨
+
+#### Changed
+- ✅ **展示策略合并** - 将 `smart` 合并为 `on_this_day` 的内部兜底链路
+  - 统一选图流程：严格往年今日 → 智能日期回溯 → 全局高分兜底
+  - `on_this_day` 统一应用回忆分与美学分阈值
+  - 兼容旧配置中的 `smart`，运行时自动归一为 `on_this_day`
+- ✅ **展示策略页面简化** - 前端只保留 `随机选择` 和 `往年今日` 两个选项
+  - 更新预览提示文案
+  - 同步前端预览逻辑到新的统一策略
+- ✅ **文档同步** - 更新 README、API 文档、需求文档与前端说明
+  - 配置键示例统一为 `display.strategy`
+  - 移除“智能推荐”作为独立策略的旧描述
+
 ### 2026-03-05 - 代码审查问题修复 🐛
 
 #### Fixed

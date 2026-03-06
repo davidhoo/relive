@@ -335,7 +335,7 @@ GET /api/v1/photos/stats
 
 ### 3.1 获取展示照片 ✅
 
-ESP32 设备获取要展示的照片（往年今日算法）。
+ESP32 设备获取要展示的照片（统一的“往年今日”展示策略）。
 
 **请求**
 ```http
@@ -365,15 +365,11 @@ GET /api/v1/display/photo?device_id=ESP32-001
 ```
 
 **算法说明**
-1. 查询往年今日的照片（当前日期 ± N 天）
-2. 智能降级策略：
-   - 尝试 ±3 天
-   - 如无结果，尝试 ±7 天
-   - 如无结果，尝试 ±30 天
-   - 如无结果，尝试 ±365 天
-   - 如仍无结果，返回评分最高的照片
-3. 过滤最近 7 天已展示的照片
-4. 选择评分最高的照片
+1. 优先查询往年今日附近的照片，按 `±3 → ±7 → ±30 → ±365` 逐级放宽
+2. 所有阶段统一应用回忆分/美学分阈值，并过滤最近 7 天已展示的照片
+3. 若严格往年今日未命中，则回溯最近 365 天内最接近目标日期的历史月日
+4. 若仍无结果，则从满足阈值的已分析照片中按综合分兜底；必要时再放宽到全部已分析照片
+5. 严格往年今日阶段按综合分优先；日期兜底阶段会在高分候选中保留少量随机性
 
 ---
 
@@ -840,7 +836,7 @@ GET /api/v1/config/{key}
 
 **示例**
 ```http
-GET /api/v1/config/display.algorithm
+GET /api/v1/config/display.strategy
 ```
 
 **响应**
@@ -849,8 +845,8 @@ GET /api/v1/config/display.algorithm
   "success": true,
   "data": {
     "id": 1,
-    "key": "display.algorithm",
-    "value": "on_this_day",
+    "key": "display.strategy",
+    "value": "{\"algorithm\":\"on_this_day\",\"dailyCount\":3,\"minBeautyScore\":70,\"minMemoryScore\":60}",
     "description": "",
     "created_at": "2026-02-28T10:00:00Z",
     "updated_at": "2026-02-28T10:00:00Z"
@@ -871,17 +867,17 @@ PUT /api/v1/config/{key}
 Content-Type: application/json
 
 {
-  "value": "random"
+  "value": "{\"algorithm\":\"random\",\"dailyCount\":3,\"minBeautyScore\":70,\"minMemoryScore\":60}"
 }
 ```
 
 **示例**
 ```http
-PUT /api/v1/config/display.algorithm
+PUT /api/v1/config/display.strategy
 Content-Type: application/json
 
 {
-  "value": "random"
+  "value": "{\"algorithm\":\"random\",\"dailyCount\":3,\"minBeautyScore\":70,\"minMemoryScore\":60}"
 }
 ```
 
@@ -894,7 +890,7 @@ Content-Type: application/json
 ```
 
 **常用配置键**
-- `display.algorithm`: 展示算法（on_this_day / random / top_score）
+- `display.strategy`: 展示策略配置（JSON，包含 `algorithm` / `dailyCount` / `minBeautyScore` / `minMemoryScore`）
 - `display.refresh_interval`: 刷新间隔（秒）
 - `display.avoid_repeat_days`: 避免重复展示天数
 - `ai.provider`: AI Provider（ollama / qwen / openai / vllm）
@@ -914,7 +910,7 @@ DELETE /api/v1/config/{key}
 
 **示例**
 ```http
-DELETE /api/v1/config/display.algorithm
+DELETE /api/v1/config/display.strategy
 ```
 
 **响应**
@@ -947,8 +943,8 @@ GET /api/v1/config
   "data": [
     {
       "id": 1,
-      "key": "display.algorithm",
-      "value": "on_this_day",
+      "key": "display.strategy",
+      "value": "{\"algorithm\":\"on_this_day\",\"dailyCount\":3,\"minBeautyScore\":70,\"minMemoryScore\":60}",
       "description": "",
       "created_at": "2026-02-28T10:00:00Z",
       "updated_at": "2026-02-28T10:00:00Z"
@@ -978,7 +974,7 @@ POST /api/v1/config/batch
 Content-Type: application/json
 
 {
-  "display.algorithm": "on_this_day",
+  "display.strategy": "{\"algorithm\":\"on_this_day\",\"dailyCount\":3,\"minBeautyScore\":70,\"minMemoryScore\":60}",
   "display.refresh_interval": "3600",
   "ai.provider": "ollama"
 }

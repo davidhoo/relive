@@ -18,7 +18,6 @@
         <el-form-item label="展示策略">
           <el-select v-model="form.algorithm" placeholder="请选择策略" style="width: 100%">
             <el-option label="随机选择" value="random" />
-            <el-option label="智能推荐" value="smart" />
             <el-option label="往年今日" value="on_this_day" />
           </el-select>
         </el-form-item>
@@ -217,7 +216,7 @@ const framePreviewPhoto = ref<Photo | null>(null)
 let previewTimer: number | undefined
 
 const previewSupported = computed(() => supportedAlgorithms.includes(form.value.algorithm))
-const supportedAlgorithms = ['random', 'smart', 'on_this_day']
+const supportedAlgorithms = ['random', 'on_this_day']
 const previewPhotos = computed<Photo[]>(() => previewResult.value?.photos || [])
 const previewDateValue = computed(() => toPreviewDateValue(previewCalendarDate.value))
 const previewDateLabel = computed(() => formatDisplayDate(previewCalendarDate.value))
@@ -226,14 +225,14 @@ const previewHint = computed(() => {
     case 'random':
       return '随机策略不依赖日期，日历用于固定一个预览时点；每次刷新仍可能选到不同照片。'
     case 'on_this_day':
-      return '点击任意日期后，会优先寻找往年同月同日附近可以展示的照片。'
+      return '点击任意日期后，会优先寻找往年同日附近的照片；若没有，则自动回溯到最接近该日期的历史记忆。'
     default:
-      return '点击日历中的任意日期，可预览该日期向前回溯时最可能展示的照片。'
+      return '点击日历中的任意日期，可预览该日期的展示结果。'
   }
 })
 const emptyPreviewText = computed(() => {
   if (form.value.algorithm === 'on_this_day') {
-    return '该日期附近没有找到可展示的往年照片'
+    return '该日期附近及其智能兜底范围内没有找到可展示的照片'
   }
   return '没有找到符合当前策略条件的照片'
 })

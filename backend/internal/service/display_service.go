@@ -68,9 +68,10 @@ func (s *displayService) GetDisplayPhoto(deviceIDStr string) (*model.Photo, erro
 	switch strategyConfig.Algorithm {
 	case "random":
 		photo, err = s.getRandomPhoto(deviceIDStr, strategyConfig)
-	case "smart":
-		photo, err = s.getSmartPhoto(deviceIDStr, strategyConfig)
 	case "on_this_day":
+		photo, err = s.GetOnThisDayPhoto(deviceIDStr)
+	case "smart":
+		logger.Infof("Display algorithm smart is merged into on_this_day, using unified on_this_day flow")
 		photo, err = s.GetOnThisDayPhoto(deviceIDStr)
 	default:
 		logger.Warnf("Display algorithm %s is not implemented, falling back to on_this_day", strategyConfig.Algorithm)
@@ -97,10 +98,10 @@ func (s *displayService) PreviewPhotos(cfg *model.DisplayStrategyConfig, preview
 	switch cfg.Algorithm {
 	case "random":
 		return s.photoRepo.GetRandom(cfg.DailyCount, cfg.MinBeautyScore, cfg.MinMemoryScore, nil)
-	case "smart":
-		return s.getSmartPhotos(*cfg, nil, cfg.DailyCount, targetDate)
 	case "on_this_day":
-		return s.getOnThisDayPhotos(targetDate, nil, cfg.DailyCount)
+		return s.getOnThisDayPhotos(targetDate, nil, *cfg, cfg.DailyCount)
+	case "smart":
+		return s.getOnThisDayPhotos(targetDate, nil, *cfg, cfg.DailyCount)
 	default:
 		return nil, fmt.Errorf("preview for algorithm %s is not implemented", cfg.Algorithm)
 	}
@@ -121,7 +122,9 @@ func (s *displayService) GetOnThisDayPhoto(deviceIDStr string) (*model.Photo, er
 		excludePhotoIDs = []uint{}
 	}
 
-	photos, err := s.getOnThisDayPhotos(time.Now(), excludePhotoIDs, 1)
+	strategyConfig := s.getDisplayStrategyConfig()
+
+	photos, err := s.getOnThisDayPhotos(time.Now(), excludePhotoIDs, strategyConfig, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -164,29 +167,6 @@ func (s *displayService) getRandomPhoto(deviceIDStr string, cfg model.DisplayStr
 	return photos[0], nil
 }
 
-func (s *displayService) getSmartPhoto(deviceIDStr string, cfg model.DisplayStrategyConfig) (*model.Photo, error) {
-	device, err := s.esp32DeviceRepo.GetByDeviceID(deviceIDStr)
-	if err != nil {
-		return nil, fmt.Errorf("get device: %w", err)
-	}
-
-	excludePhotoIDs, err := s.displayRecordRepo.GetDisplayedPhotoIDs(device.ID, s.config.Display.AvoidRepeatDays)
-	if err != nil {
-		logger.Warnf("Get displayed photo IDs failed: %v", err)
-		excludePhotoIDs = []uint{}
-	}
-
-	photos, err := s.getSmartPhotos(cfg, excludePhotoIDs, 1, time.Now())
-	if err != nil {
-		return nil, fmt.Errorf("get smart photo: %w", err)
-	}
-	if len(photos) == 0 {
-		return nil, fmt.Errorf("no photos available")
-	}
-
-	return photos[0], nil
-}
-
 // selectBestPhoto 选择最佳照片（评分最高）
 func (s *displayService) selectBestPhoto(photos []*model.Photo) *model.Photo {
 	if len(photos) == 0 {
@@ -219,7 +199,6 @@ func (s *displayService) getSmartPhotos(cfg model.DisplayStrategyConfig, exclude
 	}
 
 	candidatesByMonthDay := make(map[string][]*model.Photo)
-	var fallbackCandidates []*model.Photo
 	excludeSet := make(map[uint]struct{}, len(excludePhotoIDs))
 	for _, id := range excludePhotoIDs {
 		excludeSet[id] = struct{}{}
@@ -232,8 +211,6 @@ func (s *displayService) getSmartPhotos(cfg model.DisplayStrategyConfig, exclude
 		if _, excluded := excludeSet[photo.ID]; excluded {
 			continue
 		}
-
-		fallbackCandidates = append(fallbackCandidates, photo)
 
 		if photo.TakenAt == nil {
 			continue
@@ -250,38 +227,23 @@ func (s *displayService) getSmartPhotos(cfg model.DisplayStrategyConfig, exclude
 		monthDay := referenceDate.AddDate(0, 0, -offset).Format("01-02")
 		candidates := candidatesByMonthDay[monthDay]
 		if len(candidates) > 0 {
-			return pickRandomPhotos(candidates, limit), nil
-		}
-	}
-
-	fallback := selectTopMemoryPhoto(fallbackCandidates)
-	if fallback != nil {
-		return []*model.Photo{fallback}, nil
-	}
-
-	if len(excludePhotoIDs) > 0 {
-		var unrestricted []*model.Photo
-		for _, photo := range photos {
-			if photo != nil && photo.AIAnalyzed {
-				unrestricted = append(unrestricted, photo)
-			}
-		}
-		fallback = selectTopMemoryPhoto(unrestricted)
-		if fallback != nil {
-			return []*model.Photo{fallback}, nil
+			return selectSmartFallbackPhotos(candidates, limit), nil
 		}
 	}
 
 	return nil, nil
 }
 
-func (s *displayService) getOnThisDayPhotos(targetDate time.Time, excludePhotoIDs []uint, limit int) ([]*model.Photo, error) {
+func (s *displayService) getOnThisDayPhotos(targetDate time.Time, excludePhotoIDs []uint, cfg model.DisplayStrategyConfig, limit int) ([]*model.Photo, error) {
 	if limit <= 0 {
 		limit = 1
 	}
 
 	// 尝试多种降级策略
 	fallbackDays := s.config.Display.FallbackDays // [3, 7, 30, 365]
+	if len(fallbackDays) == 0 {
+		fallbackDays = []int{3, 7, 30, 365}
+	}
 
 	for _, days := range fallbackDays {
 		logger.Debugf("Trying on_this_day fallback: target=%s, ±%d days", targetDate.Format("2006-01-02"), days)
@@ -297,15 +259,10 @@ func (s *displayService) getOnThisDayPhotos(targetDate time.Time, excludePhotoID
 				continue
 			}
 
-			var candidates []*model.Photo
-			for _, photo := range photos {
-				if photo.AIAnalyzed && !contains(excludePhotoIDs, photo.ID) {
-					candidates = append(candidates, photo)
-				}
-			}
+			candidates := filterDisplayCandidates(photos, excludePhotoIDs, cfg, true)
 
 			if len(candidates) > 0 {
-				selected := selectTopPhotos(candidates, limit)
+				selected := selectOnThisDayPhotos(candidates, limit)
 				logger.Infof(
 					"Found on_this_day candidates with fallback ±%d days, year=%d, count=%d",
 					days,
@@ -317,8 +274,17 @@ func (s *displayService) getOnThisDayPhotos(targetDate time.Time, excludePhotoID
 		}
 	}
 
+	logger.Infof("No strict on_this_day match found, trying smart calendar fallback")
+	smartFallbackPhotos, err := s.getSmartPhotos(cfg, excludePhotoIDs, limit, targetDate)
+	if err != nil {
+		return nil, fmt.Errorf("get smart fallback photos: %w", err)
+	}
+	if len(smartFallbackPhotos) > 0 {
+		return smartFallbackPhotos, nil
+	}
+
 	logger.Warn("All on_this_day fallback strategies failed, selecting top scored photo")
-	topPhotos, err := s.photoRepo.GetTopByScore(limit, excludePhotoIDs)
+	topPhotos, err := s.selectGlobalFallbackPhotos(excludePhotoIDs, cfg, limit)
 	if err != nil {
 		return nil, fmt.Errorf("get top scored photo: %w", err)
 	}
@@ -327,6 +293,34 @@ func (s *displayService) getOnThisDayPhotos(targetDate time.Time, excludePhotoID
 	}
 
 	return nil, nil
+}
+
+func (s *displayService) selectGlobalFallbackPhotos(excludePhotoIDs []uint, cfg model.DisplayStrategyConfig, limit int) ([]*model.Photo, error) {
+	photos, err := s.photoRepo.ListAll()
+	if err != nil {
+		return nil, fmt.Errorf("list photos: %w", err)
+	}
+
+	candidates := filterDisplayCandidates(photos, excludePhotoIDs, cfg, false)
+	if len(candidates) > 0 {
+		return selectTopPhotos(candidates, limit), nil
+	}
+
+	if len(excludePhotoIDs) > 0 {
+		candidates = filterDisplayCandidates(photos, nil, cfg, false)
+		if len(candidates) > 0 {
+			return selectTopPhotos(candidates, limit), nil
+		}
+	}
+
+	var unrestricted []*model.Photo
+	for _, photo := range photos {
+		if photo != nil && photo.AIAnalyzed {
+			unrestricted = append(unrestricted, photo)
+		}
+	}
+
+	return selectTopPhotos(unrestricted, limit), nil
 }
 
 func (s *displayService) getDisplayStrategyConfig() model.DisplayStrategyConfig {
@@ -355,7 +349,7 @@ func (s *displayService) getDisplayStrategyConfig() model.DisplayStrategyConfig 
 
 func defaultDisplayStrategyConfig() model.DisplayStrategyConfig {
 	return model.DisplayStrategyConfig{
-		Algorithm:      "smart",
+		Algorithm:      "on_this_day",
 		MinBeautyScore: 70,
 		MinMemoryScore: 60,
 		DailyCount:     3,
@@ -364,7 +358,10 @@ func defaultDisplayStrategyConfig() model.DisplayStrategyConfig {
 
 func normalizeDisplayStrategyConfig(cfg *model.DisplayStrategyConfig) {
 	if cfg.Algorithm == "" {
-		cfg.Algorithm = "smart"
+		cfg.Algorithm = "on_this_day"
+	}
+	if cfg.Algorithm == "smart" {
+		cfg.Algorithm = "on_this_day"
 	}
 	if cfg.MinBeautyScore < 0 {
 		cfg.MinBeautyScore = 0
@@ -401,6 +398,71 @@ func pickRandomPhotos(photos []*model.Photo, limit int) []*model.Photo {
 	}
 
 	return result[:limit]
+}
+
+func selectOnThisDayPhotos(photos []*model.Photo, limit int) []*model.Photo {
+	return selectTopPhotos(photos, limit)
+}
+
+func selectSmartFallbackPhotos(photos []*model.Photo, limit int) []*model.Photo {
+	if len(photos) == 0 || limit <= 0 {
+		return nil
+	}
+
+	ranked := selectTopPhotos(photos, len(photos))
+	if len(ranked) <= limit*2 {
+		return ranked[:min(limit, len(ranked))]
+	}
+
+	poolSize := min(len(ranked), max(limit*3, 6))
+	pool := append([]*model.Photo(nil), ranked[:poolSize]...)
+	rand.Shuffle(len(pool), func(i, j int) {
+		pool[i], pool[j] = pool[j], pool[i]
+	})
+
+	selected := pool[:min(limit, len(pool))]
+	return selectTopPhotos(selected, len(selected))
+}
+
+func filterDisplayCandidates(photos []*model.Photo, excludePhotoIDs []uint, cfg model.DisplayStrategyConfig, requireTakenAt bool) []*model.Photo {
+	var candidates []*model.Photo
+	excludeSet := make(map[uint]struct{}, len(excludePhotoIDs))
+	for _, id := range excludePhotoIDs {
+		excludeSet[id] = struct{}{}
+	}
+
+	for _, photo := range photos {
+		if photo == nil || !photo.AIAnalyzed {
+			continue
+		}
+		if _, excluded := excludeSet[photo.ID]; excluded {
+			continue
+		}
+		if requireTakenAt && photo.TakenAt == nil {
+			continue
+		}
+		if photo.MemoryScore < cfg.MinMemoryScore || photo.BeautyScore < cfg.MinBeautyScore {
+			continue
+		}
+
+		candidates = append(candidates, photo)
+	}
+
+	return candidates
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func selectTopMemoryPhoto(photos []*model.Photo) *model.Photo {

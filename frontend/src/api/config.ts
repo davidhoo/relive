@@ -166,7 +166,7 @@ const previewTopPhotos = (photos: Photo[], limit: number) => {
     .slice(0, limit)
 }
 
-const previewSmartByPhotoList = (
+const previewSmartFallbackByPhotoList = (
   items: Photo[],
   config: DisplayStrategyConfig,
   previewDate?: string
@@ -190,9 +190,12 @@ const previewSmartByPhotoList = (
 
     const candidates = byMonthDay.get(getMonthDayKey(target)) || []
     if (candidates.length > 0) {
-      const selected = shufflePhotos(candidates).slice(0, config.dailyCount)
+      const ranked = previewTopPhotos(candidates, candidates.length)
+      const poolSize = Math.min(ranked.length, Math.max(config.dailyCount * 3, 6))
+      const pool = shufflePhotos(ranked.slice(0, poolSize))
+      const selected = previewTopPhotos(pool.slice(0, config.dailyCount), config.dailyCount)
       return {
-        algorithm: config.algorithm,
+        algorithm: 'on_this_day',
         count: selected.length,
         previewDate,
         photos: selected,
@@ -200,12 +203,11 @@ const previewSmartByPhotoList = (
     }
   }
 
-  const fallback = pickTopMemoryPhoto(analyzedPhotos)
   return {
-    algorithm: config.algorithm,
-    count: fallback.length,
+    algorithm: 'on_this_day',
+    count: 0,
     previewDate,
-    photos: fallback,
+    photos: [],
   }
 }
 
@@ -231,7 +233,9 @@ const previewOnThisDayByPhotoList = (
   previewDate?: string
 ): DisplayPreviewResponse => {
   const targetDate = resolvePreviewDate(previewDate)
-  const analyzedPhotos = items.filter((photo) => photo.ai_analyzed && photo.taken_at)
+  const analyzedPhotos = items.filter((photo) => photo.ai_analyzed)
+  const thresholdPhotos = analyzedPhotos.filter((photo) => isAboveThreshold(photo, config))
+  const thresholdPhotosWithDate = thresholdPhotos.filter((photo) => photo.taken_at)
   const fallbackWindows = [3, 7, 30, 365]
 
   for (const windowDays of fallbackWindows) {
@@ -244,7 +248,7 @@ const previewOnThisDayByPhotoList = (
       end.setFullYear(end.getFullYear() - yearOffset)
       end.setDate(end.getDate() + windowDays)
 
-      const candidates = analyzedPhotos.filter((photo) => {
+      const candidates = thresholdPhotosWithDate.filter((photo) => {
         const takenAt = new Date(photo.taken_at as string)
         return takenAt >= start && takenAt <= end
       })
@@ -252,7 +256,7 @@ const previewOnThisDayByPhotoList = (
       if (candidates.length > 0) {
         const selected = previewTopPhotos(candidates, config.dailyCount)
         return {
-          algorithm: config.algorithm,
+          algorithm: 'on_this_day',
           count: selected.length,
           previewDate,
           photos: selected,
@@ -261,12 +265,27 @@ const previewOnThisDayByPhotoList = (
     }
   }
 
-  const fallback = previewTopPhotos(analyzedPhotos, config.dailyCount)
+  const smartFallback = previewSmartFallbackByPhotoList(items, config, previewDate)
+  if (smartFallback.photos.length > 0) {
+    return smartFallback
+  }
+
+  const fallback = previewTopPhotos(thresholdPhotos, config.dailyCount)
+  if (fallback.length > 0) {
+    return {
+      algorithm: 'on_this_day',
+      count: fallback.length,
+      previewDate,
+      photos: fallback,
+    }
+  }
+
+  const unrestrictedFallback = previewTopPhotos(analyzedPhotos, config.dailyCount)
   return {
-    algorithm: config.algorithm,
-    count: fallback.length,
+    algorithm: 'on_this_day',
+    count: unrestrictedFallback.length,
     previewDate,
-    photos: fallback,
+    photos: unrestrictedFallback,
   }
 }
 
@@ -306,9 +325,8 @@ const previewByPhotoListFallback = async (
   switch (config.algorithm) {
     case 'random':
       return previewRandomByPhotoList(items, config, previewDate)
-    case 'smart':
-      return previewSmartByPhotoList(items, config, previewDate)
     case 'on_this_day':
+    case 'smart':
       return previewOnThisDayByPhotoList(items, config, previewDate)
     default:
       return {
@@ -462,17 +480,30 @@ export const configApi = {
 // ==================== Display Strategy interfaces ====================
 
 export interface DisplayStrategyConfig {
-  algorithm: string       // 展示策略: random / smart / on_this_day
+  algorithm: string       // 展示策略: random / on_this_day
   minBeautyScore: number  // 最小美学评分阈值 (0-100)
   minMemoryScore: number  // 最小回忆价值评分阈值 (0-100)
   dailyCount: number      // 每日挑选数量 (1-20)
 }
 
 export const defaultDisplayStrategyConfig: DisplayStrategyConfig = {
-  algorithm: 'smart',
+  algorithm: 'on_this_day',
   minBeautyScore: 70,
   minMemoryScore: 60,
   dailyCount: 3
+}
+
+const normalizeDisplayStrategyConfig = (config?: Partial<DisplayStrategyConfig>): DisplayStrategyConfig => {
+  const normalized: DisplayStrategyConfig = {
+    ...defaultDisplayStrategyConfig,
+    ...config,
+  }
+
+  if (normalized.algorithm === 'smart') {
+    normalized.algorithm = 'on_this_day'
+  }
+
+  return normalized
 }
 
 // Display strategy API functions
@@ -483,17 +514,17 @@ export const displayStrategyApi = {
       const response = await http.get<ApiResponse<BackendConfigResponse>>('/config/display.strategy')
       if (response.data?.data?.value) {
         const savedConfig = JSON.parse(response.data.data.value)
-        return { ...defaultDisplayStrategyConfig, ...savedConfig }
+        return normalizeDisplayStrategyConfig(savedConfig)
       }
-      return defaultDisplayStrategyConfig
+      return { ...defaultDisplayStrategyConfig }
     } catch (error) {
-      return defaultDisplayStrategyConfig
+      return { ...defaultDisplayStrategyConfig }
     }
   },
 
   // Update display strategy configuration
   updateConfig: async (config: DisplayStrategyConfig): Promise<void> => {
-    const value = JSON.stringify(config)
+    const value = JSON.stringify(normalizeDisplayStrategyConfig(config))
     await http.put('/config/display.strategy', { value })
   },
 
@@ -521,7 +552,7 @@ export const displayStrategyApi = {
   // Reset to defaults
   resetConfig: async (): Promise<DisplayStrategyConfig> => {
     await http.delete('/config/display.strategy')
-    return defaultDisplayStrategyConfig
+    return { ...defaultDisplayStrategyConfig }
   }
 }
 

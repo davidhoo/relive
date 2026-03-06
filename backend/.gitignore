@@ -15,6 +15,7 @@ coverage.html
 
 # Go workspace file
 go.work
+/.gocache/
 
 # Data directories
 data/

@@ -159,7 +159,7 @@ type AIProvider interface {
 
 ### 3. 展示策略算法 ⭐⭐
 
-**"往年今日"智能降级**：
+**“往年今日”统一策略**：
 ```
 尝试 ±3 天 → 失败
   ↓
@@ -169,7 +169,9 @@ type AIProvider interface {
   ↓
 尝试 ±365 天 → 失败
   ↓
-评分最高照片（去重）
+回溯最近 365 天内最接近目标日期的历史月日 → 失败
+  ↓
+高分照片兜底（优先满足阈值并去重）
 ```
 
 **避免重复展示**：
@@ -197,7 +199,7 @@ type AIProvider interface {
 - 配置键白名单验证
 
 **预定义配置**：
-- display.algorithm - 展示算法
+- display.strategy - 展示策略配置（JSON）
 - display.refresh_interval - 刷新间隔
 - ai.provider - AI Provider 选择
 - ai.temperature - AI 温度参数
