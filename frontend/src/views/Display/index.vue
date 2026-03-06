@@ -73,7 +73,6 @@
         <template #header>
           <div class="preview-header">
             <span><el-icon><Calendar /></el-icon> 日期预览</span>
-            <el-button text @click="jumpToToday">回到今天</el-button>
           </div>
         </template>
 
@@ -82,14 +81,20 @@
           <div class="calendar-hint">{{ previewHint }}</div>
         </div>
 
-        <el-calendar v-model="previewCalendarDate" class="preview-calendar">
+        <el-calendar ref="previewCalendarRef" v-model="previewCalendarDate" class="preview-calendar">
+          <template #header>
+            <div class="calendar-nav">
+              <el-button text @click="selectCalendarDate('prev-month')">Previous Month</el-button>
+              <el-button text @click="selectCalendarDate('today')">Today</el-button>
+              <el-button text @click="selectCalendarDate('next-month')">Next Month</el-button>
+            </div>
+          </template>
           <template #date-cell="{ data }">
             <div
               class="calendar-cell"
               :class="{ 'is-preview-date': data.day === previewDateValue }"
             >
               <span class="calendar-day">{{ getCalendarDay(data.day) }}</span>
-              <span v-if="data.day === previewDateValue" class="calendar-badge">预览</span>
             </div>
           </template>
         </el-calendar>
@@ -160,7 +165,10 @@ import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
 
+type CalendarControlAction = 'prev-month' | 'today' | 'next-month'
+
 const form = ref<DisplayStrategyConfig>({ ...defaultDisplayStrategyConfig })
+const previewCalendarRef = ref<{ selectDate: (action: CalendarControlAction) => void } | null>(null)
 const previewCalendarDate = ref(new Date())
 
 const saving = ref(false)
@@ -240,8 +248,8 @@ const formatPhotoDate = (dateStr?: string) => {
 
 const getCalendarDay = (day: string) => Number(day.split('-')[2] || 0)
 
-const jumpToToday = () => {
-  previewCalendarDate.value = new Date()
+const selectCalendarDate = (action: CalendarControlAction) => {
+  previewCalendarRef.value?.selectDate(action)
 }
 
 // 从 API 加载配置
@@ -423,17 +431,42 @@ onUnmounted(() => {
   padding-right: 0;
 }
 
+.calendar-nav {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+}
+
+.calendar-nav .el-button:first-child {
+  justify-self: start;
+}
+
+.calendar-nav .el-button:nth-child(2) {
+  justify-self: center;
+}
+
+.calendar-nav .el-button:last-child {
+  justify-self: end;
+}
+
 .preview-calendar :deep(.el-calendar-table td) {
-  height: 78px;
+  height: auto;
+}
+
+.preview-calendar :deep(.el-calendar-day) {
+  height: auto;
+  padding: 0;
 }
 
 .calendar-cell {
-  height: 100%;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  box-sizing: border-box;
   padding: 8px;
   border-radius: 12px;
   display: flex;
-  flex-direction: column;
-  justify-content: space-between;
+  align-items: flex-start;
   background: transparent;
   transition: background-color 0.2s ease, color 0.2s ease;
 }
@@ -446,16 +479,6 @@ onUnmounted(() => {
 .calendar-day {
   font-size: 14px;
   font-weight: 600;
-}
-
-.calendar-badge {
-  align-self: flex-start;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: #1d4ed8;
-  color: #fff;
-  font-size: 12px;
-  line-height: 1.4;
 }
 
 .preview-grid {
