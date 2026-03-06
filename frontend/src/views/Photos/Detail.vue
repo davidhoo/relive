@@ -158,9 +158,11 @@ import { photoApi } from '@/api/photo'
 import { aiApi } from '@/api/ai'
 import type { Photo } from '@/types/photo'
 import dayjs from 'dayjs'
+import { useUserStore } from '@/stores/user'
 
 const route = useRoute()
 const router = useRouter()
+const userStore = useUserStore()
 
 const photo = ref<Photo | null>(null)
 const loading = ref(false)
@@ -169,13 +171,15 @@ const analyzing = ref(false)
 // 获取照片缩略图 URL
 const getPhotoThumbnailUrl = (photoId: number) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
-  return `${baseUrl}/photos/${photoId}/thumbnail`
+  const token = userStore.token
+  return `${baseUrl}/photos/${photoId}/thumbnail${token ? `?token=${token}` : ''}`
 }
 
 // 获取照片原图 URL（用于预览）
 const getPhotoUrl = (photoId: number) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
-  return `${baseUrl}/photos/${photoId}/image`
+  const token = userStore.token
+  return `${baseUrl}/photos/${photoId}/image${token ? `?token=${token}` : ''}`
 }
 
 // 格式化时间

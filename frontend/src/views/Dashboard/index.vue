@@ -185,9 +185,11 @@ import { photoApi } from '@/api/photo'
 import { aiApi } from '@/api/ai'
 import type { Photo } from '@/types/photo'
 import type { AIAnalyzeProgress } from '@/types/ai'
+import { useUserStore } from '@/stores/user'
 
 const router = useRouter()
 const systemStore = useSystemStore()
+const userStore = useUserStore()
 
 const recentPhotos = ref<Photo[]>([])
 const aiProgress = ref<AIAnalyzeProgress | null>(null)
@@ -230,13 +232,15 @@ const progressStatus = computed(() => {
 // 获取照片缩略图 URL
 const getPhotoThumbnailUrl = (photoId: number) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
-  return `${baseUrl}/photos/${photoId}/thumbnail`
+  const token = userStore.token
+  return `${baseUrl}/photos/${photoId}/thumbnail${token ? `?token=${token}` : ''}`
 }
 
 // 获取照片原图 URL（用于预览）
 const getPhotoUrl = (photoId: number) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
-  return `${baseUrl}/photos/${photoId}/image`
+  const token = userStore.token
+  return `${baseUrl}/photos/${photoId}/image${token ? `?token=${token}` : ''}`
 }
 
 // 获取文件名

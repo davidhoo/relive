@@ -158,6 +158,16 @@ func PhotoAuth(authService service.AuthService, deviceService service.DeviceServ
 			}
 		}
 
+		// 尝试 ?token= 查询参数（用于 <img> 标签直接加载，无法附加 header）
+		if token := c.Query("token"); token != "" {
+			if claims, err := authService.ValidateToken(token); err == nil {
+				c.Set(ContextUserIDKey, claims.UserID)
+				c.Set(ContextUsernameKey, claims.Username)
+				c.Next()
+				return
+			}
+		}
+
 		c.JSON(http.StatusUnauthorized, model.Response{
 			Success: false,
 			Error: &model.ErrorInfo{

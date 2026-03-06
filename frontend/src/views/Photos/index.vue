@@ -351,8 +351,10 @@ import { ElMessage } from 'element-plus'
 import { photoApi } from '@/api/photo'
 import { configApi, type ScanPathConfig } from '@/api/config'
 import type { Photo } from '@/types/photo'
+import { useUserStore } from '@/stores/user'
 
 const router = useRouter()
+const userStore = useUserStore()
 
 const photos = ref<Photo[]>([])
 const loading = ref(false)
@@ -403,13 +405,15 @@ const loadPathPhotoCounts = async () => {
 // 获取照片缩略图 URL
 const getPhotoThumbnailUrl = (photoId: number) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
-  return `${baseUrl}/photos/${photoId}/thumbnail`
+  const token = userStore.token
+  return `${baseUrl}/photos/${photoId}/thumbnail${token ? `?token=${token}` : ''}`
 }
 
 // 获取照片原图 URL（用于预览）
 const getPhotoUrl = (photoId: number) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
-  return `${baseUrl}/photos/${photoId}/image`
+  const token = userStore.token
+  return `${baseUrl}/photos/${photoId}/image${token ? `?token=${token}` : ''}`
 }
 
 // 获取文件名
