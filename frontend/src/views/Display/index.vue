@@ -2,7 +2,7 @@
   <div class="display-page">
     <el-card shadow="never">
       <template #header>
-        <span><el-icon><View /></el-icon> 展示策略配置</span>
+        <span><el-icon><View /></el-icon> 展示策略</span>
       </template>
 
       <el-alert
@@ -15,13 +15,25 @@
       </el-alert>
 
       <el-form :model="form" label-width="150px" style="max-width: 800px">
-        <el-form-item label="展示算法">
-          <el-select v-model="form.algorithm" placeholder="请选择算法" style="width: 100%">
+        <el-form-item label="展示策略">
+          <el-select v-model="form.algorithm" placeholder="请选择策略" style="width: 100%">
             <el-option label="随机选择" value="random" />
-            <el-option label="按评分排序" value="score_based" />
-            <el-option label="按时间排序" value="time_based" />
+            <el-option label="回忆优先" value="memory_first" />
+            <el-option label="美观优先" value="beauty_first" />
+            <el-option label="年度最佳" value="best_of_year" />
             <el-option label="智能推荐" value="smart" />
           </el-select>
+        </el-form-item>
+
+        <el-form-item label="每日挑选数量">
+          <el-input-number
+            v-model="form.dailyCount"
+            :min="1"
+            :max="20"
+            :step="1"
+            style="width: 200px"
+          />
+          <span class="help-text">每天为设备挑选展示的照片数量</span>
         </el-form-item>
 
         <el-form-item label="最小评分阈值">
@@ -33,20 +45,6 @@
             show-stops
             show-input
           />
-        </el-form-item>
-
-        <el-form-item label="刷新间隔 (秒)">
-          <el-input-number
-            v-model="form.refreshInterval"
-            :min="10"
-            :max="3600"
-            :step="10"
-            style="width: 200px"
-          />
-        </el-form-item>
-
-        <el-form-item label="启用动画">
-          <el-switch v-model="form.enableAnimation" />
         </el-form-item>
 
         <el-form-item>
@@ -65,10 +63,9 @@ import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 
 const form = ref({
-  algorithm: 'score_based',
+  algorithm: 'smart',
   minScore: 60,
-  refreshInterval: 60,
-  enableAnimation: true,
+  dailyCount: 3,
 })
 
 const saving = ref(false)
@@ -90,10 +87,9 @@ const handleSave = async () => {
 // 重置配置
 const handleReset = () => {
   form.value = {
-    algorithm: 'score_based',
+    algorithm: 'smart',
     minScore: 60,
-    refreshInterval: 60,
-    enableAnimation: true,
+    dailyCount: 3,
   }
 }
 
@@ -105,5 +101,11 @@ onMounted(() => {
 <style scoped>
 .display-page {
   padding: 20px;
+}
+
+.help-text {
+  margin-left: 10px;
+  color: #909399;
+  font-size: 12px;
 }
 </style>
