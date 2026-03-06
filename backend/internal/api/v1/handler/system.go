@@ -118,10 +118,7 @@ func (h *SystemHandler) Stats(c *gin.Context) {
 	stats.StorageSize = totalSize
 
 	// 获取数据库文件大小
-	dbPath := "./data/relive.db"
-	if fileInfo, err := os.Stat(dbPath); err == nil {
-		stats.DatabaseSize = fileInfo.Size()
-	}
+	stats.DatabaseSize = h.getDatabaseSize()
 
 	// 获取 Go 版本
 	stats.GoVersion = runtime.Version()
@@ -137,6 +134,32 @@ func (h *SystemHandler) Stats(c *gin.Context) {
 		Data:    stats,
 		Message: "Stats retrieved successfully",
 	})
+}
+
+func (h *SystemHandler) getDatabaseSize() int64 {
+	if h.cfg == nil {
+		return 0
+	}
+
+	if strings.ToLower(strings.TrimSpace(h.cfg.Database.Type)) != "sqlite" {
+		return 0
+	}
+
+	dbPath := strings.TrimSpace(h.cfg.Database.Path)
+	if dbPath == "" {
+		dbPath = "./data/relive.db"
+	}
+
+	dbPath = filepath.Clean(dbPath)
+
+	var totalSize int64
+	for _, path := range []string{dbPath, dbPath + "-wal"} {
+		if fileInfo, err := os.Stat(path); err == nil {
+			totalSize += fileInfo.Size()
+		}
+	}
+
+	return totalSize
 }
 
 // Environment 获取系统环境信息
