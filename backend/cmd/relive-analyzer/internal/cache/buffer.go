@@ -30,6 +30,9 @@ type ResultBuffer struct {
 
 	// 提交回调
 	submitter    func(ctx context.Context, results []model.AnalysisResult) error
+	// 提交成功回调（用于更新 checkpoint 和停止心跳）
+	// 回调接收成功提交的结果列表，包含 PhotoID 和 TaskID
+	onSubmitted  func(results []model.AnalysisResult)
 
 	// 刷新控制
 	flushTimer   *time.Timer
@@ -176,6 +179,11 @@ func (b *ResultBuffer) Flush(ctx context.Context) error {
 		return fmt.Errorf("submit results: %w", err)
 	}
 
+	// 提交成功，触发回调（传递完整结果，包含 PhotoID 和 TaskID）
+	if b.onSubmitted != nil {
+		b.onSubmitted(results)
+	}
+
 	// 删除持久化文件（如果存在）
 	if _, err := os.Stat(b.bufferFile); err == nil {
 		if err := os.Remove(b.bufferFile); err != nil {
@@ -292,4 +300,12 @@ func (b *ResultBuffer) SetWorkDir(dir string) {
 	if !filepath.IsAbs(b.bufferFile) {
 		b.bufferFile = filepath.Join(dir, b.bufferFile)
 	}
+}
+
+// SetOnSubmitted 设置提交成功回调
+// 回调函数接收成功提交的结果列表，用于更新 checkpoint 和停止心跳
+func (b *ResultBuffer) SetOnSubmitted(callback func(results []model.AnalysisResult)) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	b.onSubmitted = callback
 }

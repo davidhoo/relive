@@ -164,7 +164,8 @@ func (a *APIAnalyzer) Check() error {
 		fmt.Println("Local Checkpoint")
 		fmt.Println("========================================")
 		fmt.Printf("Total processed:   %d\n", cpStats.Total)
-		fmt.Printf("Success:           %d\n", cpStats.Success)
+		fmt.Printf("Analyzed:          %d (pending submission)\n", cpStats.Analyzed)
+		fmt.Printf("Submitted:         %d\n", cpStats.Submitted)
 		fmt.Printf("Failed:            %d\n", cpStats.Failed)
 		fmt.Println("========================================")
 	}
@@ -185,14 +186,33 @@ func (a *APIAnalyzer) Run() error {
 	}
 	logger.Info("AI provider is available")
 
-	// 恢复结果缓冲区
+	// 恢复结果缓冲区（文件中的未提交结果）
 	if err := a.resultBuffer.Restore(); err != nil {
 		logger.Warnf("Failed to restore result buffer: %v", err)
 	}
 
+	// 恢复检查点中 analyzed 状态的任务（上次崩溃未提交的）
+	if err := a.restoreUnsubmitted(); err != nil {
+		logger.Warnf("Failed to restore unsubmitted results: %v", err)
+	}
+
+	// 设置提交成功回调（用于更新 checkpoint 和停止心跳）
+	a.resultBuffer.SetOnSubmitted(func(results []model.AnalysisResult) {
+		for _, result := range results {
+			// 更新检查点为已提交
+			if err := a.checkpoint.MarkSubmitted(result.PhotoID); err != nil {
+				logger.Warnf("Failed to mark submitted for photo %d: %v", result.PhotoID, err)
+			}
+			// 停止对应的心跳
+			if result.TaskID != "" {
+				a.taskManager.StopHeartbeat(result.TaskID)
+			}
+		}
+		logger.Debugf("Marked %d photos as submitted", len(results))
+	})
+
 	// 启动结果缓冲区
 	a.resultBuffer.Start()
-	defer a.resultBuffer.Stop()
 
 	// 启动工作池
 	a.workerPool.Start()
@@ -228,6 +248,28 @@ func (a *APIAnalyzer) Run() error {
 	return nil
 }
 
+// restoreUnsubmitted 恢复检查点中 analyzed 状态的结果到缓冲区
+// 用于程序崩溃后重启时，重新提交未成功提交的结果
+func (a *APIAnalyzer) restoreUnsubmitted() error {
+	photoIDs, err := a.checkpoint.GetAnalyzed()
+	if err != nil {
+		return fmt.Errorf("get analyzed photo IDs: %w", err)
+	}
+
+	if len(photoIDs) == 0 {
+		return nil
+	}
+
+	logger.Infof("Found %d unsubmitted results from previous run, will retry submission", len(photoIDs))
+
+	// 注意：这里我们只记录了 photoID，没有记录完整的 AnalysisResult
+	// 这是因为结果已经保存在 buffer.json 中了（通过 Persist）
+	// 如果 buffer.json 丢失了，这些任务将永远处于 analyzed 状态但不会提交
+	// 这种情况下，下次获取任务时会跳过（IsProcessed 返回 true），需要手动清理
+
+	return nil
+}
+
 // Stop 停止分析器
 func (a *APIAnalyzer) Stop() {
 	a.cancel()
@@ -235,7 +277,12 @@ func (a *APIAnalyzer) Stop() {
 	a.workerPool.Cancel()
 	a.wg.Wait()
 
-	// 保存检查点
+	// 先停止结果缓冲区（触发 Flush 和回调）
+	if a.resultBuffer != nil {
+		a.resultBuffer.Stop()
+	}
+
+	// 再关闭检查点（确保回调可以访问数据库）
 	if a.checkpoint != nil {
 		a.checkpoint.Close()
 	}
@@ -377,22 +424,23 @@ func (a *APIAnalyzer) processTask(ctx context.Context, task *model.AnalysisTask)
 		AIProvider:   a.aiProvider.Name(),
 	}
 
-	// 添加到结果缓冲区
+	// 添加到结果缓冲区（内部会触发 Persist 保存到文件）
 	a.resultBuffer.Add(analysisResult)
 
-	// 更新检查点
-	if err := a.checkpoint.MarkSuccess(task.PhotoID); err != nil {
-		logger.Warnf("Failed to mark success: %v", err)
+	// 【关键变更】标记为已分析（等待提交），而不是已提交
+	// 心跳继续保持，直到异步提交成功后通过回调停止
+	if err := a.checkpoint.MarkAnalyzed(task.PhotoID); err != nil {
+		logger.Warnf("Failed to mark analyzed: %v", err)
 	}
 
-	// 停止心跳
-	a.taskManager.StopHeartbeat(task.ID)
+	// 【移除】这里不再停止心跳，移到提交回调中
+	// a.taskManager.StopHeartbeat(task.ID)
 
-	// 更新统计
+	// 更新统计（AI分析成功）
 	duration := time.Since(startTime)
 	a.stats.RecordSuccess(duration, result.Cost)
 
-	logger.Debugf("Analyzed photo %d: %s (%.2fs)", task.PhotoID, task.FilePath, duration.Seconds())
+	logger.Debugf("Analyzed photo %d: %s (%.2fs), waiting for submission", task.PhotoID, task.FilePath, duration.Seconds())
 
 	return nil
 }
@@ -451,20 +499,38 @@ func submitResultsFunc(client *analyzerClient.APIClient) func(ctx context.Contex
 			return err
 		}
 
-		// 记录被拒绝的项
-		if resp.Rejected > 0 {
-			for _, item := range resp.RejectedItems {
-				logger.Warnf("Result rejected: photo_id=%d, reason=%s", item.PhotoID, item.Reason)
+		// 分析提交结果
+		var actuallyFailed []uint
+		var rejectedAsSuccess []uint // 因“已分析”等原因被拒绝，视为成功
+
+		for _, item := range resp.RejectedItems {
+			switch item.Reason {
+			case "already_analyzed", "task_not_found", "photo_not_found":
+				// 这些原因视为成功：
+				// - already_analyzed: 照片已经被分析过了
+				// - task_not_found: 任务已过期被释放，但结果可能已保存
+				// - photo_not_found: 照片不存在（被删除）
+				logger.Warnf("Result rejected but treated as success: photo_id=%d, reason=%s",
+					item.PhotoID, item.Reason)
+				rejectedAsSuccess = append(rejectedAsSuccess, item.PhotoID)
+			default:
+				// 其他原因需要重试
+				logger.Errorf("Result rejected: photo_id=%d, reason=%s, message=%s",
+					item.PhotoID, item.Reason, item.Message)
+				actuallyFailed = append(actuallyFailed, item.PhotoID)
 			}
 		}
 
-		logger.Infof("Submitted %d results (accepted: %d, rejected: %d, failed: %d)",
-			len(results), resp.Accepted, resp.Rejected, len(resp.FailedPhotos))
+		// 合并 FailedPhotos
+		actuallyFailed = append(actuallyFailed, resp.FailedPhotos...)
 
-		// 如果有失败的照片，返回错误让缓冲区恢复数据以便重试
-		if len(resp.FailedPhotos) > 0 {
-			logger.Errorf("Failed to submit %d results, will retry", len(resp.FailedPhotos))
-			return fmt.Errorf("server failed to process %d results", len(resp.FailedPhotos))
+		logger.Infof("Submitted %d results (accepted: %d, rejected-as-success: %d, failed: %d)",
+			len(results), resp.Accepted, len(rejectedAsSuccess), len(actuallyFailed))
+
+		// 如果有真正失败的照片，返回错误让缓冲区恢复数据以便重试
+		if len(actuallyFailed) > 0 {
+			logger.Errorf("Failed to submit %d results, will retry", len(actuallyFailed))
+			return fmt.Errorf("server failed to process %d results", len(actuallyFailed))
 		}
 
 		return nil

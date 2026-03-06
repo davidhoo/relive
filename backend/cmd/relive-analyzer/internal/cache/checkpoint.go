@@ -18,7 +18,7 @@ const (
 	checkpointSchema      = `
 CREATE TABLE IF NOT EXISTS checkpoint (
     photo_id INTEGER PRIMARY KEY,
-    status TEXT NOT NULL,           -- 'success', 'failed', 'pending'
+    status TEXT NOT NULL,           -- 'pending', 'analyzed', 'submitted', 'failed'
     attempts INTEGER DEFAULT 0,     -- 尝试次数
     error_msg TEXT,                 -- 失败原因
     processed_at TIMESTAMP          -- 处理时间
@@ -40,9 +40,10 @@ type Checkpoint struct {
 type CheckpointStatus string
 
 const (
-	StatusSuccess CheckpointStatus = "success"
-	StatusFailed  CheckpointStatus = "failed"
-	StatusPending CheckpointStatus = "pending"
+	StatusPending   CheckpointStatus = "pending"   // 开始处理
+	StatusAnalyzed  CheckpointStatus = "analyzed"  // AI分析完成，等待提交
+	StatusSubmitted CheckpointStatus = "submitted" // 已提交到服务器
+	StatusFailed    CheckpointStatus = "failed"    // 处理失败
 )
 
 // NewCheckpoint 创建断点续传管理器
@@ -104,20 +105,41 @@ func (c *Checkpoint) MarkPending(photoID uint) error {
 	return nil
 }
 
-// MarkSuccess 标记照片为成功
-func (c *Checkpoint) MarkSuccess(photoID uint) error {
+// MarkAnalyzed 标记照片为已分析完成（等待提交）
+func (c *Checkpoint) MarkAnalyzed(photoID uint) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	_, err := c.db.Exec(
 		`INSERT OR REPLACE INTO checkpoint (photo_id, status, attempts, error_msg, processed_at)
 		 VALUES (?, ?, COALESCE((SELECT attempts FROM checkpoint WHERE photo_id = ?), 1), NULL, ?)`,
-		photoID, StatusSuccess, photoID, time.Now(),
+		photoID, StatusAnalyzed, photoID, time.Now(),
 	)
 	if err != nil {
-		return fmt.Errorf("mark success: %w", err)
+		return fmt.Errorf("mark analyzed: %w", err)
 	}
 	return nil
+}
+
+// MarkSubmitted 标记照片为已提交到服务器
+func (c *Checkpoint) MarkSubmitted(photoID uint) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	_, err := c.db.Exec(
+		`INSERT OR REPLACE INTO checkpoint (photo_id, status, attempts, error_msg, processed_at)
+		 VALUES (?, ?, COALESCE((SELECT attempts FROM checkpoint WHERE photo_id = ?), 1), NULL, ?)`,
+		photoID, StatusSubmitted, photoID, time.Now(),
+	)
+	if err != nil {
+		return fmt.Errorf("mark submitted: %w", err)
+	}
+	return nil
+}
+
+// MarkSuccess 标记照片为成功（兼容旧版本，等同于 MarkSubmitted）
+func (c *Checkpoint) MarkSuccess(photoID uint) error {
+	return c.MarkSubmitted(photoID)
 }
 
 // MarkFailed 标记照片为失败
@@ -136,7 +158,8 @@ func (c *Checkpoint) MarkFailed(photoID uint, errorMsg string) error {
 	return nil
 }
 
-// IsProcessed 检查照片是否已处理（成功或失败）
+// IsProcessed 检查照片是否已处理（analyzed, submitted 或 failed）
+// 只要开始分析或完成都算已处理，避免重复获取任务
 func (c *Checkpoint) IsProcessed(photoID uint) (bool, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -154,7 +177,12 @@ func (c *Checkpoint) IsProcessed(photoID uint) (bool, error) {
 		return false, fmt.Errorf("check processed: %w", err)
 	}
 
-	return status == string(StatusSuccess) || status == string(StatusFailed), nil
+	// analyzed, submitted, failed 都算已处理
+	// 兼容旧版本：'success' 也视为 submitted
+	return status == string(StatusAnalyzed) ||
+		status == string(StatusSubmitted) ||
+		status == string(StatusFailed) ||
+		status == "success", nil
 }
 
 // GetStats 获取统计信息
@@ -169,9 +197,14 @@ func (c *Checkpoint) GetStats() (*CheckpointStats, error) {
 		return nil, fmt.Errorf("count total: %w", err)
 	}
 
-	// 成功数
-	if err := c.db.QueryRow("SELECT COUNT(*) FROM checkpoint WHERE status = ?", StatusSuccess).Scan(&stats.Success); err != nil {
-		return nil, fmt.Errorf("count success: %w", err)
+	// 已分析待提交
+	if err := c.db.QueryRow("SELECT COUNT(*) FROM checkpoint WHERE status = ?", StatusAnalyzed).Scan(&stats.Analyzed); err != nil {
+		return nil, fmt.Errorf("count analyzed: %w", err)
+	}
+
+	// 已提交到服务器（兼容旧版本 'success' 状态）
+	if err := c.db.QueryRow("SELECT COUNT(*) FROM checkpoint WHERE status = ? OR status = 'success'", StatusSubmitted).Scan(&stats.Submitted); err != nil {
+		return nil, fmt.Errorf("count submitted: %w", err)
 	}
 
 	// 失败数
@@ -185,6 +218,32 @@ func (c *Checkpoint) GetStats() (*CheckpointStats, error) {
 	}
 
 	return stats, nil
+}
+
+// GetAnalyzed 获取已分析但未提交的照片列表（用于启动恢复）
+func (c *Checkpoint) GetAnalyzed() ([]uint, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	rows, err := c.db.Query(
+		"SELECT photo_id FROM checkpoint WHERE status = ? ORDER BY processed_at",
+		StatusAnalyzed,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query analyzed: %w", err)
+	}
+	defer rows.Close()
+
+	var photoIDs []uint
+	for rows.Next() {
+		var id uint
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan analyzed: %w", err)
+		}
+		photoIDs = append(photoIDs, id)
+	}
+
+	return photoIDs, rows.Err()
 }
 
 // GetFailedPhotos 获取失败的照片列表
@@ -261,10 +320,11 @@ func (c *Checkpoint) CleanupOldRecords(days int) (int64, error) {
 
 // CheckpointStats 统计信息
 type CheckpointStats struct {
-	Total   int64
-	Success int64
-	Failed  int64
-	Pending int64
+	Total     int64 // 总记录数
+	Analyzed  int64 // 已分析待提交
+	Submitted int64 // 已提交到服务器
+	Failed    int64 // 处理失败
+	Pending   int64 // 处理中
 }
 
 // FailedPhoto 失败的照片记录
