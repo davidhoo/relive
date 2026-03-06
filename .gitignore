@@ -67,6 +67,7 @@ esp32/.pio
 esp32/.vscode
 esp32/build/
 backend/relive
+backend/relive-analyzer
 
 # Config files with sensitive data
 analyzer.yaml
