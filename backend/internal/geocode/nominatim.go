@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/davidhoo/relive/pkg/logger"
@@ -25,6 +26,25 @@ func inferMunicipalityFromContext(displayName, district string) string {
 	}
 	// 如果找不到，返回区/县名作为后备
 	return district
+}
+
+// isChineseDistrict 判断一个地名是否是区/县级（而非城市级）
+// Nominatim 有时会把区/县名填入 city 字段，需要识别并纠正
+func isChineseDistrict(name string) bool {
+	return strings.HasSuffix(name, "区") || strings.HasSuffix(name, "县")
+}
+
+// inferCityFromDisplayName 从 display_name 中提取城市名（以"市"结尾的部分）
+// display_name 格式："天水街道, 拱墅区, 杭州市, 浙江省, 310007, 中国"
+func inferCityFromDisplayName(displayName string) string {
+	parts := strings.Split(displayName, ", ")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if strings.HasSuffix(part, "市") && !strings.ContainsAny(part, " \t") {
+			return part
+		}
+	}
+	return ""
 }
 
 // contains 检查字符串是否包含子串
@@ -176,6 +196,19 @@ func (p *NominatimProvider) ReverseGeocode(lat, lon float64) (*Location, error) 
 			province = municipality
 			district = city  // 区/县移到 district
 			city = municipality  // 城市设为直辖市名称
+		}
+	}
+
+	// 普通省会/地级市修正：Nominatim 有时把区/县填入 city 字段，而真正的城市名只在 display_name 里
+	// 例如：city="拱墅区"（实为区级），display_name 里含 "杭州市"
+	if result.Address.CountryCode == "cn" && city != "" && isChineseDistrict(city) {
+		if inferredCity := inferCityFromDisplayName(result.DisplayName); inferredCity != "" && inferredCity != city {
+			// 把 suburb（街道）提升为 street（若 road 为空），腾出 district 给真正的区级
+			if street == "" && district != "" {
+				street = district
+			}
+			district = city         // 原 city（区/县）降级为 district
+			city = inferredCity     // 推断出的城市名升级为 city
 		}
 	}
 
