@@ -25,7 +25,7 @@
         <!-- 左侧：照片预览 -->
         <el-col :span="12">
           <el-image
-            :src="getPhotoThumbnailUrl(photo.id)"
+            :src="getPhotoThumbnailUrl(photo.id, photo.updated_at)"
             :preview-src-list="[getPhotoUrl(photo.id)]"
             fit="contain"
             style="width: 100%; border-radius: 8px"
@@ -169,10 +169,14 @@ const loading = ref(false)
 const analyzing = ref(false)
 
 // 获取照片缩略图 URL
-const getPhotoThumbnailUrl = (photoId: number) => {
+const getPhotoThumbnailUrl = (photoId: number, version?: string) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
   const token = userStore.token
-  return `${baseUrl}/photos/${photoId}/thumbnail${token ? `?token=${token}` : ''}`
+  const params = new URLSearchParams()
+  if (token) params.set('token', token)
+  if (version) params.set('v', version)
+  const query = params.toString()
+  return `${baseUrl}/photos/${photoId}/thumbnail${query ? `?${query}` : ''}`
 }
 
 // 获取照片原图 URL（用于预览）

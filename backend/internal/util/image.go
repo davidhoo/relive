@@ -15,7 +15,15 @@ import (
 
 	"github.com/disintegration/imaging"
 	"github.com/jdeng/goheif"
+	"github.com/jdeng/goheif/heif"
 )
+
+type heifTransformInfo struct {
+	rotations    int
+	mirror       int
+	visualWidth  int
+	visualHeight int
+}
 
 // ImageProcessor 图片处理器
 type ImageProcessor struct {
@@ -95,6 +103,12 @@ func (p *ImageProcessor) compressToJPEG(img image.Image) ([]byte, error) {
 
 // GetImageSize 获取图片尺寸（不加载完整图片）
 func GetImageSize(filePath string) (width, height int, err error) {
+	if IsHEIC(filePath) {
+		if info, heifErr := readHEIFTransformInfo(filePath); heifErr == nil && info.visualWidth > 0 && info.visualHeight > 0 {
+			return info.visualWidth, info.visualHeight, nil
+		}
+	}
+
 	file, err := os.Open(filePath)
 	if err != nil {
 		return 0, 0, err
@@ -134,8 +148,8 @@ func init() {
 	image.RegisterFormat("heif", "ftypmif1", goheif.Decode, goheif.DecodeConfig)
 }
 
-// isHEIC 检查是否是 HEIC/HEIF 格式
-func isHEIC(filePath string) bool {
+// IsHEIC 检查是否是 HEIC/HEIF 格式
+func IsHEIC(filePath string) bool {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	return ext == ".heic" || ext == ".heif"
 }
@@ -143,17 +157,113 @@ func isHEIC(filePath string) bool {
 // OpenImage 打开图片（支持 JPEG、PNG、HEIC 等格式）
 func OpenImage(filePath string) (image.Image, error) {
 	// 如果是 HEIC 格式，使用专门的解码器
-	if isHEIC(filePath) {
+	if IsHEIC(filePath) {
 		file, err := os.Open(filePath)
 		if err != nil {
 			return nil, err
 		}
 		defer file.Close()
-		return goheif.Decode(file)
+
+		img, err := goheif.Decode(file)
+		if err != nil {
+			return nil, err
+		}
+
+		info, err := readHEIFTransformInfoFromFile(file)
+		if err != nil {
+			return img, nil
+		}
+
+		return applyHEIFTransforms(img, info), nil
 	}
 
 	// 其他格式使用 imaging 库
 	return imaging.Open(filePath)
+}
+
+func readHEIFTransformInfo(filePath string) (heifTransformInfo, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return heifTransformInfo{}, err
+	}
+	defer file.Close()
+
+	return readHEIFTransformInfoFromFile(file)
+}
+
+func readHEIFTransformInfoFromFile(file *os.File) (heifTransformInfo, error) {
+	hf := heif.Open(file)
+	item, err := hf.PrimaryItem()
+	if err != nil {
+		return heifTransformInfo{}, err
+	}
+
+	info := heifTransformInfo{
+		rotations: item.Rotations(),
+		mirror:    item.Mirror(),
+	}
+
+	if width, height, ok := item.VisualDimensions(); ok {
+		info.visualWidth = width
+		info.visualHeight = height
+	}
+
+	return info, nil
+}
+
+func heifRotationToOrientation(rotations int, mirror int) int {
+	if mirror != 0 {
+		return 0
+	}
+
+	switch ((rotations % 4) + 4) % 4 {
+	case 0:
+		return 1
+	case 1:
+		return 8
+	case 2:
+		return 3
+	case 3:
+		return 6
+	default:
+		return 0
+	}
+}
+
+func applyHEIFTransforms(img image.Image, info heifTransformInfo) image.Image {
+	transformed := img
+	switch info.mirror {
+	case 1:
+		transformed = imaging.FlipH(transformed)
+	case 2:
+		transformed = imaging.FlipV(transformed)
+	}
+
+	for i := 0; i < ((info.rotations%4)+4)%4; i++ {
+		transformed = imaging.Rotate90(transformed)
+	}
+
+	return transformed
+}
+
+func ShouldRefreshHEICCache(sourcePath, cachePath string) bool {
+	if !IsHEIC(sourcePath) {
+		return false
+	}
+
+	sourceWidth, sourceHeight, err := GetImageSize(sourcePath)
+	if err != nil || sourceWidth <= 0 || sourceHeight <= 0 {
+		return false
+	}
+
+	cacheWidth, cacheHeight, err := GetImageSize(cachePath)
+	if err != nil || cacheWidth <= 0 || cacheHeight <= 0 {
+		return true
+	}
+
+	sourceLandscape := sourceWidth > sourceHeight
+	cacheLandscape := cacheWidth > cacheHeight
+	return sourceLandscape != cacheLandscape
 }
 
 // NormalizeOrientation 根据 EXIF orientation 将图片旋正。
@@ -450,6 +560,9 @@ func (g *ThumbnailGenerator) GenerateThumbnailIfNotExists(filePath string) (stri
 
 	// 检查缩略图是否已存在
 	if _, err := os.Stat(thumbnailPath); err == nil {
+		if ShouldRefreshHEICCache(filePath, thumbnailPath) {
+			return g.GenerateThumbnail(filePath)
+		}
 		// 已存在，直接返回路径
 		return relPath, nil
 	}

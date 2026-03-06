@@ -705,9 +705,12 @@ func (h *PhotoHandler) GetPhotoImage(c *gin.Context) {
 
 		// 如果缩略图文件已存在，直接返回
 		if _, err := os.Stat(thumbnailFile); err == nil {
-			c.Header("Content-Type", "image/jpeg")
-			c.File(thumbnailFile)
-			return
+			if !util.ShouldRefreshHEICCache(photo.FilePath, thumbnailFile) {
+				c.Header("Content-Type", "image/jpeg")
+				c.File(thumbnailFile)
+				return
+			}
+			_ = os.Remove(thumbnailFile)
 		}
 
 		// 使用 imaging 库转换 HEIC 到 JPEG（跨平台，支持 Docker）
@@ -837,9 +840,20 @@ func (h *PhotoHandler) GetPhotoThumbnail(c *gin.Context) {
 	if photo.ThumbnailPath != "" {
 		thumbnailFullPath := filepath.Join(h.cfg.Photos.ThumbnailPath, photo.ThumbnailPath)
 		if _, err := os.Stat(thumbnailFullPath); err == nil {
-			c.Header("Content-Type", "image/jpeg")
-			c.File(thumbnailFullPath)
-			return
+			if !util.ShouldRefreshHEICCache(photo.FilePath, thumbnailFullPath) {
+				c.Header("Content-Type", "image/jpeg")
+				c.File(thumbnailFullPath)
+				return
+			}
+
+			generator := util.NewThumbnailGenerator(1024, 1024, 90, h.cfg.Photos.ThumbnailPath)
+			if _, regenErr := generator.GenerateThumbnail(photo.FilePath); regenErr != nil {
+				logger.Warnf("Failed to regenerate stale thumbnail %s: %v", thumbnailFullPath, regenErr)
+			} else if _, err := os.Stat(thumbnailFullPath); err == nil {
+				c.Header("Content-Type", "image/jpeg")
+				c.File(thumbnailFullPath)
+				return
+			}
 		}
 		// 缩略图文件不存在，记录警告并回退到原图
 		logger.Warnf("Thumbnail file not found: %s, falling back to original", thumbnailFullPath)
@@ -856,7 +870,7 @@ func (h *PhotoHandler) generateFramePreviewFile(photo *model.Photo, targetWidth,
 	}
 
 	cacheKey := fmt.Sprintf(
-		"frame-preview:v2:%s:%d:%d:%dx%d",
+		"frame-preview:v3:%s:%d:%d:%dx%d",
 		photo.FilePath,
 		fileInfo.Size(),
 		fileInfo.ModTime().UnixNano(),
@@ -885,7 +899,9 @@ func (h *PhotoHandler) generateFramePreviewFile(photo *model.Photo, targetWidth,
 		orientation = exifData.Orientation
 	}
 
-	img = util.NormalizeOrientation(img, orientation)
+	if !util.IsHEIC(photo.FilePath) {
+		img = util.NormalizeOrientation(img, orientation)
+	}
 	framePreview := util.GenerateFramePreview(img, targetWidth, targetHeight)
 
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0755); err != nil {

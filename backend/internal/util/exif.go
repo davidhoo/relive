@@ -28,17 +28,22 @@ type EXIFData struct {
 
 // ExtractEXIF 提取 EXIF 信息
 func ExtractEXIF(filePath string) (*EXIFData, error) {
+	ext := strings.ToLower(filepath.Ext(filePath))
+
 	// 首先尝试用 goexif 库读取
 	data, err := extractEXIFWithGoExif(filePath)
+	if ext == ".heic" || ext == ".heif" {
+		data = enrichHEIFMetadata(filePath, data)
+	}
 	if err == nil && (data.TakenAt != nil || data.CameraModel != "") {
 		return data, nil
 	}
 
 	// 如果失败或数据为空，尝试用 exiftool（支持 HEIC）
-	ext := strings.ToLower(filepath.Ext(filePath))
 	if ext == ".heic" || ext == ".heif" {
 		// 先尝试 exiftool（Docker/Linux 环境）
 		data, err := extractEXIFWithExifTool(filePath)
+		data = enrichHEIFMetadata(filePath, data)
 		if err != nil {
 			logger.Debugf("exiftool failed for %s: %v", filePath, err)
 		} else if data.TakenAt != nil || data.GPSLatitude != nil || data.CameraModel != "" {
@@ -53,6 +58,28 @@ func ExtractEXIF(filePath string) (*EXIFData, error) {
 
 	// 返回原始数据（可能为空）
 	return data, nil
+}
+
+func enrichHEIFMetadata(filePath string, data *EXIFData) *EXIFData {
+	if data == nil {
+		data = &EXIFData{}
+	}
+
+	info, err := readHEIFTransformInfo(filePath)
+	if err != nil {
+		return data
+	}
+
+	if info.visualWidth > 0 && info.visualHeight > 0 {
+		data.Width = info.visualWidth
+		data.Height = info.visualHeight
+	}
+
+	if data.Orientation == 0 {
+		data.Orientation = heifRotationToOrientation(info.rotations, info.mirror)
+	}
+
+	return data
 }
 
 // extractEXIFWithGoExif 使用 goexif 库提取 EXIF
@@ -336,6 +363,8 @@ func extractEXIFWithSips(filePath string) (*EXIFData, error) {
 	if data.GPSLatitude == nil || data.GPSLongitude == nil {
 		extractGPSWithMdls(filePath, data)
 	}
+
+	data = enrichHEIFMetadata(filePath, data)
 
 	return data, nil
 }

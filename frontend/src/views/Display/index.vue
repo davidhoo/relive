@@ -137,7 +137,7 @@
             >
               <img
                 class="preview-image"
-                :src="getPhotoThumbnailUrl(photo.id)"
+                :src="getPhotoThumbnailUrl(photo.id, photo.updated_at)"
                 :alt="photo.caption || getFileName(photo.file_path)"
               />
             </button>
@@ -171,7 +171,7 @@
           <div class="frame-preview-stage">
             <el-image
               class="frame-preview-image"
-              :src="getPhotoFramePreviewUrl(framePreviewPhoto.id)"
+              :src="getPhotoFramePreviewUrl(framePreviewPhoto.id, framePreviewPhoto.updated_at)"
               :alt="framePreviewPhoto.caption || getFileName(framePreviewPhoto.file_path)"
               fit="cover"
             />
@@ -237,15 +237,19 @@ const emptyPreviewText = computed(() => {
   return '没有找到符合当前策略条件的照片'
 })
 
-const getPhotoAssetUrl = (photoId: number, asset: 'thumbnail' | 'frame-preview') => {
+const getPhotoAssetUrl = (photoId: number, asset: 'thumbnail' | 'frame-preview', version?: string) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
   const token = userStore.token
-  return `${baseUrl}/photos/${photoId}/${asset}${token ? `?token=${token}` : ''}`
+  const params = new URLSearchParams()
+  if (token) params.set('token', token)
+  if (version) params.set('v', version)
+  const query = params.toString()
+  return `${baseUrl}/photos/${photoId}/${asset}${query ? `?${query}` : ''}`
 }
 
-const getPhotoThumbnailUrl = (photoId: number) => getPhotoAssetUrl(photoId, 'thumbnail')
+const getPhotoThumbnailUrl = (photoId: number, version?: string) => getPhotoAssetUrl(photoId, 'thumbnail', version)
 
-const getPhotoFramePreviewUrl = (photoId: number) => getPhotoAssetUrl(photoId, 'frame-preview')
+const getPhotoFramePreviewUrl = (photoId: number, version?: string) => getPhotoAssetUrl(photoId, 'frame-preview', version)
 
 const getFileName = (filePath: string) => filePath.split('/').pop() || filePath
 
