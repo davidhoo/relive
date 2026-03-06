@@ -286,6 +286,7 @@ func (s *analysisService) SubmitResults(results []model.AnalysisResult, deviceID
 
 			err = tx.Model(&photo).Updates(updates).Error
 			if err != nil {
+				logger.Errorf("Failed to update photo %d: %v", result.PhotoID, err)
 				resp.FailedPhotos = append(resp.FailedPhotos, result.PhotoID)
 				continue
 			}

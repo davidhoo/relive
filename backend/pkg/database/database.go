@@ -52,14 +52,14 @@ func Init(cfg config.DatabaseConfig) (*gorm.DB, error) {
         db.Exec("PRAGMA journal_mode=WAL")
 
         // 设置 busy_timeout（避免 database locked 错误)
-        db.Exec("PRAGMA busy_timeout=5000")
+        db.Exec("PRAGMA busy_timeout=30000")
 
         // 启用外键约束
         db.Exec("PRAGMA foreign_keys=ON")
 
-        // 设置连接池
-        sqlDB.SetMaxOpenConns(25)
-        sqlDB.SetMaxIdleConns(5)
+        // 设置连接池（SQLite 写是单线程，连接数不宜过多）
+        sqlDB.SetMaxOpenConns(10)
+        sqlDB.SetMaxIdleConns(3)
         sqlDB.SetConnMaxLifetime(5 * time.Minute)
 
     case "postgres":
