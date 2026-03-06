@@ -9,39 +9,41 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/davidhoo/relive/internal/model"
-	"github.com/davidhoo/relive/internal/provider"
-	"github.com/davidhoo/relive/internal/util"
-	"github.com/davidhoo/relive/internal/analyzer"
 	analyzerCache "github.com/davidhoo/relive/cmd/relive-analyzer/internal/cache"
 	analyzerClient "github.com/davidhoo/relive/cmd/relive-analyzer/internal/client"
 	analyzerConfig "github.com/davidhoo/relive/cmd/relive-analyzer/internal/config"
 	"github.com/davidhoo/relive/cmd/relive-analyzer/internal/download"
+	"github.com/davidhoo/relive/internal/analyzer"
+	"github.com/davidhoo/relive/internal/model"
+	"github.com/davidhoo/relive/internal/provider"
+	"github.com/davidhoo/relive/internal/util"
 	"github.com/davidhoo/relive/pkg/logger"
 	"github.com/google/uuid"
 )
 
 // APIAnalyzer API 模式分析器
 type APIAnalyzer struct {
-	config         *analyzerConfig.Config
-	client         *analyzerClient.APIClient
-	taskManager    *analyzerClient.TaskManager
-	downloader     *download.Downloader
-	resultBuffer   *analyzerCache.ResultBuffer
-	checkpoint     *analyzerCache.Checkpoint
-	aiProvider     provider.AIProvider
-	imageProcessor *util.ImageProcessor
-	analyzerID     string
+	config                 *analyzerConfig.Config
+	client                 *analyzerClient.APIClient
+	taskManager            *analyzerClient.TaskManager
+	downloader             *download.Downloader
+	resultBuffer           *analyzerCache.ResultBuffer
+	checkpoint             *analyzerCache.Checkpoint
+	aiProvider             provider.AIProvider
+	imageProcessor         *util.ImageProcessor
+	analyzerID             string
+	runtimeLeaseAcquired   bool
+	runtimeHeartbeatCancel context.CancelFunc
 
 	// 工作控制
-	workerPool   *analyzer.WorkerPool
-	ctx          context.Context
-	cancel       context.CancelFunc
-	stopCh       chan struct{}
-	wg           sync.WaitGroup
+	workerPool *analyzer.WorkerPool
+	ctx        context.Context
+	cancel     context.CancelFunc
+	stopCh     chan struct{}
+	wg         sync.WaitGroup
 
 	// 统计
-	stats        *analyzer.Stats
+	stats *analyzer.Stats
 }
 
 // NewAPIAnalyzer 创建 API 模式分析器
@@ -180,6 +182,10 @@ func (a *APIAnalyzer) Run() error {
 	logger.Infof("Workers: %d", a.config.Analyzer.Workers)
 	logger.Infof("AI Provider: %s", a.aiProvider.Name())
 
+	if err := a.acquireRuntimeLease(); err != nil {
+		return err
+	}
+
 	// 检查 AI Provider
 	if !a.aiProvider.IsAvailable() {
 		return fmt.Errorf("AI provider %s is not available", a.aiProvider.Name())
@@ -273,6 +279,7 @@ func (a *APIAnalyzer) restoreUnsubmitted() error {
 // Stop 停止分析器
 func (a *APIAnalyzer) Stop() {
 	a.cancel()
+	a.stopRuntimeLease()
 	a.taskManager.StopAllHeartbeats()
 	a.workerPool.Cancel()
 	a.wg.Wait()
@@ -291,6 +298,63 @@ func (a *APIAnalyzer) Stop() {
 	if a.downloader != nil {
 		a.downloader.Cleanup()
 	}
+}
+
+func (a *APIAnalyzer) acquireRuntimeLease() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, status, err := a.client.AcquireAnalysisRuntime(ctx, model.AnalysisOwnerTypeAnalyzer, a.analyzerID, "离线 analyzer 运行中")
+	if err != nil {
+		if status != nil && status.IsActive {
+			return fmt.Errorf("检测到其他分析器正在运行：%s(%s)，离线 analyzer 已退出", status.OwnerType, status.OwnerID)
+		}
+		return fmt.Errorf("acquire analysis runtime: %w", err)
+	}
+
+	a.runtimeLeaseAcquired = true
+	hbCtx, hbCancel := context.WithCancel(context.Background())
+	a.runtimeHeartbeatCancel = hbCancel
+	a.wg.Add(1)
+	go a.runtimeHeartbeatLoop(hbCtx)
+	return nil
+}
+
+func (a *APIAnalyzer) runtimeHeartbeatLoop(ctx context.Context) {
+	defer a.wg.Done()
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			hbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			err := a.client.HeartbeatAnalysisRuntime(hbCtx, model.AnalysisOwnerTypeAnalyzer, a.analyzerID)
+			cancel()
+			if err != nil {
+				logger.Warnf("Failed to heartbeat analysis runtime lease: %v", err)
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (a *APIAnalyzer) stopRuntimeLease() {
+	if a.runtimeHeartbeatCancel != nil {
+		a.runtimeHeartbeatCancel()
+		a.runtimeHeartbeatCancel = nil
+	}
+	if !a.runtimeLeaseAcquired {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := a.client.ReleaseAnalysisRuntime(ctx, model.AnalysisOwnerTypeAnalyzer, a.analyzerID); err != nil {
+		logger.Warnf("Failed to release analysis runtime lease: %v", err)
+	}
+	a.runtimeLeaseAcquired = false
 }
 
 // fetchLoop 任务获取循环

@@ -1,7 +1,9 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,20 +20,23 @@ import (
 
 // AnalyzeTask 分析任务状态
 type AnalyzeTask struct {
-	ID            string    `json:"id"`
-	Status        string    `json:"status"` // pending, running, completed, failed
-	TotalCount    int       `json:"total_count"`
-	SuccessCount  int       `json:"success_count"`
-	FailedCount   int       `json:"failed_count"`
-	CurrentIndex  int       `json:"current_index"`
-	StartedAt     time.Time `json:"started_at"`
-	CompletedAt   *time.Time `json:"completed_at,omitempty"`
-	ErrorMessage  string    `json:"error_message,omitempty"`
+	ID             string     `json:"id"`
+	Mode           string     `json:"mode,omitempty"`
+	Status         string     `json:"status"` // pending, running, sleeping, stopping, completed, failed
+	TotalCount     int        `json:"total_count"`
+	SuccessCount   int        `json:"success_count"`
+	FailedCount    int        `json:"failed_count"`
+	CurrentIndex   int        `json:"current_index"`
+	CurrentPhotoID *uint      `json:"current_photo_id,omitempty"`
+	CurrentMessage string     `json:"current_message,omitempty"`
+	StartedAt      time.Time  `json:"started_at"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	ErrorMessage   string     `json:"error_message,omitempty"`
 }
 
 // IsRunning 检查任务是否运行中
 func (t *AnalyzeTask) IsRunning() bool {
-	return t.Status == "running"
+	return t.Status == "running" || t.Status == "sleeping" || t.Status == "stopping"
 }
 
 // AIService AI 分析服务接口
@@ -44,6 +49,15 @@ type AIService interface {
 
 	// AnalyzeBatch 批量分析照片（异步启动）
 	AnalyzeBatch(limit int) (*AnalyzeTask, error)
+
+	// StartBackgroundAnalyze 启动后台持续分析
+	StartBackgroundAnalyze() (*AnalyzeTask, error)
+
+	// StopBackgroundAnalyze 停止后台持续分析
+	StopBackgroundAnalyze() error
+
+	// GetBackgroundLogs 获取后台分析日志
+	GetBackgroundLogs() []string
 
 	// GetAnalyzeProgress 获取分析进度
 	GetAnalyzeProgress() (*model.AIAnalyzeProgressResponse, error)
@@ -60,12 +74,16 @@ type AIService interface {
 
 // aiService AI 分析服务实现
 type aiService struct {
-	photoRepo     repository.PhotoRepository
-	config        *config.Config
-	configService ConfigService
-	provider      provider.AIProvider
-	currentTask   *AnalyzeTask
-	taskMutex     sync.RWMutex
+	photoRepo        repository.PhotoRepository
+	config           *config.Config
+	configService    ConfigService
+	runtimeService   AnalysisRuntimeService
+	provider         provider.AIProvider
+	currentTask      *AnalyzeTask
+	taskMutex        sync.RWMutex
+	backgroundStopCh chan struct{}
+	backgroundLogMu  sync.RWMutex
+	backgroundLogs   []string
 }
 
 // AIConfigFromDB 数据库中存储的 AI 配置结构
@@ -110,11 +128,12 @@ type AIConfigFromDB struct {
 }
 
 // NewAIService 创建 AI 分析服务
-func NewAIService(photoRepo repository.PhotoRepository, cfg *config.Config, configService ConfigService) (AIService, error) {
+func NewAIService(photoRepo repository.PhotoRepository, cfg *config.Config, configService ConfigService, runtimeService AnalysisRuntimeService) (AIService, error) {
 	svc := &aiService{
-		photoRepo:    photoRepo,
-		config:       cfg,
-		configService: configService,
+		photoRepo:      photoRepo,
+		config:         cfg,
+		configService:  configService,
+		runtimeService: runtimeService,
 	}
 
 	// 初始化 provider
@@ -282,7 +301,7 @@ func (s *aiService) loadAIConfig() *AIConfigFromDB {
 		aiConfig.Temperature = 0.7
 	}
 	if aiConfig.Timeout == 0 {
-		aiConfig.Timeout = 120  // 默认 120 秒，支持更复杂的模型如 qwen3.5-plus
+		aiConfig.Timeout = 120 // 默认 120 秒，支持更复杂的模型如 qwen3.5-plus
 	}
 
 	return aiConfig
@@ -567,6 +586,16 @@ func (s *aiService) GetTaskStatus() *AnalyzeTask {
 	return s.currentTask
 }
 
+// GetBackgroundLogs 获取后台分析日志
+func (s *aiService) GetBackgroundLogs() []string {
+	s.backgroundLogMu.RLock()
+	defer s.backgroundLogMu.RUnlock()
+
+	logs := make([]string, len(s.backgroundLogs))
+	copy(logs, s.backgroundLogs)
+	return logs
+}
+
 // AnalyzeBatch 批量分析照片（异步启动）
 func (s *aiService) AnalyzeBatch(limit int) (*AnalyzeTask, error) {
 	if s.provider == nil {
@@ -594,13 +623,22 @@ func (s *aiService) AnalyzeBatch(limit int) (*AnalyzeTask, error) {
 
 	// 创建新任务
 	task := &AnalyzeTask{
-		ID:           fmt.Sprintf("task_%d", time.Now().Unix()),
-		Status:       "running",
-		TotalCount:   len(photos),
-		SuccessCount: 0,
-		FailedCount:  0,
-		CurrentIndex: 0,
-		StartedAt:    time.Now(),
+		ID:             fmt.Sprintf("task_%d", time.Now().Unix()),
+		Mode:           model.AnalysisOwnerTypeBatch,
+		Status:         "running",
+		TotalCount:     len(photos),
+		SuccessCount:   0,
+		FailedCount:    0,
+		CurrentIndex:   0,
+		StartedAt:      time.Now(),
+		CurrentMessage: "正在批量分析未分析照片",
+	}
+
+	if s.runtimeService != nil {
+		if _, err := s.runtimeService.AcquireGlobal(model.AnalysisOwnerTypeBatch, task.ID, "在线批量分析运行中"); err != nil {
+			s.taskMutex.Unlock()
+			return nil, fmt.Errorf("acquire analysis runtime: %w", err)
+		}
 	}
 	s.currentTask = task
 	s.taskMutex.Unlock()
@@ -614,8 +652,85 @@ func (s *aiService) AnalyzeBatch(limit int) (*AnalyzeTask, error) {
 	return task, nil
 }
 
+// StartBackgroundAnalyze 启动后台持续分析
+func (s *aiService) StartBackgroundAnalyze() (*AnalyzeTask, error) {
+	if s.provider == nil {
+		return nil, fmt.Errorf("AI provider not configured")
+	}
+
+	s.taskMutex.Lock()
+	if s.currentTask != nil && s.currentTask.IsRunning() {
+		s.taskMutex.Unlock()
+		return nil, fmt.Errorf("analysis task already running")
+	}
+
+	task := &AnalyzeTask{
+		ID:             fmt.Sprintf("background_%d", time.Now().Unix()),
+		Mode:           model.AnalysisOwnerTypeBackground,
+		Status:         "running",
+		StartedAt:      time.Now(),
+		CurrentMessage: "后台分析已启动",
+	}
+
+	if s.runtimeService != nil {
+		if _, err := s.runtimeService.AcquireGlobal(model.AnalysisOwnerTypeBackground, task.ID, "在线后台分析运行中"); err != nil {
+			s.taskMutex.Unlock()
+			return nil, fmt.Errorf("acquire analysis runtime: %w", err)
+		}
+	}
+
+	s.currentTask = task
+	s.backgroundStopCh = make(chan struct{})
+	s.resetBackgroundLogs()
+	s.appendBackgroundLog("后台分析已启动")
+	s.taskMutex.Unlock()
+
+	go s.runBackgroundAnalysis(task)
+	return task, nil
+}
+
+// StopBackgroundAnalyze 停止后台持续分析
+func (s *aiService) StopBackgroundAnalyze() error {
+	s.taskMutex.Lock()
+	defer s.taskMutex.Unlock()
+
+	if s.currentTask == nil || s.currentTask.Mode != model.AnalysisOwnerTypeBackground || !s.currentTask.IsRunning() {
+		return fmt.Errorf("background analysis is not running")
+	}
+
+	if s.currentTask.Status != "stopping" {
+		s.currentTask.Status = "stopping"
+		s.currentTask.CurrentMessage = "正在停止后台分析，等待当前批次完成"
+		s.appendBackgroundLog("收到停止请求，等待当前批次完成")
+	}
+
+	if s.backgroundStopCh != nil {
+		close(s.backgroundStopCh)
+		s.backgroundStopCh = nil
+	}
+
+	return nil
+}
+
 // runBatchAnalysis 后台执行批量分析
 func (s *aiService) runBatchAnalysis(task *AnalyzeTask, photos []*model.Photo) {
+	var leaseCancel context.CancelFunc
+	if s.runtimeService != nil {
+		var ctx context.Context
+		ctx, leaseCancel = context.WithCancel(context.Background())
+		go s.keepRuntimeLeaseAlive(ctx, model.AnalysisOwnerTypeBatch, task.ID)
+	}
+	defer func() {
+		if leaseCancel != nil {
+			leaseCancel()
+		}
+		if s.runtimeService != nil {
+			if err := s.runtimeService.ReleaseGlobal(model.AnalysisOwnerTypeBatch, task.ID); err != nil && !errors.Is(err, ErrAnalysisRuntimeOwnedByOther) {
+				logger.Warnf("Failed to release analysis runtime lease for task %s: %v", task.ID, err)
+			}
+		}
+	}()
+
 	successCount, failedCount, _ := 0, 0, 0.0
 
 	// 如果 provider 支持批量分析，使用批量模式
@@ -637,6 +752,185 @@ func (s *aiService) runBatchAnalysis(task *AnalyzeTask, photos []*model.Photo) {
 
 	logger.Infof("Batch analysis task %s completed: total=%d, success=%d, failed=%d",
 		task.ID, task.TotalCount, successCount, failedCount)
+}
+
+func (s *aiService) runBackgroundAnalysis(task *AnalyzeTask) {
+	var leaseCancel context.CancelFunc
+	if s.runtimeService != nil {
+		var ctx context.Context
+		ctx, leaseCancel = context.WithCancel(context.Background())
+		go s.keepRuntimeLeaseAlive(ctx, model.AnalysisOwnerTypeBackground, task.ID)
+	}
+	defer func() {
+		if leaseCancel != nil {
+			leaseCancel()
+		}
+		if s.runtimeService != nil {
+			if err := s.runtimeService.ReleaseGlobal(model.AnalysisOwnerTypeBackground, task.ID); err != nil && !errors.Is(err, ErrAnalysisRuntimeOwnedByOther) {
+				logger.Warnf("Failed to release analysis runtime lease for background task %s: %v", task.ID, err)
+			}
+		}
+
+		s.taskMutex.Lock()
+		now := time.Now()
+		task.CompletedAt = &now
+		if task.Status == "stopping" {
+			task.Status = "completed"
+			task.CurrentMessage = "后台分析已停止"
+		} else if task.Status != "failed" {
+			task.Status = "completed"
+			task.CurrentMessage = "后台分析已结束"
+		}
+		s.taskMutex.Unlock()
+		s.appendBackgroundLog(task.CurrentMessage)
+	}()
+
+	for {
+		if s.isBackgroundStopRequested() {
+			return
+		}
+
+		limit := s.backgroundBatchSize()
+		photos, err := s.photoRepo.GetUnanalyzed(limit)
+		if err != nil {
+			s.setTaskState(task, "running", 0, nil, fmt.Sprintf("获取待分析照片失败：%v", err))
+			s.appendBackgroundLog(fmt.Sprintf("获取待分析照片失败：%v", err))
+			if s.waitForBackgroundNextCycle(5 * time.Second) {
+				return
+			}
+			continue
+		}
+
+		if len(photos) == 0 {
+			s.setTaskState(task, "sleeping", 0, nil, "没有新的未分析照片，后台分析等待中")
+			s.appendBackgroundLog("没有新的未分析照片，5 秒后重试")
+			if s.waitForBackgroundNextCycle(5 * time.Second) {
+				return
+			}
+			continue
+		}
+
+		s.setTaskState(task, "running", len(photos), nil, fmt.Sprintf("本轮准备分析 %d 张照片", len(photos)))
+		s.appendBackgroundLog(fmt.Sprintf("开始新一轮后台分析：%d 张照片", len(photos)))
+
+		prevSuccess, prevFailed := 0, 0
+		s.taskMutex.RLock()
+		prevSuccess = task.SuccessCount
+		prevFailed = task.FailedCount
+		s.taskMutex.RUnlock()
+
+		cycleSuccess, cycleFailed := 0, 0
+		if s.provider.SupportsBatch() && s.provider.MaxBatchSize() > 1 {
+			cycleSuccess, cycleFailed, _ = s.analyzeInBatchesAsync(task, photos)
+		} else {
+			cycleSuccess, cycleFailed, _ = s.analyzeOneByOneAsync(task, photos)
+		}
+
+		s.taskMutex.Lock()
+		task.SuccessCount = prevSuccess + cycleSuccess
+		task.FailedCount = prevFailed + cycleFailed
+		task.CurrentIndex = 0
+		task.CurrentPhotoID = nil
+		task.CurrentMessage = fmt.Sprintf("本轮完成：成功 %d，失败 %d", cycleSuccess, cycleFailed)
+		s.taskMutex.Unlock()
+		s.appendBackgroundLog(task.CurrentMessage)
+
+		if s.waitForBackgroundNextCycle(2 * time.Second) {
+			return
+		}
+	}
+}
+
+func (s *aiService) keepRuntimeLeaseAlive(ctx context.Context, ownerType, ownerID string) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if _, err := s.runtimeService.HeartbeatGlobal(ownerType, ownerID); err != nil {
+				logger.Warnf("Failed to heartbeat analysis runtime lease for %s/%s: %v", ownerType, ownerID, err)
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (s *aiService) backgroundBatchSize() int {
+	if s.provider == nil {
+		return 1
+	}
+
+	if s.provider.SupportsBatch() && s.provider.MaxBatchSize() > 1 {
+		return s.provider.MaxBatchSize()
+	}
+
+	if concurrency := s.provider.MaxConcurrency(); concurrency > 0 {
+		return concurrency
+	}
+
+	return 1
+}
+
+func (s *aiService) waitForBackgroundNextCycle(delay time.Duration) bool {
+	s.taskMutex.RLock()
+	stopCh := s.backgroundStopCh
+	s.taskMutex.RUnlock()
+
+	if stopCh == nil {
+		return true
+	}
+
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-stopCh:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+func (s *aiService) isBackgroundStopRequested() bool {
+	s.taskMutex.RLock()
+	defer s.taskMutex.RUnlock()
+	return s.currentTask != nil && s.currentTask.Mode == model.AnalysisOwnerTypeBackground && s.currentTask.Status == "stopping"
+}
+
+func (s *aiService) setTaskState(task *AnalyzeTask, status string, totalCount int, currentPhotoID *uint, message string) {
+	s.taskMutex.Lock()
+	defer s.taskMutex.Unlock()
+
+	task.Status = status
+	if totalCount > 0 {
+		task.TotalCount = totalCount
+	}
+	task.CurrentIndex = 0
+	task.CurrentPhotoID = currentPhotoID
+	task.CurrentMessage = message
+}
+
+func (s *aiService) appendBackgroundLog(message string) {
+	if message == "" {
+		return
+	}
+
+	entry := fmt.Sprintf("[%s] %s", time.Now().Format("2006-01-02 15:04:05"), message)
+	s.backgroundLogMu.Lock()
+	defer s.backgroundLogMu.Unlock()
+
+	s.backgroundLogs = append(s.backgroundLogs, entry)
+	if len(s.backgroundLogs) > 100 {
+		s.backgroundLogs = s.backgroundLogs[len(s.backgroundLogs)-100:]
+	}
+}
+
+func (s *aiService) resetBackgroundLogs() {
+	s.backgroundLogMu.Lock()
+	defer s.backgroundLogMu.Unlock()
+	s.backgroundLogs = make([]string, 0, 100)
 }
 
 // analyzeOneByOneAsync 逐个分析照片（支持并发）
@@ -664,6 +958,15 @@ func (s *aiService) analyzeOneByOneAsync(task *AnalyzeTask, photos []*model.Phot
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
 
+			s.taskMutex.Lock()
+			photoID := p.ID
+			task.CurrentPhotoID = &photoID
+			task.CurrentMessage = fmt.Sprintf("正在分析照片 #%d", p.ID)
+			s.taskMutex.Unlock()
+			if task.Mode == model.AnalysisOwnerTypeBackground {
+				s.appendBackgroundLog(fmt.Sprintf("开始分析照片 #%d (%s)", p.ID, p.FileName))
+			}
+
 			logger.Infof("[Task %s] Analyzing photo %d/%d: id=%d, path=%s", task.ID, idx+1, totalCount, p.ID, p.FileName)
 
 			err := s.AnalyzePhoto(p.ID)
@@ -673,9 +976,15 @@ func (s *aiService) analyzeOneByOneAsync(task *AnalyzeTask, photos []*model.Phot
 			if err != nil {
 				logger.Errorf("[Task %s] Failed to analyze photo %d: %v", task.ID, p.ID, err)
 				failedCount++
+				if task.Mode == model.AnalysisOwnerTypeBackground {
+					s.appendBackgroundLog(fmt.Sprintf("分析照片 #%d 失败：%v", p.ID, err))
+				}
 			} else {
 				successCount++
 				totalCost += s.provider.Cost()
+				if task.Mode == model.AnalysisOwnerTypeBackground {
+					s.appendBackgroundLog(fmt.Sprintf("分析照片 #%d 成功", p.ID))
+				}
 			}
 			task.CurrentIndex = idx + 1
 			task.SuccessCount = successCount
@@ -727,9 +1036,17 @@ func (s *aiService) analyzeInBatchesAsync(task *AnalyzeTask, photos []*model.Pho
 		// 更新当前索引
 		s.taskMutex.Lock()
 		task.CurrentIndex = end
+		if len(batch) > 0 {
+			photoID := batch[0].ID
+			task.CurrentPhotoID = &photoID
+		}
+		task.CurrentMessage = fmt.Sprintf("正在处理批次 %d/%d", i/batchSize+1, (len(photos)+batchSize-1)/batchSize)
 		s.taskMutex.Unlock()
 
 		logger.Infof("[Task %s] Processing batch %d/%d: photos %d-%d", task.ID, i/batchSize+1, (len(photos)+batchSize-1)/batchSize, i+1, end)
+		if task.Mode == model.AnalysisOwnerTypeBackground {
+			s.appendBackgroundLog(fmt.Sprintf("开始处理批次 %d/%d（照片 %d-%d）", i/batchSize+1, (len(photos)+batchSize-1)/batchSize, i+1, end))
+		}
 
 		// 准备批量请求
 		requests := make([]*provider.AnalyzeRequest, 0, len(batch))
@@ -774,15 +1091,29 @@ func (s *aiService) analyzeInBatchesAsync(task *AnalyzeTask, photos []*model.Pho
 		results, err := s.provider.AnalyzeBatch(requests)
 		if err != nil {
 			logger.Errorf("[Task %s] Batch analysis failed: %v", task.ID, err)
+			if task.Mode == model.AnalysisOwnerTypeBackground {
+				s.appendBackgroundLog(fmt.Sprintf("批处理失败，回退逐张分析：%v", err))
+			}
 			// 批量失败，回退到逐个分析
 			for idx := range photoMap {
 				photo := photoMap[idx]
+				s.taskMutex.Lock()
+				photoID := photo.ID
+				task.CurrentPhotoID = &photoID
+				task.CurrentMessage = fmt.Sprintf("回退逐张分析照片 #%d", photo.ID)
+				s.taskMutex.Unlock()
 				if err := s.AnalyzePhoto(photo.ID); err != nil {
 					logger.Errorf("[Task %s] Failed to analyze photo %d: %v", task.ID, photo.ID, err)
 					failedCount++
+					if task.Mode == model.AnalysisOwnerTypeBackground {
+						s.appendBackgroundLog(fmt.Sprintf("回退分析照片 #%d 失败：%v", photo.ID, err))
+					}
 				} else {
 					successCount++
 					totalCost += s.provider.Cost()
+					if task.Mode == model.AnalysisOwnerTypeBackground {
+						s.appendBackgroundLog(fmt.Sprintf("回退分析照片 #%d 成功", photo.ID))
+					}
 				}
 			}
 		} else {
@@ -794,6 +1125,12 @@ func (s *aiService) analyzeInBatchesAsync(task *AnalyzeTask, photos []*model.Pho
 				if !ok {
 					continue
 				}
+
+				s.taskMutex.Lock()
+				photoID := photo.ID
+				task.CurrentPhotoID = &photoID
+				task.CurrentMessage = fmt.Sprintf("正在写入照片 #%d 的分析结果", photo.ID)
+				s.taskMutex.Unlock()
 
 				// ========== 第二次会话：生成创意文案 ==========
 				req := requests[idx]
@@ -824,9 +1161,15 @@ func (s *aiService) analyzeInBatchesAsync(task *AnalyzeTask, photos []*model.Pho
 				if err := s.photoRepo.Update(photo); err != nil {
 					logger.Errorf("[Task %s] Failed to update photo %d: %v", task.ID, photo.ID, err)
 					failedCount++
+					if task.Mode == model.AnalysisOwnerTypeBackground {
+						s.appendBackgroundLog(fmt.Sprintf("写入照片 #%d 结果失败：%v", photo.ID, err))
+					}
 				} else {
 					successCount++
 					totalCost += s.provider.BatchCost()
+					if task.Mode == model.AnalysisOwnerTypeBackground {
+						s.appendBackgroundLog(fmt.Sprintf("写入照片 #%d 结果成功", photo.ID))
+					}
 				}
 			}
 		}

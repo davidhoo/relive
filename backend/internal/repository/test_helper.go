@@ -19,6 +19,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	// 自动迁移
 	err = db.AutoMigrate(
 		&model.Photo{},
+		&model.AnalysisRuntimeLease{},
 		&model.DisplayRecord{},
 		&model.ESP32Device{},
 		&model.AppConfig{},

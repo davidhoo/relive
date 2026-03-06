@@ -123,6 +123,9 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 			analyzer.POST("/results", handlers.Analyzer.SubmitResults)
 			analyzer.GET("/stats", handlers.Analyzer.GetStats)
 			analyzer.POST("/clean-locks", handlers.Analyzer.CleanExpiredLocks)
+			analyzer.POST("/runtime/acquire", handlers.Analyzer.AcquireRuntime)
+			analyzer.POST("/runtime/heartbeat", handlers.Analyzer.HeartbeatRuntime)
+			analyzer.POST("/runtime/release", handlers.Analyzer.ReleaseRuntime)
 		}
 
 		// 图片访问（JWT 或 API Key 认证）
@@ -171,8 +174,12 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				// AIHandler 现在总是存在，它会自己处理服务未配置的情况
 				ai.POST("/analyze", handlers.AI.Analyze)
 				ai.POST("/analyze/batch", handlers.AI.AnalyzeBatch)
+				ai.POST("/background/start", handlers.AI.StartBackground)
+				ai.POST("/background/stop", handlers.AI.StopBackground)
+				ai.GET("/background/logs", handlers.AI.GetBackgroundLogs)
 				ai.GET("/progress", handlers.AI.GetProgress)
 				ai.GET("/task", handlers.AI.GetTaskStatus)
+				ai.GET("/runtime", handlers.AI.GetRuntimeStatus)
 				ai.POST("/reanalyze/:id", handlers.AI.ReAnalyze)
 				ai.GET("/provider", handlers.AI.GetProviderInfo)
 			}

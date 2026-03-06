@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -16,14 +17,72 @@ import (
 type AnalyzerHandler struct {
 	photoService    service.PhotoService
 	analysisService service.AnalysisService
+	runtimeService  service.AnalysisRuntimeService
 }
 
 // NewAnalyzerHandler 创建分析器处理器
-func NewAnalyzerHandler(photoService service.PhotoService, analysisService service.AnalysisService) *AnalyzerHandler {
+func NewAnalyzerHandler(photoService service.PhotoService, analysisService service.AnalysisService, runtimeService service.AnalysisRuntimeService) *AnalyzerHandler {
 	return &AnalyzerHandler{
 		photoService:    photoService,
 		analysisService: analysisService,
+		runtimeService:  runtimeService,
 	}
+}
+
+// AcquireRuntime 获取全局分析运行租约
+func (h *AnalyzerHandler) AcquireRuntime(c *gin.Context) {
+	var req model.AnalysisRuntimeAcquireRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: err.Error()}})
+		return
+	}
+
+	lease, err := h.runtimeService.AcquireGlobal(req.OwnerType, req.OwnerID, req.Message)
+	if err != nil {
+		if errors.Is(err, service.ErrAnalysisRuntimeBusy) {
+			status, _ := h.runtimeService.GetGlobalStatus()
+			c.JSON(http.StatusConflict, model.Response{Success: false, Error: &model.ErrorInfo{Code: "ANALYSIS_RUNTIME_BUSY", Message: "Another analysis runtime is already running"}, Data: status})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INTERNAL_ERROR", Message: err.Error()}})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "Runtime acquired", Data: lease})
+}
+
+// HeartbeatRuntime 续约全局分析运行租约
+func (h *AnalyzerHandler) HeartbeatRuntime(c *gin.Context) {
+	var req model.AnalysisRuntimeHeartbeatRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: err.Error()}})
+		return
+	}
+
+	lease, err := h.runtimeService.HeartbeatGlobal(req.OwnerType, req.OwnerID)
+	if err != nil {
+		status, _ := h.runtimeService.GetGlobalStatus()
+		c.JSON(http.StatusConflict, model.Response{Success: false, Error: &model.ErrorInfo{Code: "ANALYSIS_RUNTIME_OWNED_BY_OTHER", Message: err.Error()}, Data: status})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "Runtime heartbeat updated", Data: lease})
+}
+
+// ReleaseRuntime 释放全局分析运行租约
+func (h *AnalyzerHandler) ReleaseRuntime(c *gin.Context) {
+	var req model.AnalysisRuntimeReleaseRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: err.Error()}})
+		return
+	}
+
+	if err := h.runtimeService.ReleaseGlobal(req.OwnerType, req.OwnerID); err != nil {
+		c.JSON(http.StatusConflict, model.Response{Success: false, Error: &model.ErrorInfo{Code: "ANALYSIS_RUNTIME_OWNED_BY_OTHER", Message: err.Error()}})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "Runtime released"})
 }
 
 // GetTasks 获取待分析任务列表
@@ -54,6 +113,23 @@ func (h *AnalyzerHandler) GetTasks(c *gin.Context) {
 	// 获取设备信息
 	deviceID, _ := c.Get("device_id")
 	deviceName, _ := c.Get("device_name")
+
+	if h.runtimeService != nil {
+		status, err := h.runtimeService.GetGlobalStatus()
+		if err != nil {
+			logger.Errorf("Failed to get analysis runtime status: %v", err)
+			c.JSON(http.StatusInternalServerError, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INTERNAL_ERROR", Message: "Failed to get runtime status"}})
+			return
+		}
+		if !status.IsActive {
+			c.JSON(http.StatusConflict, model.Response{Success: false, Error: &model.ErrorInfo{Code: "ANALYSIS_RUNTIME_NOT_ACQUIRED", Message: "Analyzer must acquire runtime before fetching tasks"}, Data: status})
+			return
+		}
+		if status.IsActive && !(status.OwnerType == model.AnalysisOwnerTypeAnalyzer && status.OwnerID == analyzerID) {
+			c.JSON(http.StatusConflict, model.Response{Success: false, Error: &model.ErrorInfo{Code: "ANALYSIS_RUNTIME_BUSY", Message: "Another analysis runtime is already running"}, Data: status})
+			return
+		}
+	}
 
 	logger.Infof("Analyzer %s requesting %d tasks (Device: %v)", analyzerID, limit, deviceName)
 

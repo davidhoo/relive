@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -14,14 +15,16 @@ import (
 
 // AIHandler AI 分析处理器
 type AIHandler struct {
-	mu        sync.RWMutex
-	aiService service.AIService
+	mu             sync.RWMutex
+	aiService      service.AIService
+	runtimeService service.AnalysisRuntimeService
 }
 
 // NewAIHandler 创建 AI 分析处理器
-func NewAIHandler(aiService service.AIService) *AIHandler {
+func NewAIHandler(aiService service.AIService, runtimeService service.AnalysisRuntimeService) *AIHandler {
 	return &AIHandler{
-		aiService: aiService,
+		aiService:      aiService,
+		runtimeService: runtimeService,
 	}
 }
 
@@ -144,6 +147,10 @@ func (h *AIHandler) AnalyzeBatch(c *gin.Context) {
 	task, err := svc.AnalyzeBatch(req.Limit)
 	if err != nil {
 		logger.Errorf("Batch analyze failed: %v", err)
+		if errors.Is(err, service.ErrAnalysisRuntimeBusy) {
+			h.respondRuntimeBusy(c, "当前已有其他分析器在运行，无法启动批量分析")
+			return
+		}
 		c.JSON(http.StatusInternalServerError, model.Response{
 			Success: false,
 			Error: &model.ErrorInfo{
@@ -163,6 +170,98 @@ func (h *AIHandler) AnalyzeBatch(c *gin.Context) {
 			"total_count": task.TotalCount,
 			"queued":      task.TotalCount,
 		},
+	})
+}
+
+// StartBackground 启动后台分析
+func (h *AIHandler) StartBackground(c *gin.Context) {
+	svc := h.getAIService()
+	if svc == nil {
+		c.JSON(http.StatusServiceUnavailable, model.Response{Success: false, Error: &model.ErrorInfo{Code: "SERVICE_UNAVAILABLE", Message: "AI service not configured"}})
+		return
+	}
+
+	task, err := svc.StartBackgroundAnalyze()
+	if err != nil {
+		logger.Errorf("Start background analyze failed: %v", err)
+		if errors.Is(err, service.ErrAnalysisRuntimeBusy) {
+			h.respondRuntimeBusy(c, "当前已有其他分析器在运行，无法启动后台分析")
+			return
+		}
+		c.JSON(http.StatusInternalServerError, model.Response{Success: false, Error: &model.ErrorInfo{Code: "ANALYZE_FAILED", Message: "Failed to start background analyze: " + err.Error()}})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "Background analysis started", Data: task})
+}
+
+// StopBackground 停止后台分析
+func (h *AIHandler) StopBackground(c *gin.Context) {
+	svc := h.getAIService()
+	if svc == nil {
+		c.JSON(http.StatusServiceUnavailable, model.Response{Success: false, Error: &model.ErrorInfo{Code: "SERVICE_UNAVAILABLE", Message: "AI service not configured"}})
+		return
+	}
+
+	if err := svc.StopBackgroundAnalyze(); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "STOP_FAILED", Message: err.Error()}})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "Background analysis stopping"})
+}
+
+// GetBackgroundLogs 获取后台分析日志
+func (h *AIHandler) GetBackgroundLogs(c *gin.Context) {
+	svc := h.getAIService()
+	if svc == nil {
+		c.JSON(http.StatusServiceUnavailable, model.Response{Success: false, Error: &model.ErrorInfo{Code: "SERVICE_UNAVAILABLE", Message: "AI service not configured"}})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "Success", Data: map[string]interface{}{"lines": svc.GetBackgroundLogs()}})
+}
+
+// GetRuntimeStatus 获取全局分析运行状态
+func (h *AIHandler) GetRuntimeStatus(c *gin.Context) {
+	if h.runtimeService == nil {
+		c.JSON(http.StatusOK, model.Response{
+			Success: true,
+			Message: "Success",
+			Data: &model.AnalysisRuntimeStatusResponse{
+				ResourceKey: model.GlobalAnalysisResourceKey,
+				Status:      model.AnalysisRuntimeStatusIdle,
+				IsActive:    false,
+			},
+		})
+		return
+	}
+
+	status, err := h.runtimeService.GetGlobalStatus()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "QUERY_FAILED", Message: err.Error()},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "Success", Data: status})
+}
+
+func (h *AIHandler) respondRuntimeBusy(c *gin.Context, message string) {
+	var status *model.AnalysisRuntimeStatusResponse
+	if h.runtimeService != nil {
+		status, _ = h.runtimeService.GetGlobalStatus()
+	}
+
+	c.JSON(http.StatusConflict, model.Response{
+		Success: false,
+		Error: &model.ErrorInfo{
+			Code:    "ANALYSIS_RUNTIME_BUSY",
+			Message: message,
+		},
+		Data: status,
 	})
 }
 
@@ -207,24 +306,27 @@ func (h *AIHandler) GetProgress(c *gin.Context) {
 
 	// 构建响应，兼容前端期望的格式
 	responseData := map[string]interface{}{
-		"total":          progress.Total,
-		"completed":      progress.Analyzed,
-		"failed":         0, // 从任务状态获取
-		"is_running":     false,
+		"total":            progress.Total,
+		"completed":        progress.Analyzed,
+		"failed":           0, // 从任务状态获取
+		"is_running":       false,
 		"current_photo_id": nil,
-		"started_at":     nil,
-		"provider":       progress.Provider,
-		"estimated_cost": progress.EstimatedCost,
+		"started_at":       nil,
+		"mode":             "",
+		"status":           "idle",
+		"current_message":  "",
+		"provider":         progress.Provider,
+		"estimated_cost":   progress.EstimatedCost,
 	}
 
 	if task != nil {
 		responseData["failed"] = task.FailedCount
 		responseData["is_running"] = task.IsRunning()
 		responseData["started_at"] = task.StartedAt
-		// 当前处理的照片ID可以从task推断
-		if task.IsRunning() && task.CurrentIndex > 0 && task.CurrentIndex <= task.TotalCount {
-			// 这里简化处理，实际可能需要更精确的状态
-		}
+		responseData["mode"] = task.Mode
+		responseData["status"] = task.Status
+		responseData["current_message"] = task.CurrentMessage
+		responseData["current_photo_id"] = task.CurrentPhotoID
 	}
 
 	c.JSON(http.StatusOK, model.Response{

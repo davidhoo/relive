@@ -38,6 +38,32 @@
       </el-descriptions>
     </el-card>
 
+    <el-card shadow="never" style="margin-bottom: 20px">
+      <template #header>
+        <span>分析运行状态</span>
+      </template>
+
+      <el-descriptions :column="2" border>
+        <el-descriptions-item label="当前状态">
+          <el-tag :type="runtimeStatus?.is_active ? 'warning' : 'success'">
+            {{ runtimeStatus?.is_active ? '已占用' : '空闲' }}
+          </el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="占用模式">
+          {{ runtimeModeText }}
+        </el-descriptions-item>
+        <el-descriptions-item label="占用实例">
+          {{ runtimeStatus?.owner_id || '-' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="开始时间">
+          {{ formatTime(runtimeStatus?.started_at) }}
+        </el-descriptions-item>
+        <el-descriptions-item label="说明" :span="2">
+          {{ runtimeStatus?.message || '当前没有分析器占用运行权' }}
+        </el-descriptions-item>
+      </el-descriptions>
+    </el-card>
+
     <!-- 批量分析 -->
     <el-card shadow="never" style="margin-bottom: 20px">
       <template #header>
@@ -58,12 +84,12 @@
             size="large"
             @click="handleBatchAnalyze"
             :loading="analyzing"
-            :disabled="!providerInfo"
+            :disabled="batchAnalyzeDisabled"
           >
             {{ analyzing ? '分析中...' : '开始批量分析' }}
           </el-button>
-          <el-text v-if="!providerInfo" type="info" style="margin-left: 10px">
-            请先配置 AI Provider
+          <el-text v-if="batchDisabledReason" type="info" style="margin-left: 10px">
+            {{ batchDisabledReason }}
           </el-text>
         </div>
         <el-alert
@@ -73,6 +99,54 @@
           description="批量分析将按照队列顺序处理未分析的照片。建议每次处理数量不超过 500 张，避免长时间占用资源。"
           style="margin-top: 16px"
         />
+      </div>
+    </el-card>
+
+    <el-card shadow="never" style="margin-bottom: 20px">
+      <template #header>
+        <span>后台分析</span>
+      </template>
+      <div class="batch-analyze-form">
+        <div class="batch-analyze-row">
+          <el-button
+            v-if="!backgroundRunning"
+            type="primary"
+            size="large"
+            @click="handleStartBackground"
+            :disabled="backgroundStartDisabled"
+          >
+            开启后台分析
+          </el-button>
+          <el-button
+            v-else
+            type="danger"
+            size="large"
+            @click="handleStopBackground"
+          >
+            停止后台分析
+          </el-button>
+          <el-text v-if="backgroundDisabledReason" type="info" style="margin-left: 10px">
+            {{ backgroundDisabledReason }}
+          </el-text>
+        </div>
+        <el-alert
+          title="后台分析说明"
+          type="info"
+          :closable="false"
+          description="后台分析会持续扫描未分析照片并自动处理；没有新照片时会短暂等待后继续轮询。"
+          style="margin-top: 16px"
+        />
+
+        <div class="background-log-panel">
+          <div class="background-log-header">
+            <span>任务日志（最后 100 行）</span>
+            <el-button size="small" text @click="loadBackgroundLogs">刷新</el-button>
+          </div>
+          <div class="background-log-body" ref="logContainerRef">
+            <pre v-if="backgroundLogs.length">{{ backgroundLogs.join('\n') }}</pre>
+            <div v-else class="background-log-empty">暂无后台分析日志</div>
+          </div>
+        </div>
       </div>
     </el-card>
 
@@ -119,6 +193,15 @@
           <el-descriptions-item label="开始时间" :span="2">
             {{ formatTime(progress.started_at) }}
           </el-descriptions-item>
+          <el-descriptions-item label="运行模式">
+            {{ progressModeText }}
+          </el-descriptions-item>
+          <el-descriptions-item label="当前状态">
+            {{ progressStatusText }}
+          </el-descriptions-item>
+          <el-descriptions-item label="当前消息" :span="2">
+            {{ progress.current_message || '-' }}
+          </el-descriptions-item>
         </el-descriptions>
       </div>
     </el-card>
@@ -128,17 +211,92 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { aiApi } from '@/api/ai'
-import type { AIAnalyzeProgress, AIProviderInfo } from '@/types/ai'
+import type { AIAnalyzeProgress, AIProviderInfo, AnalysisRuntimeStatus } from '@/types/ai'
 import dayjs from 'dayjs'
 
 const providerInfo = ref<AIProviderInfo | null>(null)
 const progress = ref<AIAnalyzeProgress | null>(null)
+const runtimeStatus = ref<AnalysisRuntimeStatus | null>(null)
 const batchLimit = ref(100)
 const analyzing = ref(false)
+const backgroundLogs = ref<string[]>([])
 let progressTimer: any = null
+const logContainerRef = ref<HTMLElement | null>(null)
+
+const runtimeModeText = computed(() => {
+  if (!runtimeStatus.value?.is_active) return '-'
+
+  switch (runtimeStatus.value.owner_type) {
+    case 'batch':
+      return '在线批量分析'
+    case 'background':
+      return '在线后台分析'
+    case 'analyzer':
+      return '离线 analyzer'
+    default:
+      return runtimeStatus.value.owner_type || '-'
+  }
+})
+
+const batchAnalyzeDisabled = computed(() => {
+  return !providerInfo.value || (!!runtimeStatus.value?.is_active && runtimeStatus.value.owner_type !== 'batch')
+})
+
+const batchDisabledReason = computed(() => {
+  if (!providerInfo.value) return '请先配置 AI Provider'
+  if (!runtimeStatus.value?.is_active) return ''
+  if (runtimeStatus.value.owner_type === 'analyzer') return '离线 analyzer 正在运行'
+  if (runtimeStatus.value.owner_type === 'background') return '在线后台分析正在运行'
+  if (runtimeStatus.value.owner_type === 'batch' && !analyzing.value) return '在线批量分析正在运行'
+  return ''
+})
+
+const backgroundRunning = computed(() => {
+  return !!runtimeStatus.value?.is_active && runtimeStatus.value.owner_type === 'background'
+})
+
+const backgroundStartDisabled = computed(() => {
+  return !providerInfo.value || (!!runtimeStatus.value?.is_active && runtimeStatus.value.owner_type !== 'background')
+})
+
+const backgroundDisabledReason = computed(() => {
+  if (!providerInfo.value) return '请先配置 AI Provider'
+  if (!runtimeStatus.value?.is_active) return ''
+  if (runtimeStatus.value.owner_type === 'analyzer') return '离线 analyzer 正在运行'
+  if (runtimeStatus.value.owner_type === 'batch') return '在线批量分析正在运行'
+  return ''
+})
+
+const progressModeText = computed(() => {
+  if (!progress.value?.mode) return '-'
+  switch (progress.value.mode) {
+    case 'batch':
+      return '在线批量分析'
+    case 'background':
+      return '在线后台分析'
+    default:
+      return progress.value.mode
+  }
+})
+
+const progressStatusText = computed(() => {
+  if (!progress.value?.status) return '-'
+  switch (progress.value.status) {
+    case 'running':
+      return '运行中'
+    case 'sleeping':
+      return '等待新任务'
+    case 'stopping':
+      return '停止中'
+    case 'completed':
+      return '已完成'
+    default:
+      return progress.value.status
+  }
+})
 
 // 进度百分比
 const progressPercentage = computed(() => {
@@ -175,8 +333,27 @@ const loadProgress = async () => {
   try {
     const res = await aiApi.getProgress()
     progress.value = res.data?.data || null
+    analyzing.value = !!progress.value?.is_running && progress.value?.mode === 'batch'
   } catch (error) {
     console.error('Failed to load progress:', error)
+  }
+}
+
+const loadRuntimeStatus = async () => {
+  try {
+    const res = await aiApi.getRuntimeStatus()
+    runtimeStatus.value = res.data?.data || null
+  } catch (error) {
+    console.error('Failed to load runtime status:', error)
+  }
+}
+
+const loadBackgroundLogs = async () => {
+  try {
+    const res = await aiApi.getBackgroundLogs()
+    backgroundLogs.value = res.data?.data?.lines || []
+  } catch (error) {
+    console.error('Failed to load background logs:', error)
   }
 }
 
@@ -192,11 +369,23 @@ const handleBatchAnalyze = async () => {
     const res = await aiApi.analyzeBatch(batchLimit.value)
     ElMessage.success(`已提交 ${res.data?.data?.queued || 0} 张照片进行分析`)
 
+    await loadRuntimeStatus()
+
     // 开始轮询进度
     startProgressPolling()
   } catch (error: any) {
-    // 特殊处理 AI 服务未配置的情况
-    if (error.response?.status === 503) {
+    if (error.response?.status === 409) {
+      const ownerType = error.response?.data?.data?.owner_type
+      const ownerLabel = ownerType === 'analyzer'
+        ? '离线 analyzer'
+        : ownerType === 'background'
+          ? '在线后台分析'
+          : ownerType === 'batch'
+            ? '在线批量分析'
+            : '其他分析器'
+      ElMessage.warning(`当前 ${ownerLabel} 正在运行，请稍后再试`)
+      await loadRuntimeStatus()
+    } else if (error.response?.status === 503) {
       ElMessage.warning({
         message: 'AI 服务未配置或不可用，请先在配置管理中配置 AI Provider',
         duration: 5000
@@ -208,6 +397,48 @@ const handleBatchAnalyze = async () => {
   }
 }
 
+const handleStartBackground = async () => {
+  if (!providerInfo.value) {
+    ElMessage.warning('请先配置 AI Provider')
+    return
+  }
+
+  try {
+    await aiApi.startBackground()
+    ElMessage.success('后台分析已启动')
+    await Promise.all([loadRuntimeStatus(), loadProgress(), loadBackgroundLogs()])
+    startProgressPolling()
+  } catch (error: any) {
+    if (error.response?.status === 409) {
+      const ownerType = error.response?.data?.data?.owner_type
+      const ownerLabel = ownerType === 'analyzer'
+        ? '离线 analyzer'
+        : ownerType === 'batch'
+          ? '在线批量分析'
+          : ownerType === 'background'
+            ? '在线后台分析'
+            : '其他分析器'
+      ElMessage.warning(`当前 ${ownerLabel} 正在运行，请稍后再试`)
+      await loadRuntimeStatus()
+    } else if (error.response?.status === 503) {
+      ElMessage.warning('AI 服务未配置或不可用，请先在配置管理中配置 AI Provider')
+    } else {
+      ElMessage.error(error.message || '启动后台分析失败')
+    }
+  }
+}
+
+const handleStopBackground = async () => {
+  try {
+    await aiApi.stopBackground()
+    ElMessage.success('后台分析正在停止')
+    await Promise.all([loadRuntimeStatus(), loadProgress(), loadBackgroundLogs()])
+    startProgressPolling()
+  } catch (error: any) {
+    ElMessage.error(error.message || '停止后台分析失败')
+  }
+}
+
 // 开始轮询进度
 const startProgressPolling = () => {
   if (progressTimer) {
@@ -215,13 +446,17 @@ const startProgressPolling = () => {
   }
 
   progressTimer = setInterval(async () => {
-    await loadProgress()
+    await Promise.all([loadProgress(), loadRuntimeStatus(), loadBackgroundLogs()])
 
-    if (!progress.value?.is_running) {
+    if (!progress.value?.is_running && !runtimeStatus.value?.is_active) {
       clearInterval(progressTimer)
       progressTimer = null
+
+      if (analyzing.value) {
+        ElMessage.success('批量分析已完成')
+      }
+
       analyzing.value = false
-      ElMessage.success('批量分析已完成')
     }
   }, 2000)
 }
@@ -236,17 +471,24 @@ const stopProgressPolling = () => {
 
 onMounted(async () => {
   await loadProviderInfo()
-  await loadProgress()
+  await Promise.all([loadProgress(), loadRuntimeStatus(), loadBackgroundLogs()])
 
   // 如果有正在运行的任务，开始轮询
-  if (progress.value?.is_running) {
-    analyzing.value = true
+  if (progress.value?.is_running || runtimeStatus.value?.is_active) {
+    analyzing.value = !!progress.value?.is_running && progress.value?.mode === 'batch'
     startProgressPolling()
   }
 })
 
 onUnmounted(() => {
   stopProgressPolling()
+})
+
+watch(backgroundLogs, async () => {
+  await nextTick()
+  if (logContainerRef.value) {
+    logContainerRef.value.scrollTop = logContainerRef.value.scrollHeight
+  }
 })
 </script>
 
@@ -268,5 +510,39 @@ onUnmounted(() => {
 .batch-label {
   font-size: 14px;
   color: var(--color-text-secondary);
+}
+
+.background-log-panel {
+  margin-top: 16px;
+}
+
+.background-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.background-log-body {
+  height: 240px;
+  padding: 12px;
+  overflow-y: auto;
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+  background: var(--el-fill-color-light);
+}
+
+.background-log-body pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--el-font-family-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.background-log-empty {
+  color: var(--color-text-secondary);
+  font-size: 13px;
 }
 </style>

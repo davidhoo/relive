@@ -336,6 +336,96 @@ func (c *APIClient) GetStats(ctx context.Context) (*model.AnalyzerStatsResponse,
 	return &statsResp, nil
 }
 
+// AcquireAnalysisRuntime 获取全局分析运行租约
+func (c *APIClient) AcquireAnalysisRuntime(ctx context.Context, ownerType, ownerID, message string) (*model.AnalysisRuntimeLease, *model.AnalysisRuntimeStatusResponse, error) {
+	req := model.AnalysisRuntimeAcquireRequest{
+		OwnerType: ownerType,
+		OwnerID:   ownerID,
+		Message:   message,
+	}
+
+	resp, err := c.doRequest(ctx, "POST", "/api/v1/analyzer/runtime/acquire", req, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read response body: %w", err)
+	}
+
+	var apiResp model.Response
+	if err := json.Unmarshal(body, &apiResp); err != nil {
+		return nil, nil, fmt.Errorf("unmarshal response: %w", err)
+	}
+
+	if resp.StatusCode == http.StatusConflict {
+		var status model.AnalysisRuntimeStatusResponse
+		if apiResp.Data != nil {
+			dataJSON, _ := json.Marshal(apiResp.Data)
+			_ = json.Unmarshal(dataJSON, &status)
+		}
+		message := "analysis runtime busy"
+		if apiResp.Error != nil && apiResp.Error.Message != "" {
+			message = apiResp.Error.Message
+		}
+		return nil, &status, fmt.Errorf("%s", message)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	dataJSON, err := json.Marshal(apiResp.Data)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal data: %w", err)
+	}
+
+	var lease model.AnalysisRuntimeLease
+	if err := json.Unmarshal(dataJSON, &lease); err != nil {
+		return nil, nil, fmt.Errorf("unmarshal runtime lease: %w", err)
+	}
+
+	return &lease, nil, nil
+}
+
+// HeartbeatAnalysisRuntime 续约全局分析运行租约
+func (c *APIClient) HeartbeatAnalysisRuntime(ctx context.Context, ownerType, ownerID string) error {
+	req := model.AnalysisRuntimeHeartbeatRequest{OwnerType: ownerType, OwnerID: ownerID}
+	resp, err := c.doRequest(ctx, "POST", "/api/v1/analyzer/runtime/heartbeat", req, nil)
+	if err != nil {
+		return err
+	}
+
+	var apiResp model.Response
+	if err := parseResponse(resp, &apiResp); err != nil {
+		return err
+	}
+	if !apiResp.Success {
+		return fmt.Errorf("API error: %s", apiResp.Error.Message)
+	}
+	return nil
+}
+
+// ReleaseAnalysisRuntime 释放全局分析运行租约
+func (c *APIClient) ReleaseAnalysisRuntime(ctx context.Context, ownerType, ownerID string) error {
+	req := model.AnalysisRuntimeReleaseRequest{OwnerType: ownerType, OwnerID: ownerID}
+	resp, err := c.doRequest(ctx, "POST", "/api/v1/analyzer/runtime/release", req, nil)
+	if err != nil {
+		return err
+	}
+
+	var apiResp model.Response
+	if err := parseResponse(resp, &apiResp); err != nil {
+		return err
+	}
+	if !apiResp.Success {
+		return fmt.Errorf("API error: %s", apiResp.Error.Message)
+	}
+	return nil
+}
+
 // DownloadPhoto 下载照片
 func (c *APIClient) DownloadPhoto(ctx context.Context, downloadURL string) (io.ReadCloser, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", downloadURL, nil)

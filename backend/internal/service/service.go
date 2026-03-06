@@ -9,18 +9,19 @@ import (
 
 // Services 所有服务的集合
 type Services struct {
-	Photo       PhotoService
-	Display     DisplayService
-	Device      DeviceService // 新名称
-	ESP32       ESP32Service  // 保留兼容（别名）
-	AI          AIService
-	Config      ConfigService
-	Prompt      PromptService
-	Geocode     GeocodeService
-	Auth        AuthService
-	Analysis    AnalysisService
-	Scheduler   *TaskScheduler
-	ResultQueue *ResultQueue // 结果队列服务
+	Photo           PhotoService
+	Display         DisplayService
+	Device          DeviceService // 新名称
+	ESP32           ESP32Service  // 保留兼容（别名）
+	AI              AIService
+	AnalysisRuntime AnalysisRuntimeService
+	Config          ConfigService
+	Prompt          PromptService
+	Geocode         GeocodeService
+	Auth            AuthService
+	Analysis        AnalysisService
+	Scheduler       *TaskScheduler
+	ResultQueue     *ResultQueue // 结果队列服务
 }
 
 // NewServices 创建所有服务
@@ -30,7 +31,8 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	configService := NewConfigService(repos.Config)
 
 	// 创建 AI 服务（可能失败，不阻塞其他服务）
-	aiService, err := NewAIService(repos.Photo, cfg, configService)
+	runtimeService := NewAnalysisRuntimeService(db)
+	aiService, err := NewAIService(repos.Photo, cfg, configService, runtimeService)
 	if err != nil {
 		logger.Warnf("Failed to initialize AI service: %v", err)
 		aiService = nil
@@ -83,17 +85,18 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	analysisService.SetResultQueue(resultQueue)
 
 	return &Services{
-		Photo:       NewPhotoService(repos.Photo, cfg, configService, geocodeService),
-		Display:     NewDisplayService(repos.Photo, repos.DisplayRecord, repos.Device, configService, cfg),
-		Device:      deviceService,
-		ESP32:       deviceService,
-		AI:          aiService,
-		Config:      configService,
-		Prompt:      promptService,
-		Geocode:     geocodeService,
-		Auth:        authService,
-		Analysis:    analysisService,
-		Scheduler:   scheduler,
-		ResultQueue: resultQueue,
+		Photo:           NewPhotoService(repos.Photo, cfg, configService, geocodeService),
+		Display:         NewDisplayService(repos.Photo, repos.DisplayRecord, repos.Device, configService, cfg),
+		Device:          deviceService,
+		ESP32:           deviceService,
+		AI:              aiService,
+		AnalysisRuntime: runtimeService,
+		Config:          configService,
+		Prompt:          promptService,
+		Geocode:         geocodeService,
+		Auth:            authService,
+		Analysis:        analysisService,
+		Scheduler:       scheduler,
+		ResultQueue:     resultQueue,
 	}
 }

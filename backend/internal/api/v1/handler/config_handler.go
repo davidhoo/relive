@@ -26,6 +26,7 @@ import (
 type ConfigHandler struct {
 	service        service.ConfigService
 	aiService      service.AIService
+	runtimeService service.AnalysisRuntimeService
 	photoService   service.PhotoService
 	promptService  service.PromptService
 	geocodeService service.GeocodeService
@@ -36,10 +37,11 @@ type ConfigHandler struct {
 }
 
 // NewConfigHandler 创建配置处理器
-func NewConfigHandler(service service.ConfigService, aiService service.AIService, photoService service.PhotoService, promptService service.PromptService, geocodeService service.GeocodeService, photoRepo repository.PhotoRepository, cfg *config.Config, db *gorm.DB) *ConfigHandler {
+func NewConfigHandler(service service.ConfigService, aiService service.AIService, runtimeService service.AnalysisRuntimeService, photoService service.PhotoService, promptService service.PromptService, geocodeService service.GeocodeService, photoRepo repository.PhotoRepository, cfg *config.Config, db *gorm.DB) *ConfigHandler {
 	return &ConfigHandler{
 		service:        service,
 		aiService:      aiService,
+		runtimeService: runtimeService,
 		photoService:   photoService,
 		promptService:  promptService,
 		geocodeService: geocodeService,
@@ -172,7 +174,7 @@ func (h *ConfigHandler) SetConfig(c *gin.Context) {
 		} else {
 			// AI service 为 nil，尝试重新初始化
 			logger.Info("AI service not initialized, trying to initialize...")
-			newAIService, err := service.NewAIService(h.photoRepo, h.cfg, h.service)
+			newAIService, err := service.NewAIService(h.photoRepo, h.cfg, h.service, h.runtimeService)
 			if err != nil {
 				logger.Warnf("Failed to initialize AI service after config change: %v", err)
 				c.JSON(http.StatusOK, model.Response{
@@ -370,7 +372,7 @@ func (h *ConfigHandler) SetBatchConfigs(c *gin.Context) {
 		} else {
 			// AI service 为 nil，尝试重新初始化
 			logger.Info("AI service not initialized, trying to initialize...")
-			newAIService, err := service.NewAIService(h.photoRepo, h.cfg, h.service)
+			newAIService, err := service.NewAIService(h.photoRepo, h.cfg, h.service, h.runtimeService)
 			if err != nil {
 				logger.Warnf("Failed to initialize AI service after config change: %v", err)
 				c.JSON(http.StatusOK, model.Response{
@@ -694,10 +696,10 @@ func (h *ConfigHandler) ResetPromptConfig(c *gin.Context) {
 
 // CitiesDataStatus 城市数据状态
 type CitiesDataStatus struct {
-	Exists     bool   `json:"exists"`
-	FilePath   string `json:"file_path"`
-	FileSize   int64  `json:"file_size,omitempty"`
-	CityCount  int    `json:"city_count,omitempty"`
+	Exists      bool   `json:"exists"`
+	FilePath    string `json:"file_path"`
+	FileSize    int64  `json:"file_size,omitempty"`
+	CityCount   int    `json:"city_count,omitempty"`
 	DownloadURL string `json:"download_url"`
 }
 

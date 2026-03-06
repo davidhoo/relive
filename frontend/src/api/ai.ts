@@ -1,5 +1,5 @@
 import http from '@/utils/request'
-import type { AIAnalyzeProgress, AIAnalyzeBatchResponse, AIAnalyzeTask, AIProviderInfo } from '@/types/ai'
+import type { AIAnalyzeProgress, AIAnalyzeBatchResponse, AIAnalyzeTask, AIProviderInfo, AnalysisRuntimeStatus, AIBackgroundLogsResponse } from '@/types/ai'
 import type { ApiResponse } from '@/types/api'
 
 export const aiApi = {
@@ -11,6 +11,18 @@ export const aiApi = {
   // 批量分析
   analyzeBatch(limit: number = 100) {
     return http.post<ApiResponse<AIAnalyzeBatchResponse>>('/ai/analyze/batch', { limit })
+  },
+
+  startBackground() {
+    return http.post<ApiResponse<AIAnalyzeTask>>('/ai/background/start')
+  },
+
+  stopBackground() {
+    return http.post<ApiResponse<void>>('/ai/background/stop')
+  },
+
+  getBackgroundLogs() {
+    return http.get<ApiResponse<AIBackgroundLogsResponse>>('/ai/background/logs')
   },
 
   // 获取分析进度
@@ -31,5 +43,10 @@ export const aiApi = {
   // 获取任务状态
   getTaskStatus() {
     return http.get<ApiResponse<AIAnalyzeTask>>('/ai/task')
+  },
+
+  // 获取全局分析运行状态
+  getRuntimeStatus() {
+    return http.get<ApiResponse<AnalysisRuntimeStatus>>('/ai/runtime')
   },
 }
