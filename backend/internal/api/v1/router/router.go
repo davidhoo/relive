@@ -125,9 +125,13 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 			analyzer.POST("/clean-locks", handlers.Analyzer.CleanExpiredLocks)
 		}
 
-		// 图片访问（公开访问，不需要认证）
-		v1.GET("/photos/:id/image", handlers.Photo.GetPhotoImage)
-		v1.GET("/photos/:id/thumbnail", handlers.Photo.GetPhotoThumbnail)
+		// 图片访问（JWT 或 API Key 认证）
+		photoAuth := v1.Group("")
+		photoAuth.Use(middleware.PhotoAuth(services.Auth, services.Device))
+		{
+			photoAuth.GET("/photos/:id/image", handlers.Photo.GetPhotoImage)
+			photoAuth.GET("/photos/:id/thumbnail", handlers.Photo.GetPhotoThumbnail)
+		}
 
 		// 以下接口需要 JWT 认证
 		authorized := v1.Group("")

@@ -121,6 +121,54 @@ func FirstLoginCheck(authService service.AuthService) gin.HandlerFunc {
 	}
 }
 
+// PhotoAuth 照片图片访问认证中间件
+// 同时支持 JWT（Web 端）和 API Key（嵌入式设备），任一通过即放行
+func PhotoAuth(authService service.AuthService, deviceService service.DeviceService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 尝试 Authorization: Bearer <token>
+		authHeader := c.GetHeader("Authorization")
+		if authHeader != "" {
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) == 2 && parts[0] == "Bearer" {
+				token := parts[1]
+				// 先尝试 JWT
+				if claims, err := authService.ValidateToken(token); err == nil {
+					c.Set(ContextUserIDKey, claims.UserID)
+					c.Set(ContextUsernameKey, claims.Username)
+					c.Next()
+					return
+				}
+				// 再尝试 API Key
+				if device, err := deviceService.GetByAPIKey(token); err == nil && device.IsEnabled {
+					deviceService.UpdateLastSeen(device.ID, c.ClientIP())
+					c.Set(ContextDeviceIDKey, device.ID)
+					c.Next()
+					return
+				}
+			}
+		}
+
+		// 尝试 X-API-Key header
+		if apiKey := c.GetHeader("X-API-Key"); apiKey != "" {
+			if device, err := deviceService.GetByAPIKey(apiKey); err == nil && device.IsEnabled {
+				deviceService.UpdateLastSeen(device.ID, c.ClientIP())
+				c.Set(ContextDeviceIDKey, device.ID)
+				c.Next()
+				return
+			}
+		}
+
+		c.JSON(http.StatusUnauthorized, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "UNAUTHORIZED",
+				Message: "Authentication required",
+			},
+		})
+		c.Abort()
+	}
+}
+
 // APIKeyAuth API Key 认证中间件（用于设备和 Analyzer）
 // 统一从 devices 表验证 API Key
 func APIKeyAuth(deviceService service.DeviceService) gin.HandlerFunc {
