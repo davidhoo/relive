@@ -104,7 +104,7 @@ func (h *DisplayHandler) resolveDeviceDisplaySelection(c *gin.Context) (*model.D
 		return nil, false
 	}
 
-	device, err := h.esp32Service.GetByID(deviceID)
+	device, err := h.deviceService.GetByID(deviceID)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, model.Response{
 			Success: false,

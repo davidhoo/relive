@@ -21,7 +21,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		&model.Photo{},
 		&model.AnalysisRuntimeLease{},
 		&model.DisplayRecord{},
-		&model.ESP32Device{},
+		&model.Device{},
 		&model.DailyDisplayBatch{},
 		&model.DailyDisplayItem{},
 		&model.DailyDisplayAsset{},

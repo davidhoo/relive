@@ -88,29 +88,29 @@
    - 构建系统（Makefile）
 
 2. **数据模型层** ✅
-   - 5 个核心模型（Photo, DisplayRecord, ESP32Device, Config, AnalyzeTask）
+   - 5 个核心模型（Photo, DisplayRecord, Device, Config, AnalyzeTask）
    - 21 个 DTO 结构
 
 3. **Repository 层** ✅
    - PhotoRepository - 照片数据访问
    - DisplayRecordRepository - 展示记录
-   - ESP32DeviceRepository - 设备管理
+   - DeviceRepository - 设备管理
    - ConfigRepository - 配置存储
    - 75+ 个方法，完整 CRUD
 
 4. **Service 层** ✅
    - PhotoService - 照片业务逻辑
    - DisplayService - 展示策略
-   - ESP32Service - 设备管理
+   - DeviceService - 设备管理
    - AIService - AI 分析
    - ExportService - 导出/导入
    - ConfigService - 配置管理
 
 5. **Handler 层（28 个 API）** ✅
    - SystemHandler（2 个）- 健康检查、系统统计
-   - PhotoHandler（6 个）- 扫描、重建、清理、列表、详情、统计
+   - PhotoHandler（异步扫描为主）- 扫描任务、重建任务、清理、列表、详情、统计
    - DisplayHandler（2 个）- 获取展示照片、记录展示
-   - ESP32Handler（5 个）- 注册、心跳、列表、详情、统计
+   - DeviceHandler（7 个）- 创建设备、启停、渲染规格、列表、详情、统计
    - AIHandler（5 个）- 分析、批量分析、进度、重新分析、Provider 信息
    - ExportHandler（3 个）- 导出、导入、检查导出
    - ConfigHandler（5 个）- 列表、获取、设置、删除、批量设置

@@ -152,13 +152,10 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 			// 照片相关
 			photos := authorized.Group("/photos")
 			{
-				// 异步扫描（推荐）
+				// 异步扫描
 				photos.POST("/scan/async", handlers.Photo.StartScan)
 				photos.POST("/rebuild/async", handlers.Photo.StartRebuild)
 				photos.GET("/scan/task", handlers.Photo.GetScanTask)
-				// 同步扫描（已弃用，保留兼容）
-				photos.POST("/scan", handlers.Photo.ScanPhotos)
-				photos.POST("/rebuild", handlers.Photo.RebuildPhotos)
 				photos.POST("/cleanup", handlers.Photo.CleanupPhotos)
 				photos.POST("/validate-path", handlers.Photo.ValidatePath)
 				photos.POST("/list-directories", handlers.Photo.ListDirectories)

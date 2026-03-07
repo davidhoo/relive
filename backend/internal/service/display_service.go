@@ -43,7 +43,7 @@ type displayService struct {
 	db                *gorm.DB
 	photoRepo         repository.PhotoRepository
 	displayRecordRepo repository.DisplayRecordRepository
-	esp32DeviceRepo   repository.ESP32DeviceRepository
+	deviceRepo        repository.DeviceRepository
 	configService     ConfigService
 	config            *config.Config
 }
@@ -53,7 +53,7 @@ func NewDisplayService(
 	db *gorm.DB,
 	photoRepo repository.PhotoRepository,
 	displayRecordRepo repository.DisplayRecordRepository,
-	esp32DeviceRepo repository.ESP32DeviceRepository,
+	deviceRepo repository.DeviceRepository,
 	configService ConfigService,
 	cfg *config.Config,
 ) DisplayService {
@@ -61,7 +61,7 @@ func NewDisplayService(
 		db:                db,
 		photoRepo:         photoRepo,
 		displayRecordRepo: displayRecordRepo,
-		esp32DeviceRepo:   esp32DeviceRepo,
+		deviceRepo:        deviceRepo,
 		configService:     configService,
 		config:            cfg,
 	}
@@ -70,7 +70,7 @@ func NewDisplayService(
 // GetDisplayPhoto 获取展示照片
 func (s *displayService) GetDisplayPhoto(deviceIDStr string) (*model.Photo, error) {
 	// 获取设备信息
-	device, err := s.esp32DeviceRepo.GetByDeviceID(deviceIDStr)
+	device, err := s.deviceRepo.GetByDeviceID(deviceIDStr)
 	if err != nil {
 		return nil, fmt.Errorf("get device: %w", err)
 	}
@@ -123,7 +123,7 @@ func (s *displayService) PreviewPhotos(cfg *model.DisplayStrategyConfig, preview
 // GetOnThisDayPhoto 往年今日算法
 func (s *displayService) GetOnThisDayPhoto(deviceIDStr string) (*model.Photo, error) {
 	// 获取设备
-	device, err := s.esp32DeviceRepo.GetByDeviceID(deviceIDStr)
+	device, err := s.deviceRepo.GetByDeviceID(deviceIDStr)
 	if err != nil {
 		return nil, fmt.Errorf("get device: %w", err)
 	}
@@ -149,7 +149,7 @@ func (s *displayService) GetOnThisDayPhoto(deviceIDStr string) (*model.Photo, er
 }
 
 func (s *displayService) getRandomPhoto(deviceIDStr string, cfg model.DisplayStrategyConfig) (*model.Photo, error) {
-	device, err := s.esp32DeviceRepo.GetByDeviceID(deviceIDStr)
+	device, err := s.deviceRepo.GetByDeviceID(deviceIDStr)
 	if err != nil {
 		return nil, fmt.Errorf("get device: %w", err)
 	}

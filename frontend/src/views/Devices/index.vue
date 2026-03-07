@@ -250,11 +250,11 @@ import { ref, onMounted, reactive } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { deviceApi, type CreateDeviceRequest, type CreateDeviceResponse } from '@/api/device'
 import { dailyDisplayApi, type RenderProfileOption } from '@/api/display'
-import type { ESP32Device, DeviceStats } from '@/types/device'
+import type { Device, DeviceStats } from '@/types/device'
 import dayjs from 'dayjs'
 import { Monitor, CircleCheck, CircleClose, List, Refresh, Plus, CopyDocument } from '@element-plus/icons-vue'
 
-const devices = ref<ESP32Device[]>([])
+const devices = ref<Device[]>([])
 const stats = ref<DeviceStats | null>(null)
 const renderProfiles = ref<RenderProfileOption[]>([])
 const loading = ref(false)
@@ -262,7 +262,7 @@ const currentPage = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
 const detailVisible = ref(false)
-const currentDevice = ref<ESP32Device | null>(null)
+const currentDevice = ref<Device | null>(null)
 const renderProfileDraft = ref('')
 
 // 创建设备相关
@@ -382,7 +382,7 @@ const createDevice = async () => {
 }
 
 // 切换设备可用状态
-const toggleEnabled = async (row: ESP32Device, enabled: boolean) => {
+const toggleEnabled = async (row: Device, enabled: boolean) => {
   try {
     await deviceApi.updateEnabled(row.id, enabled)
     ElMessage.success(enabled ? '设备已启用' : '设备已禁用')
@@ -402,7 +402,7 @@ const closeApiKeyDialog = () => {
 }
 
 // 删除设备
-const deleteDevice = async (row: ESP32Device) => {
+const deleteDevice = async (row: Device) => {
   try {
     await ElMessageBox.confirm(
       `确定要删除设备「${row.name || row.device_id}」吗？此操作不可恢复！`,

@@ -294,15 +294,3 @@ func (s *deviceService) generateAPIKey() (string, error) {
 
 	return apiKey, nil
 }
-
-// ============= 向后兼容 =============
-
-// ESP32Service 类型别名，保持向后兼容
-// Deprecated: 使用 DeviceService 代替
-type ESP32Service = DeviceService
-
-// NewESP32Service 创建设备服务（兼容旧代码）
-// Deprecated: 使用 NewDeviceService 代替
-func NewESP32Service(repo repository.DeviceRepository, cfg *config.Config) DeviceService {
-	return NewDeviceService(repo, cfg)
-}

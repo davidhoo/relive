@@ -112,6 +112,10 @@ func AutoMigrate(db *gorm.DB) error {
 		return err
 	}
 
+	if err := cleanupObsoleteDeviceColumns(db); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -127,4 +131,17 @@ func migrateDeviceLastSeenColumn(db *gorm.DB) error {
 		return nil
 	}
 	return migrator.RenameColumn(&model.Device{}, "last_heartbeat", "last_seen")
+}
+
+func cleanupObsoleteDeviceColumns(db *gorm.DB) error {
+	migrator := db.Migrator()
+	obsoleteColumns := []string{"battery_level", "wifi_rssi"}
+	for _, column := range obsoleteColumns {
+		if migrator.HasColumn("devices", column) {
+			if err := db.Exec(fmt.Sprintf("ALTER TABLE devices DROP COLUMN %s", column)).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

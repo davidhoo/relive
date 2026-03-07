@@ -106,7 +106,7 @@ sqlite3 data/relive.db "SELECT COUNT(*) FROM cities;"
 
 ```bash
 # 扫描包含 GPS 的照片
-curl -X POST http://localhost:8080/api/v1/photos/scan \
+curl -X POST http://localhost:8080/api/v1/photos/scan/async \
   -H "Content-Type: application/json" \
   -d '{"path": "/path/to/photos"}'
 
@@ -243,7 +243,7 @@ EOF
 
 ```bash
 # 扫描照片
-curl -X POST http://localhost:8080/api/v1/photos/scan \
+curl -X POST http://localhost:8080/api/v1/photos/scan/async \
   -H "Content-Type: application/json" \
   -d '{"path": "/photos/travel-2025"}'
 

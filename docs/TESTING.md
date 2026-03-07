@@ -323,7 +323,7 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
     v1 := router.Group("/api/v1")
     {
         v1.GET("/photos/:id", photoHandler.GetPhoto)
-        v1.POST("/photos/scan", photoHandler.ScanPhotos)
+        v1.POST("/photos/scan/async", photoHandler.StartScan)
         // ...
     }
 
@@ -371,7 +371,7 @@ func TestPhotoAPI_GetPhoto(t *testing.T) {
     assert.NotNil(t, response["data"])
 }
 
-func TestPhotoAPI_ScanPhotos(t *testing.T) {
+func TestPhotoAPI_StartScan(t *testing.T) {
     // 准备测试照片目录
     testPhotosDir := "../../tests/fixtures/photos"
 
@@ -383,7 +383,7 @@ func TestPhotoAPI_ScanPhotos(t *testing.T) {
 
     // 发送请求
     w := httptest.NewRecorder()
-    req, _ := http.NewRequest("POST", "/api/v1/photos/scan", bytes.NewReader(jsonBody))
+    req, _ := http.NewRequest("POST", "/api/v1/photos/scan/async", bytes.NewReader(jsonBody))
     req.Header.Set("Content-Type", "application/json")
     testRouter.ServeHTTP(w, req)
 
@@ -460,7 +460,7 @@ func TestE2E_PhotoWorkflow(t *testing.T) {
     t.Run("Scan photos", func(t *testing.T) {
         w := httptest.NewRecorder()
         body := `{"path": "/test-photos"}`
-        req, _ := http.NewRequest("POST", "/api/v1/photos/scan", strings.NewReader(body))
+        req, _ := http.NewRequest("POST", "/api/v1/photos/scan/async", strings.NewReader(body))
         req.Header.Set("Content-Type", "application/json")
         testRouter.ServeHTTP(w, req)
 
@@ -525,7 +525,7 @@ func TestE2E_PhotoWorkflow(t *testing.T) {
 
 **模拟 ESP32 设备**：
 ```go
-func TestE2E_ESP32Device(t *testing.T) {
+func TestE2E_DeviceDisplayFlow(t *testing.T) {
     // 1. 后台预先创建设备，并为设备分配 API Key
     deviceID := "ESP32-TEST01"
     apiKey := createTestDevice(t, testDB, model.Device{

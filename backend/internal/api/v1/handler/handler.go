@@ -12,8 +12,7 @@ type Handlers struct {
 	System   *SystemHandler
 	Photo    *PhotoHandler
 	Display  *DisplayHandler
-	Device   *DeviceHandler // 新名称
-	ESP32    *ESP32Handler  // 保留兼容（别名）
+	Device   *DeviceHandler
 	AI       *AIHandler
 	Config   *ConfigHandler
 	Auth     *AuthHandler
@@ -30,7 +29,6 @@ func NewHandlers(db *gorm.DB, services *service.Services, repos *repository.Repo
 		Photo:    NewPhotoHandler(services.Photo, services.Config, cfg),
 		Display:  NewDisplayHandler(services.Display, services.Device, cfg),
 		Device:   deviceHandler,
-		ESP32:    deviceHandler,
 		Config:   NewConfigHandler(services.Config, services.AI, services.AnalysisRuntime, services.Photo, services.Prompt, services.Geocode, repos.Photo, cfg, db),
 		Auth:     NewAuthHandler(services.Auth),
 		Analyzer: NewAnalyzerHandler(services.Photo, services.Analysis, services.AnalysisRuntime),

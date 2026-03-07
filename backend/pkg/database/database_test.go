@@ -19,7 +19,9 @@ func TestMigrateDeviceLastSeenColumn(t *testing.T) {
 		device_id text,
 		name text,
 		api_key text,
-		last_heartbeat datetime
+		last_heartbeat datetime,
+		battery_level integer,
+		wifi_rssi integer
 	)`).Error; err != nil {
 		t.Fatalf("create legacy table: %v", err)
 	}
@@ -33,5 +35,15 @@ func TestMigrateDeviceLastSeenColumn(t *testing.T) {
 	}
 	if db.Migrator().HasColumn(&model.Device{}, "last_heartbeat") {
 		t.Fatal("expected last_heartbeat column to be renamed")
+	}
+
+	if err := cleanupObsoleteDeviceColumns(db); err != nil {
+		t.Fatalf("cleanup columns: %v", err)
+	}
+	if db.Migrator().HasColumn(&model.Device{}, "battery_level") {
+		t.Fatal("expected battery_level column to be removed")
+	}
+	if db.Migrator().HasColumn(&model.Device{}, "wifi_rssi") {
+		t.Fatal("expected wifi_rssi column to be removed")
 	}
 }

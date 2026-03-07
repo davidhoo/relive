@@ -30,21 +30,6 @@ type ScanPhotosRequest struct {
 	Path string `json:"path" binding:"omitempty"` // 扫描路径 (optional, uses config default if empty)
 }
 
-// ScanPhotosResponse 扫描照片响应
-type ScanPhotosResponse struct {
-	ScannedCount int `json:"scanned_count"` // 扫描数量
-	NewCount     int `json:"new_count"`     // 新增数量
-	UpdatedCount int `json:"updated_count"` // 更新数量
-}
-
-// RebuildPhotosResponse 重建照片响应
-type RebuildPhotosResponse struct {
-	ScannedCount int `json:"scanned_count"` // 扫描数量
-	NewCount     int `json:"new_count"`     // 新增数量
-	UpdatedCount int `json:"updated_count"` // 更新数量
-	DeletedCount int `json:"deleted_count"` // 删除数量（数据库中已不存在于文件系统的照片）
-}
-
 // CleanupPhotosResponse 清理照片响应
 type CleanupPhotosResponse struct {
 	TotalCount   int `json:"total_count"`   // 检查总数
@@ -153,8 +138,6 @@ type DeviceDetailResponse struct {
 	IsEnabled     bool      `json:"is_enabled"` // 是否可用
 	Online        bool      `json:"online"`     // 是否在线（根据最近活跃时间计算）
 	LastSeen      time.Time `json:"last_seen,omitempty"`
-	BatteryLevel  int       `json:"battery_level"`
-	WiFiRSSI      int       `json:"wifi_rssi"`
 }
 
 // RecordDisplayRequest 上报展示记录请求
@@ -169,12 +152,6 @@ type PhotoStatsResponse struct {
 	Total      int64 `json:"total"`
 	Analyzed   int64 `json:"analyzed"`
 	Unanalyzed int64 `json:"unanalyzed"`
-}
-
-// ESP32StatsResponse ESP32 设备统计响应
-type ESP32StatsResponse struct {
-	Total  int64 `json:"total"`
-	Online int64 `json:"online"`
 }
 
 // AIAnalyzeRequest AI 分析请求

@@ -325,9 +325,7 @@ CREATE TABLE devices (
     is_enabled BOOLEAN DEFAULT TRUE,          -- 是否可用（服务端控制）
     online BOOLEAN DEFAULT FALSE,             -- 是否在线（自动检测）
     last_seen DATETIME,                  -- 最近活跃时间
-    battery_level INTEGER DEFAULT 0,          -- 电池电量（0-100）
-    wifi_rssi INTEGER DEFAULT 0,              -- WiFi信号强度（dBm）
-
+    
     -- 配置信息
     config TEXT,                              -- 设备配置（JSON）
 
@@ -374,8 +372,6 @@ type Device struct {
     IsEnabled     bool       `gorm:"default:true" json:"is_enabled"`
     Online        bool       `gorm:"default:false" json:"online"`
     LastSeen *time.Time `gorm:"column:last_seen;index:idx_last_seen" json:"last_seen"`
-    BatteryLevel  int        `gorm:"default:0" json:"battery_level"`
-    WiFiRSSI      int        `gorm:"column:wifi_rssi;default:0" json:"wifi_rssi"`
 
     // 配置信息
     Config string `gorm:"type:text" json:"config"`

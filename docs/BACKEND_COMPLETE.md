@@ -67,7 +67,7 @@
 │ ├─ SystemHandler (2)                           │
 │ ├─ PhotoHandler (4)                            │
 │ ├─ DisplayHandler (2)                          │
-│ ├─ ESP32Handler (5)                            │
+│ ├─ DeviceHandler (5)                            │
 │ ├─ AIHandler (5)                               │
 │ ├─ ExportHandler (3)                           │
 │ └─ ConfigHandler (5)                           │
@@ -87,7 +87,7 @@
 │ Repository 层 - 数据访问（4个仓库）            │
 │ ├─ PhotoRepository (29个方法)                  │
 │ ├─ DisplayRecordRepository (15个方法)          │
-│ ├─ ESP32DeviceRepository (20个方法)            │
+│ ├─ DeviceRepository (20个方法)            │
 │ └─ ConfigRepository (11个方法)                 │
 └────────────────────────────────────────────────┘
                       ↓
@@ -95,7 +95,7 @@
 │ Model 层 - 数据模型                             │
 │ ├─ Photo (照片)                                 │
 │ ├─ DisplayRecord (展示记录)                    │
-│ ├─ ESP32Device (设备)                          │
+│ ├─ Device (设备)                          │
 │ ├─ AppConfig (配置)                            │
 │ └─ City (城市)                                  │
 └────────────────────────────────────────────────┘
@@ -273,7 +273,7 @@ type AIProvider interface {
 | 接口 | 平均响应时间 | QPS |
 |------|-------------|-----|
 | GET /photos | ~10ms | 100+ |
-| POST /photos/scan | ~2s/张 | N/A |
+| POST /photos/scan/async | 立即返回任务 | N/A |
 | GET /display/photo | ~50ms | 20+ |
 | POST /ai/analyze | ~5s/张 | 取决于 Provider |
 

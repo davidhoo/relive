@@ -380,8 +380,6 @@ func (h *DeviceHandler) GetDeviceByID(c *gin.Context) {
 		RenderProfile: device.RenderProfile,
 		IsEnabled:     device.IsEnabled,
 		Online:        device.Online,
-		BatteryLevel:  device.BatteryLevel,
-		WiFiRSSI:      device.WiFiRSSI,
 	}
 	if device.LastSeen != nil {
 		resp.LastSeen = *device.LastSeen
@@ -453,16 +451,4 @@ func (h *DeviceHandler) GetDeviceStats(c *gin.Context) {
 		Message: "Success",
 		Data:    stats,
 	})
-}
-
-// ============= 向后兼容 =============
-
-// ESP32Handler 类型别名，保持向后兼容
-// Deprecated: 使用 DeviceHandler 代替
-type ESP32Handler = DeviceHandler
-
-// NewESP32Handler 创建设备处理器（兼容旧代码）
-// Deprecated: 使用 NewDeviceHandler 代替
-func NewESP32Handler(deviceService service.DeviceService) *DeviceHandler {
-	return NewDeviceHandler(deviceService)
 }

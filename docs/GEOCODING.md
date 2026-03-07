@@ -299,7 +299,7 @@ go test ./internal/geocode/...
 ./bin/relive -config config.dev.yaml
 
 # Scan photos with GPS data
-curl -X POST http://localhost:8080/api/v1/photos/scan \
+curl -X POST http://localhost:8080/api/v1/photos/scan/async \
   -H "Content-Type: application/json" \
   -d '{"path": "/path/to/photos/with/gps"}'
 

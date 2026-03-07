@@ -1,14 +1,14 @@
 import http from '@/utils/request'
-import type { ESP32Device, DeviceStats } from '@/types/device'
+import type { Device, DeviceStats } from '@/types/device'
 import type { ApiResponse, PagedResponse } from '@/types/api'
 
 export const deviceApi = {
   getList(params?: { page?: number; page_size?: number }) {
-    return http.get<ApiResponse<PagedResponse<ESP32Device>>>('/devices', { params })
+    return http.get<ApiResponse<PagedResponse<Device>>>('/devices', { params })
   },
 
   getById(deviceId: string) {
-    return http.get<ApiResponse<ESP32Device>>(`/devices/${deviceId}`)
+    return http.get<ApiResponse<Device>>(`/devices/${deviceId}`)
   },
 
   create(data: CreateDeviceRequest) {

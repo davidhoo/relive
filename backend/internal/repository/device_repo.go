@@ -228,13 +228,3 @@ func (r *deviceRepository) CountByPlatform(platform string) (int64, error) {
 	err := r.db.Model(&model.Device{}).Where("platform = ?", platform).Count(&count).Error
 	return count, err
 }
-
-// ESP32DeviceRepository 类型别名，保持向后兼容
-// Deprecated: 使用 DeviceRepository 代替
-type ESP32DeviceRepository = DeviceRepository
-
-// NewESP32DeviceRepository 创建设备仓库（兼容旧代码）
-// Deprecated: 使用 NewDeviceRepository 代替
-func NewESP32DeviceRepository(db *gorm.DB) DeviceRepository {
-	return NewDeviceRepository(db)
-}

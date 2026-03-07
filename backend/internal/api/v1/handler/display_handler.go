@@ -14,22 +14,22 @@ import (
 // DisplayHandler 展示处理器
 type DisplayHandler struct {
 	displayService service.DisplayService
-	esp32Service   service.ESP32Service
+	deviceService  service.DeviceService
 	cfg            *config.Config
 }
 
 // NewDisplayHandler 创建展示处理器
-func NewDisplayHandler(displayService service.DisplayService, esp32Service service.ESP32Service, cfg *config.Config) *DisplayHandler {
+func NewDisplayHandler(displayService service.DisplayService, deviceService service.DeviceService, cfg *config.Config) *DisplayHandler {
 	return &DisplayHandler{
 		displayService: displayService,
-		esp32Service:   esp32Service,
+		deviceService:  deviceService,
 		cfg:            cfg,
 	}
 }
 
 // GetDisplayPhoto 获取展示照片
 // @Summary 获取展示照片
-// @Description ESP32 设备获取要展示的照片
+// @Description 设备获取要展示的照片
 // @Tags display
 // @Accept json
 // @Produce json
@@ -54,7 +54,7 @@ func (h *DisplayHandler) GetDisplayPhoto(c *gin.Context) {
 	}
 
 	// 验证设备是否存在
-	device, err := h.esp32Service.GetByDeviceID(deviceID)
+	device, err := h.deviceService.GetByDeviceID(deviceID)
 	if err != nil {
 		logger.Warnf("Device not found: %s", deviceID)
 		c.JSON(http.StatusNotFound, model.Response{
@@ -205,7 +205,7 @@ func (h *DisplayHandler) RecordDisplay(c *gin.Context) {
 	}
 
 	// 验证设备
-	device, err := h.esp32Service.GetByDeviceID(req.DeviceID)
+	device, err := h.deviceService.GetByDeviceID(req.DeviceID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, model.Response{
 			Success: false,

@@ -103,11 +103,11 @@ func (h *SystemHandler) Stats(c *gin.Context) {
 	stats.UnanalyzedPhotos = stats.TotalPhotos - stats.AnalyzedPhotos
 
 	// 统计设备总数
-	h.db.Model(&model.ESP32Device{}).Count(&stats.TotalDevices)
+	h.db.Model(&model.Device{}).Count(&stats.TotalDevices)
 
 	// 统计在线设备（5分钟内有最近活跃记录）
 	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
-	h.db.Model(&model.ESP32Device{}).
+	h.db.Model(&model.Device{}).
 		Where("last_seen > ?", fiveMinutesAgo).
 		Count(&stats.OnlineDevices)
 

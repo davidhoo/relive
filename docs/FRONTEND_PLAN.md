@@ -162,7 +162,7 @@ frontend/
 - DisplayHistory（展示历史）
 
 #### 2.3 照片扫描
-**路由**：`/photos/scan`
+**页面**：`/photos`（触发异步扫描任务）
 
 **功能**：
 - 扫描路径配置

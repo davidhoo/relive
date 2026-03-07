@@ -1,4 +1,4 @@
-export interface ESP32Device {
+export interface Device {
   id: number
   device_id: string
   device_name?: string
@@ -10,8 +10,6 @@ export interface ESP32Device {
   online?: boolean
   is_online?: boolean
   last_seen?: string
-  battery_level?: number
-  wifi_rssi?: number
   photo_count?: number
   api_key?: string
   description?: string

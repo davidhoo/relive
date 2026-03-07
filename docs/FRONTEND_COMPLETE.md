@@ -338,15 +338,15 @@ frontend/
 ```typescript
 - getList(params) → GET /photos
 - getById(id) → GET /photos/:id
-- scan(data?) → POST /photos/scan
+- startScan(data?) → POST /photos/scan/async
 - getStats() → GET /photos/stats
 ```
 
 ### Device API (`src/api/device.ts`)
 ```typescript
-- getList(params) → GET /esp32/devices
-- getById(deviceId) → GET /esp32/devices/:id
-- getStats() → GET /esp32/stats
+- getList(params) → GET /devices
+- getById(deviceId) → GET /devices/:id
+- getStats() → GET /devices/stats
 ```
 
 ### AI API (`src/api/ai.ts`)

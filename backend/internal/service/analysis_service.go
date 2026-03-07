@@ -364,18 +364,18 @@ func (s *analysisService) batchUpdatePhotos(tx *gorm.DB, results []struct {
 
 	// 构建 CASE WHEN 子句
 	var (
-		idCases        []string
-		descCases      []string
-		captionCases   []string
-		memoryCases    []string
-		beautyCases    []string
-		overallCases   []string
-		reasonCases    []string
-		categoryCases  []string
-		tagsCases      []string
-		providerCases  []string
-		analyzedCases  []string
-		photoIDList    []string
+		idCases       []string
+		descCases     []string
+		captionCases  []string
+		memoryCases   []string
+		beautyCases   []string
+		overallCases  []string
+		reasonCases   []string
+		categoryCases []string
+		tagsCases     []string
+		providerCases []string
+		analyzedCases []string
+		photoIDList   []string
 	)
 
 	for _, vr := range results {
@@ -479,7 +479,7 @@ func (s *analysisService) GetStats(deviceID uint) (*model.AnalyzerStatsResponse,
 	// 计算队列压力
 	stats.QueuePressure = model.GetQueuePressure(stats.Pending)
 
-	// TODO: 计算平均分析时间（需要记录分析开始时间）
+	// 当前未统计平均分析耗时
 	stats.AvgAnalysisTime = 0
 
 	return &stats, nil

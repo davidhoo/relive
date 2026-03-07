@@ -101,7 +101,7 @@ GET /api/v1/system/stats
 
 **请求**
 ```http
-POST /api/v1/photos/scan
+POST /api/v1/photos/scan/async
 Content-Type: application/json
 
 {
@@ -142,7 +142,7 @@ Content-Type: application/json
 
 **请求**
 ```http
-POST /api/v1/photos/rebuild
+POST /api/v1/photos/rebuild/async
 Content-Type: application/json
 
 {
@@ -493,9 +493,7 @@ GET /api/v1/devices?page=1&page_size=20
         "is_enabled": true,
         "online": true,
         "last_seen": "2026-02-28T17:59:00+08:00",
-        "battery_level": 85,
-        "wifi_rssi": -45,
-        "created_at": "2026-02-28T10:00:00Z"
+        "        "created_at": "2026-02-28T10:00:00Z"
       }
     ],
     "total": 3,
@@ -531,8 +529,6 @@ GET /api/v1/devices/{device_id}
     "is_enabled": true,
     "online": true,
     "last_seen": "2026-02-28T17:59:00+08:00",
-    "battery_level": 85,
-    "wifi_rssi": -45,
     "created_at": "2026-02-28T10:00:00Z",
     "updated_at": "2026-02-28T17:59:00Z"
   },

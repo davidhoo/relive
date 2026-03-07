@@ -1,5 +1,5 @@
 import http from '@/utils/request'
-import type { Photo, PhotoListParams, PhotoStats, ScanPhotosRequest, ScanPhotosResponse, RebuildPhotosRequest, RebuildPhotosResponse, CleanupPhotosResponse, CountPhotosByPathsRequest, CountPhotosByPathsResponse } from '@/types/photo'
+import type { Photo, PhotoListParams, PhotoStats, ScanPhotosRequest, RebuildPhotosRequest, CleanupPhotosResponse, CountPhotosByPathsRequest, CountPhotosByPathsResponse } from '@/types/photo'
 import type { ApiResponse, PagedResponse } from '@/types/api'
 
 export const photoApi = {
@@ -26,18 +26,6 @@ export const photoApi = {
   // 异步重建照片（新接口，立即返回任务 ID）
   startRebuild(data?: RebuildPhotosRequest) {
     return http.post<ApiResponse<{ task_id: string }>>('/photos/rebuild/async', data || {})
-  },
-
-  // 同步扫描照片（已弃用，保留兼容）
-  scan(data?: ScanPhotosRequest) {
-    return http.post<ApiResponse<ScanPhotosResponse>>('/photos/scan', data || {}, {
-      timeout: 300000, // 5 分钟
-    })
-  },
-
-  // 同步重建照片（已弃用，保留兼容）
-  rebuild(data?: RebuildPhotosRequest) {
-    return http.post<ApiResponse<RebuildPhotosResponse>>('/photos/rebuild', data || {})
   },
 
   // 清理不存在文件的照片

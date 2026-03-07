@@ -318,14 +318,25 @@ const handleStartAnalysis = async () => {
 // 扫描照片
 const handleScan = async () => {
   try {
-    // 使用环境变量中配置的照片路径
-    const photoPath = '/Volumes/home/Photos/MobileBackup/iPhone/2025/11'
-    const res = await photoApi.scan({ path: photoPath })
-    ElMessage.success(`扫描完成，新增 ${res.data?.data?.new_count || 0} 张照片`)
-    await loadRecentPhotos()
-    await systemStore.fetchStats()
+    await photoApi.startScan()
+    ElMessage.success('扫描任务已启动，正在后台处理')
+
+    const timer = window.setInterval(async () => {
+      try {
+        const res = await photoApi.getScanTask()
+        const { task, is_running } = res.data?.data || {}
+        if (!task || !is_running) {
+          clearInterval(timer)
+          await loadRecentPhotos()
+          await systemStore.fetchStats()
+          ElMessage.success('扫描任务已完成')
+        }
+      } catch (error) {
+        clearInterval(timer)
+      }
+    }, 2000)
   } catch (error: any) {
-    ElMessage.error(error.message || '扫描照片失败')
+    ElMessage.error(error.message || '启动扫描任务失败')
   }
 }
 

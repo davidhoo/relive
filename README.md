@@ -201,7 +201,7 @@ Handler 层（HTTP API，26个接口）
 │   ├── GET /system/health
 │   └── GET /system/stats
 ├── PhotoHandler（4个）
-│   ├── POST /photos/scan
+│   ├── POST /photos/scan/async
 │   ├── GET /photos
 │   ├── GET /photos/:id
 │   └── GET /photos/stats
@@ -233,7 +233,7 @@ Handler 层（HTTP API，26个接口）
 Service 层（业务逻辑）
 ├── PhotoService - 照片管理
 ├── DisplayService - 展示策略（往年今日 + 智能日期兜底）
-├── ESP32Service - 设备管理
+├── DeviceService - 设备管理
 ├── AIService - AI 分析
 ├── ExportService - 导出/导入
 └── ConfigService - 配置管理

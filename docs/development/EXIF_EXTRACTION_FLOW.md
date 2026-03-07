@@ -188,7 +188,7 @@ func (s *aiService) AnalyzePhoto(photoID uint) error {
 ### 场景 1: 只扫描不分析
 ```bash
 # 用户扫描了 1000 张照片
-POST /api/v1/photos/scan
+POST /api/v1/photos/scan/async
 
 # 结果：数据库中有 1000 条记录
 # ✅ 所有 EXIF 信息都已保存
@@ -199,7 +199,7 @@ POST /api/v1/photos/scan
 ### 场景 2: 先扫描后分析
 ```bash
 # 第一步：扫描
-POST /api/v1/photos/scan
+POST /api/v1/photos/scan/async
 # → 1000 张照片，EXIF 已提取
 
 # 第二步：AI 分析（批量）
@@ -238,7 +238,7 @@ backend/internal/util/exif.go
 ### 照片扫描服务
 ```
 backend/internal/service/photo_service.go
-├─ ScanPhotos()      // 扫描照片入口
+├─ StartScan()       // 启动异步扫描任务
 ├─ ScanDirectory()   // 遍历目录
 └─ processPhoto()    // 处理单张照片（提取 EXIF）
 ```
