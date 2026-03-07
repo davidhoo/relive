@@ -333,15 +333,17 @@ func closeFontFace(face font.Face) {
 }
 
 func loadPreferredFont() (*sfnt.Font, error) {
-	candidates := []string{
+	candidates := append(projectFontCandidates(), []string{
 		"/System/Library/Fonts/Hiragino Sans GB.ttc",
 		"/System/Library/Fonts/STHeiti Medium.ttc",
 		"/System/Library/AssetsV2/com_apple_MobileAsset_Font8/53fe5be564086fefc7523ccd0a31200acf92e0e5.asset/AssetData/STHEITI.ttf",
+		"/app/fonts/GlowSansSC-Normal-Light.otf",
+		"/app/assets/fonts/GlowSansSC-Normal-Light.otf",
 		"/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
 		"/usr/share/fonts/noto/NotoSansCJK-Regular.ttc",
 		"/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
 		"/usr/share/fonts/TTF/DejaVuSans.ttf",
-	}
+	}...)
 	for _, candidate := range candidates {
 		fontFile, err := loadFontFile(candidate)
 		if err == nil && fontFile != nil {
@@ -349,6 +351,30 @@ func loadPreferredFont() (*sfnt.Font, error) {
 		}
 	}
 	return nil, fmt.Errorf("no usable font found")
+}
+
+func projectFontCandidates() []string {
+	candidates := []string{
+		"./backend/assets/fonts/GlowSansSC-Normal-Light.otf",
+		"./assets/fonts/GlowSansSC-Normal-Light.otf",
+	}
+
+	if exePath, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exePath)
+		candidates = append(candidates,
+			filepath.Join(exeDir, "assets/fonts/GlowSansSC-Normal-Light.otf"),
+			filepath.Join(exeDir, "../assets/fonts/GlowSansSC-Normal-Light.otf"),
+		)
+	}
+
+	if workDir, err := os.Getwd(); err == nil {
+		candidates = append(candidates,
+			filepath.Join(workDir, "backend/assets/fonts/GlowSansSC-Normal-Light.otf"),
+			filepath.Join(workDir, "assets/fonts/GlowSansSC-Normal-Light.otf"),
+		)
+	}
+
+	return candidates
 }
 
 func loadFontFile(path string) (*sfnt.Font, error) {

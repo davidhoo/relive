@@ -82,6 +82,7 @@ RUN apk add --no-cache \
 COPY --from=backend-builder /app/relive /app/relive
 COPY --from=backend-builder /app/relive-analyzer /app/relive-analyzer
 COPY --from=backend-builder /app/import-cities /app/import-cities
+COPY --from=backend-builder /app/assets/fonts /app/fonts
 
 # 从构建阶段复制前端静态文件
 COPY --from=frontend-builder /frontend/dist /app/frontend/dist

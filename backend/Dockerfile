@@ -54,6 +54,7 @@ RUN apk add --no-cache \
 COPY --from=backend-builder /app/relive /app/relive
 COPY --from=backend-builder /app/relive-analyzer /app/relive-analyzer
 COPY --from=backend-builder /app/import-cities /app/import-cities
+COPY --from=backend-builder /app/assets/fonts /app/fonts
 
 # 复制初始化脚本和入口点
 COPY scripts/init-cities.sh /app/init-cities.sh
