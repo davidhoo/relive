@@ -11,6 +11,7 @@ import (
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/logger"
+	"gorm.io/gorm"
 )
 
 // DisplayService 展示服务接口
@@ -26,10 +27,20 @@ type DisplayService interface {
 
 	// 往年今日算法
 	GetOnThisDayPhoto(deviceID string) (*model.Photo, error)
+
+	// 每日展示批次
+	GenerateDailyBatch(date time.Time, force bool) (*model.DailyDisplayBatch, error)
+	GetDailyBatch(date time.Time) (*model.DailyDisplayBatch, error)
+	ListDailyBatches(limit int) ([]*model.DailyDisplayBatch, error)
+	GetDeviceDisplay(deviceID uint, renderProfile string) (*model.DeviceDisplaySelection, error)
+	GetDailyDisplayItem(id uint) (*model.DailyDisplayItem, error)
+	GetDailyDisplayAsset(id uint) (*model.DailyDisplayAsset, error)
+	GetRenderProfiles() []model.RenderProfileResponse
 }
 
 // displayService 展示服务实现
 type displayService struct {
+	db                *gorm.DB
 	photoRepo         repository.PhotoRepository
 	displayRecordRepo repository.DisplayRecordRepository
 	esp32DeviceRepo   repository.ESP32DeviceRepository
@@ -39,6 +50,7 @@ type displayService struct {
 
 // NewDisplayService 创建展示服务
 func NewDisplayService(
+	db *gorm.DB,
 	photoRepo repository.PhotoRepository,
 	displayRecordRepo repository.DisplayRecordRepository,
 	esp32DeviceRepo repository.ESP32DeviceRepository,
@@ -46,6 +58,7 @@ func NewDisplayService(
 	cfg *config.Config,
 ) DisplayService {
 	return &displayService{
+		db:                db,
 		photoRepo:         photoRepo,
 		displayRecordRepo: displayRecordRepo,
 		esp32DeviceRepo:   esp32DeviceRepo,

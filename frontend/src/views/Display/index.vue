@@ -158,6 +158,106 @@
       </el-card>
     </div>
 
+
+    <el-card shadow="never" class="daily-batch-card">
+      <template #header>
+        <div class="preview-header">
+          <span><el-icon><Files /></el-icon> 今日批次</span>
+          <div style="display: flex; gap: 12px">
+            <el-button @click="loadDailyBatch" :loading="batchLoading">刷新</el-button>
+            <el-button type="primary" @click="handleGenerateDailyBatch" :loading="batchGenerating">{{ dailyBatch ? '重新生成并覆盖' : '生成今日批次' }}</el-button>
+          </div>
+        </div>
+      </template>
+
+      <el-skeleton v-if="batchLoading" :rows="4" animated />
+      <el-empty v-else-if="!dailyBatch" description="今日批次尚未生成" />
+      <template v-else>
+        <div class="batch-summary">
+          <el-tag type="info">{{ dailyBatch.batch_date }}</el-tag>
+          <el-tag type="success">{{ dailyBatch.item_count }} 张</el-tag>
+          <el-tag>{{ dailyBatch.canvas_template }}</el-tag>
+        </div>
+        <div class="batch-grid">
+          <div v-for="item in dailyBatch.items" :key="item.id" class="batch-item">
+            <button type="button" class="batch-preview-trigger" @click="openDitherPreview(item)"><img class="batch-preview" :src="resolveProtectedUrl(item.preview_url)" :alt="item.photo?.caption || getFileName(item.photo?.file_path || '')"></button>
+            <div class="batch-item-meta">
+              <div class="batch-item-title">#{{ item.sequence }} {{ item.photo?.caption || getFileName(item.photo?.file_path || '') }}</div>
+              <div class="batch-item-subtitle">{{ formatPhotoDate(item.photo?.taken_at) || '未知时间' }}<span v-if="item.photo?.location"> · {{ item.photo.location }}</span></div>
+              <div class="batch-asset-tags">
+                <el-tag v-for="asset in item.assets" :key="asset.id" size="small">{{ asset.render_profile }}</el-tag>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+    </el-card>
+
+    <el-card shadow="never" class="history-card">
+      <template #header>
+        <div class="preview-header">
+          <span><el-icon><Clock /></el-icon> 历史批次</span>
+          <el-button @click="loadBatchHistory" :loading="historyLoading">刷新历史</el-button>
+        </div>
+      </template>
+
+      <el-skeleton v-if="historyLoading" :rows="4" animated />
+      <el-empty v-else-if="batchHistory.length === 0" description="暂无历史批次" />
+      <div v-else class="history-list">
+        <el-collapse>
+          <el-collapse-item v-for="batch in batchHistory" :key="batch.id" :name="batch.batch_date">
+            <template #title>
+              <div class="history-title">
+                <span>{{ batch.batch_date }}</span>
+                <span class="history-title-meta">{{ batch.item_count }} 张 · {{ batch.status }}</span>
+              </div>
+            </template>
+            <div class="batch-grid compact">
+              <div v-for="item in batch.items" :key="item.id" class="batch-item compact">
+                <button type="button" class="batch-preview-trigger" @click="openDitherPreview(item)"><img class="batch-preview" :src="resolveProtectedUrl(item.preview_url)" :alt="item.photo?.caption || getFileName(item.photo?.file_path || '')"></button>
+                <div class="batch-item-meta">
+                  <div class="batch-item-title">#{{ item.sequence }} {{ item.photo?.caption || getFileName(item.photo?.file_path || '') }}</div>
+                  <div class="batch-asset-links">
+                    <a v-for="asset in item.assets" :key="asset.id" :href="resolveProtectedUrl(asset.bin_url || '')" target="_blank" rel="noreferrer">{{ asset.render_profile }}</a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
+      </div>
+    </el-card>
+    <el-dialog
+      v-model="ditherPreviewVisible"
+      title="抖动预览"
+      width="min(720px, calc(100vw - 24px))"
+      align-center
+      destroy-on-close
+      @closed="resetDitherPreview"
+    >
+      <div v-if="ditherPreviewItem" class="dither-preview-body">
+        <div class="dither-preview-toolbar" v-if="ditherPreviewItem.assets.length > 1">
+          <el-tag
+            v-for="asset in ditherPreviewItem.assets"
+            :key="asset.id"
+            :type="asset.id === ditherPreviewAsset?.id ? 'primary' : 'info'"
+            effect="plain"
+            class="dither-preview-tag"
+            @click="selectDitherAsset(asset.id)"
+          >
+            {{ asset.render_profile }}
+          </el-tag>
+        </div>
+        <el-image
+          v-if="ditherPreviewAsset"
+          class="dither-preview-image"
+          :src="resolveProtectedUrl(ditherPreviewAsset.dither_preview_url || '')"
+          :alt="ditherPreviewItem.photo?.caption || getFileName(ditherPreviewItem.photo?.file_path || '')"
+          fit="contain"
+        />
+      </div>
+    </el-dialog>
+
     <el-dialog
       v-model="framePreviewVisible"
       title="相框预览"
@@ -172,16 +272,15 @@
             <el-image
               class="frame-preview-image"
               :src="getPhotoFramePreviewUrl(framePreviewPhoto.id, framePreviewPhoto.updated_at)"
-              :alt="framePreviewPhoto.caption || getFileName(framePreviewPhoto.file_path)"
+              :alt="getDisplayTitle(framePreviewPhoto)"
               fit="cover"
             />
             <div class="frame-preview-info">
               <div class="frame-preview-title">
-                {{ framePreviewPhoto.caption || getFileName(framePreviewPhoto.file_path) }}
+                {{ getDisplayTitle(framePreviewPhoto) }}
               </div>
               <div class="frame-preview-subtitle">
-                {{ formatPhotoDate(framePreviewPhoto.taken_at) || '未知时间' }}
-                <span v-if="framePreviewPhoto.location"> · {{ framePreviewPhoto.location }}</span>
+                {{ getDisplaySubtitle(framePreviewPhoto) }}
               </div>
             </div>
           </div>
@@ -194,8 +293,10 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Files, Clock } from '@element-plus/icons-vue'
 import { displayStrategyApi, defaultDisplayStrategyConfig } from '@/api/config'
 import type { DisplayPreviewResponse, DisplayStrategyConfig } from '@/api/config'
+import { dailyDisplayApi, type DailyDisplayBatch } from '@/api/display'
 import type { Photo } from '@/types/photo'
 import { useUserStore } from '@/stores/user'
 
@@ -211,6 +312,14 @@ const saving = ref(false)
 const loading = ref(false)
 const previewLoading = ref(false)
 const previewResult = ref<DisplayPreviewResponse | null>(null)
+const dailyBatch = ref<DailyDisplayBatch | null>(null)
+const batchHistory = ref<DailyDisplayBatch[]>([])
+const batchLoading = ref(false)
+const historyLoading = ref(false)
+const batchGenerating = ref(false)
+const ditherPreviewVisible = ref(false)
+const ditherPreviewItem = ref<DailyDisplayBatch['items'][number] | null>(null)
+const ditherPreviewAsset = ref<DailyDisplayBatch['items'][number]['assets'][number] | null>(null)
 const framePreviewVisible = ref(false)
 const framePreviewPhoto = ref<Photo | null>(null)
 let previewTimer: number | undefined
@@ -252,6 +361,48 @@ const getPhotoThumbnailUrl = (photoId: number, version?: string) => getPhotoAsse
 const getPhotoFramePreviewUrl = (photoId: number, version?: string) => getPhotoAssetUrl(photoId, 'frame-preview', version)
 
 const getFileName = (filePath: string) => filePath.split('/').pop() || filePath
+
+const getDisplayTitle = (photo?: Photo | null) => {
+  if (!photo) return ''
+  const caption = photo.caption?.trim()
+  if (caption) return caption
+  const fileName = getFileName(photo.file_path || '')
+  return fileName.replace(/\.[^.]+$/, '')
+}
+
+const getDisplaySubtitle = (photo?: Photo | null) => {
+  if (!photo) return ''
+  const parts: string[] = []
+  const date = formatPhotoDate(photo.taken_at)
+  if (date) parts.push(date.replace(/\//g, '.'))
+  if (photo.location) parts.push(photo.location)
+  return parts.join(' · ')
+}
+
+const resolveProtectedUrl = (path: string) => {
+  if (!path) return ''
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
+  const token = userStore.token
+  const normalized = path.startsWith('/api/v1') ? path : `/api/v1${path.startsWith('/') ? path : `/${path}`}`
+  const query = token ? `?token=${token}` : ''
+  return `${baseUrl.replace(/\/api\/v1$/, '')}${normalized}${query}`
+}
+
+const openDitherPreview = (item: DailyDisplayBatch['items'][number]) => {
+  ditherPreviewItem.value = item
+  ditherPreviewAsset.value = item.assets[0] || null
+  ditherPreviewVisible.value = true
+}
+
+const selectDitherAsset = (assetId: number) => {
+  if (!ditherPreviewItem.value) return
+  ditherPreviewAsset.value = ditherPreviewItem.value.assets.find((asset) => asset.id === assetId) || ditherPreviewAsset.value
+}
+
+const resetDitherPreview = () => {
+  ditherPreviewItem.value = null
+  ditherPreviewAsset.value = null
+}
 
 const openFramePreview = (photo: Photo) => {
   framePreviewPhoto.value = photo
@@ -305,6 +456,44 @@ const getCalendarDay = (day: string) => Number(day.split('-')[2] || 0)
 
 const selectCalendarDate = (action: CalendarControlAction) => {
   previewCalendarRef.value?.selectDate(action)
+}
+
+const loadDailyBatch = async () => {
+  batchLoading.value = true
+  try {
+    dailyBatch.value = await dailyDisplayApi.getTodayBatch()
+  } finally {
+    batchLoading.value = false
+  }
+}
+
+const loadBatchHistory = async () => {
+  historyLoading.value = true
+  try {
+    batchHistory.value = await dailyDisplayApi.listHistory(10)
+  } catch (error: any) {
+    ElMessage.error(error.message || '加载历史批次失败')
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+const generateDailyBatch = async (force: boolean) => {
+  batchGenerating.value = true
+  try {
+    await dailyDisplayApi.generateBatch({ force })
+    ElMessage.success(force ? '今日批次已重新生成' : '今日批次生成成功')
+    await loadDailyBatch()
+    await loadBatchHistory()
+  } catch (error: any) {
+    ElMessage.error(error.message || '生成今日批次失败')
+  } finally {
+    batchGenerating.value = false
+  }
+}
+
+const handleGenerateDailyBatch = async () => {
+  await generateDailyBatch(!!dailyBatch.value)
 }
 
 // 从 API 加载配置
@@ -416,6 +605,8 @@ watch(
 
 onMounted(() => {
   loadConfig()
+  loadDailyBatch()
+  loadBatchHistory()
 })
 
 onUnmounted(() => {
@@ -537,14 +728,12 @@ onUnmounted(() => {
 }
 
 .preview-grid {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 16px;
 }
 
 .preview-item {
-  width: min(100%, 480px);
-  flex: 0 1 480px;
   border: 1px solid #ebeef5;
   border-radius: 14px;
   overflow: hidden;
@@ -583,6 +772,132 @@ onUnmounted(() => {
   margin-top: 6px;
   font-size: 12px;
   color: #909399;
+}
+
+.daily-batch-card,
+.history-card {
+  min-height: 220px;
+}
+
+.batch-summary {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.batch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.batch-grid.compact {
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+}
+
+.batch-item {
+  border: 1px solid #ebeef5;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.batch-item.compact {
+  border-radius: 12px;
+}
+
+.batch-preview-trigger {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.batch-preview {
+  width: 100%;
+  aspect-ratio: 3 / 5;
+  object-fit: cover;
+  display: block;
+  background: #f5f7fa;
+}
+
+.batch-item-meta {
+  padding: 12px;
+}
+
+.batch-item-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+  line-height: 1.5;
+}
+
+.batch-item-subtitle {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #909399;
+}
+
+.batch-asset-tags,
+.batch-asset-links {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.batch-asset-links a {
+  color: var(--el-color-primary);
+  text-decoration: none;
+  font-size: 12px;
+}
+
+.history-list {
+  display: grid;
+  gap: 12px;
+}
+
+.history-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding-right: 8px;
+}
+
+.history-title-meta {
+  font-size: 12px;
+  color: #909399;
+}
+
+.dither-preview-body {
+  display: grid;
+  gap: 16px;
+}
+
+.dither-preview-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dither-preview-tag {
+  cursor: pointer;
+}
+
+.dither-preview-image {
+  width: 100%;
+  min-height: 420px;
+  background: #f5f7fa;
+  border-radius: 12px;
+}
+
+.dither-preview-image :deep(img) {
+  width: 100%;
+  height: auto;
+  object-fit: contain;
 }
 
 .frame-preview-body {
@@ -674,24 +989,27 @@ onUnmounted(() => {
 }
 
 .frame-preview-title {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
   color: #303133;
   text-align: center;
-  line-height: 1.4;
-  white-space: nowrap;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
+  min-height: 48px;
 }
 
 .frame-preview-subtitle {
-  font-size: 14px;
+  font-size: 13px;
   color: #909399;
   text-align: center;
   line-height: 1.5;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  margin-top: 8px;
 }
 
 @media (max-width: 960px) {

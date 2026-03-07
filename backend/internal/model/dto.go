@@ -166,23 +166,29 @@ type ESP32RegisterResponse = DeviceRegisterResponse
 
 // CreateDeviceRequest 创建设备请求（管理员）
 type CreateDeviceRequest struct {
-	Name        string `json:"name" binding:"required"` // 设备名称（用户填写）
-	DeviceType  string `json:"device_type"`             // 设备类型：embedded/mobile/web/offline/service
-	Description string `json:"description"`             // 描述/备注
+	Name          string `json:"name" binding:"required"` // 设备名称（用户填写）
+	DeviceType    string `json:"device_type"`             // 设备类型：embedded/mobile/web/offline/service
+	Description   string `json:"description"`             // 描述/备注
+	RenderProfile string `json:"render_profile"`          // 嵌入式渲染规格
 }
 
 // CreateDeviceResponse 创建设备响应（包含 API Key，仅创建时返回）
 type CreateDeviceResponse struct {
-	ID          uint      `json:"id"`
-	CreatedAt   time.Time `json:"created_at"`
-	DeviceID    string    `json:"device_id"`
-	Name        string    `json:"name"`
-	APIKey      string    `json:"api_key"` // ⚠️ 仅创建时返回，之后无法查看
-	DeviceType  string    `json:"device_type"`
-	Description string    `json:"description"`
+	ID            uint      `json:"id"`
+	CreatedAt     time.Time `json:"created_at"`
+	DeviceID      string    `json:"device_id"`
+	Name          string    `json:"name"`
+	APIKey        string    `json:"api_key"` // ⚠️ 仅创建时返回，之后无法查看
+	DeviceType    string    `json:"device_type"`
+	Description   string    `json:"description"`
+	RenderProfile string    `json:"render_profile"`
 }
 
 // DeviceActivateRequest 设备激活请求（设备使用 API Key 激活）
+type UpdateDeviceRenderProfileRequest struct {
+	RenderProfile string `json:"render_profile" binding:"required"`
+}
+
 type DeviceActivateRequest struct {
 	DeviceID   string `json:"device_id" binding:"required"`
 	Name       string `json:"name"`
@@ -212,6 +218,7 @@ type DeviceDetailResponse struct {
 	APIKey        string    `json:"api_key"` // 设备的 API Key
 	IPAddress     string    `json:"ip_address"`
 	DeviceType    string    `json:"device_type"`
+	RenderProfile string    `json:"render_profile"`
 	IsEnabled     bool      `json:"is_enabled"` // 是否可用
 	Online        bool      `json:"online"`     // 是否在线
 	LastHeartbeat time.Time `json:"last_heartbeat,omitempty"`

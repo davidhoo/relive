@@ -48,14 +48,17 @@ type Device struct {
 	Description string `gorm:"type:varchar(500)" json:"description"`
 
 	// 状态信息
-	IsEnabled     bool       `gorm:"default:true" json:"is_enabled"`                     // 是否可用（服务端控制）
-	Online        bool       `gorm:"default:false" json:"online"`                        // 是否在线（自动检测）
-	LastHeartbeat *time.Time `gorm:"index:idx_last_heartbeat" json:"last_heartbeat"`     // 最后心跳时间
-	BatteryLevel  int        `gorm:"default:0" json:"battery_level"`                     // 电池电量（0-100）
-	WiFiRSSI      int        `gorm:"column:wifi_rssi;default:0" json:"wifi_rssi"`        // WiFi 信号强度（dBm）
+	IsEnabled     bool       `gorm:"default:true" json:"is_enabled"`                 // 是否可用（服务端控制）
+	Online        bool       `gorm:"default:false" json:"online"`                    // 是否在线（自动检测）
+	LastHeartbeat *time.Time `gorm:"index:idx_last_heartbeat" json:"last_heartbeat"` // 最后心跳时间
+	BatteryLevel  int        `gorm:"default:0" json:"battery_level"`                 // 电池电量（0-100）
+	WiFiRSSI      int        `gorm:"column:wifi_rssi;default:0" json:"wifi_rssi"`    // WiFi 信号强度（dBm）
 
 	// 配置信息
 	Config string `gorm:"type:text" json:"config"` // 设备配置（JSON）
+
+	// 渲染规格（嵌入式设备预生成资产使用）
+	RenderProfile string `gorm:"type:varchar(100)" json:"render_profile"`
 
 	// 关联
 	DisplayRecords []DisplayRecord `gorm:"foreignKey:DeviceID" json:"-"` // 展示记录
@@ -99,10 +102,10 @@ type City struct {
 	ID        uint    `gorm:"primarykey" json:"id"`
 	GeonameID int     `gorm:"not null;uniqueIndex:idx_geoname_id" json:"geoname_id"` // GeoNames ID
 	Name      string  `gorm:"type:varchar(200);not null;index:idx_name" json:"name"` // 城市名
-	AdminName string  `gorm:"type:varchar(200)" json:"admin_name"`                    // 省/州名
-	Country   string  `gorm:"type:varchar(100);not null" json:"country"`              // 国家
-	Latitude  float64 `gorm:"not null;index:idx_lat" json:"latitude"`                 // 纬度
-	Longitude float64 `gorm:"not null;index:idx_lon" json:"longitude"`                // 经度
+	AdminName string  `gorm:"type:varchar(200)" json:"admin_name"`                   // 省/州名
+	Country   string  `gorm:"type:varchar(100);not null" json:"country"`             // 国家
+	Latitude  float64 `gorm:"not null;index:idx_lat" json:"latitude"`                // 纬度
+	Longitude float64 `gorm:"not null;index:idx_lon" json:"longitude"`               // 经度
 }
 
 // TableName 指定表名

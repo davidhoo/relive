@@ -8,6 +8,7 @@ import (
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
+	"github.com/davidhoo/relive/internal/util"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/logger"
 )
@@ -19,6 +20,7 @@ type DeviceService interface {
 	Delete(id uint) error
 	Update(device *model.Device) error
 	UpdateEnabled(id uint, enabled bool) error // 更新设备可用状态
+	UpdateRenderProfile(id uint, renderProfile string) error
 
 	// 设备激活（设备使用预分配的 API Key 激活）
 	Activate(req *model.DeviceActivateRequest) (*model.DeviceActivateResponse, error)
@@ -79,13 +81,21 @@ func (s *deviceService) Create(req *model.CreateDeviceRequest) (*model.CreateDev
 	}
 
 	// 创建设备记录
+	renderProfile := ""
+	if deviceType == "embedded" {
+		renderProfile = req.RenderProfile
+		if renderProfile == "" {
+			renderProfile = util.DefaultRenderProfile()
+		}
+	}
 	device := &model.Device{
-		DeviceID:   deviceID,
-		Name:       req.Name,
-		APIKey:     apiKey,
-		DeviceType: deviceType,
-		IsEnabled:  true,  // 新设备默认可用
-		Online:     false, // 新设备默认离线，等待激活
+		DeviceID:      deviceID,
+		Name:          req.Name,
+		APIKey:        apiKey,
+		DeviceType:    deviceType,
+		RenderProfile: renderProfile,
+		IsEnabled:     true,  // 新设备默认可用
+		Online:        false, // 新设备默认离线，等待激活
 	}
 
 	if err := s.repo.Create(device); err != nil {
@@ -96,12 +106,13 @@ func (s *deviceService) Create(req *model.CreateDeviceRequest) (*model.CreateDev
 		deviceID, req.Name, deviceType)
 
 	return &model.CreateDeviceResponse{
-		ID:         device.ID,
-		CreatedAt:  device.CreatedAt,
-		DeviceID:   device.DeviceID,
-		Name:       device.Name,
-		APIKey:     apiKey, // ⚠️ 仅创建时返回
-		DeviceType: device.DeviceType,
+		ID:            device.ID,
+		CreatedAt:     device.CreatedAt,
+		DeviceID:      device.DeviceID,
+		Name:          device.Name,
+		APIKey:        apiKey, // ⚠️ 仅创建时返回
+		DeviceType:    device.DeviceType,
+		RenderProfile: device.RenderProfile,
 	}, nil
 }
 
@@ -132,6 +143,26 @@ func (s *deviceService) UpdateEnabled(id uint, enabled bool) error {
 		status = "enabled"
 	}
 	logger.Infof("Device %s %s by admin", device.DeviceID, status)
+	return nil
+}
+
+func (s *deviceService) UpdateRenderProfile(id uint, renderProfile string) error {
+	device, err := s.repo.GetByID(id)
+	if err != nil {
+		return fmt.Errorf("device not found: %w", err)
+	}
+	if device.DeviceType != "embedded" {
+		device.RenderProfile = ""
+	} else {
+		if renderProfile == "" {
+			renderProfile = util.DefaultRenderProfile()
+		}
+		device.RenderProfile = renderProfile
+	}
+	if err := s.repo.Update(device); err != nil {
+		return fmt.Errorf("update render profile: %w", err)
+	}
+	logger.Infof("Device %s render profile updated to %s", device.DeviceID, device.RenderProfile)
 	return nil
 }
 
@@ -250,24 +281,21 @@ func (s *deviceService) CountByPlatform(platform string) (int64, error) {
 	return s.repo.CountByPlatform(platform)
 }
 
-// UpdateLastSeen 更新设备最后请求时间和 IP（异步调用）
+// UpdateLastSeen 更新设备最后请求时间和 IP。
 func (s *deviceService) UpdateLastSeen(deviceID uint, ip string) {
-	// 异步更新，不阻塞请求
-	go func() {
-		device, err := s.repo.GetByID(deviceID)
-		if err != nil {
-			return
-		}
+	device, err := s.repo.GetByID(deviceID)
+	if err != nil {
+		return
+	}
 
-		now := time.Now()
-		device.LastHeartbeat = &now
-		device.Online = true
-		if ip != "" {
-			device.IPAddress = ip
-		}
+	now := time.Now()
+	device.LastHeartbeat = &now
+	device.Online = true
+	if ip != "" {
+		device.IPAddress = ip
+	}
 
-		_ = s.repo.Update(device)
-	}()
+	_ = s.repo.Update(device)
 }
 
 // generateDeviceID 生成设备 ID（8位随机字符串，便于显示和输入）

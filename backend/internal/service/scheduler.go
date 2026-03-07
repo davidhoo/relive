@@ -11,6 +11,7 @@ import (
 // TaskScheduler 定时任务调度器
 type TaskScheduler struct {
 	analysisService AnalysisService
+	displayService  DisplayService
 	stopCh          chan struct{}
 	wg              sync.WaitGroup
 	running         bool
@@ -18,9 +19,10 @@ type TaskScheduler struct {
 }
 
 // NewTaskScheduler 创建定时任务调度器
-func NewTaskScheduler(analysisService AnalysisService) *TaskScheduler {
+func NewTaskScheduler(analysisService AnalysisService, displayService DisplayService) *TaskScheduler {
 	return &TaskScheduler{
 		analysisService: analysisService,
+		displayService:  displayService,
 		stopCh:          make(chan struct{}),
 	}
 }
@@ -41,6 +43,10 @@ func (s *TaskScheduler) Start() {
 	// 启动清理过期锁任务（每5分钟执行一次）
 	s.wg.Add(1)
 	go s.cleanExpiredLocksTask()
+
+	// 启动每日展示批次确保任务
+	s.wg.Add(1)
+	go s.ensureDailyBatchTask()
 
 	logger.Info("Task scheduler started")
 }
@@ -77,6 +83,7 @@ func (s *TaskScheduler) cleanExpiredLocksTask() {
 
 	// 立即执行一次
 	s.cleanExpiredLocks()
+	s.ensureTodayDailyBatch()
 
 	for {
 		select {
@@ -103,6 +110,7 @@ func (s *TaskScheduler) cleanExpiredLocks() {
 // RunOnce 立即执行所有任务（用于测试或手动触发）
 func (s *TaskScheduler) RunOnce() {
 	s.cleanExpiredLocks()
+	s.ensureTodayDailyBatch()
 }
 
 // RunWithContext 使用上下文运行调度器（支持外部取消）
@@ -122,6 +130,7 @@ func (s *TaskScheduler) RunWithContext(ctx context.Context) {
 
 	// 立即执行一次
 	s.cleanExpiredLocks()
+	s.ensureTodayDailyBatch()
 
 	for {
 		select {
@@ -139,5 +148,32 @@ func (s *TaskScheduler) RunWithContext(ctx context.Context) {
 			s.mu.Unlock()
 			return
 		}
+	}
+}
+
+func (s *TaskScheduler) ensureDailyBatchTask() {
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	s.ensureTodayDailyBatch()
+
+	for {
+		select {
+		case <-ticker.C:
+			s.ensureTodayDailyBatch()
+		case <-s.stopCh:
+			return
+		}
+	}
+}
+
+func (s *TaskScheduler) ensureTodayDailyBatch() {
+	if s.displayService == nil {
+		return
+	}
+	if _, err := s.displayService.GenerateDailyBatch(time.Now(), false); err != nil {
+		logger.Warnf("Failed to ensure daily display batch: %v", err)
 	}
 }

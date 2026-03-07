@@ -239,6 +239,34 @@ func (h *DeviceHandler) Activate(c *gin.Context) {
 // @Failure 500 {object} model.Response
 // @Router /api/v1/devices/heartbeat [post]
 // @Router /api/v1/esp32/heartbeat [post]
+func (h *DeviceHandler) UpdateDeviceRenderProfile(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "INVALID_ID", Message: "Invalid device ID"},
+		})
+		return
+	}
+	var req model.UpdateDeviceRenderProfileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "INVALID_REQUEST", Message: "Invalid request"},
+		})
+		return
+	}
+	if err := h.deviceService.UpdateRenderProfile(uint(id), req.RenderProfile); err != nil {
+		logger.Errorf("Update render profile failed: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "UPDATE_FAILED", Message: "Failed to update render profile"},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "Render profile updated successfully"})
+}
+
 func (h *DeviceHandler) Heartbeat(c *gin.Context) {
 	var req model.DeviceHeartbeatRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -446,18 +474,19 @@ func (h *DeviceHandler) GetDeviceByID(c *gin.Context) {
 
 	// 构建详情响应（包含 API Key）
 	resp := model.DeviceDetailResponse{
-		ID:           device.ID,
-		CreatedAt:    device.CreatedAt,
-		UpdatedAt:    device.UpdatedAt,
-		DeviceID:     device.DeviceID,
-		Name:         device.Name,
-		APIKey:       device.APIKey,
-		IPAddress:    device.IPAddress,
-		DeviceType:   device.DeviceType,
-		IsEnabled:    device.IsEnabled,
-		Online:       device.Online,
-		BatteryLevel: device.BatteryLevel,
-		WiFiRSSI:     device.WiFiRSSI,
+		ID:            device.ID,
+		CreatedAt:     device.CreatedAt,
+		UpdatedAt:     device.UpdatedAt,
+		DeviceID:      device.DeviceID,
+		Name:          device.Name,
+		APIKey:        device.APIKey,
+		IPAddress:     device.IPAddress,
+		DeviceType:    device.DeviceType,
+		RenderProfile: device.RenderProfile,
+		IsEnabled:     device.IsEnabled,
+		Online:        device.Online,
+		BatteryLevel:  device.BatteryLevel,
+		WiFiRSSI:      device.WiFiRSSI,
 	}
 	if device.LastHeartbeat != nil {
 		resp.LastHeartbeat = *device.LastHeartbeat

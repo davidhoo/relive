@@ -6,6 +6,7 @@ import (
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/service"
+	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/logger"
 	"github.com/gin-gonic/gin"
 )
@@ -14,13 +15,15 @@ import (
 type DisplayHandler struct {
 	displayService service.DisplayService
 	esp32Service   service.ESP32Service
+	cfg            *config.Config
 }
 
 // NewDisplayHandler 创建展示处理器
-func NewDisplayHandler(displayService service.DisplayService, esp32Service service.ESP32Service) *DisplayHandler {
+func NewDisplayHandler(displayService service.DisplayService, esp32Service service.ESP32Service, cfg *config.Config) *DisplayHandler {
 	return &DisplayHandler{
 		displayService: displayService,
 		esp32Service:   esp32Service,
+		cfg:            cfg,
 	}
 }
 

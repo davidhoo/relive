@@ -55,8 +55,11 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	// 创建分析服务
 	analysisService := NewAnalysisService(db, repos.Photo, cfg)
 
+	// 创建展示服务
+	displayService := NewDisplayService(db, repos.Photo, repos.DisplayRecord, repos.Device, configService, cfg)
+
 	// 创建定时任务调度器
-	scheduler := NewTaskScheduler(analysisService)
+	scheduler := NewTaskScheduler(analysisService, displayService)
 
 	// 创建提示词配置服务
 	promptService := NewPromptService(repos.Config)
@@ -86,7 +89,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 
 	return &Services{
 		Photo:           NewPhotoService(repos.Photo, cfg, configService, geocodeService),
-		Display:         NewDisplayService(repos.Photo, repos.DisplayRecord, repos.Device, configService, cfg),
+		Display:         displayService,
 		Device:          deviceService,
 		ESP32:           deviceService,
 		AI:              aiService,

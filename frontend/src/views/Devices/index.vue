@@ -66,6 +66,11 @@
             />
           </template>
         </el-table-column>
+        <el-table-column label="规格" min-width="190">
+          <template #default="{ row }">
+            <span>{{ formatRenderProfile(row.render_profile) }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="70">
           <template #default="{ row }">
             <el-tag :type="row.online ? 'success' : 'info'" size="small">
@@ -118,6 +123,16 @@
             <el-option label="Web" value="web" />
             <el-option label="离线程序" value="offline" />
             <el-option label="服务" value="service" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="createForm.device_type === 'embedded'" label="渲染规格">
+          <el-select v-model="createForm.render_profile" placeholder="选择嵌入式规格" style="width: 100%">
+            <el-option
+              v-for="profile in renderProfiles"
+              :key="profile.name"
+              :label="profile.display_name"
+              :value="profile.name"
+            />
           </el-select>
         </el-form-item>
         <el-form-item label="备注">
@@ -197,6 +212,32 @@
           </el-tag>
         </el-descriptions-item>
         <el-descriptions-item label="设备类型">{{ formatDeviceType(currentDevice.device_type) }}</el-descriptions-item>
+        <el-descriptions-item label="渲染规格">
+          <div style="display: flex; gap: 12px; align-items: center">
+            <el-select
+              v-if="currentDevice.device_type === 'embedded'"
+              v-model="renderProfileDraft"
+              placeholder="选择渲染规格"
+              style="width: 320px"
+            >
+              <el-option
+                v-for="profile in renderProfiles"
+                :key="profile.name"
+                :label="profile.display_name"
+                :value="profile.name"
+              />
+            </el-select>
+            <span v-else>{{ formatRenderProfile(currentDevice.render_profile) }}</span>
+            <el-button
+              v-if="currentDevice.device_type === 'embedded'"
+              type="primary"
+              plain
+              @click="saveRenderProfile"
+            >
+              保存规格
+            </el-button>
+          </div>
+        </el-descriptions-item>
         <el-descriptions-item label="IP 地址">{{ currentDevice.ip_address || '-' }}</el-descriptions-item>
         <el-descriptions-item label="最后请求">{{ formatTime(currentDevice.last_heartbeat) }}</el-descriptions-item>
         <el-descriptions-item label="创建时间">{{ formatTime(currentDevice.created_at) }}</el-descriptions-item>
@@ -209,18 +250,21 @@
 import { ref, onMounted, reactive } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { deviceApi, type CreateDeviceRequest, type CreateDeviceResponse } from '@/api/device'
+import { dailyDisplayApi, type RenderProfileOption } from '@/api/display'
 import type { ESP32Device, DeviceStats } from '@/types/device'
 import dayjs from 'dayjs'
 import { Monitor, CircleCheck, CircleClose, List, Refresh, Plus, CopyDocument } from '@element-plus/icons-vue'
 
 const devices = ref<ESP32Device[]>([])
 const stats = ref<DeviceStats | null>(null)
+const renderProfiles = ref<RenderProfileOption[]>([])
 const loading = ref(false)
 const currentPage = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
 const detailVisible = ref(false)
 const currentDevice = ref<ESP32Device | null>(null)
+const renderProfileDraft = ref('')
 
 // 创建设备相关
 const createDialogVisible = ref(false)
@@ -229,7 +273,8 @@ const createFormRef = ref()
 const createForm = reactive<CreateDeviceRequest>({
   name: '',
   device_type: 'embedded',
-  description: ''
+  description: '',
+  render_profile: ''
 })
 
 // API Key 显示
@@ -259,6 +304,18 @@ const loadDevices = async () => {
   }
 }
 
+const loadRenderProfiles = async () => {
+  try {
+    renderProfiles.value = await dailyDisplayApi.getRenderProfiles()
+    if (!createForm.render_profile) {
+      const defaultProfile = renderProfiles.value.find((profile) => profile.default_for_device)
+      createForm.render_profile = defaultProfile?.name || renderProfiles.value[0]?.name || ''
+    }
+  } catch (error) {
+    console.error('Failed to load render profiles:', error)
+  }
+}
+
 // 加载设备统计
 const loadStats = async () => {
   try {
@@ -274,19 +331,25 @@ const openCreateDialog = () => {
   createForm.name = ''
   createForm.device_type = 'embedded'
   createForm.description = ''
+  createForm.render_profile = renderProfiles.value.find((profile) => profile.default_for_device)?.name || renderProfiles.value[0]?.name || ''
   createDialogVisible.value = true
 }
 
 // 格式化设备类型显示
 const formatDeviceType = (type?: string) => {
   const typeMap: Record<string, string> = {
-    'embedded': '嵌入式',
-    'mobile': '移动端',
-    'web': 'Web',
-    'offline': '离线程序',
-    'service': '服务'
+    embedded: '嵌入式',
+    mobile: '移动端',
+    web: 'Web',
+    offline: '离线程序',
+    service: '服务'
   }
   return typeMap[type || ''] || type || '-'
+}
+
+const formatRenderProfile = (profileName?: string) => {
+  if (!profileName) return '-'
+  return renderProfiles.value.find((profile) => profile.name === profileName)?.display_name || profileName
 }
 
 // 创建设备
@@ -296,9 +359,14 @@ const createDevice = async () => {
     return
   }
 
+  const payload: CreateDeviceRequest = {
+    ...createForm,
+    render_profile: createForm.device_type === 'embedded' ? createForm.render_profile : undefined
+  }
+
   creating.value = true
   try {
-    const res = await deviceApi.create(createForm)
+    const res = await deviceApi.create(payload)
     if (res.data?.data) {
       createdDevice.value = res.data.data
       createDialogVisible.value = false
@@ -363,9 +431,23 @@ const viewDevice = async (deviceId: string) => {
   try {
     const res = await deviceApi.getById(deviceId)
     currentDevice.value = res.data?.data || null
+    renderProfileDraft.value = currentDevice.value?.render_profile || ''
     detailVisible.value = true
   } catch (error: any) {
     ElMessage.error(error.message || '加载设备详情失败')
+  }
+}
+
+const saveRenderProfile = async () => {
+  if (!currentDevice.value?.id || !renderProfileDraft.value) return
+  try {
+    await deviceApi.updateRenderProfile(currentDevice.value.id, renderProfileDraft.value)
+    currentDevice.value.render_profile = renderProfileDraft.value
+    const target = devices.value.find((item) => item.id === currentDevice.value?.id)
+    if (target) target.render_profile = renderProfileDraft.value
+    ElMessage.success('渲染规格已更新')
+  } catch (error: any) {
+    ElMessage.error(error.message || '更新渲染规格失败')
   }
 }
 
@@ -390,6 +472,7 @@ const copyApiKey = async (apiKey?: string) => {
 }
 
 onMounted(async () => {
+  await loadRenderProfiles()
   await loadDevices()
   await loadStats()
 })

@@ -105,12 +105,18 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 			esp32.POST("/activate", handlers.ESP32.Activate) // 兼容：指向 Activate
 		}
 
-		// 展示相关（API Key 认证，设备获取照片）
+		// 展示相关（API Key 认证，兼容旧接口）
 		display := v1.Group("/display")
 		display.Use(middleware.APIKeyAuth(services.Device))
 		{
 			display.GET("/photo", handlers.Display.GetDisplayPhoto)
 			display.POST("/record", handlers.Display.RecordDisplay)
+		}
+
+		deviceDisplay := v1.Group("/device")
+		deviceDisplay.Use(middleware.APIKeyAuth(services.Device))
+		{
+			deviceDisplay.GET("/display", handlers.Display.GetDeviceDisplay)
 		}
 
 		// 分析器相关（API Key 认证，离线分析器使用）
@@ -135,6 +141,10 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 			photoAuth.GET("/photos/:id/image", handlers.Photo.GetPhotoImage)
 			photoAuth.GET("/photos/:id/thumbnail", handlers.Photo.GetPhotoThumbnail)
 			photoAuth.GET("/photos/:id/frame-preview", handlers.Photo.GetPhotoFramePreview)
+			photoAuth.GET("/display/items/:id/preview", handlers.Display.GetDailyDisplayPreview)
+			photoAuth.GET("/display/assets/:id/preview", handlers.Display.GetDailyDisplayAssetPreview)
+			photoAuth.GET("/display/assets/:id/bin", handlers.Display.GetDailyDisplayAssetBin)
+			photoAuth.GET("/display/assets/:id/header", handlers.Display.GetDailyDisplayAssetHeader)
 		}
 
 		// 以下接口需要 JWT 认证
@@ -146,6 +156,10 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 			authorized.GET("/system/stats", handlers.System.Stats)
 			authorized.POST("/system/reset", handlers.System.Reset)
 			authorized.POST("/display/preview", handlers.Display.PreviewPhotos)
+			authorized.GET("/display/batch", handlers.Display.GetDailyBatch)
+			authorized.GET("/display/history", handlers.Display.ListDailyBatches)
+			authorized.POST("/display/batch/generate", handlers.Display.GenerateDailyBatch)
+			authorized.GET("/display/render-profiles", handlers.Display.GetRenderProfiles)
 
 			// 照片相关
 			photos := authorized.Group("/photos")
