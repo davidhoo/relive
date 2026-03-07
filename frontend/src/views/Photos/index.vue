@@ -3,8 +3,9 @@
     <PageHeader title="照片管理" subtitle="浏览和管理您的照片集合" :gradient="true" />
 
     <!-- 扫描路径列表 -->
-    <div class="scan-paths-card modern-card animate-fade-in" v-loading="scanPathLoading">
-      <SectionHeader :icon="FolderOpened" title="扫描路径">
+    <el-card shadow="never" class="scan-paths-card animate-fade-in" v-loading="scanPathLoading">
+      <template #header>
+        <SectionHeader :icon="FolderOpened" title="扫描路径">
         <template #actions>
           <div class="scan-paths-actions">
             <el-tag type="info" size="small" effect="plain" class="count-tag">{{ scanPaths.length }}</el-tag>
@@ -27,6 +28,7 @@
           </div>
         </template>
       </SectionHeader>
+      </template>
 
       <el-table
         :data="scanPaths"
@@ -99,9 +101,9 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="150" align="center">
+        <el-table-column label="操作" width="170" align="center">
           <template #default="{ row }">
-            <el-button-group>
+            <div class="path-action-group">
               <el-button
                 v-if="shouldShowScanButton(row)"
                 type="primary"
@@ -127,7 +129,7 @@
               >
                 重建
               </el-button>
-            </el-button-group>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -138,10 +140,25 @@
           前往配置
         </el-button>
       </el-empty>
-    </div>
+    </el-card>
 
-    <!-- 照片网格 -->
-    <div class="photos-grid-card modern-card animate-fade-in" v-loading="loading">
+    <!-- 照片列表 -->
+    <el-card shadow="never" class="photos-grid-card animate-fade-in" v-loading="loading">
+      <template #header>
+        <SectionHeader :icon="Picture" title="照片列表">
+        <template #actions>
+          <div class="photos-list-actions">
+            <el-tag type="info" effect="plain">共 {{ total }} 张</el-tag>
+            <el-radio-group v-model="filterAnalyzed" @change="handleSearch" size="default" class="filter-group">
+              <el-radio-button label="">全部</el-radio-button>
+              <el-radio-button label="true">已分析</el-radio-button>
+              <el-radio-button label="false">未分析</el-radio-button>
+            </el-radio-group>
+          </div>
+        </template>
+      </SectionHeader>
+      </template>
+
       <!-- 空状态：系统中没有照片 -->
       <el-empty v-if="!photos.length && !loading && systemTotal === 0" description="暂无照片" :image-size="120">
         <el-button type="primary" @click="goToConfig">
@@ -161,6 +178,7 @@
 
       <!-- 照片网格 -->
       <div v-else>
+        <div class="photos-toolbar">
         <!-- 搜索区域 -->
         <div class="search-section">
           <el-input
@@ -232,25 +250,15 @@
           </div>
         </div>
 
-        <!-- 统计信息和筛选 -->
-        <div class="photos-stats">
+        <!-- 统计信息 -->
+        <div class="photos-stats" v-if="filterAnalyzed">
           <div class="stats-left">
             <div class="stat-item">
-              <el-icon class="stat-icon"><Picture /></el-icon>
-              <span class="stat-text">共 <strong>{{ total }}</strong> 张照片</span>
-            </div>
-            <div class="stat-item" v-if="filterAnalyzed">
               <el-icon class="stat-icon"><Filter /></el-icon>
-              <span class="stat-text">筛选结果</span>
+              <span class="stat-text">当前显示筛选结果</span>
             </div>
           </div>
-          <div class="stats-right">
-            <el-radio-group v-model="filterAnalyzed" @change="handleSearch" size="default" class="filter-group">
-              <el-radio-button label="">全部</el-radio-button>
-              <el-radio-button label="true">已分析</el-radio-button>
-              <el-radio-button label="false">未分析</el-radio-button>
-            </el-radio-group>
-          </div>
+        </div>
         </div>
 
         <div class="photo-grid">
@@ -332,7 +340,7 @@
           />
         </div>
       </div>
-    </div>
+    </el-card>
   </div>
 </template>
 
@@ -855,27 +863,9 @@ defineExpose({
 <style scoped>
 /* ============ Photos 页面容器 - WeDance 风格 ============ */
 .photos-page {
-  padding: var(--spacing-2xl);
+  padding: var(--spacing-xl);
   background: var(--color-bg-primary);
   min-height: 100vh;
-}
-
-/* ============ 页面标题 ============ */
-.page-header {
-  margin-bottom: var(--spacing-2xl);
-}
-
-.page-title {
-  font-size: var(--font-size-4xl);
-  font-weight: var(--font-weight-bold);
-  margin-bottom: var(--spacing-sm);
-  line-height: 1.2;
-  color: var(--color-text-primary);
-}
-
-.page-subtitle {
-  font-size: var(--font-size-lg);
-  color: var(--color-text-secondary);
 }
 
 .text-gradient {
@@ -900,7 +890,14 @@ defineExpose({
 /* ============ 扫描路径卡片 ============ */
 .scan-paths-card {
   margin-bottom: var(--spacing-xl);
-  padding: var(--spacing-lg) !important;
+}
+
+.scan-paths-card :deep(.el-card__body) {
+  padding: var(--spacing-md);
+}
+
+.scan-paths-card > :deep(.section-header) {
+  margin-bottom: var(--spacing-md);
 }
 
 .scan-paths-title .count-tag {
@@ -1033,13 +1030,17 @@ defineExpose({
   color: var(--color-text-primary);
 }
 
-/* 按钮组间隙 */
-:deep(.el-button-group) {
-  display: flex;
+/* 操作列按钮组 */
+.path-action-group {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   gap: var(--spacing-xs);
+  width: 100%;
 }
 
-:deep(.el-button-group .el-button) {
+.path-action-group :deep(.el-button) {
+  min-width: 56px;
   border-radius: var(--radius-sm);
 }
 
@@ -1082,8 +1083,27 @@ defineExpose({
 }
 
 /* ============ 照片网格卡片 ============ */
-.photos-grid-card {
-  padding: var(--spacing-xl) !important;
+.photos-grid-card :deep(.el-card__body) {
+  padding: var(--spacing-xl);
+}
+
+.photos-grid-card > :deep(.section-header) {
+  margin-bottom: var(--spacing-lg);
+}
+
+.photos-list-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  flex-wrap: wrap;
+}
+
+.photos-toolbar {
+  margin-bottom: var(--spacing-lg);
+  padding: var(--spacing-lg);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
 }
 
 /* 空状态提示 */
@@ -1392,9 +1412,6 @@ defineExpose({
     padding: var(--spacing-md);
   }
 
-  .page-title {
-    font-size: var(--font-size-2xl);
-  }
 
   .scan-paths-card {
     padding: var(--spacing-md) !important;
@@ -1402,13 +1419,6 @@ defineExpose({
 }
 
 @media (max-width: 480px) {
-  .page-title {
-    font-size: var(--font-size-xl);
-  }
-
-  .page-subtitle {
-    font-size: var(--font-size-base);
-  }
 
   .photo-grid {
     grid-template-columns: repeat(2, 1fr);
