@@ -36,7 +36,7 @@
 
 5. **Scan Without Path (Uses Default)**
    ```bash
-   curl -X POST http://localhost:8080/api/v1/photos/scan \
+   curl -X POST http://localhost:8080/api/v1/photos/scan/async \
      -H "Content-Type: application/json" \
      -d '{}'
    # Result: Uses default path from config
@@ -139,7 +139,7 @@ curl http://localhost:8080/api/v1/config/photos.scan_paths | jq -r '.data.value'
 
 **Test scan:**
 ```bash
-curl -X POST http://localhost:8080/api/v1/photos/scan \
+curl -X POST http://localhost:8080/api/v1/photos/scan/async \
   -H "Content-Type: application/json" \
   -d '{}'
 ```
