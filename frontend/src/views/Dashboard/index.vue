@@ -180,6 +180,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { ArrowRight, DataLine, FolderOpened, MagicStick, Monitor, Picture, QuestionFilled, Star, VideoPlay } from '@element-plus/icons-vue'
 import { useSystemStore } from '@/stores/system'
 import { photoApi } from '@/api/photo'
 import { aiApi } from '@/api/ai'

@@ -809,7 +809,7 @@ import { configApi, promptApi, type ScanPathConfig, type AutoScanConfig, type Ge
 import { photoApi } from '@/api/photo'
 import dayjs from 'dayjs'
 import { v4 as uuidv4 } from 'uuid'
-import { FolderOpened, CircleCheck, CircleClose, Document, RefreshLeft, Check, Download, SuccessFilled, Link, Location } from '@element-plus/icons-vue'
+import { FolderOpened, CircleCheck, CircleClose, Document, RefreshLeft, Check, Download, SuccessFilled, Link, Location, Clock, Cpu, Plus } from '@element-plus/icons-vue'
 
 // Scan paths state
 const scanPaths = ref<ScanPathConfig[]>([])

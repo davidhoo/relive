@@ -210,6 +210,7 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { DataLine, MagicStick, Setting } from '@element-plus/icons-vue'
 import { aiApi } from '@/api/ai'
 import type { AIAnalyzeProgress, AIProviderInfo, AnalysisRuntimeStatus } from '@/types/ai'
 import dayjs from 'dayjs'

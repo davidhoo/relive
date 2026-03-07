@@ -347,7 +347,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { ArrowDown, ArrowUp } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowUp, Clock, Collection, Delete, Filter, Folder, FolderOpened, FullScreen, Loading, Picture, PictureFilled, PriceTag, QuestionFilled, Refresh, Search, Setting, Star } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { photoApi } from '@/api/photo'
