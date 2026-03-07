@@ -1044,7 +1044,7 @@ curl "http://localhost:8080/api/v1/display/photo?device_id=ESP32-001"
 - **2026-03-05**: 重大更新
   - 🗑️ 移除导出/导入 API（功能迁移至 relive-analyzer）
   - 🔄 ESP32 设备 API 重构为通用设备管理 API
-    - 简化设备注册（移除 screen_width/height、firmware_version、mac_address 等字段）
+    - 简化设备接入（改为预分配 API Key，移除注册/激活/心跳流程）
     - 新增 device_type 字段（embedded/mobile/web/offline/service）
     - 新增 description、is_enabled 字段
     - 路径从 `/api/v1/esp32/*` 改为 `/api/v1/devices/*`

@@ -118,7 +118,7 @@ devices/photo-frame/esp32/
 - [ ] PlatformIO 工程初始化
 - [ ] WiFi 连接管理
 - [ ] HTTP 客户端封装
-- [ ] 设备注册和心跳
+- [ ] API Key 配置与鉴权请求
 
 ### Phase 2：显示功能（3-4 天）
 - [ ] 墨水屏驱动集成

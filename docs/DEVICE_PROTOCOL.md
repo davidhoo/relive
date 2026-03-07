@@ -393,7 +393,7 @@ void displayCachedPhoto() {
 
 ## 六、设备管理
 
-### 6.1 设备注册流程
+### 6.1 设备接入流程
 
 ```
 1. ESP32 首次启动
@@ -408,11 +408,11 @@ void displayCachedPhoto() {
    ↓
 6. ESP32 连接 WiFi
    ↓
-7. 调用注册接口
+7. 在后台创建设备并获取 API Key
    ↓
-8. 获取 API Key
+8. 将 API Key 保存到设备配置/NVS
    ↓
-9. 保存配置到 NVS
+9. 直接请求展示接口
 ```
 
 ### 6.2 设备标识
@@ -891,8 +891,8 @@ void downloadAndDisplay(int photoID, String imageURL, String caption) {
 ### 12.2 实现优先级
 
 **Phase 1：基础通信**
-- ✅ 设备注册
-- ✅ 心跳上报
+- ✅ 预分配 API Key 接入
+- ✅ 获取展示信息 / 二进制
 - ✅ 获取展示照片
 - ✅ 下载图片
 - ✅ 上报展示记录

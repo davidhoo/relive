@@ -590,21 +590,15 @@ Content-Type: application/json
 
 **说明**：ESP32 成功显示照片后调用此接口记录
 
-#### 4.3.4 设备心跳
+#### 4.3.4 设备活跃状态
 
-**请求**：
-```http
-POST /api/v1/display/heartbeat
-X-API-Key: your-esp32-api-key
-Content-Type: application/json
+当前简化模型下，不再单独设计设备心跳接口。
 
-{
-  "device_id": "esp32-001",
-  "battery_level": 85,
-  "wifi_rssi": -45,
-  "free_heap": 120000
-}
-```
+**说明**：
+- 设备由后台预先创建，并分配 `api_key`
+- 设备直接调用 `/api/v1/device/display` 或 `/api/v1/device/display.bin`
+- 服务端在鉴权成功后自动更新最近活跃时间
+- 如果未来需要电量、RSSI、OTA 状态，再单独增加可选状态上报接口
 
 **响应**：
 ```json

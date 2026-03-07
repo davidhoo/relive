@@ -77,7 +77,7 @@
 │ Service 层 - 业务逻辑（6个服务）                │
 │ ├─ PhotoService - 照片扫描、EXIF、哈希          │
 │ ├─ DisplayService - 展示策略、智能降级         │
-│ ├─ ESP32Service - 设备注册、心跳、API Key      │
+│ ├─ DeviceService - 设备管理、API Key、最近活跃 │
 │ ├─ AIService - 分析调度、进度追踪              │
 │ ├─ ExportService - 导出/导入、离线工作流       │
 │ └─ ConfigService - 配置管理、批量操作          │
@@ -308,7 +308,7 @@ type AIProvider interface {
 - ✅ 展示策略（往年今日）
 - ✅ 避免重复展示
 - ✅ ESP32 设备管理
-- ✅ 设备注册和心跳
+- ✅ 设备管理和 API Key 接入
 - ✅ 导出/导入（离线工作流）
 - ✅ 配置管理
 - ✅ 系统健康检查
@@ -362,9 +362,9 @@ type AIProvider interface {
 
 ### ESP32 固件（最后阶段）
 
-- [ ] 设备注册和认证
+- [ ] 设备 API Key 接入
 - [ ] 照片获取和显示
-- [ ] 心跳上报
+- [ ] 设备拉取展示资源
 - [ ] OTA 升级
 - [ ] 低功耗优化
 
