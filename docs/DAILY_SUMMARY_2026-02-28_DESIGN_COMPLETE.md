@@ -150,7 +150,7 @@ CREATE INDEX idx_photos_gps ON photos(exif_gps_lat, exif_gps_lon);
    - 获取今日照片（简化版）
    - 下载渲染后照片（含文案叠加）
    - 记录展示历史
-   - 设备心跳
+   - 设备接入状态（后续已简化为 API Key 直接请求）
 
 4. **统计分析（5个）**
    - 获取概览统计

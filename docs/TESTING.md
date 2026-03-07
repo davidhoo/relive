@@ -526,70 +526,53 @@ func TestE2E_PhotoWorkflow(t *testing.T) {
 **模拟 ESP32 设备**：
 ```go
 func TestE2E_ESP32Device(t *testing.T) {
-    // 1. 设备注册
-    var deviceID string
-    var apiKey string
+    // 1. 后台预先创建设备，并为设备分配 API Key
+    deviceID := "ESP32-TEST01"
+    apiKey := createTestDevice(t, testDB, model.Device{
+        DeviceID:      deviceID,
+        Name:          "测试相框",
+        DeviceType:    "embedded",
+        APIKey:        "sk-relive-test-device",
+        RenderProfile: "waveshare_7in3e",
+        IsEnabled:     true,
+    }).APIKey
 
-    t.Run("Register device", func(t *testing.T) {
-        body := `{
-            "device_id": "ESP32-TEST01",
-            "name": "测试相框",
-            "screen_width": 800,
-            "screen_height": 480
-        }`
-
+    // 2. 获取展示信息
+    t.Run("Get device display metadata", func(t *testing.T) {
         w := httptest.NewRecorder()
-        req, _ := http.NewRequest("POST", "/api/v1/esp32/register", strings.NewReader(body))
-        req.Header.Set("Content-Type", "application/json")
+        req, _ := http.NewRequest("GET", "/api/v1/device/display", nil)
+        req.Header.Set("Authorization", "Bearer "+apiKey)
         testRouter.ServeHTTP(w, req)
 
         assert.Equal(t, 200, w.Code)
-
-        var response map[string]interface{}
-        json.Unmarshal(w.Body.Bytes(), &response)
-        data := response["data"].(map[string]interface{})
-
-        deviceID = data["device_id"].(string)
-        apiKey = data["api_key"].(string)
-        assert.NotEmpty(t, apiKey)
     })
 
-    // 2. 发送心跳
-    t.Run("Send heartbeat", func(t *testing.T) {
+    // 3. 获取展示二进制
+    t.Run("Get device display binary", func(t *testing.T) {
+        w := httptest.NewRecorder()
+        req, _ := http.NewRequest("GET", "/api/v1/device/display.bin", nil)
+        req.Header.Set("Authorization", "Bearer "+apiKey)
+        testRouter.ServeHTTP(w, req)
+
+        assert.Equal(t, 200, w.Code)
+        assert.Equal(t, "application/octet-stream", w.Header().Get("Content-Type"))
+    })
+
+    // 4. 上报展示记录
+    t.Run("Record display", func(t *testing.T) {
         body := fmt.Sprintf(`{
             "device_id": "%s",
-            "battery_level": 85,
-            "wifi_rssi": -45
+            "photo_id": 1,
+            "algorithm": "daily_batch"
         }`, deviceID)
 
         w := httptest.NewRecorder()
-        req, _ := http.NewRequest("POST", "/api/v1/esp32/heartbeat", strings.NewReader(body))
+        req, _ := http.NewRequest("POST", "/api/v1/display/record", strings.NewReader(body))
         req.Header.Set("Content-Type", "application/json")
         req.Header.Set("Authorization", "Bearer "+apiKey)
         testRouter.ServeHTTP(w, req)
 
         assert.Equal(t, 200, w.Code)
-    })
-
-    // 3. 获取展示照片
-    t.Run("Get display photo", func(t *testing.T) {
-        w := httptest.NewRecorder()
-        req, _ := http.NewRequest("GET", "/api/v1/esp32/display/photo?device_id="+deviceID, nil)
-        req.Header.Set("Authorization", "Bearer "+apiKey)
-        testRouter.ServeHTTP(w, req)
-
-        assert.Equal(t, 200, w.Code)
-    })
-
-    // 4. 下载图片
-    t.Run("Download image", func(t *testing.T) {
-        w := httptest.NewRecorder()
-        req, _ := http.NewRequest("GET", "/api/v1/esp32/image/1", nil)
-        req.Header.Set("Authorization", "Bearer "+apiKey)
-        testRouter.ServeHTTP(w, req)
-
-        assert.Equal(t, 200, w.Code)
-        assert.Equal(t, "image/jpeg", w.Header().Get("Content-Type"))
     })
 }
 ```
@@ -715,7 +698,7 @@ func TestSecurity_Authentication(t *testing.T) {
     // 测试未认证访问
     t.Run("Without token", func(t *testing.T) {
         w := httptest.NewRecorder()
-        req, _ := http.NewRequest("GET", "/api/v1/esp32/display/photo", nil)
+        req, _ := http.NewRequest("GET", "/api/v1/device/display", nil)
         testRouter.ServeHTTP(w, req)
 
         assert.Equal(t, 401, w.Code)
@@ -724,7 +707,7 @@ func TestSecurity_Authentication(t *testing.T) {
     // 测试无效 token
     t.Run("Invalid token", func(t *testing.T) {
         w := httptest.NewRecorder()
-        req, _ := http.NewRequest("GET", "/api/v1/esp32/display/photo", nil)
+        req, _ := http.NewRequest("GET", "/api/v1/device/display", nil)
         req.Header.Set("Authorization", "Bearer invalid-token")
         testRouter.ServeHTTP(w, req)
 
