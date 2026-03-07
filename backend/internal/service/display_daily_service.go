@@ -26,7 +26,15 @@ func (s *displayService) GenerateDailyBatch(date time.Time, force bool) (*model.
 	}
 
 	strategyConfig := s.getDisplayStrategyConfig()
-	photos, err := s.PreviewPhotos(&strategyConfig, &date)
+	var excludePhotoIDs []uint
+	if s.config.Display.AvoidRepeatDays > 0 {
+		excludePhotoIDs, err = s.displayRecordRepo.GetDisplayedPhotoIDsAll(s.config.Display.AvoidRepeatDays)
+		if err != nil {
+			logger.Warnf("Get globally displayed photo IDs failed: %v", err)
+			excludePhotoIDs = nil
+		}
+	}
+	photos, err := s.previewPhotosWithExcludes(&strategyConfig, &date, excludePhotoIDs)
 	if err != nil {
 		return nil, fmt.Errorf("preview daily batch: %w", err)
 	}

@@ -169,3 +169,37 @@ func createBatchPhotos(t *testing.T, photoRepo repository.PhotoRepository, tempD
 		require.NoError(t, photoRepo.Create(photo))
 	}
 }
+
+func TestDisplayService_GenerateDailyBatchAvoidsRecentlyDisplayedPhotos(t *testing.T) {
+	db := setupDisplayServiceTestDB(t)
+	defer closeDisplayServiceTestDB(db)
+
+	tempDir := t.TempDir()
+	displayService, photoRepo, deviceRepo, configService := buildTestDisplayService(t, db, tempDir)
+	targetDate := time.Date(2026, 3, 7, 9, 0, 0, 0, time.Local)
+	createBatchPhotos(t, photoRepo, tempDir, targetDate, 4)
+	setDisplayStrategy(t, configService, model.DisplayStrategyConfig{Algorithm: "random", MinBeautyScore: 60, MinMemoryScore: 60, DailyCount: 3})
+
+	device := &model.Device{DeviceID: "DEV-HISTORY", Name: "History Device", APIKey: "key-history", DeviceType: "embedded", RenderProfile: "gdem075f52_480x800_4color", IsEnabled: true}
+	require.NoError(t, deviceRepo.Create(device))
+
+	allPhotos, err := photoRepo.ListAll()
+	require.NoError(t, err)
+	require.Len(t, allPhotos, 4)
+
+	recentRecord := &model.DisplayRecord{
+		PhotoID:     allPhotos[0].ID,
+		DeviceID:    device.ID,
+		DisplayedAt: time.Now().AddDate(0, 0, -1),
+		TriggerType: "scheduled",
+	}
+	require.NoError(t, db.Create(recentRecord).Error)
+
+	batch, err := displayService.GenerateDailyBatch(targetDate, true)
+	require.NoError(t, err)
+	require.Len(t, batch.Items, 3)
+
+	for _, item := range batch.Items {
+		assert.NotEqual(t, allPhotos[0].ID, item.PhotoID, "recently displayed photo should be excluded from generated batch")
+	}
+}

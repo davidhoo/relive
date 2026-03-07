@@ -23,6 +23,7 @@ type DisplayRecordRepository interface {
 	// 检查
 	WasDisplayedRecently(photoID uint, deviceID uint, days int) (bool, error)
 	GetDisplayedPhotoIDs(deviceID uint, days int) ([]uint, error)
+	GetDisplayedPhotoIDsAll(days int) ([]uint, error)
 
 	// 统计
 	Count() (int64, error)
@@ -151,6 +152,19 @@ func (r *displayRecordRepository) GetDisplayedPhotoIDs(deviceID uint, days int) 
 
 	err := r.db.Model(&model.DisplayRecord{}).
 		Where("device_id = ? AND displayed_at >= ?", deviceID, cutoffTime).
+		Distinct("photo_id").
+		Pluck("photo_id", &photoIDs).Error
+
+	return photoIDs, err
+}
+
+// GetDisplayedPhotoIDsAll 获取最近在任意设备上展示过的照片 ID 列表
+func (r *displayRecordRepository) GetDisplayedPhotoIDsAll(days int) ([]uint, error) {
+	var photoIDs []uint
+	cutoffTime := time.Now().AddDate(0, 0, -days)
+
+	err := r.db.Model(&model.DisplayRecord{}).
+		Where("displayed_at >= ?", cutoffTime).
 		Distinct("photo_id").
 		Pluck("photo_id", &photoIDs).Error
 

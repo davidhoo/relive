@@ -100,6 +100,10 @@ func (s *displayService) GetDisplayPhoto(deviceIDStr string) (*model.Photo, erro
 
 // PreviewPhotos 预览展示策略结果
 func (s *displayService) PreviewPhotos(cfg *model.DisplayStrategyConfig, previewDate *time.Time) ([]*model.Photo, error) {
+	return s.previewPhotosWithExcludes(cfg, previewDate, nil)
+}
+
+func (s *displayService) previewPhotosWithExcludes(cfg *model.DisplayStrategyConfig, previewDate *time.Time, excludePhotoIDs []uint) ([]*model.Photo, error) {
 	if cfg == nil {
 		defaultCfg := defaultDisplayStrategyConfig()
 		cfg = &defaultCfg
@@ -110,11 +114,11 @@ func (s *displayService) PreviewPhotos(cfg *model.DisplayStrategyConfig, preview
 
 	switch cfg.Algorithm {
 	case "random":
-		return s.photoRepo.GetRandom(cfg.DailyCount, cfg.MinBeautyScore, cfg.MinMemoryScore, nil)
+		return s.photoRepo.GetRandom(cfg.DailyCount, cfg.MinBeautyScore, cfg.MinMemoryScore, excludePhotoIDs)
 	case "on_this_day":
-		return s.getOnThisDayPhotos(targetDate, nil, *cfg, cfg.DailyCount)
+		return s.getOnThisDayPhotos(targetDate, excludePhotoIDs, *cfg, cfg.DailyCount)
 	case "smart":
-		return s.getOnThisDayPhotos(targetDate, nil, *cfg, cfg.DailyCount)
+		return s.getOnThisDayPhotos(targetDate, excludePhotoIDs, *cfg, cfg.DailyCount)
 	default:
 		return nil, fmt.Errorf("preview for algorithm %s is not implemented", cfg.Algorithm)
 	}
