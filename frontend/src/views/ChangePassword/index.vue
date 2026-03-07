@@ -15,7 +15,7 @@
           type="warning"
           :closable="false"
           show-icon
-          style="margin-bottom: 24px"
+          class="first-login-alert"
         />
 
         <h2 class="change-Password-title">{{ userStore.isFirstLogin ? '修改初始密码' : '修改密码' }}</h2>
@@ -100,7 +100,7 @@
             <li>建议包含字母和数字</li>
             <li>新密码不能与旧密码相同</li>
           </ul>
-          <p style="margin-top: 12px">用户名（可选）：</p>
+          <p class="tips-text">用户名（可选）：</p>
           <ul>
             <li>可在此修改用户名，留空则保持原用户名</li>
             <li>用户名需3-32位字符</li>
@@ -269,5 +269,12 @@ const handleCancel = () => {
 
 .tips li {
   margin: 4px 0;
+}
+.first-login-alert {
+  margin-bottom: 24px;
+}
+
+.tips-text {
+  margin-top: 12px;
 }
 </style>

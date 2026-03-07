@@ -1,9 +1,20 @@
 <template>
   <div class="devices-page">
-    <PageHeader title="设备管理" subtitle="管理设备、查看状态并维护展示配置" :gradient="true" />
+    <PageHeader title="设备管理" subtitle="管理设备、查看状态并维护展示配置" :gradient="true">
+      <template #actions>
+        <el-button type="primary" @click="openCreateDialog">
+          <el-icon><Plus /></el-icon>
+          新增设备
+        </el-button>
+        <el-button @click="loadDevices">
+          <el-icon><Refresh /></el-icon>
+          刷新
+        </el-button>
+      </template>
+    </PageHeader>
 
     <!-- 设备统计 -->
-    <el-row :gutter="20" style="margin-bottom: 20px">
+    <el-row :gutter="20" class="stats-row">
       <el-col :span="8">
         <el-card shadow="hover">
           <el-statistic title="总设备数" :value="stats?.total || 0">
@@ -17,7 +28,7 @@
         <el-card shadow="hover">
           <el-statistic title="在线设备" :value="stats?.online || 0">
             <template #prefix>
-              <el-icon style="color: #67c23a"><CircleCheck /></el-icon>
+              <el-icon class="success-icon"><CircleCheck /></el-icon>
             </template>
           </el-statistic>
         </el-card>
@@ -26,7 +37,7 @@
         <el-card shadow="hover">
           <el-statistic title="离线设备" :value="(stats?.total || 0) - (stats?.online || 0)">
             <template #prefix>
-              <el-icon style="color: #f56c6c"><CircleClose /></el-icon>
+              <el-icon class="danger-icon"><CircleClose /></el-icon>
             </template>
           </el-statistic>
         </el-card>
@@ -36,19 +47,7 @@
     <!-- 设备列表 -->
     <el-card shadow="never" v-loading="loading">
       <template #header>
-        <div style="display: flex; justify-content: space-between; align-items: center">
-          <span><el-icon><List /></el-icon> 设备列表</span>
-          <div style="display: flex; gap: 12px">
-            <el-button type="primary" @click="openCreateDialog">
-              <el-icon><Plus /></el-icon>
-              新增设备
-            </el-button>
-            <el-button @click="loadDevices">
-              <el-icon><Refresh /></el-icon>
-              刷新
-            </el-button>
-          </div>
-        </div>
+        <SectionHeader :icon="List" title="设备列表" />
       </template>
 
       <el-table :data="devices" stripe>
@@ -64,7 +63,7 @@
             <el-switch
               v-model="row.is_enabled"
               @change="(val: boolean) => toggleEnabled(row, val)"
-              style="--el-switch-on-color: #67c23a"
+              class="enabled-switch"
             />
           </template>
         </el-table-column>
@@ -88,7 +87,7 @@
         </el-table-column>
         <el-table-column label="操作" width="120" fixed="right">
           <template #default="{ row }">
-            <el-button link @click="viewDevice(row.device_id)" style="color: var(--color-primary);">
+            <el-button link @click="viewDevice(row.device_id)" class="action-link">
               详情
             </el-button>
             <el-button link type="danger" @click="deleteDevice(row)">
@@ -99,7 +98,7 @@
       </el-table>
 
       <!-- 分页 -->
-      <div style="margin-top: 20px; text-align: center">
+      <div class="pagination-wrapper">
         <el-pagination
           v-model:current-page="currentPage"
           v-model:page-size="pageSize"
@@ -119,7 +118,7 @@
           <el-input v-model="createForm.name" placeholder="例如: 客厅相框" />
         </el-form-item>
         <el-form-item label="设备类型">
-          <el-select v-model="createForm.device_type" placeholder="选择设备类型" style="width: 100%">
+          <el-select v-model="createForm.device_type" placeholder="选择设备类型" class="full-width">
             <el-option label="嵌入式" value="embedded" />
             <el-option label="移动端" value="mobile" />
             <el-option label="Web" value="web" />
@@ -128,7 +127,7 @@
           </el-select>
         </el-form-item>
         <el-form-item v-if="createForm.device_type === 'embedded'" label="渲染规格">
-          <el-select v-model="createForm.render_profile" placeholder="选择嵌入式规格" style="width: 100%">
+          <el-select v-model="createForm.render_profile" placeholder="选择嵌入式规格" class="full-width">
             <el-option
               v-for="profile in renderProfiles"
               :key="profile.name"
@@ -156,19 +155,19 @@
         description="此 API Key 仅在创建时显示一次，关闭后将无法再次查看。请将其配置到设备中使用。"
         type="warning"
         :closable="false"
-        style="margin-bottom: 20px"
+        class="api-key-alert"
       />
       <el-descriptions :column="1" border>
         <el-descriptions-item label="设备 ID">{{ createdDevice?.device_id }}</el-descriptions-item>
         <el-descriptions-item label="设备名称">{{ createdDevice?.name }}</el-descriptions-item>
         <el-descriptions-item label="API Key">
-          <div style="display: flex; gap: 12px">
+          <div class="api-key-row">
             <el-input
               :model-value="createdDevice?.api_key"
               type="password"
               show-password
               readonly
-              style="flex: 1"
+              class="flex-1"
             />
             <el-button type="primary" @click="copyApiKey(createdDevice?.api_key)">
               <el-icon><CopyDocument /></el-icon>
@@ -188,13 +187,13 @@
         <el-descriptions-item label="设备 ID">{{ currentDevice.device_id }}</el-descriptions-item>
         <el-descriptions-item label="设备名称">{{ currentDevice.name }}</el-descriptions-item>
         <el-descriptions-item label="API Key">
-          <div style="display: flex; align-items: center; gap: 12px">
+          <div class="detail-row">
             <el-input
               v-model="currentDevice.api_key"
               type="password"
               show-password
               readonly
-              style="flex: 1"
+              class="flex-1"
             />
             <el-button type="primary" @click="copyApiKey(currentDevice.api_key)">
               <el-icon><CopyDocument /></el-icon>
@@ -215,12 +214,12 @@
         </el-descriptions-item>
         <el-descriptions-item label="设备类型">{{ formatDeviceType(currentDevice.device_type) }}</el-descriptions-item>
         <el-descriptions-item label="渲染规格">
-          <div style="display: flex; gap: 12px; align-items: center">
+          <div class="render-profile-row">
             <el-select
               v-if="currentDevice.device_type === 'embedded'"
               v-model="renderProfileDraft"
               placeholder="选择渲染规格"
-              style="width: 320px"
+              class="render-profile-select"
             >
               <el-option
                 v-for="profile in renderProfiles"
@@ -251,6 +250,7 @@
 import { ref, onMounted, reactive } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
+import SectionHeader from '@/components/SectionHeader.vue'
 import { deviceApi, type CreateDeviceRequest, type CreateDeviceResponse } from '@/api/device'
 import { dailyDisplayApi, type RenderProfileOption } from '@/api/display'
 import type { Device, DeviceStats } from '@/types/device'
@@ -493,5 +493,62 @@ onMounted(async () => {
 
 .last-request-time {
   white-space: nowrap;
+}
+.stats-row {
+  margin-bottom: 20px;
+}
+
+.success-icon {
+  color: #67c23a;
+}
+
+.danger-icon {
+  color: #f56c6c;
+}
+
+.enabled-switch {
+  --el-switch-on-color: #67c23a;
+}
+
+.action-link {
+  color: var(--color-primary);
+}
+
+.pagination-wrapper {
+  margin-top: 20px;
+  text-align: center;
+}
+
+.api-key-alert {
+  margin-bottom: 20px;
+}
+
+.render-profile-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.render-profile-select {
+  width: 320px;
+}
+
+.full-width {
+  width: 100%;
+}
+
+.api-key-row {
+  display: flex;
+  gap: 12px;
+}
+
+.detail-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.flex-1 {
+  flex: 1;
 }
 </style>

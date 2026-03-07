@@ -4,36 +4,33 @@
 
     <!-- 扫描路径列表 -->
     <div class="scan-paths-card modern-card animate-fade-in" v-loading="scanPathLoading">
-      <div class="scan-paths-header">
-        <div class="scan-paths-title">
-          <el-icon class="title-icon"><FolderOpened /></el-icon>
-          <span>扫描路径</span>
-          <el-tag type="info" size="small" effect="plain" class="count-tag">{{ scanPaths.length }}</el-tag>
-        </div>
-        <div class="scan-paths-actions">
-          <el-button
-            type="danger"
-            size="small"
-            plain
-            :loading="cleaningUp"
-            @click="handleCleanup"
-            class="cleanup-btn"
-            title="清理数据库中所有文件已不存在的照片记录"
-          >
-            <el-icon><Delete /></el-icon>
-            清理
-          </el-button>
-          <el-link type="primary" @click="goToConfig" class="manage-link">
-            <el-icon><Setting /></el-icon>
-            管理路径
-          </el-link>
-        </div>
-      </div>
+      <SectionHeader :icon="FolderOpened" title="扫描路径">
+        <template #actions>
+          <div class="scan-paths-actions">
+            <el-tag type="info" size="small" effect="plain" class="count-tag">{{ scanPaths.length }}</el-tag>
+            <el-button
+              type="danger"
+              size="small"
+              plain
+              :loading="cleaningUp"
+              @click="handleCleanup"
+              class="cleanup-btn"
+              title="清理数据库中所有文件已不存在的照片记录"
+            >
+              <el-icon><Delete /></el-icon>
+              清理
+            </el-button>
+            <el-link type="primary" @click="goToConfig" class="manage-link">
+              <el-icon><Setting /></el-icon>
+              管理路径
+            </el-link>
+          </div>
+        </template>
+      </SectionHeader>
 
       <el-table
         :data="scanPaths"
-        style="width: 100%"
-        class="scan-path-table"
+        class="full-width-table scan-path-table"
         size="small"
       >
         <el-table-column prop="name" label="路径名称" min-width="120">
@@ -345,6 +342,7 @@ import { ArrowDown, ArrowUp, Clock, Collection, Delete, Filter, Folder, FolderOp
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
+import SectionHeader from '@/components/SectionHeader.vue'
 import { photoApi } from '@/api/photo'
 import { configApi, type ScanPathConfig } from '@/api/config'
 import type { Photo } from '@/types/photo'
@@ -905,30 +903,7 @@ defineExpose({
   padding: var(--spacing-lg) !important;
 }
 
-.scan-paths-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--spacing-md);
-  padding-bottom: var(--spacing-md);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.scan-paths-title {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  font-size: var(--font-size-lg);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
-}
-
-.scan-paths-title .title-icon {
-  font-size: 20px;
-  color: var(--color-primary);
-}
-
-.count-tag {
+.scan-paths-title .count-tag {
   margin-left: var(--spacing-xs);
 }
 
@@ -1423,66 +1398,6 @@ defineExpose({
 
   .scan-paths-card {
     padding: var(--spacing-md) !important;
-  }
-
-  .scan-paths-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--spacing-sm);
-  }
-
-  .photos-grid-card {
-    padding: var(--spacing-lg) !important;
-  }
-
-  .search-section {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .search-btn {
-    width: 100%;
-  }
-
-  .photos-stats {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--spacing-md);
-  }
-
-  .stats-left {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--spacing-sm);
-    width: 100%;
-  }
-
-  .stats-right {
-    width: 100%;
-  }
-
-  .filter-group {
-    width: 100%;
-  }
-
-  .filter-group :deep(.el-radio-button) {
-    flex: 1;
-  }
-
-  .filter-group :deep(.el-radio-button__inner) {
-    width: 100%;
-  }
-
-  .photo-grid {
-    grid-template-columns: repeat(3, 1fr);
-  }
-
-  .pagination-wrapper {
-    overflow-x: auto;
-  }
-
-  .pagination-wrapper :deep(.el-pagination) {
-    flex-wrap: nowrap;
   }
 }
 

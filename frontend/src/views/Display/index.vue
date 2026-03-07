@@ -1,24 +1,34 @@
 <template>
   <div class="display-page">
-    <PageHeader title="展示策略" subtitle="配置每日展示批次、渲染规格与设备展示内容" :gradient="true" />
+    <PageHeader title="展示策略" subtitle="配置每日展示批次、渲染规格与设备展示内容" :gradient="true">
+      <template #actions>
+        <el-button type="primary" @click="handleSave" :loading="saving">
+          保存配置
+        </el-button>
+        <el-button @click="handleReset">重置</el-button>
+        <el-button @click="handlePreview" :loading="previewLoading">
+          刷新预览
+        </el-button>
+      </template>
+    </PageHeader>
 
     <el-card shadow="never">
       <template #header>
-        <span><el-icon><View /></el-icon> 展示策略</span>
+        <SectionHeader :icon="View" title="展示策略" />
       </template>
 
       <el-alert
         title="展示策略说明"
         type="info"
         :closable="false"
-        style="margin-bottom: 20px"
+        class="section-alert-bottom"
       >
         <p>根据不同算法，设备会从照片库中挑选当天最适合展示的照片。下方日历可直接预览指定日期的展示结果。</p>
       </el-alert>
 
-      <el-form :model="form" label-width="150px" style="max-width: 800px">
+      <el-form :model="form" label-width="150px" class="display-form">
         <el-form-item label="展示策略">
-          <el-select v-model="form.algorithm" placeholder="请选择策略" style="width: 100%">
+          <el-select v-model="form.algorithm" placeholder="请选择策略" class="full-width">
             <el-option label="随机选择" value="random" />
             <el-option label="往年今日" value="on_this_day" />
           </el-select>
@@ -30,7 +40,7 @@
             :min="1"
             :max="20"
             :step="1"
-            style="width: 200px"
+            class="input-number-width-lg"
           />
           <span class="help-text">每天为设备挑选展示的照片数量</span>
         </el-form-item>
@@ -57,25 +67,17 @@
           />
         </el-form-item>
 
-        <el-form-item>
-          <el-button type="primary" @click="handleSave" :loading="saving">
-            保存配置
-          </el-button>
-          <el-button @click="handleReset">重置</el-button>
-          <el-button @click="handlePreview" :loading="previewLoading">
-            刷新预览
-          </el-button>
-        </el-form-item>
       </el-form>
     </el-card>
 
     <div class="preview-layout">
       <el-card shadow="never" class="calendar-card">
         <template #header>
-          <div class="preview-header">
-            <span><el-icon><Calendar /></el-icon> 日期预览</span>
-            <el-tag type="info" effect="plain">{{ previewDateLabel }}</el-tag>
-          </div>
+          <SectionHeader :icon="Calendar" title="日期预览">
+            <template #actions>
+              <el-tag type="info" effect="plain">{{ previewDateLabel }}</el-tag>
+            </template>
+          </SectionHeader>
         </template>
 
         <el-calendar ref="previewCalendarRef" v-model="previewCalendarDate" class="preview-calendar">
@@ -99,12 +101,13 @@
 
       <el-card shadow="never" class="preview-card">
         <template #header>
-          <div class="preview-header">
-            <span><el-icon><Picture /></el-icon> 策略预览</span>
-            <div class="preview-tags">
-              <el-tag type="success">已找到 {{ previewPhotos.length }} / {{ form.dailyCount }} 张</el-tag>
-            </div>
-          </div>
+          <SectionHeader :icon="Picture" title="策略预览">
+            <template #actions>
+              <div class="preview-tags">
+                <el-tag type="success">已找到 {{ previewPhotos.length }} / {{ form.dailyCount }} 张</el-tag>
+              </div>
+            </template>
+          </SectionHeader>
         </template>
 
         <el-alert
@@ -158,13 +161,14 @@
 
     <el-card shadow="never" class="daily-batch-card">
       <template #header>
-        <div class="preview-header">
-          <span><el-icon><Files /></el-icon> 今日批次</span>
-          <div style="display: flex; gap: 12px">
-            <el-button @click="loadDailyBatch" :loading="batchLoading">刷新</el-button>
-            <el-button type="primary" @click="handleGenerateDailyBatch" :loading="batchGenerating">{{ dailyBatch ? '重新生成并覆盖' : '生成今日批次' }}</el-button>
-          </div>
-        </div>
+        <SectionHeader :icon="Files" title="今日批次">
+          <template #actions>
+            <div class="header-actions-row">
+              <el-button @click="loadDailyBatch" :loading="batchLoading">刷新</el-button>
+              <el-button type="primary" @click="handleGenerateDailyBatch" :loading="batchGenerating">{{ dailyBatch ? '重新生成并覆盖' : '生成今日批次' }}</el-button>
+            </div>
+          </template>
+        </SectionHeader>
       </template>
 
       <el-skeleton v-if="batchLoading" :rows="4" animated />
@@ -192,10 +196,11 @@
 
     <el-card shadow="never" class="history-card">
       <template #header>
-        <div class="preview-header">
-          <span><el-icon><Clock /></el-icon> 历史批次</span>
-          <el-button @click="loadBatchHistory" :loading="historyLoading">刷新历史</el-button>
-        </div>
+        <SectionHeader :icon="Clock" title="历史批次">
+          <template #actions>
+            <el-button @click="loadBatchHistory" :loading="historyLoading">刷新历史</el-button>
+          </template>
+        </SectionHeader>
       </template>
 
       <el-skeleton v-if="historyLoading" :rows="4" animated />
@@ -291,6 +296,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
+import SectionHeader from '@/components/SectionHeader.vue'
 import { Calendar, Clock, Files, Picture, View } from '@element-plus/icons-vue'
 import { displayStrategyApi, defaultDisplayStrategyConfig } from '@/api/config'
 import type { DisplayPreviewResponse, DisplayStrategyConfig } from '@/api/config'
@@ -653,11 +659,9 @@ onUnmounted(() => {
   padding-bottom: 4px;
 }
 
-.preview-header {
+.header-actions-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 12px;
 }
 
 .preview-tags {
@@ -1073,5 +1077,20 @@ onUnmounted(() => {
     --frame-display-width: min(480px, calc(100vw - 112px));
     --frame-shell-padding: 16px;
   }
+}
+.section-alert-bottom {
+  margin-bottom: 20px;
+}
+
+.display-form {
+  max-width: 800px;
+}
+
+.full-width {
+  width: 100%;
+}
+
+.input-number-width-lg {
+  width: 200px;
 }
 </style>

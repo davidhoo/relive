@@ -10,9 +10,9 @@
     </PageHeader>
 
     <!-- AI Provider 信息 -->
-    <el-card shadow="never" style="margin-bottom: 20px">
+    <el-card shadow="never" class="section-card">
       <template #header>
-        <span><el-icon><Setting /></el-icon> AI Provider 配置</span>
+        <SectionHeader :icon="Setting" title="AI Provider 配置" />
       </template>
 
       <!-- AI 未配置提示 -->
@@ -23,7 +23,7 @@
         description="请先在配置管理中配置 AI Provider (Ollama/Qwen/OpenAI) 才能使用 AI 分析功能"
         show-icon
         :closable="false"
-        style="margin-bottom: 20px"
+        class="provider-alert"
       >
       </el-alert>
 
@@ -39,9 +39,9 @@
       </el-descriptions>
     </el-card>
 
-    <el-card shadow="never" style="margin-bottom: 20px">
+    <el-card shadow="never" class="section-card">
       <template #header>
-        <span>分析运行状态</span>
+        <SectionHeader :icon="Cpu" title="分析运行状态" />
       </template>
 
       <el-descriptions :column="2" border>
@@ -66,9 +66,9 @@
     </el-card>
 
     <!-- 批量分析 -->
-    <el-card shadow="never" style="margin-bottom: 20px">
+    <el-card shadow="never" class="section-card">
       <template #header>
-        <span><el-icon><MagicStick /></el-icon> 批量分析</span>
+        <SectionHeader :icon="MagicStick" title="批量分析" />
       </template>
       <div class="batch-analyze-form">
         <div class="batch-analyze-row">
@@ -78,7 +78,7 @@
             :min="1"
             :max="1000"
             :step="10"
-            style="width: 200px"
+            class="input-number-width-lg"
           />
           <el-button
             type="primary"
@@ -89,7 +89,7 @@
           >
             {{ analyzing ? '分析中...' : '开始批量分析' }}
           </el-button>
-          <el-text v-if="batchDisabledReason" type="info" style="margin-left: 10px">
+          <el-text v-if="batchDisabledReason" type="info" class="inline-info-text">
             {{ batchDisabledReason }}
           </el-text>
         </div>
@@ -98,14 +98,14 @@
           type="info"
           :closable="false"
           description="批量分析将按照队列顺序处理未分析的照片。建议每次处理数量不超过 500 张，避免长时间占用资源。"
-          style="margin-top: 16px"
+          class="section-alert"
         />
       </div>
     </el-card>
 
-    <el-card shadow="never" style="margin-bottom: 20px">
+    <el-card shadow="never" class="section-card">
       <template #header>
-        <span>后台分析</span>
+        <SectionHeader :icon="MagicStick" title="后台分析" />
       </template>
       <div class="batch-analyze-form">
         <div class="batch-analyze-row">
@@ -126,7 +126,7 @@
           >
             停止后台分析
           </el-button>
-          <el-text v-if="backgroundDisabledReason" type="info" style="margin-left: 10px">
+          <el-text v-if="backgroundDisabledReason" type="info" class="inline-info-text">
             {{ backgroundDisabledReason }}
           </el-text>
         </div>
@@ -135,7 +135,7 @@
           type="info"
           :closable="false"
           description="后台分析会持续扫描未分析照片并自动处理；没有新照片时会短暂等待后继续轮询。"
-          style="margin-top: 16px"
+          class="section-alert"
         />
 
         <div class="background-log-panel">
@@ -154,13 +154,14 @@
     <!-- 分析进度 -->
     <el-card shadow="never" v-if="progress">
       <template #header>
-        <div style="display: flex; justify-content: space-between; align-items: center">
-          <span><el-icon><DataLine /></el-icon> 分析进度</span>
+        <SectionHeader :icon="DataLine" title="分析进度">
+          <template #actions>
           <el-button size="small" @click="loadProgress">刷新</el-button>
-        </div>
+        </template>
+        </SectionHeader>
       </template>
 
-      <el-row :gutter="20" style="margin-bottom: 20px">
+      <el-row :gutter="20" class="stats-row">
         <el-col :span="6">
           <el-statistic title="总任务数" :value="progress.total" />
         </el-col>
@@ -181,7 +182,7 @@
         :stroke-width="24"
       />
 
-      <div style="margin-top: 20px">
+      <div class="log-section">
         <el-descriptions :column="2" border>
           <el-descriptions-item label="运行状态">
             <el-tag :type="progress.is_running ? 'success' : 'info'">
@@ -215,7 +216,8 @@
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
-import { DataLine, MagicStick, Setting } from '@element-plus/icons-vue'
+import SectionHeader from '@/components/SectionHeader.vue'
+import { Cpu, DataLine, MagicStick, Setting } from '@element-plus/icons-vue'
 import { aiApi } from '@/api/ai'
 import type { AIAnalyzeProgress, AIProviderInfo, AnalysisRuntimeStatus } from '@/types/ai'
 import dayjs from 'dayjs'
@@ -547,5 +549,32 @@ watch(backgroundLogs, async () => {
 .background-log-empty {
   color: var(--color-text-secondary);
   font-size: 13px;
+}
+.section-card {
+  margin-bottom: 20px;
+}
+
+.provider-alert {
+  margin-bottom: 20px;
+}
+
+.input-number-width-lg {
+  width: 200px;
+}
+
+.inline-info-text {
+  margin-left: 10px;
+}
+
+.section-alert {
+  margin-top: 16px;
+}
+
+.stats-row {
+  margin-bottom: 20px;
+}
+
+.log-section {
+  margin-top: 20px;
 }
 </style>

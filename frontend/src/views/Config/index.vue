@@ -12,12 +12,7 @@
     <!-- Scan Paths Card -->
     <el-card shadow="never" class="scan-paths-card">
       <template #header>
-        <div class="card-header">
-          <div>
-            <el-icon class="header-icon"><FolderOpened /></el-icon>
-            <span class="header-title">扫描路径配置</span>
-          </div>
-        </div>
+        <SectionHeader :icon="FolderOpened" title="扫描路径配置" />
       </template>
 
       <div v-loading="loading">
@@ -65,14 +60,14 @@
               v-if="!path.is_default"
               link
               @click="handleSetDefault(path)"
-              style="color: var(--color-primary)"
+              class="action-link"
             >
               设为默认
             </el-button>
-            <el-button link @click="handleEditPath(path)" style="color: var(--color-primary)">
+            <el-button link @click="handleEditPath(path)" class="action-link">
               编辑
             </el-button>
-            <el-button link @click="handleDeletePath(path)" style="color: var(--color-error)">
+            <el-button link @click="handleDeletePath(path)" class="danger-link">
               删除
             </el-button>
           </div>
@@ -93,7 +88,7 @@
             </el-form-item>
             <el-form-item label="扫描频率">
               <div class="model-select-row">
-                <el-select v-model="autoScanIntervalSelection" style="width: 240px" @change="handleAutoScanIntervalSelectionChange">
+                <el-select v-model="autoScanIntervalSelection" class="select-width-md" @change="handleAutoScanIntervalSelectionChange">
                   <el-option :value="10" label="10 分钟" />
                   <el-option :value="30" label="30 分钟" />
                   <el-option :value="60" label="1 小时" />
@@ -107,7 +102,7 @@
                   v-model="autoScanConfig.interval_minutes"
                   :min="1"
                   :max="10080"
-                  style="width: 180px"
+                  class="input-number-width-md"
                 />
                 <span v-if="autoScanIntervalSelection === '__custom__'">分钟</span>
               </div>
@@ -122,23 +117,21 @@
     <!-- Geocode Configuration Card -->
     <el-card shadow="never" class="geocode-card">
       <template #header>
-        <div class="card-header">
-          <div>
-            <el-icon class="header-icon"><Location /></el-icon>
-            <span class="header-title">GPS 逆地理编码配置</span>
-          </div>
-          <el-button type="primary" @click="handleSaveGeocodeConfig" :loading="savingGeocode">
-            <el-icon><Check /></el-icon>
-            保存配置
-          </el-button>
-        </div>
+        <SectionHeader :icon="Location" title="GPS 逆地理编码配置">
+          <template #actions>
+            <el-button type="primary" @click="handleSaveGeocodeConfig" :loading="savingGeocode">
+              <el-icon><Check /></el-icon>
+              保存配置
+            </el-button>
+          </template>
+        </SectionHeader>
       </template>
 
       <div v-loading="loadingGeocode">
         <el-form :model="geocodeConfig" label-width="140px" class="geocode-form">
           <!-- Provider Selection -->
           <el-form-item label="主要提供商">
-            <el-select v-model="geocodeConfig.provider" placeholder="选择主要提供商" style="width: 100%">
+            <el-select v-model="geocodeConfig.provider" placeholder="选择主要提供商" class="full-width">
               <el-option value="offline" label="离线数据库 (Offline)">
                 <div class="provider-option">
                   <span>离线数据库 (Offline)</span>
@@ -171,7 +164,7 @@
 
           <!-- Fallback Provider -->
           <el-form-item label="备用提供商">
-            <el-select v-model="geocodeConfig.fallback" placeholder="选择备用提供商" style="width: 100%">
+            <el-select v-model="geocodeConfig.fallback" placeholder="选择备用提供商" class="full-width">
               <el-option value="" label="无备用"></el-option>
               <el-option value="offline" label="离线数据库 (Offline)"></el-option>
               <el-option value="amap" label="高德地图 (AMap)"></el-option>
@@ -199,9 +192,9 @@
               :min="3600"
               :max="604800"
               :step="3600"
-              style="width: 200px"
+              class="input-number-width-lg"
             />
-            <span style="margin-left: 12px">秒 ({{ Math.floor(geocodeConfig.cache_ttl / 3600) }} 小时)</span>
+            <span class="unit-label">秒 ({{ Math.floor(geocodeConfig.cache_ttl / 3600) }} 小时)</span>
             <div class="form-hint">
               缓存数据保留时长，默认 24 小时
             </div>
@@ -236,9 +229,9 @@
               v-model="geocodeConfig.amap_timeout"
               :min="5"
               :max="60"
-              style="width: 150px"
+              class="input-number-width-sm"
             />
-            <span style="margin-left: 12px">秒</span>
+            <span class="unit-label">秒</span>
           </el-form-item>
 
           <!-- Nominatim Configuration -->
@@ -262,9 +255,9 @@
               v-model="geocodeConfig.nominatim_timeout"
               :min="5"
               :max="60"
-              style="width: 150px"
+              class="input-number-width-sm"
             />
-            <span style="margin-left: 12px">秒</span>
+            <span class="unit-label">秒</span>
           </el-form-item>
 
           <!-- Weibo Configuration -->
@@ -296,19 +289,19 @@
               v-model="geocodeConfig.weibo_timeout"
               :min="5"
               :max="60"
-              style="width: 150px"
+              class="input-number-width-sm"
             />
-            <span style="margin-left: 12px">秒</span>
+            <span class="unit-label">秒</span>
           </el-form-item>
 
           <el-alert
             title="微博地图RGC 说明"
             type="info"
             :closable="false"
-            style="margin-top: 16px; margin-bottom: 16px"
+            class="section-alert section-alert-double"
           >
             <template #default>
-              <ul style="margin: 8px 0; padding-left: 20px">
+              <ul class="info-list">
                 <li>全球覆盖：支持国内+海外全区域逆地理编码</li>
                 <li>坐标自适应：国内自动适配WGS84坐标、海外自动切换GCJ02坐标</li>
                 <li>合规内置：接口层自动完成台湾、三沙群岛等国土敏感区域政策校验</li>
@@ -328,9 +321,9 @@
               :min="10"
               :max="500"
               :step="10"
-              style="width: 150px"
+              class="input-number-width-sm"
             />
-            <span style="margin-left: 12px">公里</span>
+            <span class="unit-label">公里</span>
             <div class="form-hint">
               超过此距离的坐标将无法匹配到城市
             </div>
@@ -340,20 +333,20 @@
             title="离线数据库说明"
             type="info"
             :closable="false"
-            style="margin-top: 16px"
+            class="section-alert"
           >
             <template #default>
               <div>离线提供商需要导入城市数据库才能使用。如未导入，系统会自动使用备用提供商。</div>
-              <div style="margin-top: 8px">
+              <div class="hint-block">
                 数据源：<a href="https://download.geonames.org/export/dump/" target="_blank">GeoNames</a>
                 (推荐使用 <a href="https://download.geonames.org/export/dump/cities500.zip" target="_blank">cities500.zip</a> - 覆盖面更广)
               </div>
-              <div v-if="!citiesDataStatus.exists" class="download-section" style="margin-top: 16px">
+              <div v-if="!citiesDataStatus.exists" class="download-section section-alert">
                 <el-button type="primary" @click="handleDownloadCities" :loading="downloadingCities">
                   <el-icon><Download /></el-icon>
                   {{ downloadingCities ? '下载中...' : '下载城市数据 (~180MB)' }}
                 </el-button>
-                <div v-if="downloadingCities" class="download-progress" style="margin-top: 16px">
+                <div v-if="downloadingCities" class="download-progress section-alert">
                   <el-progress :percentage="citiesDownloadProgress" :stroke-width="20" indeterminate />
                 </div>
               </div>
@@ -362,13 +355,13 @@
                 title="离线数据库已就绪"
                 type="success"
                 :closable="false"
-                style="margin-top: 16px"
+                class="section-alert"
               >
                 <div>
                   <el-icon><SuccessFilled /></el-icon>
                   <span>数据已就绪</span>
                 </div>
-                <div style="margin-top: 8px">
+                <div class="hint-block">
                   <strong>位置:</strong> {{ citiesDataStatus.file_path }}
                   <br />
                   <strong>大小:</strong> {{ formatFileSize(citiesDataStatus.file_size) }}
@@ -383,23 +376,21 @@
     <!-- AI Provider Configuration Card -->
     <el-card shadow="never" class="ai-card">
       <template #header>
-        <div class="card-header">
-          <div>
-            <el-icon class="header-icon"><Cpu /></el-icon>
-            <span class="header-title">AI 分析服务配置</span>
-          </div>
-          <el-button type="primary" @click="handleSaveAIConfig" :loading="savingAI">
-            <el-icon><Check /></el-icon>
-            保存配置
-          </el-button>
-        </div>
+        <SectionHeader :icon="Cpu" title="AI 分析服务配置">
+          <template #actions>
+            <el-button type="primary" @click="handleSaveAIConfig" :loading="savingAI">
+              <el-icon><Check /></el-icon>
+              保存配置
+            </el-button>
+          </template>
+        </SectionHeader>
       </template>
 
       <div v-loading="loadingAI">
         <el-form :model="aiConfig" label-width="140px" class="ai-form">
           <!-- Provider Selection -->
           <el-form-item label="主要提供商">
-            <el-select v-model="aiConfig.provider" placeholder="选择 AI 提供商" style="width: 100%">
+            <el-select v-model="aiConfig.provider" placeholder="选择 AI 提供商" class="full-width">
               <el-option value="" label="未配置">
                 <div class="provider-option">
                   <span>未配置</span>
@@ -446,15 +437,15 @@
           <el-divider content-position="left">全局设置</el-divider>
 
           <el-form-item label="温度参数">
-            <el-slider v-model="aiConfig.temperature" :min="0" :max="1" :step="0.1" show-input style="max-width: 400px" />
+            <el-slider v-model="aiConfig.temperature" :min="0" :max="1" :step="0.1" show-input class="slider-width-md" />
             <div class="form-hint">
               较低的值产生更一致的结果，较高的值产生更多样化的结果
             </div>
           </el-form-item>
 
           <el-form-item label="超时时间">
-            <el-input-number v-model="aiConfig.timeout" :min="10" :max="300" style="width: 150px" />
-            <span style="margin-left: 12px">秒</span>
+            <el-input-number v-model="aiConfig.timeout" :min="10" :max="300" class="input-number-width-sm" />
+            <span class="unit-label">秒</span>
           </el-form-item>
 
           <!-- Qwen Configuration -->
@@ -487,7 +478,7 @@
 
           <el-form-item label="模型">
             <div class="model-select-row">
-              <el-select v-model="qwenModelSelection" style="width: 360px" @change="handleQwenModelSelectionChange">
+              <el-select v-model="qwenModelSelection" class="select-width-lg" @change="handleQwenModelSelectionChange">
                 <el-option value="qwen-vl-max" label="qwen-vl-max (推荐)" />
                 <el-option value="qwen-vl-plus" label="qwen-vl-plus (经济)" />
                 <el-option value="qwen3.5-flash" label="qwen3.5-flash (更快更便宜)" />
@@ -500,7 +491,7 @@
                 v-if="qwenModelSelection === '__custom__'"
                 v-model="aiConfig.qwen_model"
                 placeholder="请输入自定义千问模型名"
-                style="flex: 1; min-width: 280px"
+                class="model-input"
               />
             </div>
           </el-form-item>
@@ -511,9 +502,9 @@
               :min="30"
               :max="300"
               :step="10"
-              style="width: 150px"
+              class="input-number-width-sm"
             />
-            <span style="margin-left: 12px">秒</span>
+            <span class="unit-label">秒</span>
             <div class="form-hint">
               默认 60 秒，使用 qwen3.5-plus 建议设置为 120 秒或更长
             </div>
@@ -549,7 +540,7 @@
 
           <el-form-item label="模型">
             <div class="model-select-row">
-              <el-select v-model="openAIModelSelection" style="width: 360px" @change="handleOpenAIModelSelectionChange">
+              <el-select v-model="openAIModelSelection" class="select-width-lg" @change="handleOpenAIModelSelectionChange">
                 <el-option value="gpt-4-vision-preview" label="GPT-4 Vision (推荐)" />
                 <el-option value="gpt-4o" label="GPT-4o" />
                 <el-option value="gpt-4o-mini" label="GPT-4o Mini (经济)" />
@@ -559,13 +550,13 @@
                 v-if="openAIModelSelection === '__custom__'"
                 v-model="aiConfig.openai_model"
                 placeholder="请输入自定义 OpenAI 模型名"
-                style="flex: 1; min-width: 280px"
+                class="model-input"
               />
             </div>
           </el-form-item>
 
           <el-form-item label="最大 Tokens">
-            <el-input-number v-model="aiConfig.openai_max_tokens" :min="100" :max="4000" style="width: 150px" />
+            <el-input-number v-model="aiConfig.openai_max_tokens" :min="100" :max="4000" class="input-number-width-sm" />
           </el-form-item>
 
           <!-- Ollama Configuration -->
@@ -606,11 +597,11 @@
           </el-form-item>
 
           <el-form-item label="最大 Tokens">
-            <el-input-number v-model="aiConfig.vllm_max_tokens" :min="100" :max="4000" style="width: 150px" />
+            <el-input-number v-model="aiConfig.vllm_max_tokens" :min="100" :max="4000" class="input-number-width-sm" />
           </el-form-item>
 
           <el-form-item label="并发数">
-            <el-input-number v-model="aiConfig.vllm_concurrency" :min="1" :max="20" style="width: 150px" />
+            <el-input-number v-model="aiConfig.vllm_concurrency" :min="1" :max="20" class="input-number-width-sm" />
             <div class="form-hint">
               批量分析时的并发请求数（默认 5）
             </div>
@@ -630,7 +621,7 @@
           </el-divider>
 
           <el-form-item label="主提供商">
-            <el-select v-model="aiConfig.hybrid_primary" placeholder="选择主提供商" style="width: 100%">
+            <el-select v-model="aiConfig.hybrid_primary" placeholder="选择主提供商" class="full-width">
               <el-option value="qwen" label="通义千问 (Qwen)" />
               <el-option value="openai" label="OpenAI" />
               <el-option value="ollama" label="Ollama" />
@@ -639,7 +630,7 @@
           </el-form-item>
 
           <el-form-item label="备用提供商">
-            <el-select v-model="aiConfig.hybrid_fallback" placeholder="选择备用提供商" style="width: 100%">
+            <el-select v-model="aiConfig.hybrid_fallback" placeholder="选择备用提供商" class="full-width">
               <el-option value="" label="无备用" />
               <el-option value="qwen" label="通义千问 (Qwen)" />
               <el-option value="openai" label="OpenAI" />
@@ -659,13 +650,13 @@
             title="配置提示"
             type="info"
             :closable="false"
-            style="margin-top: 16px"
+            class="section-alert"
           >
             <template #default>
               <div>AI 配置保存后立即生效，无需重启服务。</div>
-              <div style="margin-top: 8px">
+              <div class="hint-block">
                 <strong>推荐配置：</strong>
-                <ul style="margin: 4px 0; padding-left: 20px">
+                <ul class="info-list compact">
                   <li>日常使用：通义千问 (性价比高，¥0.004/张)</li>
                   <li>高质量分析：OpenAI GPT-4V (¥0.07/张)</li>
                   <li>免费方案：Ollama + llava (本地运行)</li>
@@ -680,22 +671,20 @@
     <!-- AI Prompt Configuration Card -->
     <el-card shadow="never" class="prompt-card">
       <template #header>
-        <div class="card-header">
-          <div>
-            <el-icon class="header-icon"><Document /></el-icon>
-            <span class="header-title">AI 提示词配置</span>
-          </div>
-          <div class="header-actions">
-            <el-button @click="handleResetPrompts" :loading="resettingPrompts">
-              <el-icon><RefreshLeft /></el-icon>
-              恢复默认
-            </el-button>
-            <el-button type="primary" @click="handleSavePromptConfig" :loading="savingPrompts">
-              <el-icon><Check /></el-icon>
-              保存配置
-            </el-button>
-          </div>
-        </div>
+        <SectionHeader :icon="Document" title="AI 提示词配置">
+          <template #actions>
+            <div class="header-actions">
+              <el-button @click="handleResetPrompts" :loading="resettingPrompts">
+                <el-icon><RefreshLeft /></el-icon>
+                恢复默认
+              </el-button>
+              <el-button type="primary" @click="handleSavePromptConfig" :loading="savingPrompts">
+                <el-icon><Check /></el-icon>
+                保存配置
+              </el-button>
+            </div>
+          </template>
+        </SectionHeader>
       </template>
 
       <div v-loading="loadingPrompts">
@@ -749,10 +738,10 @@
             title="提示词配置说明"
             type="info"
             :closable="false"
-            style="margin-top: 16px"
+            class="section-alert"
           >
             <template #default>
-              <ul style="margin: 8px 0; padding-left: 20px">
+              <ul class="info-list">
                 <li>修改提示词后，新的分析将使用新的提示词</li>
                 <li>已分析的照片不会自动重新分析</li>
                 <li>提示词为空时将使用系统默认值</li>
@@ -810,6 +799,7 @@
 import { ref, onMounted } from 'vue'
 import PathBrowser from '@/components/PathBrowser.vue'
 import PageHeader from '@/components/PageHeader.vue'
+import SectionHeader from '@/components/SectionHeader.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { configApi, promptApi, type ScanPathConfig, type AutoScanConfig, type GeocodeConfig, type AIConfig, type PromptConfig, defaultPrompts, getCitiesDataStatus, downloadCitiesData, type CitiesDataStatus } from '@/api/config'
 import { photoApi } from '@/api/photo'
@@ -1039,7 +1029,7 @@ const handleDeletePath = async (path: ScanPathConfig) => {
 
     let message = `确定要删除扫描路径「${path.name}」吗？`
     if (photoCount > 0) {
-      message += `<br><br><strong style="color: var(--color-error)">警告：该路径下有 ${photoCount} 张照片，删除路径将同时删除这些照片的数据库记录和缩略图！</strong>`
+      message += `<br><br><strong class="danger-link">警告：该路径下有 ${photoCount} 张照片，删除路径将同时删除这些照片的数据库记录和缩略图！</strong>`
     }
 
     await ElMessageBox.confirm(message, '确认删除', {
@@ -1306,23 +1296,6 @@ onMounted(() => {
   /* 移除 max-width 限制，允许卡片自适应宽度 */
 }
 
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.header-icon {
-  margin-right: 8px;
-  font-size: 18px;
-  color: var(--color-primary);
-}
-
-.header-title {
-  font-size: 16px;
-  font-weight: 600;
-}
-
 .auto-scan-config-panel {
   padding: 16px 20px;
   border: 1px solid var(--color-border);
@@ -1540,6 +1513,80 @@ onMounted(() => {
   gap: 12px;
   width: 100%;
   align-items: center;
+}
+
+.action-link {
+  color: var(--color-primary);
+}
+
+.danger-link {
+  color: var(--color-error);
+}
+
+.full-width {
+  width: 100%;
+}
+
+.select-width-md {
+  width: 240px;
+}
+
+.select-width-lg {
+  width: 360px;
+}
+
+.input-number-width-sm {
+  width: 150px;
+}
+
+.input-number-width-md {
+  width: 180px;
+}
+
+.input-number-width-lg {
+  width: 200px;
+}
+
+.slider-width-md {
+  max-width: 400px;
+}
+
+.unit-label {
+  margin-left: 12px;
+}
+
+.section-alert {
+  margin-top: 16px;
+}
+
+.section-alert-double {
+  margin-bottom: 16px;
+}
+
+.hint-block {
+  margin-top: 8px;
+}
+
+.section-top-gap {
+  margin-top: 16px;
+}
+
+.info-list {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.info-list.compact {
+  margin: 4px 0;
+}
+
+.model-input {
+  flex: 1;
+  min-width: 280px;
+}
+
+.dialog-danger-text {
+  color: var(--color-error);
 }
 
 </style>

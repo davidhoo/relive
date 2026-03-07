@@ -3,7 +3,7 @@
     <el-card shadow="never" v-if="photo">
       <template #header>
         <div class="header">
-          <el-button link @click="goBack" style="color: var(--color-primary); font-weight: 500;">
+          <el-button link @click="goBack" class="back-link">
             <el-icon><ArrowLeft /></el-icon>
             返回
           </el-button>
@@ -28,7 +28,7 @@
             :src="getPhotoThumbnailUrl(photo.id, photo.updated_at)"
             :preview-src-list="[getPhotoUrl(photo.id)]"
             fit="contain"
-            style="width: 100%; border-radius: 8px"
+            class="preview-image"
             preview-teleported
             :preview-props="{ zIndex: 9999 }"
           />
@@ -76,7 +76,7 @@
           <el-divider />
           <div v-if="photo.ai_analyzed">
             <h3>AI 分析结果</h3>
-            <el-descriptions :column="2" border style="margin-top: 16px">
+            <el-descriptions :column="2" border class="analysis-descriptions">
               <el-descriptions-item label="综合评分" :span="2">
                 <el-progress
                   :percentage="photo.overall_score || 0"
@@ -88,7 +88,7 @@
               <el-descriptions-item label="美学评分">{{ photo.beauty_score?.toFixed(2) }}</el-descriptions-item>
               <el-descriptions-item label="评分理由" :span="2" v-if="photo.score_reason">
                 <el-icon><InfoFilled /></el-icon>
-                <span style="margin-left: 8px; color: #606266; font-style: italic;">{{ photo.score_reason }}</span>
+                <span class="score-reason">{{ photo.score_reason }}</span>
               </el-descriptions-item>
               <el-descriptions-item label="AI 提供商">
                 <el-tag type="success" size="small">{{ formatAIProvider(photo.ai_provider) }}</el-tag>
@@ -97,19 +97,19 @@
             </el-descriptions>
 
             <!-- 描述 -->
-            <div style="margin-top: 20px" v-if="photo.description">
+            <div class="detail-section" v-if="photo.description">
               <h4>照片描述</h4>
-              <p style="color: #606266; line-height: 1.8;">{{ photo.description }}</p>
+              <p class="detail-text-muted">{{ photo.description }}</p>
             </div>
 
             <!-- 标题 -->
-            <div style="margin-top: 20px" v-if="photo.caption">
+            <div class="detail-section" v-if="photo.caption">
               <h4>标题</h4>
-              <p style="color: #303133; font-weight: 500;">{{ photo.caption }}</p>
+              <p class="detail-text-strong">{{ photo.caption }}</p>
             </div>
 
             <!-- 分类 -->
-            <div style="margin-top: 20px" v-if="photo.main_category">
+            <div class="detail-section" v-if="photo.main_category">
               <h4>分类</h4>
               <el-tag
                 type="primary"
@@ -122,13 +122,12 @@
             </div>
 
             <!-- 标签 -->
-            <div style="margin-top: 20px" v-if="photo.tags">
+            <div class="detail-section" v-if="photo.tags">
               <h4>标签</h4>
               <el-tag
                 v-for="tag in photo.tags.split(',')"
                 :key="tag"
-                class="clickable-tag"
-                style="margin-right: 8px; margin-top: 8px"
+                class="clickable-tag tag-chip"
                 @click="handleTagClick(tag)"
               >
                 {{ tag }}
@@ -136,10 +135,10 @@
             </div>
 
             <!-- 分析描述 -->
-            <div style="margin-top: 20px" v-if="(photo as any).analysis_result">
+            <div class="detail-section" v-if="(photo as any).analysis_result">
               <h4>AI 描述</h4>
-              <el-card shadow="never" style="margin-top: 8px">
-                <p style="white-space: pre-wrap; line-height: 1.6">{{ (photo as any).analysis_result }}</p>
+              <el-card shadow="never" class="analysis-card">
+                <p class="analysis-result-text">{{ (photo as any).analysis_result }}</p>
               </el-card>
             </div>
           </div>
@@ -365,4 +364,52 @@ h4 {
   transform: translateY(-2px);
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
 }
+.back-link {
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+.preview-image {
+  width: 100%;
+  border-radius: 8px;
+}
+
+.analysis-descriptions {
+  margin-top: 16px;
+}
+
+.score-reason {
+  margin-left: 8px;
+  color: #606266;
+  font-style: italic;
+}
+
+.detail-section {
+  margin-top: 20px;
+}
+
+.detail-text-muted {
+  color: #606266;
+  line-height: 1.8;
+}
+
+.detail-text-strong {
+  color: #303133;
+  font-weight: 500;
+}
+
+.tag-chip {
+  margin-right: 8px;
+  margin-top: 8px;
+}
+
+.analysis-card {
+  margin-top: 8px;
+}
+
+.analysis-result-text {
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
 </style>

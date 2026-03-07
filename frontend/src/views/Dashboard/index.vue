@@ -55,22 +55,20 @@
     <el-row :gutter="20" class="progress-row">
       <el-col :span="24">
         <div class="progress-card modern-card animate-fade-in animate-delay-1">
-          <div class="progress-card-header">
-            <div class="progress-title">
-              <el-icon class="progress-icon"><MagicStick /></el-icon>
-              <span>AI 分析进度</span>
-            </div>
-            <el-button
-              type="primary"
-              size="default"
-              @click="handleStartAnalysis"
-              :disabled="analyzing"
-              class="start-button"
-            >
-              <el-icon v-if="!analyzing"><VideoPlay /></el-icon>
-              {{ analyzing ? '分析中...' : '开始批量分析' }}
-            </el-button>
-          </div>
+          <SectionHeader :icon="MagicStick" title="AI 分析进度">
+            <template #actions>
+              <el-button
+                type="primary"
+                size="default"
+                @click="handleStartAnalysis"
+                :disabled="analyzing"
+                class="start-button"
+              >
+                <el-icon v-if="!analyzing"><VideoPlay /></el-icon>
+                {{ analyzing ? '分析中...' : '开始批量分析' }}
+              </el-button>
+            </template>
+          </SectionHeader>
           <div v-if="aiProgress" class="progress-content">
             <div class="modern-progress">
               <div
@@ -106,17 +104,17 @@
     <el-row :gutter="20" class="photos-row">
       <el-col :span="24">
         <div class="photos-card modern-card animate-fade-in animate-delay-2">
-          <div class="photos-card-header">
-            <div class="photos-title">
-              <el-icon class="photos-icon"><Picture /></el-icon>
-              <span>最近照片</span>
-              <span class="photos-count">{{ recentPhotos.length }} 张</span>
-            </div>
-            <el-button link @click="gotoPhotos" class="view-all-btn" style="color: var(--color-primary); font-weight: 500;">
-              查看全部
-              <el-icon><ArrowRight /></el-icon>
-            </el-button>
-          </div>
+          <SectionHeader :icon="Picture" title="最近照片">
+            <template #actions>
+              <div class="photos-title-actions">
+                <span class="photos-count">{{ recentPhotos.length }} 张</span>
+                <el-button link @click="gotoPhotos" class="view-all-btn">
+                  查看全部
+                  <el-icon><ArrowRight /></el-icon>
+                </el-button>
+              </div>
+            </template>
+          </SectionHeader>
           <el-row :gutter="16" v-if="recentPhotos.length" class="photos-grid">
             <el-col
               :xs="12"
@@ -182,6 +180,7 @@ import type { Photo } from '@/types/photo'
 import type { AIAnalyzeProgress } from '@/types/ai'
 import { useUserStore } from '@/stores/user'
 import PageHeader from '@/components/PageHeader.vue'
+import SectionHeader from '@/components/SectionHeader.vue'
 
 const router = useRouter()
 const systemStore = useSystemStore()
@@ -427,29 +426,6 @@ onMounted(async () => {
   padding: var(--spacing-xl) !important;
 }
 
-.progress-card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: var(--spacing-xl);
-  flex-wrap: wrap;
-  gap: var(--spacing-md);
-}
-
-.progress-title {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-md);
-  font-size: var(--font-size-xl);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
-}
-
-.progress-icon {
-  font-size: 24px;
-  color: var(--color-primary);
-}
-
 .start-button {
   border-radius: var(--radius-sm);
   font-weight: var(--font-weight-semibold);
@@ -513,29 +489,6 @@ onMounted(async () => {
 
 .photos-card {
   padding: var(--spacing-xl) !important;
-}
-
-.photos-card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: var(--spacing-xl);
-  flex-wrap: wrap;
-  gap: var(--spacing-md);
-}
-
-.photos-title {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-md);
-  font-size: var(--font-size-xl);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
-}
-
-.photos-icon {
-  font-size: 24px;
-  color: var(--color-primary);
 }
 
 .photos-count {

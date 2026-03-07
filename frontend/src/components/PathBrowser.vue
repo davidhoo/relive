@@ -9,7 +9,7 @@
       v-if="isDocker"
       type="info"
       :closable="false"
-      style="margin-bottom: 16px"
+      class="docker-path-alert"
     >
       <template #title>
         <strong>Docker 路径说明</strong>
@@ -214,5 +214,8 @@ const handleConfirm = () => {
 
 .entry-name {
   font-size: 14px;
+}
+.docker-path-alert {
+  margin-bottom: 16px;
 }
 </style>
