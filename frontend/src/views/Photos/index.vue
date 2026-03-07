@@ -112,6 +112,7 @@
           <template #default="{ row }">
             <el-button-group>
               <el-button
+                v-if="shouldShowScanButton(row)"
                 type="primary"
                 size="small"
                 plain
@@ -123,6 +124,7 @@
                 扫描
               </el-button>
               <el-button
+                v-if="shouldShowRebuildButton(row)"
                 type="warning"
                 size="small"
                 plain
@@ -800,6 +802,18 @@ const isPathScanning = (path: ScanPathConfig) => {
 // 判断路径是否正在重建
 const isPathRebuilding = (path: ScanPathConfig) => {
   return currentScanPath.value === path.path && currentScanType.value === 'rebuild'
+}
+
+const shouldShowScanButton = (path: ScanPathConfig) => {
+  if (isPathScanning(path)) return true
+  if (isPathRebuilding(path)) return false
+  return !path.last_scanned_at
+}
+
+const shouldShowRebuildButton = (path: ScanPathConfig) => {
+  if (isPathRebuilding(path)) return true
+  if (isPathScanning(path)) return false
+  return !!path.last_scanned_at
 }
 
 onMounted(() => {
