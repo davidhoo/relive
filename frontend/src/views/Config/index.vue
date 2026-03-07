@@ -734,6 +734,7 @@ import { ref, onMounted } from 'vue'
 import PathBrowser from '@/components/PathBrowser.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { configApi, promptApi, type ScanPathConfig, type GeocodeConfig, type AIConfig, type PromptConfig, defaultPrompts, getCitiesDataStatus, downloadCitiesData, type CitiesDataStatus } from '@/api/config'
+import { photoApi } from '@/api/photo'
 import dayjs from 'dayjs'
 import { v4 as uuidv4 } from 'uuid'
 import { FolderOpened, CircleCheck, CircleClose, Document, RefreshLeft, Check, Download, SuccessFilled, Link, Location } from '@element-plus/icons-vue'
@@ -937,9 +938,8 @@ const handleDeletePath = async (path: ScanPathConfig) => {
 
 // 获取路径下的照片数量（用于提示）
 const getPhotoCountByPath = async (path: string): Promise<number> => {
-  // 这里可以通过 API 获取，暂时返回 0，让后端处理
-  // 也可以添加一个新 API 来查询路径下的照片数量
-  return 0
+  const res = await photoApi.countByPaths({ paths: [path] })
+  return res.data?.data?.counts?.[path] || 0
 }
 
 const handleSetDefault = async (path: ScanPathConfig) => {

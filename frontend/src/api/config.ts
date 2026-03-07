@@ -363,7 +363,10 @@ export const configApi = {
   // Delete scan path and associated data
   deleteScanPath: async (pathId: string): Promise<{ success: boolean; message: string }> => {
     const response = await http.delete<ApiResponse<{ success: boolean; message: string }>>(`/config/scan-paths/${pathId}`)
-    return response.data?.data || { success: false, message: 'Unknown error' }
+    return {
+      success: response.data?.success ?? false,
+      message: response.data?.message || response.data?.data?.message || 'Unknown error',
+    }
   },
 
   // Validate a scan path

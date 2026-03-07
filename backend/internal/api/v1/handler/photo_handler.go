@@ -443,11 +443,11 @@ func (h *PhotoHandler) ListDirectories(c *gin.Context) {
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		logger.Errorf("Failed to read directory %s: %v", path, err)
-		c.JSON(http.StatusOK, model.Response{
-			Success: true,
-			Data: model.ListDirectoriesResponse{
-				Entries:     []model.DirectoryEntry{},
-				CurrentPath: req.Path,
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "READ_DIRECTORY_FAILED",
+				Message: fmt.Sprintf("failed to read directory %s: %v", path, err),
 			},
 		})
 		return
@@ -1115,7 +1115,19 @@ func (h *PhotoHandler) StartScan(c *gin.Context) {
 		return
 	}
 
-	task, err := h.photoService.StartScan(req.Path)
+	scanPath, _, err := h.resolveScanPath(req.Path)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INVALID_PATH",
+				Message: err.Error(),
+			},
+		})
+		return
+	}
+
+	task, err := h.photoService.StartScan(scanPath)
 	if err != nil {
 		if err.Error() == "scan task already running" {
 			c.JSON(http.StatusConflict, model.Response{
@@ -1174,7 +1186,19 @@ func (h *PhotoHandler) StartRebuild(c *gin.Context) {
 		return
 	}
 
-	task, err := h.photoService.StartRebuild(req.Path)
+	scanPath, _, err := h.resolveScanPath(req.Path)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INVALID_PATH",
+				Message: err.Error(),
+			},
+		})
+		return
+	}
+
+	task, err := h.photoService.StartRebuild(scanPath)
 	if err != nil {
 		if err.Error() == "scan task already running" {
 			c.JSON(http.StatusConflict, model.Response{
@@ -1206,6 +1230,27 @@ func (h *PhotoHandler) StartRebuild(c *gin.Context) {
 		Message: "重建任务已启动",
 		Data:    resp,
 	})
+}
+
+func (h *PhotoHandler) resolveScanPath(requestedPath string) (string, string, error) {
+	scanPath := requestedPath
+	var scanPathID string
+
+	if scanPath == "" {
+		var err error
+		scanPath, scanPathID, err = h.getDefaultScanPath(nil)
+		if err != nil {
+			return "", "", err
+		}
+	} else {
+		scanPathID = h.findPathIDByPath(nil, scanPath)
+	}
+
+	if err := validateScanPath(scanPath); err != nil {
+		return "", "", fmt.Errorf("invalid scan path: %w", err)
+	}
+
+	return scanPath, scanPathID, nil
 }
 
 // GetScanTask 获取当前扫描任务状态

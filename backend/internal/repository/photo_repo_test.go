@@ -201,6 +201,66 @@ func TestPhotoRepository_GetUnanalyzed(t *testing.T) {
 	}
 }
 
+func TestPhotoRepository_ListByPathPrefix_RespectsDirectoryBoundary(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	repo := NewPhotoRepository(db)
+
+	photos := []*model.Photo{
+		{FilePath: "/photos/trip/a.jpg", FileName: "a.jpg", FileSize: 1, FileHash: "hash-a", Width: 100, Height: 100},
+		{FilePath: "/photos/trip/day1/b.jpg", FileName: "b.jpg", FileSize: 1, FileHash: "hash-b", Width: 100, Height: 100},
+		{FilePath: "/photos/trip-old/c.jpg", FileName: "c.jpg", FileSize: 1, FileHash: "hash-c", Width: 100, Height: 100},
+	}
+
+	for _, photo := range photos {
+		assert.NoError(t, repo.Create(photo))
+	}
+
+	matched, err := repo.ListByPathPrefix("/photos/trip")
+	assert.NoError(t, err)
+	assert.Len(t, matched, 2)
+
+	count, err := repo.CountByPathPrefix("/photos/trip")
+	assert.NoError(t, err)
+	assert.Equal(t, int64(2), count)
+
+	filtered, total, err := repo.List(1, 10, nil, "", "", "id", false, []string{"/photos/trip"})
+	assert.NoError(t, err)
+	assert.Equal(t, int64(2), total)
+	assert.Len(t, filtered, 2)
+
+	for _, photo := range filtered {
+		assert.NotContains(t, photo.FilePath, "/photos/trip-old/")
+	}
+}
+
+func TestPhotoRepository_List_WithNoEnabledPaths_ReturnsEmpty(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	repo := NewPhotoRepository(db)
+	photo := &model.Photo{
+		FilePath: "/photos/trip/a.jpg",
+		FileName: "a.jpg",
+		FileSize: 1,
+		FileHash: "hash-a",
+		Width:    100,
+		Height:   100,
+	}
+	assert.NoError(t, repo.Create(photo))
+
+	items, total, err := repo.List(1, 10, nil, "", "", "id", false, []string{})
+	assert.NoError(t, err)
+	assert.Empty(t, items)
+	assert.Equal(t, int64(0), total)
+
+	items, total, err = repo.List(1, 10, nil, "", "", "id", false, nil)
+	assert.NoError(t, err)
+	assert.Len(t, items, 1)
+	assert.Equal(t, int64(1), total)
+}
+
 func TestPhotoRepository_BatchCreate(t *testing.T) {
 	db := setupTestDB(t)
 	defer teardownTestDB(db)

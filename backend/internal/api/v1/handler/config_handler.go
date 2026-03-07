@@ -521,36 +521,33 @@ func (h *ConfigHandler) DeleteScanPath(c *gin.Context) {
 		return
 	}
 
-	// 删除该路径下的所有照片记录
-	deletedCount, err := h.photoService.DeletePhotosByPathPrefix(targetPath)
-	if err != nil {
-		logger.Errorf("Failed to delete photos for path %s: %v", targetPath, err)
-		// 继续执行，不中断流程
-	}
-
 	// 删除缩略图文件
 	thumbnailPath := h.cfg.Photos.ThumbnailPath
 	if thumbnailPath == "" {
 		thumbnailPath = "./data/thumbnails"
 	}
 
-	// 遍历缩略图目录，删除与该路径相关的缩略图
-	// 由于缩略图是以 photo ID 命名的，我们需要先获取该路径下的所有照片 ID
-	// 然后通过 photoService 来获取这些 ID
-	photoIDs, err := h.photoService.GetPhotoIDsByPathPrefix(targetPath)
+	photos, err := h.photoService.GetPhotosByPathPrefix(targetPath)
 	if err != nil {
-		logger.Warnf("Failed to get photo IDs for path %s: %v", targetPath, err)
+		logger.Warnf("Failed to get photos for path %s: %v", targetPath, err)
 	} else {
-		for _, id := range photoIDs {
-			// 删除缩略图文件
-			hexStr := fmt.Sprintf("%04x", id)
-			subDir1 := hexStr[0:2]
-			subDir2 := hexStr[2:4]
-			thumbnailFile := filepath.Join(thumbnailPath, subDir1, subDir2, strconv.FormatUint(uint64(id), 10)+".jpg")
+		for _, photo := range photos {
+			if photo.ThumbnailPath == "" {
+				continue
+			}
+
+			thumbnailFile := filepath.Join(thumbnailPath, photo.ThumbnailPath)
 			if err := os.Remove(thumbnailFile); err != nil && !os.IsNotExist(err) {
-				logger.Warnf("Failed to remove thumbnail for photo %d: %v", id, err)
+				logger.Warnf("Failed to remove thumbnail for photo %d: %v", photo.ID, err)
 			}
 		}
+	}
+
+	// 删除该路径下的所有照片记录
+	deletedCount, err := h.photoService.DeletePhotosByPathPrefix(targetPath)
+	if err != nil {
+		logger.Errorf("Failed to delete photos for path %s: %v", targetPath, err)
+		// 继续执行，不中断流程
 	}
 
 	// 更新扫描路径配置

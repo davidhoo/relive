@@ -49,6 +49,7 @@ type PhotoService interface {
 	// 删除路径相关
 	DeletePhotosByPathPrefix(pathPrefix string) (int64, error)
 	GetPhotoIDsByPathPrefix(pathPrefix string) ([]uint, error)
+	GetPhotosByPathPrefix(pathPrefix string) ([]*model.Photo, error)
 
 	// 路径统计
 	CountPhotosByPathPrefix(pathPrefix string) (int64, error)
@@ -464,7 +465,7 @@ func (s *photoService) GetPhotos(req *model.GetPhotosRequest) ([]*model.Photo, i
 	if err != nil {
 		logger.Warnf("Failed to get enabled scan paths: %v", err)
 		// 如果获取失败，仍然返回结果，但不过滤路径
-		enabledPaths = []string{}
+		enabledPaths = nil
 	}
 
 	// 调用 Repository
@@ -572,6 +573,16 @@ func (s *photoService) GetPhotoIDsByPathPrefix(pathPrefix string) ([]uint, error
 	return ids, nil
 }
 
+// GetPhotosByPathPrefix 根据路径前缀获取照片列表
+func (s *photoService) GetPhotosByPathPrefix(pathPrefix string) ([]*model.Photo, error) {
+	photos, err := s.repo.ListByPathPrefix(pathPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("list photos by path prefix: %w", err)
+	}
+
+	return photos, nil
+}
+
 // CountPhotosByPathPrefix 根据路径前缀统计照片数量
 func (s *photoService) CountPhotosByPathPrefix(pathPrefix string) (int64, error) {
 	count, err := s.repo.CountByPathPrefix(pathPrefix)
@@ -632,11 +643,11 @@ func (s *photoService) StartScan(path string) (*model.ScanTask, error) {
 
 	// 创建新任务
 	task := &model.ScanTask{
-		ID:         fmt.Sprintf("scan_%d", time.Now().Unix()),
-		Status:     "running",
-		Type:       "scan",
-		Path:       path,
-		StartedAt:  time.Now(),
+		ID:        fmt.Sprintf("scan_%d", time.Now().Unix()),
+		Status:    "running",
+		Type:      "scan",
+		Path:      path,
+		StartedAt: time.Now(),
 	}
 	s.scanTask = task
 	s.taskMutex.Unlock()
@@ -666,11 +677,11 @@ func (s *photoService) StartRebuild(path string) (*model.ScanTask, error) {
 
 	// 创建新任务
 	task := &model.ScanTask{
-		ID:         fmt.Sprintf("rebuild_%d", time.Now().Unix()),
-		Status:     "running",
-		Type:       "rebuild",
-		Path:       path,
-		StartedAt:  time.Now(),
+		ID:        fmt.Sprintf("rebuild_%d", time.Now().Unix()),
+		Status:    "running",
+		Type:      "rebuild",
+		Path:      path,
+		StartedAt: time.Now(),
 	}
 	s.scanTask = task
 	s.taskMutex.Unlock()

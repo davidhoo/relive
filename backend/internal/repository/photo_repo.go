@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -140,14 +141,27 @@ func (r *photoRepository) List(page, pageSize int, analyzed *bool, location stri
 	query := r.db.Model(&model.Photo{})
 
 	// 筛选启用的路径
-	if len(enabledPaths) > 0 {
-		// 构建 OR 条件：file_path LIKE 'path1%' OR file_path LIKE 'path2%' ...
+	if enabledPaths != nil {
+		if len(enabledPaths) == 0 {
+			return []*model.Photo{}, 0, nil
+		}
+
 		var pathConditions []string
 		var pathValues []interface{}
 		for _, path := range enabledPaths {
-			pathConditions = append(pathConditions, "file_path LIKE ?")
-			pathValues = append(pathValues, path+"%")
+			condition, values := buildPathPrefixCondition(path)
+			if condition == "" {
+				continue
+			}
+
+			pathConditions = append(pathConditions, condition)
+			pathValues = append(pathValues, values...)
 		}
+
+		if len(pathConditions) == 0 {
+			return []*model.Photo{}, 0, nil
+		}
+
 		query = query.Where(strings.Join(pathConditions, " OR "), pathValues...)
 	}
 
@@ -191,6 +205,34 @@ func (r *photoRepository) List(page, pageSize int, analyzed *bool, location stri
 	}
 
 	return photos, total, nil
+}
+
+func normalizePathPrefix(prefix string) string {
+	if prefix == "" {
+		return ""
+	}
+
+	cleaned := filepath.Clean(prefix)
+	if cleaned == "." {
+		return ""
+	}
+
+	return cleaned
+}
+
+func buildPathPrefixCondition(prefix string) (string, []interface{}) {
+	normalized := normalizePathPrefix(prefix)
+	if normalized == "" {
+		return "", nil
+	}
+
+	separator := string(filepath.Separator)
+	childPattern := normalized + separator + "%"
+	if normalized == separator {
+		childPattern = normalized + "%"
+	}
+
+	return "(file_path = ? OR file_path LIKE ?)", []interface{}{normalized, childPattern}
 }
 
 // ListAll 获取所有照片
@@ -379,19 +421,34 @@ func (r *photoRepository) UpdateLocation(id uint, location string) error {
 // ListByPathPrefix 根据路径前缀获取所有照片（用于重建时找出已删除的文件）
 func (r *photoRepository) ListByPathPrefix(prefix string) ([]*model.Photo, error) {
 	var photos []*model.Photo
-	err := r.db.Where("file_path LIKE ?", prefix+"%").Find(&photos).Error
+	condition, values := buildPathPrefixCondition(prefix)
+	if condition == "" {
+		return photos, nil
+	}
+
+	err := r.db.Where(condition, values...).Find(&photos).Error
 	return photos, err
 }
 
 // SoftDeleteByPathPrefix 软删除指定路径前缀的所有照片
 func (r *photoRepository) SoftDeleteByPathPrefix(prefix string) error {
-	return r.db.Where("file_path LIKE ?", prefix+"%").Delete(&model.Photo{}).Error
+	condition, values := buildPathPrefixCondition(prefix)
+	if condition == "" {
+		return nil
+	}
+
+	return r.db.Where(condition, values...).Delete(&model.Photo{}).Error
 }
 
 // CountByPathPrefix 统计指定路径前缀的照片数量
 func (r *photoRepository) CountByPathPrefix(prefix string) (int64, error) {
 	var count int64
-	err := r.db.Model(&model.Photo{}).Where("file_path LIKE ?", prefix+"%").Count(&count).Error
+	condition, values := buildPathPrefixCondition(prefix)
+	if condition == "" {
+		return 0, nil
+	}
+
+	err := r.db.Model(&model.Photo{}).Where(condition, values...).Count(&count).Error
 	return count, err
 }
 
