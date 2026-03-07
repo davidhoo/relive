@@ -79,9 +79,9 @@
           </template>
         </el-table-column>
         <el-table-column prop="ip_address" label="IP 地址" width="130" />
-        <el-table-column label="最后请求" width="150">
+        <el-table-column label="最后请求" width="180">
           <template #default="{ row }">
-            {{ formatTime(row.last_heartbeat) }}
+            <span class="last-request-time">{{ formatTime(row.last_heartbeat) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="120" fixed="right">
@@ -486,5 +486,9 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--color-text-tertiary);
   margin-top: 4px;
+}
+
+.last-request-time {
+  white-space: nowrap;
 }
 </style>
