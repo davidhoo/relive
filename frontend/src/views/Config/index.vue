@@ -16,6 +16,63 @@
       </template>
 
       <div v-loading="loading">
+        <div class="paths-list">
+          <el-empty v-if="!scanPaths.length" description="暂无扫描路径配置">
+            <el-button type="primary" @click="handleAddPath">添加第一个路径</el-button>
+          </el-empty>
+          <div
+            v-for="path in scanPaths"
+          :key="path.id"
+          class="path-item"
+          :class="{ disabled: !path.enabled }"
+        >
+          <div class="path-info">
+            <div class="path-header">
+              <el-checkbox v-model="path.enabled" @change="handleToggleEnabled(path)">
+                {{ path.name }}
+              </el-checkbox>
+              <el-tag v-if="path.is_default" type="success" size="small">默认</el-tag>
+            </div>
+            <div class="path-details">
+              <div class="path-location">{{ path.path }}</div>
+              <div class="path-meta">
+                <span>
+                  <el-tag :type="path.auto_scan_enabled ? 'success' : 'info'" size="small" effect="light">
+                    {{ path.auto_scan_enabled ? '自动扫描' : '仅手动' }}
+                  </el-tag>
+                </span>
+                <span v-if="path.last_scanned_at">
+                  <el-icon><Clock /></el-icon>
+                  上次扫描: {{ formatTime(path.last_scanned_at) }}
+                </span>
+                <span v-else class="never-scanned">从未扫描</span>
+              </div>
+            </div>
+          </div>
+          <div class="path-actions">
+            <el-switch
+              v-model="path.auto_scan_enabled"
+              active-text="自动"
+              inactive-text="手动"
+              @change="handleToggleAutoScan(path)"
+            />
+            <el-button
+              v-if="!path.is_default"
+              link
+              @click="handleSetDefault(path)"
+              style="color: var(--color-primary)"
+            >
+              设为默认
+            </el-button>
+            <el-button link @click="handleEditPath(path)" style="color: var(--color-primary)">
+              编辑
+            </el-button>
+            <el-button link @click="handleDeletePath(path)" style="color: var(--color-error)">
+              删除
+            </el-button>
+          </div>
+        </div>
+
         <div class="auto-scan-config-panel">
           <div class="auto-scan-config-header">
             <div class="auto-scan-config-title">自动扫描设置</div>
@@ -52,61 +109,6 @@
               <div class="form-hint">仅对已启用且开启自动扫描的路径生效。系统按设定周期检查目录变化，检测到变化才触发异步扫描。</div>
             </el-form-item>
           </el-form>
-        </div>
-
-        <div class="paths-list">
-          <el-empty v-if="!scanPaths.length" description="暂无扫描路径配置">
-            <el-button type="primary" @click="handleAddPath">添加第一个路径</el-button>
-          </el-empty>
-          <div
-            v-for="path in scanPaths"
-          :key="path.id"
-          class="path-item"
-          :class="{ disabled: !path.enabled }"
-        >
-          <div class="path-info">
-            <div class="path-header">
-              <el-checkbox v-model="path.enabled" @change="handleToggleEnabled(path)">
-                {{ path.name }}
-              </el-checkbox>
-              <el-tag v-if="path.is_default" type="success" size="small">默认</el-tag>
-            </div>
-            <div class="path-location">{{ path.path }}</div>
-            <div class="path-meta">
-              <span>
-                <el-tag :type="path.auto_scan_enabled ? 'success' : 'info'" size="small" effect="light">
-                  {{ path.auto_scan_enabled ? '自动扫描' : '仅手动' }}
-                </el-tag>
-              </span>
-              <span v-if="path.last_scanned_at">
-                <el-icon><Clock /></el-icon>
-                上次扫描: {{ formatTime(path.last_scanned_at) }}
-              </span>
-              <span v-else class="never-scanned">从未扫描</span>
-            </div>
-          </div>
-          <div class="path-actions">
-            <el-switch
-              v-model="path.auto_scan_enabled"
-              active-text="自动"
-              inactive-text="手动"
-              @change="handleToggleAutoScan(path)"
-            />
-            <el-button
-              v-if="!path.is_default"
-              link
-              @click="handleSetDefault(path)"
-              style="color: var(--color-primary)"
-            >
-              设为默认
-            </el-button>
-            <el-button link @click="handleEditPath(path)" style="color: var(--color-primary)">
-              编辑
-            </el-button>
-            <el-button link @click="handleDeletePath(path)" style="color: var(--color-error)">
-              删除
-            </el-button>
-          </div>
         </div>
       </div>
       </div>
@@ -1363,20 +1365,28 @@ onMounted(() => {
 
 .path-info {
   flex: 1;
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: center;
 }
 
 .path-header {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 8px;
   font-weight: 600;
+}
+
+.path-details {
+  min-width: 0;
 }
 
 .path-location {
   color: var(--color-text-secondary);
   font-family: monospace;
   margin-bottom: 4px;
+  word-break: break-all;
 }
 
 .path-meta {
@@ -1393,7 +1403,27 @@ onMounted(() => {
 
 .path-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
+  margin-left: 16px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 960px) {
+  .path-item {
+    align-items: flex-start;
+  }
+
+  .path-info {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .path-actions {
+    margin-left: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
 }
 
 .validation-result {
