@@ -164,8 +164,8 @@ func TestDeviceHandlerGetDeviceStats(t *testing.T) {
 	recent := time.Now().Add(-2 * time.Minute)
 	old := time.Now().Add(-10 * time.Minute)
 	devices := []*model.Device{
-		{DeviceID: "EMBED001", Name: "Embedded", APIKey: "sk-relive-1", DeviceType: "embedded", IsEnabled: true, LastHeartbeat: &recent},
-		{DeviceID: "OFF001", Name: "Analyzer", APIKey: "sk-relive-2", DeviceType: "offline", IsEnabled: true, LastHeartbeat: &old},
+		{DeviceID: "EMBED001", Name: "Embedded", APIKey: "sk-relive-1", DeviceType: "embedded", IsEnabled: true, LastSeen: &recent},
+		{DeviceID: "OFF001", Name: "Analyzer", APIKey: "sk-relive-2", DeviceType: "offline", IsEnabled: true, LastSeen: &old},
 	}
 	for _, device := range devices {
 		if err := db.Create(device).Error; err != nil {

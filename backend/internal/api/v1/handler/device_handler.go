@@ -383,8 +383,8 @@ func (h *DeviceHandler) GetDeviceByID(c *gin.Context) {
 		BatteryLevel:  device.BatteryLevel,
 		WiFiRSSI:      device.WiFiRSSI,
 	}
-	if device.LastHeartbeat != nil {
-		resp.LastHeartbeat = *device.LastHeartbeat
+	if device.LastSeen != nil {
+		resp.LastSeen = *device.LastSeen
 	}
 
 	c.JSON(http.StatusOK, model.Response{

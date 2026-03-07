@@ -229,7 +229,7 @@ func (s *deviceService) UpdateLastSeen(deviceID uint, ip string) {
 	}
 
 	now := time.Now()
-	device.LastHeartbeat = &now
+	device.LastSeen = &now
 	device.Online = true
 	if ip != "" {
 		device.IPAddress = ip
