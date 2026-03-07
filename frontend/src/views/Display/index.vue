@@ -72,20 +72,16 @@
         <template #header>
           <div class="preview-header">
             <span><el-icon><Calendar /></el-icon> 日期预览</span>
+            <el-tag type="info" effect="plain">{{ previewDateLabel }}</el-tag>
           </div>
         </template>
-
-        <div class="calendar-summary">
-          <div class="calendar-date">{{ previewDateLabel }}</div>
-          <div class="calendar-hint">{{ previewHint }}</div>
-        </div>
 
         <el-calendar ref="previewCalendarRef" v-model="previewCalendarDate" class="preview-calendar">
           <template #header>
             <div class="calendar-nav">
-              <el-button text @click="selectCalendarDate('prev-month')">Previous Month</el-button>
-              <el-button text @click="selectCalendarDate('today')">Today</el-button>
-              <el-button text @click="selectCalendarDate('next-month')">Next Month</el-button>
+              <el-button text @click="selectCalendarDate('prev-month')">上月</el-button>
+              <el-button text @click="selectCalendarDate('today')">今天</el-button>
+              <el-button text @click="selectCalendarDate('next-month')">下月</el-button>
             </div>
           </template>
           <template #date-cell="{ data }">
@@ -104,7 +100,6 @@
           <div class="preview-header">
             <span><el-icon><Picture /></el-icon> 策略预览</span>
             <div class="preview-tags">
-              <el-tag type="info">{{ previewDateLabel }}</el-tag>
               <el-tag type="success">已找到 {{ previewPhotos.length }} / {{ form.dailyCount }} 张</el-tag>
             </div>
           </div>
@@ -137,7 +132,7 @@
             >
               <img
                 class="preview-image"
-                :src="getPhotoThumbnailUrl(photo.id, photo.updated_at)"
+                :src="getPhotoFramePreviewUrl(photo.id, photo.updated_at)"
                 :alt="photo.caption || getFileName(photo.file_path)"
               />
             </button>
@@ -332,11 +327,11 @@ const previewDateLabel = computed(() => formatDisplayDate(previewCalendarDate.va
 const previewHint = computed(() => {
   switch (form.value.algorithm) {
     case 'random':
-      return '随机策略不依赖日期，日历用于固定一个预览时点；每次刷新仍可能选到不同照片。'
+      return '随机策略会按当前参数抽取一组照片。'
     case 'on_this_day':
-      return '点击任意日期后，会优先寻找往年同日附近的照片；若没有，则自动回溯到最接近该日期的历史记忆。'
+      return '优先匹配往年同日附近的历史照片。'
     default:
-      return '点击日历中的任意日期，可预览该日期的展示结果。'
+      return '选择日期后查看该天的策略结果。'
   }
 })
 const emptyPreviewText = computed(() => {
@@ -620,7 +615,7 @@ onUnmounted(() => {
 .display-page {
   padding: 20px;
   display: grid;
-  gap: 20px;
+  gap: 12px;
 }
 
 .help-text {
@@ -631,21 +626,35 @@ onUnmounted(() => {
 
 .preview-layout {
   display: grid;
-  grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
+  grid-template-columns: minmax(300px, 340px) minmax(0, 1fr);
   gap: 20px;
   align-items: start;
 }
 
 .calendar-card,
 .preview-card {
-  min-height: 240px;
+  min-height: 220px;
+}
+
+.calendar-card :deep(.el-card__header),
+.preview-card :deep(.el-card__header) {
+  padding: 12px 16px 8px;
+}
+
+.calendar-card :deep(.el-card__body),
+.preview-card :deep(.el-card__body) {
+  padding-top: 8px;
+}
+
+.calendar-card :deep(.el-card__body) {
+  padding-bottom: 4px;
 }
 
 .preview-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
 }
 
 .preview-tags {
@@ -656,32 +665,46 @@ onUnmounted(() => {
 }
 
 .calendar-summary {
-  margin-bottom: 16px;
+  margin-bottom: 10px;
 }
 
 .calendar-date {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
   color: #303133;
 }
 
 .calendar-hint {
-  margin-top: 8px;
-  font-size: 13px;
-  line-height: 1.6;
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.4;
   color: #606266;
 }
 
 .preview-calendar :deep(.el-calendar__header) {
-  padding-left: 0;
-  padding-right: 0;
+  padding: 0 0 10px;
 }
+
+.calendar-hint {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 
 .calendar-nav {
   width: 100%;
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
+  min-height: 28px;
+}
+
+.calendar-nav :deep(.el-button) {
+  padding-top: 0;
+  padding-bottom: 0;
+  min-height: 24px;
 }
 
 .calendar-nav .el-button:first-child {
@@ -700,8 +723,25 @@ onUnmounted(() => {
   height: auto;
 }
 
+.preview-calendar :deep(.el-calendar-table) {
+  margin-bottom: 0;
+}
+
+.preview-calendar :deep(.el-calendar__body) {
+  padding-left: 0;
+  padding-right: 0;
+  padding-top: 10px;
+  padding-bottom: 0;
+}
+
+.preview-calendar :deep(.el-calendar-table thead th) {
+  padding-top: 6px;
+  padding-bottom: 4px;
+}
+
 .preview-calendar :deep(.el-calendar-day) {
   height: auto;
+  min-height: 0;
   padding: 0;
 }
 
@@ -709,8 +749,8 @@ onUnmounted(() => {
   width: 100%;
   aspect-ratio: 1 / 1;
   box-sizing: border-box;
-  padding: 8px;
-  border-radius: 12px;
+  padding: 4px;
+  border-radius: 10px;
   display: flex;
   align-items: flex-start;
   background: transparent;
@@ -723,7 +763,7 @@ onUnmounted(() => {
 }
 
 .calendar-day {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -750,28 +790,35 @@ onUnmounted(() => {
 
 .preview-image {
   width: 100%;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 3 / 5;
   object-fit: cover;
   display: block;
   background: #f5f7fa;
 }
 
 .preview-meta {
-  padding: 12px;
+  padding: 10px;
 }
 
 .preview-title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: #303133;
-  line-height: 1.5;
+  line-height: 1.4;
 }
 
 .preview-subtitle,
 .preview-score {
-  margin-top: 6px;
-  font-size: 12px;
+  margin-top: 4px;
+  font-size: 11px;
   color: #909399;
+  line-height: 1.4;
+}
+
+.preview-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .daily-batch-card,
@@ -783,7 +830,7 @@ onUnmounted(() => {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-  margin-bottom: 16px;
+  margin-bottom: 10px;
 }
 
 .batch-grid {
