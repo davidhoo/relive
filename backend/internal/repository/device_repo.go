@@ -162,8 +162,8 @@ func (r *deviceRepository) GetOnlineDevices() ([]*model.Device, error) {
 	var devices []*model.Device
 	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
 
-	err := r.db.Where("last_heartbeat > ?", fiveMinutesAgo).
-		Order("last_heartbeat DESC").
+	err := r.db.Where("last_seen > ?", fiveMinutesAgo).
+		Order("last_seen DESC").
 		Find(&devices).Error
 	return devices, err
 }
@@ -173,8 +173,8 @@ func (r *deviceRepository) GetOfflineDevices() ([]*model.Device, error) {
 	var devices []*model.Device
 	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
 
-	err := r.db.Where("last_heartbeat IS NULL OR last_heartbeat <= ?", fiveMinutesAgo).
-		Order("last_heartbeat DESC").
+	err := r.db.Where("last_seen IS NULL OR last_seen <= ?", fiveMinutesAgo).
+		Order("last_seen DESC").
 		Find(&devices).Error
 	return devices, err
 }
@@ -199,7 +199,7 @@ func (r *deviceRepository) CountOnline() (int64, error) {
 	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
 
 	err := r.db.Model(&model.Device{}).
-		Where("last_heartbeat > ?", fiveMinutesAgo).
+		Where("last_seen > ?", fiveMinutesAgo).
 		Count(&count).Error
 	return count, err
 }
@@ -210,7 +210,7 @@ func (r *deviceRepository) CountOffline() (int64, error) {
 	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
 
 	err := r.db.Model(&model.Device{}).
-		Where("last_heartbeat IS NULL OR last_heartbeat <= ?", fiveMinutesAgo).
+		Where("last_seen IS NULL OR last_seen <= ?", fiveMinutesAgo).
 		Count(&count).Error
 	return count, err
 }

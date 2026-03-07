@@ -492,7 +492,7 @@ GET /api/v1/devices?page=1&page_size=20
         "ip_address": "192.168.1.100",
         "is_enabled": true,
         "online": true,
-        "last_heartbeat": "2026-02-28T17:59:00+08:00",
+        "last_seen": "2026-02-28T17:59:00+08:00",
         "battery_level": 85,
         "wifi_rssi": -45,
         "created_at": "2026-02-28T10:00:00Z"
@@ -530,7 +530,7 @@ GET /api/v1/devices/{device_id}
     "ip_address": "192.168.1.100",
     "is_enabled": true,
     "online": true,
-    "last_heartbeat": "2026-02-28T17:59:00+08:00",
+    "last_seen": "2026-02-28T17:59:00+08:00",
     "battery_level": 85,
     "wifi_rssi": -45,
     "created_at": "2026-02-28T10:00:00Z",

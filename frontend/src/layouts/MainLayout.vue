@@ -22,7 +22,7 @@
           class="menu-item"
         >
           <el-icon v-if="route.meta?.icon" class="menu-icon">
-            <component :is="route.meta.icon" />
+            <component :is="resolveMenuIcon(route.meta?.icon)" />
           </el-icon>
           <template #title>
             <span class="menu-title">{{ route.meta?.title }}</span>
@@ -35,7 +35,7 @@
         <div class="collapse-line"></div>
         <div class="collapse-arrow" :class="{ 'is-collapsed': isCollapsed }">
           <el-icon :size="12">
-            <component :is="isCollapsed ? 'ArrowRight' : 'ArrowLeft'" />
+            <component :is="isCollapsed ? ArrowRight : ArrowLeft" />
           </el-icon>
         </div>
       </div>
@@ -101,7 +101,23 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSystemStore } from '@/stores/system'
-import { User, ArrowDown, Key, SwitchButton } from '@element-plus/icons-vue'
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  Cpu,
+  DataLine,
+  HomeFilled,
+  Key,
+  MagicStick,
+  Monitor,
+  Picture,
+  PictureFilled,
+  Setting,
+  SwitchButton,
+  User,
+  View,
+} from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -109,6 +125,21 @@ const systemStore = useSystemStore()
 
 // 侧边栏折叠状态
 const isCollapsed = ref(false)
+const menuIconMap = {
+  DataLine,
+  Picture,
+  MagicStick,
+  Monitor,
+  View,
+  Setting,
+  Cpu,
+} as const
+
+const resolveMenuIcon = (iconName?: unknown) => {
+  if (typeof iconName !== 'string') return undefined
+  return menuIconMap[iconName as keyof typeof menuIconMap]
+}
+
 
 // 切换折叠状态
 const toggleCollapse = () => {

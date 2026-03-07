@@ -104,9 +104,27 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.User{},
 	}
 
+	if err := migrateDeviceLastSeenColumn(db); err != nil {
+		return err
+	}
+
 	if err := db.AutoMigrate(models...); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+func migrateDeviceLastSeenColumn(db *gorm.DB) error {
+	migrator := db.Migrator()
+	if !migrator.HasTable(&model.Device{}) {
+		return nil
+	}
+	if migrator.HasColumn(&model.Device{}, "last_seen") {
+		return nil
+	}
+	if !migrator.HasColumn(&model.Device{}, "last_heartbeat") {
+		return nil
+	}
+	return migrator.RenameColumn(&model.Device{}, "last_heartbeat", "last_seen")
 }

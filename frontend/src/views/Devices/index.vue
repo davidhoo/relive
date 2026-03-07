@@ -81,7 +81,7 @@
         <el-table-column prop="ip_address" label="IP 地址" width="130" />
         <el-table-column label="最后请求" width="180">
           <template #default="{ row }">
-            <span class="last-request-time">{{ formatTime(row.last_heartbeat) }}</span>
+            <span class="last-request-time">{{ formatTime(row.last_seen) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="120" fixed="right">
@@ -238,7 +238,7 @@
           </div>
         </el-descriptions-item>
         <el-descriptions-item label="IP 地址">{{ currentDevice.ip_address || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="最后请求">{{ formatTime(currentDevice.last_heartbeat) }}</el-descriptions-item>
+        <el-descriptions-item label="最后请求">{{ formatTime(currentDevice.last_seen) }}</el-descriptions-item>
         <el-descriptions-item label="创建时间">{{ formatTime(currentDevice.created_at) }}</el-descriptions-item>
       </el-descriptions>
     </el-dialog>

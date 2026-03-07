@@ -105,10 +105,10 @@ func (h *SystemHandler) Stats(c *gin.Context) {
 	// 统计设备总数
 	h.db.Model(&model.ESP32Device{}).Count(&stats.TotalDevices)
 
-	// 统计在线设备（5分钟内有心跳）
+	// 统计在线设备（5分钟内有最近活跃记录）
 	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
 	h.db.Model(&model.ESP32Device{}).
-		Where("last_heartbeat > ?", fiveMinutesAgo).
+		Where("last_seen > ?", fiveMinutesAgo).
 		Count(&stats.OnlineDevices)
 
 	// 统计展示记录总数

@@ -48,11 +48,11 @@ type Device struct {
 	Description string `gorm:"type:varchar(500)" json:"description"`
 
 	// 状态信息
-	IsEnabled    bool       `gorm:"default:true" json:"is_enabled"`                                       // 是否可用（服务端控制）
-	Online       bool       `gorm:"default:false" json:"online"`                                          // 是否在线（根据最近活跃时间计算/缓存）
-	LastSeen     *time.Time `gorm:"column:last_heartbeat;index:idx_last_heartbeat" json:"last_heartbeat"` // 最近活跃时间（兼容保留 `last_heartbeat` 字段名）
-	BatteryLevel int        `gorm:"default:0" json:"battery_level"`                                       // 电池电量（0-100）
-	WiFiRSSI     int        `gorm:"column:wifi_rssi;default:0" json:"wifi_rssi"`                          // WiFi 信号强度（dBm）
+	IsEnabled    bool       `gorm:"default:true" json:"is_enabled"`                        // 是否可用（服务端控制）
+	Online       bool       `gorm:"default:false" json:"online"`                           // 是否在线（根据最近活跃时间计算/缓存）
+	LastSeen     *time.Time `gorm:"column:last_seen;index:idx_last_seen" json:"last_seen"` // 最近活跃时间
+	BatteryLevel int        `gorm:"default:0" json:"battery_level"`                        // 电池电量（0-100）
+	WiFiRSSI     int        `gorm:"column:wifi_rssi;default:0" json:"wifi_rssi"`           // WiFi 信号强度（dBm）
 
 	// 配置信息
 	Config string `gorm:"type:text" json:"config"` // 设备配置（JSON）

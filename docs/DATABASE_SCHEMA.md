@@ -324,7 +324,7 @@ CREATE TABLE devices (
     -- 状态信息
     is_enabled BOOLEAN DEFAULT TRUE,          -- 是否可用（服务端控制）
     online BOOLEAN DEFAULT FALSE,             -- 是否在线（自动检测）
-    last_heartbeat DATETIME,                  -- 最近活跃时间（历史字段名保留）
+    last_seen DATETIME,                  -- 最近活跃时间
     battery_level INTEGER DEFAULT 0,          -- 电池电量（0-100）
     wifi_rssi INTEGER DEFAULT 0,              -- WiFi信号强度（dBm）
 
@@ -339,7 +339,7 @@ CREATE TABLE devices (
     INDEX idx_device_id (device_id),
     INDEX idx_api_key (api_key),
     INDEX idx_device_type (device_type),
-    INDEX idx_last_heartbeat (last_heartbeat)
+    INDEX idx_last_seen (last_seen)
 );
 ```
 
@@ -373,7 +373,7 @@ type Device struct {
     // 状态信息
     IsEnabled     bool       `gorm:"default:true" json:"is_enabled"`
     Online        bool       `gorm:"default:false" json:"online"`
-    LastSeen *time.Time `gorm:"column:last_heartbeat;index:idx_last_heartbeat" json:"last_heartbeat"`
+    LastSeen *time.Time `gorm:"column:last_seen;index:idx_last_seen" json:"last_seen"`
     BatteryLevel  int        `gorm:"default:0" json:"battery_level"`
     WiFiRSSI      int        `gorm:"column:wifi_rssi;default:0" json:"wifi_rssi"`
 

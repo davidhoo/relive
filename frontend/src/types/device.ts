@@ -9,7 +9,7 @@ export interface ESP32Device {
   is_enabled?: boolean
   online?: boolean
   is_online?: boolean
-  last_heartbeat?: string
+  last_seen?: string
   battery_level?: number
   wifi_rssi?: number
   photo_count?: number

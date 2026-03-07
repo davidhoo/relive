@@ -150,9 +150,9 @@ type DeviceDetailResponse struct {
 	IPAddress     string    `json:"ip_address"`
 	DeviceType    string    `json:"device_type"`
 	RenderProfile string    `json:"render_profile"`
-	IsEnabled     bool      `json:"is_enabled"`               // 是否可用
-	Online        bool      `json:"online"`                   // 是否在线（根据最近活跃时间计算）
-	LastSeen      time.Time `json:"last_heartbeat,omitempty"` // 兼容保留对外字段名
+	IsEnabled     bool      `json:"is_enabled"` // 是否可用
+	Online        bool      `json:"online"`     // 是否在线（根据最近活跃时间计算）
+	LastSeen      time.Time `json:"last_seen,omitempty"`
 	BatteryLevel  int       `json:"battery_level"`
 	WiFiRSSI      int       `json:"wifi_rssi"`
 }

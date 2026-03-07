@@ -3,7 +3,6 @@ import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
 import { readFileSync } from 'fs'
 
-// 读取根目录 VERSION 文件
 let appVersion = 'dev'
 try {
   const versionPath = resolve(__dirname, '..', 'VERSION')
@@ -12,7 +11,6 @@ try {
   console.warn('VERSION file not found, using dev')
 }
 
-// https://vite.dev/config/
 export default defineConfig({
   plugins: [vue()],
   resolve: {
@@ -22,5 +20,26 @@ export default defineConfig({
   },
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) {
+            return undefined
+          }
+          if (id.includes('element-plus') || id.includes('@element-plus')) {
+            return 'element-plus'
+          }
+          if (id.includes('vue')) {
+            return 'vue-vendor'
+          }
+          if (id.includes('axios') || id.includes('dayjs') || id.includes('uuid')) {
+            return 'app-vendor'
+          }
+          return 'vendor'
+        },
+      },
+    },
   },
 })

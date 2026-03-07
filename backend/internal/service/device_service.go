@@ -221,7 +221,7 @@ func (s *deviceService) CountByPlatform(platform string) (int64, error) {
 }
 
 // UpdateLastSeen 更新设备最近活跃时间和 IP。
-// 当前仍复用 last_heartbeat 字段存储最近请求时间，以避免额外迁移。
+// 最近活跃时间写入 `last_seen` 字段。
 func (s *deviceService) UpdateLastSeen(deviceID uint, ip string) {
 	device, err := s.repo.GetByID(deviceID)
 	if err != nil {
