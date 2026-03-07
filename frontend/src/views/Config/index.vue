@@ -1,6 +1,13 @@
 <template>
   <div class="config-page">
-    <PageHeader title="配置管理" subtitle="维护扫描路径、自动扫描、地理编码、AI 服务与提示词" :gradient="true" />
+    <PageHeader title="配置管理" subtitle="维护扫描路径、自动扫描、地理编码、AI 服务与提示词" :gradient="true">
+      <template #actions>
+        <el-button type="primary" @click="handleAddPath">
+          <el-icon><Plus /></el-icon>
+          添加路径
+        </el-button>
+      </template>
+    </PageHeader>
 
     <!-- Scan Paths Card -->
     <el-card shadow="never" class="scan-paths-card">
@@ -10,10 +17,6 @@
             <el-icon class="header-icon"><FolderOpened /></el-icon>
             <span class="header-title">扫描路径配置</span>
           </div>
-          <el-button type="primary" @click="handleAddPath">
-            <el-icon><Plus /></el-icon>
-            添加路径
-          </el-button>
         </div>
       </template>
 

@@ -1,6 +1,13 @@
 <template>
   <div class="analysis-page">
-    <PageHeader title="AI 分析" subtitle="管理分析任务、查看运行状态与批量处理进度" :gradient="true" />
+    <PageHeader title="AI 分析" subtitle="管理分析任务、查看运行状态与批量处理进度" :gradient="true">
+      <template #actions>
+        <el-button @click="$router.push('/config')">
+          <el-icon><Setting /></el-icon>
+          前往配置
+        </el-button>
+      </template>
+    </PageHeader>
 
     <!-- AI Provider 信息 -->
     <el-card shadow="never" style="margin-bottom: 20px">
@@ -18,11 +25,6 @@
         :closable="false"
         style="margin-bottom: 20px"
       >
-        <template #default>
-          <el-button type="primary" size="small" @click="$router.push('/config')">
-            前往配置
-          </el-button>
-        </template>
       </el-alert>
 
       <el-descriptions :column="2" border v-if="providerInfo">
