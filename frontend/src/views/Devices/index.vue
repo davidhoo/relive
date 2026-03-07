@@ -1,5 +1,7 @@
 <template>
   <div class="devices-page">
+    <PageHeader title="设备管理" subtitle="管理设备、查看状态并维护展示配置" :gradient="true" />
+
     <!-- 设备统计 -->
     <el-row :gutter="20" style="margin-bottom: 20px">
       <el-col :span="8">
@@ -248,6 +250,7 @@
 <script setup lang="ts">
 import { ref, onMounted, reactive } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import PageHeader from '@/components/PageHeader.vue'
 import { deviceApi, type CreateDeviceRequest, type CreateDeviceResponse } from '@/api/device'
 import { dailyDisplayApi, type RenderProfileOption } from '@/api/display'
 import type { Device, DeviceStats } from '@/types/device'

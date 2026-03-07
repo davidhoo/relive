@@ -1,5 +1,7 @@
 <template>
   <div class="config-page">
+    <PageHeader title="配置管理" subtitle="维护扫描路径、自动扫描、地理编码、AI 服务与提示词" :gradient="true" />
+
     <!-- Scan Paths Card -->
     <el-card shadow="never" class="scan-paths-card">
       <template #header>
@@ -804,6 +806,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import PathBrowser from '@/components/PathBrowser.vue'
+import PageHeader from '@/components/PageHeader.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { configApi, promptApi, type ScanPathConfig, type AutoScanConfig, type GeocodeConfig, type AIConfig, type PromptConfig, defaultPrompts, getCitiesDataStatus, downloadCitiesData, type CitiesDataStatus } from '@/api/config'
 import { photoApi } from '@/api/photo'

@@ -1,5 +1,7 @@
 <template>
   <div class="display-page">
+    <PageHeader title="展示策略" subtitle="配置每日展示批次、渲染规格与设备展示内容" :gradient="true" />
+
     <el-card shadow="never">
       <template #header>
         <span><el-icon><View /></el-icon> 展示策略</span>
@@ -288,6 +290,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import PageHeader from '@/components/PageHeader.vue'
 import { Calendar, Clock, Files, Picture, View } from '@element-plus/icons-vue'
 import { displayStrategyApi, defaultDisplayStrategyConfig } from '@/api/config'
 import type { DisplayPreviewResponse, DisplayStrategyConfig } from '@/api/config'

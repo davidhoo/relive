@@ -1,5 +1,7 @@
 <template>
   <div class="analysis-page">
+    <PageHeader title="AI 分析" subtitle="管理分析任务、查看运行状态与批量处理进度" :gradient="true" />
+
     <!-- AI Provider 信息 -->
     <el-card shadow="never" style="margin-bottom: 20px">
       <template #header>
@@ -210,6 +212,7 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import PageHeader from '@/components/PageHeader.vue'
 import { DataLine, MagicStick, Setting } from '@element-plus/icons-vue'
 import { aiApi } from '@/api/ai'
 import type { AIAnalyzeProgress, AIProviderInfo, AnalysisRuntimeStatus } from '@/types/ai'

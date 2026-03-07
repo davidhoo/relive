@@ -1,12 +1,6 @@
 <template>
   <div class="photos-page">
-    <!-- 页面标题 -->
-    <div class="page-header animate-fade-in">
-      <h1 class="page-title">
-        <span class="text-gradient">照片管理</span>
-      </h1>
-      <p class="page-subtitle">浏览和管理您的照片集合</p>
-    </div>
+    <PageHeader title="照片管理" subtitle="浏览和管理您的照片集合" :gradient="true" />
 
     <!-- 扫描路径列表 -->
     <div class="scan-paths-card modern-card animate-fade-in" v-loading="scanPathLoading">
@@ -350,6 +344,7 @@ import { ref, onMounted, computed } from 'vue'
 import { ArrowDown, ArrowUp, Clock, Collection, Delete, Filter, Folder, FolderOpened, FullScreen, Loading, Picture, PictureFilled, PriceTag, QuestionFilled, Refresh, Search, Setting, Star } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import PageHeader from '@/components/PageHeader.vue'
 import { photoApi } from '@/api/photo'
 import { configApi, type ScanPathConfig } from '@/api/config'
 import type { Photo } from '@/types/photo'

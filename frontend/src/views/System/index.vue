@@ -1,12 +1,6 @@
 <template>
   <div class="system-page">
-    <!-- 页面标题 -->
-    <div class="page-header animate-fade-in">
-      <h1 class="page-title">
-        <span class="text-gradient">系统信息</span>
-      </h1>
-      <p class="page-subtitle">查看系统运行状态和详细信息</p>
-    </div>
+    <PageHeader title="系统信息" subtitle="查看系统运行状态和详细信息" :gradient="true" />
 
     <!-- 系统健康状态 -->
     <div class="health-section animate-fade-in">

@@ -1,12 +1,6 @@
 <template>
   <div class="dashboard">
-    <!-- 页面标题 -->
-    <div class="page-header animate-fade-in">
-      <h1 class="page-title">
-        <span class="text-gradient">Dashboard</span>
-      </h1>
-      <p class="page-subtitle">照片管理系统概览</p>
-    </div>
+    <PageHeader title="仪表盘" subtitle="照片管理系统概览" :gradient="true" />
 
     <!-- 统计卡片网格 - WeDance 风格 -->
     <div class="stats-grid animate-fade-in">
@@ -187,6 +181,7 @@ import { aiApi } from '@/api/ai'
 import type { Photo } from '@/types/photo'
 import type { AIAnalyzeProgress } from '@/types/ai'
 import { useUserStore } from '@/stores/user'
+import PageHeader from '@/components/PageHeader.vue'
 
 const router = useRouter()
 const systemStore = useSystemStore()
