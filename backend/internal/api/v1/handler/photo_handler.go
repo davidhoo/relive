@@ -554,6 +554,65 @@ func (h *PhotoHandler) GetPhotoImage(c *gin.Context) {
 	c.File(photo.FilePath)
 }
 
+func buildPhotoDisplayText(photo *model.Photo) (string, string) {
+	title := strings.TrimSpace(photo.Caption)
+	if title == "" {
+		title = strings.TrimSuffix(photo.FileName, filepath.Ext(photo.FileName))
+	}
+	parts := make([]string, 0, 2)
+	if photo.TakenAt != nil {
+		parts = append(parts, photo.TakenAt.In(time.Local).Format("2006.01.02"))
+	}
+	if location := strings.TrimSpace(photo.Location); location != "" {
+		parts = append(parts, location)
+	}
+	return title, strings.Join(parts, " · ")
+}
+
+// GetPhotoDevicePreview 获取照片设备预览图（实时缓存生成）
+// @Summary 获取照片设备预览图
+// @Description 按指定渲染规格实时生成 480x800 设备预览并返回缓存文件
+// @Tags photos
+// @Accept json
+// @Produce image/jpeg
+// @Param id path int true "照片 ID"
+// @Param profile query string false "渲染规格名称"
+// @Success 200 {file} binary
+// @Failure 400 {object} model.Response
+// @Failure 404 {object} model.Response
+// @Failure 500 {object} model.Response
+// @Router /api/v1/photos/{id}/device-preview [get]
+func (h *PhotoHandler) GetPhotoDevicePreview(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: "Invalid photo ID"}})
+		return
+	}
+
+	photo, err := h.photoService.GetPhotoByID(uint(id))
+	if err != nil {
+		logger.Errorf("Get photo by ID failed: %v", err)
+		c.JSON(http.StatusNotFound, model.Response{Success: false, Error: &model.ErrorInfo{Code: "NOT_FOUND", Message: "Photo not found"}})
+		return
+	}
+
+	profileName := c.Query("profile")
+	if profileName == "" {
+		profileName = util.DefaultRenderProfile()
+	}
+	previewPath, err := h.generateDevicePreviewFile(photo, profileName)
+	if err != nil {
+		logger.Errorf("Generate device preview failed for photo %d: %v", photo.ID, err)
+		c.JSON(http.StatusInternalServerError, model.Response{Success: false, Error: &model.ErrorInfo{Code: "DEVICE_PREVIEW_FAILED", Message: "Failed to generate device preview"}})
+		return
+	}
+
+	c.Header("Content-Type", "image/jpeg")
+	c.Header("Cache-Control", "private, max-age=86400")
+	c.File(previewPath)
+}
+
 // GetPhotoFramePreview 获取相框预览图
 // @Summary 获取相框预览图
 // @Description 返回为相框预览生成的 480x640 JPEG 图片
@@ -728,6 +787,55 @@ func (h *PhotoHandler) generateFramePreviewFile(photo *model.Photo, targetWidth,
 	}
 
 	return cachePath, nil
+}
+
+func (h *PhotoHandler) generateDevicePreviewFile(photo *model.Photo, profileName string) (string, error) {
+	profile, ok := util.GetRenderProfile(profileName)
+	if !ok {
+		return "", fmt.Errorf("unsupported render profile: %s", profileName)
+	}
+
+	fileInfo, err := os.Stat(photo.FilePath)
+	if err != nil {
+		return "", fmt.Errorf("stat photo file: %w", err)
+	}
+
+	title, subtitle := buildPhotoDisplayText(photo)
+	cacheKey := fmt.Sprintf(
+		"device-preview:v1:%s:%d:%d:%d:%s:%s:%s",
+		photo.FilePath,
+		fileInfo.Size(),
+		fileInfo.ModTime().UnixNano(),
+		photo.UpdatedAt.UnixNano(),
+		profile.Name,
+		title,
+		subtitle,
+	)
+
+	cacheJPG := util.GenerateDerivedImagePath(cacheKey)
+	baseName := strings.TrimSuffix(filepath.Base(cacheJPG), filepath.Ext(cacheJPG))
+	cacheDir := filepath.Join(h.getThumbnailRoot(), "device-previews", filepath.Dir(cacheJPG))
+	ditherPreviewPath := filepath.Join(cacheDir, baseName+"-preview.jpg")
+	previewPath := filepath.Join(cacheDir, baseName+"-frame.jpg")
+	binPath := filepath.Join(cacheDir, baseName+".bin")
+	headerPath := filepath.Join(cacheDir, baseName+".h")
+
+	if _, err := os.Stat(ditherPreviewPath); err == nil {
+		return ditherPreviewPath, nil
+	}
+
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return "", fmt.Errorf("create device preview directory: %w", err)
+	}
+
+	if err := util.GenerateDisplayPreview(photo.FilePath, previewPath, profile.Width, profile.Height, title, subtitle); err != nil {
+		return "", fmt.Errorf("generate display preview: %w", err)
+	}
+
+	if _, _, err := util.BuildRenderArtifacts(previewPath, profile, ditherPreviewPath, binPath, headerPath); err != nil {
+		return "", fmt.Errorf("build render artifacts: %w", err)
+	}
+	return ditherPreviewPath, nil
 }
 
 func (h *PhotoHandler) getThumbnailRoot() string {

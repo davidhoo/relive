@@ -129,6 +129,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 			photoAuth.GET("/photos/:id/image", handlers.Photo.GetPhotoImage)
 			photoAuth.GET("/photos/:id/thumbnail", handlers.Photo.GetPhotoThumbnail)
 			photoAuth.GET("/photos/:id/frame-preview", handlers.Photo.GetPhotoFramePreview)
+			photoAuth.GET("/photos/:id/device-preview", handlers.Photo.GetPhotoDevicePreview)
 			photoAuth.GET("/display/items/:id/preview", handlers.Display.GetDailyDisplayPreview)
 			photoAuth.GET("/display/assets/:id/preview", handlers.Display.GetDailyDisplayAssetPreview)
 			photoAuth.GET("/display/assets/:id/bin", handlers.Display.GetDailyDisplayAssetBin)

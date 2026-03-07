@@ -225,62 +225,92 @@
       </div>
     </el-card>
     <el-dialog
-      v-model="ditherPreviewVisible"
-      title="设备预览"
-      width="min(720px, calc(100vw - 24px))"
+      v-model="previewVisible"
+      class="preview-dialog"
+      width="min(760px, calc(100vw - 24px))"
       align-center
+      :show-close="false"
       destroy-on-close
-      @closed="resetDitherPreview"
+      @closed="resetPreview"
     >
-      <div v-if="ditherPreviewItem" class="dither-preview-body">
-        <div class="dither-preview-toolbar" v-if="ditherPreviewItem.assets.length > 1">
-          <el-tag
-            v-for="asset in ditherPreviewItem.assets"
-            :key="asset.id"
-            :type="asset.id === ditherPreviewAsset?.id ? 'primary' : 'info'"
-            effect="plain"
-            class="dither-preview-tag"
-            @click="selectDitherAsset(asset.id)"
-          >
-            {{ asset.render_profile }}
-          </el-tag>
+      <div v-if="previewPhoto || previewAsset" class="unified-preview-body">
+        <div class="preview-titlebar">
+          <div class="unified-preview-toolbar" v-if="previewPhoto && availablePreviewProfiles.length">
+            <button
+              type="button"
+              class="preview-mode-btn"
+              :class="{ active: previewMode === 'frame' }"
+              @click="previewMode = 'frame'"
+            >
+              全彩
+            </button>
+            <button
+              v-for="profile in availablePreviewProfiles"
+              :key="profile.key"
+              type="button"
+              class="preview-mode-btn"
+              :class="{ active: previewMode === 'device' && previewProfileName === profile.profileName }"
+              @click="selectPreviewProfile(profile.profileName, profile.assetId)"
+            >
+              {{ profile.label }}
+            </button>
+          </div>
         </div>
-        <el-image
-          v-if="ditherPreviewAsset"
-          class="dither-preview-image"
-          :src="resolveProtectedUrl(ditherPreviewAsset.dither_preview_url || '')"
-          :alt="ditherPreviewItem.photo?.caption || getFileName(ditherPreviewItem.photo?.file_path || '')"
-          fit="contain"
-        />
-      </div>
-    </el-dialog>
 
-    <el-dialog
-      v-model="framePreviewVisible"
-      title="相框预览"
-      width="min(680px, calc(100vw - 24px))"
-      align-center
-      destroy-on-close
-      @closed="resetFramePreview"
-    >
-      <div v-if="framePreviewPhoto" class="frame-preview-body">
-        <div class="frame-preview-frame">
-          <div class="frame-preview-stage">
-            <el-image
-              class="frame-preview-image"
-              :src="getPhotoFramePreviewUrl(framePreviewPhoto.id, framePreviewPhoto.updated_at)"
-              :alt="getDisplayTitle(framePreviewPhoto)"
-              fit="cover"
-            />
-            <div class="frame-preview-info">
-              <div class="frame-preview-title">
-                {{ getDisplayTitle(framePreviewPhoto) }}
+        <div class="frame-preview-body">
+          <div class="frame-preview-frame">
+            <div v-if="previewMode === 'device' && (previewAsset || previewProfileName)" class="dither-preview-stage">
+              <div class="dither-preview-canvas">
+                <el-image
+                  class="dither-preview-image"
+                  :src="previewDeviceImageUrl"
+                  :alt="previewPhoto?.caption || getFileName(previewPhoto?.file_path || '')"
+                  fit="fill"
+                />
               </div>
-              <div class="frame-preview-subtitle">
-                {{ getDisplaySubtitle(framePreviewPhoto) }}
+            </div>
+            <div v-else-if="previewPhoto" class="frame-preview-stage">
+              <div class="frame-preview-canvas">
+                <el-image
+                  class="frame-preview-image"
+                  :src="getPhotoFramePreviewUrl(previewPhoto.id, previewPhoto.updated_at)"
+                  :alt="getDisplayTitle(previewPhoto)"
+                  fit="cover"
+                />
+                <div class="frame-preview-info">
+                  <div class="frame-preview-title">
+                    {{ getDisplayTitle(previewPhoto) }}
+                  </div>
+                  <div class="frame-preview-subtitle">
+                    {{ getDisplaySubtitle(previewPhoto) }}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
+        </div>
+
+        <div v-if="previewMode === 'device' && (currentPreviewBinUrl || currentPreviewHeaderUrl)" class="preview-downloads">
+          <a
+            v-if="currentPreviewBinUrl"
+            class="preview-download-link"
+            :href="currentPreviewBinUrl"
+            target="_blank"
+            rel="noreferrer"
+            download
+          >
+            下载 bin
+          </a>
+          <a
+            v-if="currentPreviewHeaderUrl"
+            class="preview-download-link"
+            :href="currentPreviewHeaderUrl"
+            target="_blank"
+            rel="noreferrer"
+            download
+          >
+            下载 header
+          </a>
         </div>
       </div>
     </el-dialog>
@@ -295,7 +325,7 @@ import SectionHeader from '@/components/SectionHeader.vue'
 import { Calendar, Clock, Files, Picture, View } from '@element-plus/icons-vue'
 import { displayStrategyApi, defaultDisplayStrategyConfig } from '@/api/config'
 import type { DisplayPreviewResponse, DisplayStrategyConfig } from '@/api/config'
-import { dailyDisplayApi, type DailyDisplayBatch } from '@/api/display'
+import { dailyDisplayApi, type DailyDisplayBatch, type RenderProfileOption } from '@/api/display'
 import type { Photo } from '@/types/photo'
 import { useUserStore } from '@/stores/user'
 
@@ -316,11 +346,13 @@ const batchHistory = ref<DailyDisplayBatch[]>([])
 const batchLoading = ref(false)
 const historyLoading = ref(false)
 const batchGenerating = ref(false)
-const ditherPreviewVisible = ref(false)
-const ditherPreviewItem = ref<DailyDisplayBatch['items'][number] | null>(null)
-const ditherPreviewAsset = ref<DailyDisplayBatch['items'][number]['assets'][number] | null>(null)
-const framePreviewVisible = ref(false)
-const framePreviewPhoto = ref<Photo | null>(null)
+const previewVisible = ref(false)
+const previewPhoto = ref<Photo | null>(null)
+const previewAssets = ref<DailyDisplayBatch['items'][number]['assets']>([])
+const previewAsset = ref<DailyDisplayBatch['items'][number]['assets'][number] | null>(null)
+const previewMode = ref<'frame' | 'device'>('frame')
+const renderProfiles = ref<RenderProfileOption[]>([])
+const previewProfileName = ref<string | null>(null)
 let previewTimer: number | undefined
 
 const previewSupported = computed(() => supportedAlgorithms.includes(form.value.algorithm))
@@ -344,6 +376,43 @@ const emptyPreviewText = computed(() => {
   }
   return '没有找到符合当前策略条件的照片'
 })
+const availablePreviewProfiles = computed(() => {
+  if (previewAssets.value.length > 0) {
+    return previewAssets.value.map((asset) => ({
+      key: `asset-${asset.id}`,
+      label: asset.render_profile,
+      profileName: asset.render_profile,
+      assetId: asset.id,
+    }))
+  }
+  return renderProfiles.value
+    .filter((profile) => profile.width === 480 && profile.height === 800)
+    .map((profile) => ({
+      key: profile.name,
+      label: profile.name,
+      profileName: profile.name,
+      assetId: undefined,
+    }))
+})
+
+const previewDeviceImageUrl = computed(() => {
+  if (previewAsset.value?.dither_preview_url) {
+    return resolveProtectedUrl(previewAsset.value.dither_preview_url)
+  }
+  if (!previewPhoto.value || !previewProfileName.value) return ''
+  return getPhotoDevicePreviewUrl(previewPhoto.value.id, previewProfileName.value, previewPhoto.value.updated_at)
+})
+
+const currentPreviewBinUrl = computed(() => {
+  if (!previewAsset.value?.bin_url) return ''
+  return resolveProtectedUrl(previewAsset.value.bin_url)
+})
+
+const currentPreviewHeaderUrl = computed(() => {
+  if (!previewAsset.value?.header_url) return ''
+  return resolveProtectedUrl(previewAsset.value.header_url)
+})
+
 
 const getPhotoAssetUrl = (photoId: number, asset: 'thumbnail' | 'frame-preview', version?: string) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
@@ -358,6 +427,16 @@ const getPhotoAssetUrl = (photoId: number, asset: 'thumbnail' | 'frame-preview',
 const getPhotoThumbnailUrl = (photoId: number, version?: string) => getPhotoAssetUrl(photoId, 'thumbnail', version)
 
 const getPhotoFramePreviewUrl = (photoId: number, version?: string) => getPhotoAssetUrl(photoId, 'frame-preview', version)
+const getPhotoDevicePreviewUrl = (photoId: number, profileName: string, version?: string) => {
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
+  const token = userStore.token
+  const params = new URLSearchParams()
+  params.set('profile', profileName)
+  if (token) params.set('token', token)
+  if (version) params.set('v', version)
+  return `${baseUrl}/photos/${photoId}/device-preview?${params.toString()}`
+}
+
 
 const getFileName = (filePath: string) => filePath.split('/').pop() || filePath
 
@@ -388,28 +467,35 @@ const resolveProtectedUrl = (path: string) => {
 }
 
 const openDitherPreview = (item: DailyDisplayBatch['items'][number]) => {
-  ditherPreviewItem.value = item
-  ditherPreviewAsset.value = item.assets[0] || null
-  ditherPreviewVisible.value = true
+  previewPhoto.value = item.photo || null
+  previewAssets.value = item.assets || []
+  previewAsset.value = item.assets[0] || null
+  previewProfileName.value = previewAsset.value?.render_profile || null
+  previewMode.value = previewAsset.value ? 'device' : 'frame'
+  previewVisible.value = true
 }
 
-const selectDitherAsset = (assetId: number) => {
-  if (!ditherPreviewItem.value) return
-  ditherPreviewAsset.value = ditherPreviewItem.value.assets.find((asset) => asset.id === assetId) || ditherPreviewAsset.value
-}
-
-const resetDitherPreview = () => {
-  ditherPreviewItem.value = null
-  ditherPreviewAsset.value = null
+const selectPreviewProfile = (profileName: string, assetId?: number) => {
+  previewProfileName.value = profileName
+  previewAsset.value = assetId ? previewAssets.value.find((asset) => asset.id === assetId) || null : null
+  previewMode.value = 'device'
 }
 
 const openFramePreview = (photo: Photo) => {
-  framePreviewPhoto.value = photo
-  framePreviewVisible.value = true
+  previewPhoto.value = photo
+  previewAssets.value = []
+  previewAsset.value = null
+  previewProfileName.value = null
+  previewMode.value = 'frame'
+  previewVisible.value = true
 }
 
-const resetFramePreview = () => {
-  framePreviewPhoto.value = null
+const resetPreview = () => {
+  previewPhoto.value = null
+  previewAssets.value = []
+  previewAsset.value = null
+  previewProfileName.value = null
+  previewMode.value = 'frame'
 }
 
 const toPreviewDateValue = (date: Date) => {
@@ -602,10 +688,19 @@ watch(
   }
 )
 
+const loadRenderProfiles = async () => {
+  try {
+    renderProfiles.value = await dailyDisplayApi.getRenderProfiles()
+  } catch (error) {
+    console.error('Failed to load render profiles:', error)
+  }
+}
+
 onMounted(() => {
   loadConfig()
   loadDailyBatch()
   loadBatchHistory()
+  loadRenderProfiles()
 })
 
 onUnmounted(() => {
@@ -911,7 +1006,7 @@ onUnmounted(() => {
 .history-title {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   width: 100%;
   padding-right: 8px;
 }
@@ -921,44 +1016,119 @@ onUnmounted(() => {
   color: #909399;
 }
 
-.dither-preview-body {
+:deep(.preview-dialog .el-dialog) {
+  padding: 0 !important;
+  overflow: hidden;
+}
+
+:deep(.preview-dialog .el-dialog__header) {
+  display: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  height: 0 !important;
+  min-height: 0 !important;
+}
+
+:deep(.preview-dialog .el-dialog__body) {
+  padding: 0 !important;
+}
+
+.unified-preview-body {
+  --device-preview-width: min(480px, calc(100vw - 120px));
+  --device-shell-padding: clamp(18px, 2.8vw, 26px);
   display: grid;
+  justify-items: center;
   gap: 16px;
 }
 
-.dither-preview-toolbar {
+.preview-titlebar {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px 16px 0;
+}
+
+.unified-preview-toolbar {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: 8px;
+}
+
+.preview-mode-btn {
+  border: 1px solid var(--color-border);
+  background: #fff;
+  color: var(--color-text-secondary);
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.preview-mode-btn.active {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
+  box-shadow: 0 8px 18px rgba(0, 184, 148, 0.18);
 }
 
 .dither-preview-tag {
   cursor: pointer;
 }
 
+.dither-preview-stage {
+  --preview-stage-padding: 14px;
+  position: relative;
+  z-index: 1;
+  width: calc(var(--device-preview-width) + (var(--preview-stage-padding) * 2));
+  height: calc((var(--device-preview-width) * 5 / 3) + (var(--preview-stage-padding) * 2));
+  padding: var(--preview-stage-padding);
+  overflow: hidden;
+  border-radius: 24px;
+  background: linear-gradient(180deg, #fbfaf6 0%, #f1eadf 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(180, 157, 126, 0.28),
+    inset 0 16px 24px rgba(255, 255, 255, 0.82),
+    0 18px 34px rgba(15, 23, 42, 0.08);
+  box-sizing: border-box;
+}
+
+.dither-preview-canvas {
+  width: var(--device-preview-width);
+  height: calc(var(--device-preview-width) * 5 / 3);
+  overflow: hidden;
+  border-radius: 14px;
+  background: #f5f7fa;
+}
+
 .dither-preview-image {
   width: 100%;
-  min-height: 420px;
+  height: 100%;
   background: #f5f7fa;
-  border-radius: 12px;
 }
 
 .dither-preview-image :deep(img) {
   width: 100%;
-  height: auto;
-  object-fit: contain;
+  height: 100%;
+  object-fit: fill;
 }
 
 .frame-preview-body {
-  --frame-display-width: min(480px, calc(100vw - 168px));
+  --frame-canvas-width: min(480px, calc(100vw - 168px));
   --frame-shell-padding: clamp(18px, 2.8vw, 26px);
+  --preview-stage-padding: 14px;
   display: flex;
   justify-content: center;
 }
 
 .frame-preview-frame {
   position: relative;
-  width: calc(var(--frame-display-width) + (var(--frame-shell-padding) * 2));
+  width: calc(var(--frame-canvas-width) + (var(--preview-stage-padding) * 2) + (var(--frame-shell-padding) * 2));
   padding: var(--frame-shell-padding);
   border-radius: 34px;
   background:
@@ -997,25 +1167,34 @@ onUnmounted(() => {
 .frame-preview-stage {
   position: relative;
   z-index: 1;
-  width: var(--frame-display-width);
-  aspect-ratio: 3 / 5;
+  width: calc(var(--frame-canvas-width) + (var(--preview-stage-padding) * 2));
+  height: calc((var(--frame-canvas-width) * 5 / 3) + (var(--preview-stage-padding) * 2));
   display: flex;
-  flex-direction: column;
   overflow: hidden;
-  padding: 14px;
+  padding: var(--preview-stage-padding);
   border-radius: 24px;
   background: linear-gradient(180deg, #fbfaf6 0%, #f1eadf 100%);
   box-shadow:
     inset 0 0 0 1px rgba(180, 157, 126, 0.28),
     inset 0 16px 24px rgba(255, 255, 255, 0.82),
     0 18px 34px rgba(15, 23, 42, 0.08);
+  box-sizing: border-box;
+}
+
+.frame-preview-canvas {
+  width: var(--frame-canvas-width);
+  height: calc(var(--frame-canvas-width) * 5 / 3);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 14px;
+  background: #f5f7fa;
 }
 
 .frame-preview-image {
   width: 100%;
   aspect-ratio: 3 / 4;
   flex: 0 0 auto;
-  border-radius: 14px 14px 0 0;
   background: #f5f7fa;
 }
 
@@ -1061,6 +1240,36 @@ onUnmounted(() => {
   margin-top: 8px;
 }
 
+.preview-downloads {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: -4px;
+  flex-wrap: wrap;
+}
+
+.preview-download-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--color-primary);
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+  text-decoration: none;
+  transition: all var(--transition-fast);
+}
+
+.preview-download-link:hover {
+  border-color: var(--color-primary);
+  box-shadow: 0 8px 18px rgba(0, 184, 148, 0.12);
+}
+
 @media (max-width: 960px) {
   .preview-layout {
     grid-template-columns: 1fr;
@@ -1068,8 +1277,13 @@ onUnmounted(() => {
 }
 
 @media (max-width: 640px) {
+  .unified-preview-body {
+    --device-preview-width: min(480px, calc(100vw - 96px));
+    --device-shell-padding: 16px;
+  }
+
   .frame-preview-body {
-    --frame-display-width: min(480px, calc(100vw - 112px));
+    --frame-canvas-width: min(480px, calc(100vw - 112px));
     --frame-shell-padding: 16px;
   }
 }

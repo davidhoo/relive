@@ -42,6 +42,7 @@ const (
 	displayCanvasHeight   = 800
 	displayPhotoHeight    = 640
 	displayInfoHeight     = 160
+	infoBinaryThreshold   = 235
 	infoHorizontalPadding = 24
 	titleFontSize         = 22
 	subtitleFontSize      = 18
@@ -505,14 +506,49 @@ func quantizeToPalette(img image.Image, profile RenderProfile) []uint8 {
 		return nil
 	}
 
+	photoHeight := displayPhotoHeightForProfile(height)
+	if photoHeight <= 0 {
+		return quantizeDirect(img, profile.Palette)
+	}
+	if photoHeight >= height {
+		switch profile.DitherMode {
+		case "floyd_steinberg":
+			return quantizeFloydSteinberg(img, profile.Palette)
+		case "ordered":
+			fallthrough
+		default:
+			return quantizeOrdered(img, profile.Palette)
+		}
+	}
+
+	photoRect := image.Rect(bounds.Min.X, bounds.Min.Y, bounds.Min.X+width, bounds.Min.Y+photoHeight)
+	infoRect := image.Rect(bounds.Min.X, bounds.Min.Y+photoHeight, bounds.Min.X+width, bounds.Min.Y+height)
+
+	var photoIndexed []uint8
 	switch profile.DitherMode {
 	case "floyd_steinberg":
-		return quantizeFloydSteinberg(img, profile.Palette)
+		photoIndexed = quantizeFloydSteinbergRegion(img, profile.Palette, photoRect)
 	case "ordered":
 		fallthrough
 	default:
-		return quantizeOrdered(img, profile.Palette)
+		photoIndexed = quantizeOrderedRegion(img, profile.Palette, photoRect)
 	}
+	infoIndexed := quantizeInfoRegionBlackWhite(img, profile.Palette, infoRect)
+	return append(photoIndexed, infoIndexed...)
+}
+
+func displayPhotoHeightForProfile(totalHeight int) int {
+	if totalHeight <= 0 {
+		return 0
+	}
+	photoHeight := int(math.Round(float64(totalHeight) * float64(displayPhotoHeight) / float64(displayCanvasHeight)))
+	if photoHeight < 0 {
+		return 0
+	}
+	if photoHeight > totalHeight {
+		return totalHeight
+	}
+	return photoHeight
 }
 
 var bayer4 = [4][4]float64{
@@ -523,13 +559,16 @@ var bayer4 = [4][4]float64{
 }
 
 func quantizeOrdered(img image.Image, palette []color.NRGBA) []uint8 {
-	bounds := img.Bounds()
-	width := bounds.Dx()
-	height := bounds.Dy()
+	return quantizeOrderedRegion(img, palette, img.Bounds())
+}
+
+func quantizeOrderedRegion(img image.Image, palette []color.NRGBA, rect image.Rectangle) []uint8 {
+	width := rect.Dx()
+	height := rect.Dy()
 	indexed := make([]uint8, width*height)
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
-			current := color.NRGBAModel.Convert(img.At(bounds.Min.X+x, bounds.Min.Y+y)).(color.NRGBA)
+			current := color.NRGBAModel.Convert(img.At(rect.Min.X+x, rect.Min.Y+y)).(color.NRGBA)
 			shift := (bayer4[y%4][x%4] - 7.5) * 6
 			current.R = clampByte(float64(current.R) + shift)
 			current.G = clampByte(float64(current.G) + shift)
@@ -541,9 +580,12 @@ func quantizeOrdered(img image.Image, palette []color.NRGBA) []uint8 {
 }
 
 func quantizeFloydSteinberg(img image.Image, palette []color.NRGBA) []uint8 {
-	bounds := img.Bounds()
-	width := bounds.Dx()
-	height := bounds.Dy()
+	return quantizeFloydSteinbergRegion(img, palette, img.Bounds())
+}
+
+func quantizeFloydSteinbergRegion(img image.Image, palette []color.NRGBA, rect image.Rectangle) []uint8 {
+	width := rect.Dx()
+	height := rect.Dy()
 	indexed := make([]uint8, width*height)
 	r := make([][]float64, height)
 	g := make([][]float64, height)
@@ -553,7 +595,7 @@ func quantizeFloydSteinberg(img image.Image, palette []color.NRGBA) []uint8 {
 		g[y] = make([]float64, width)
 		b[y] = make([]float64, width)
 		for x := 0; x < width; x++ {
-			c := color.NRGBAModel.Convert(img.At(bounds.Min.X+x, bounds.Min.Y+y)).(color.NRGBA)
+			c := color.NRGBAModel.Convert(img.At(rect.Min.X+x, rect.Min.Y+y)).(color.NRGBA)
 			r[y][x] = float64(c.R)
 			g[y][x] = float64(c.G)
 			b[y][x] = float64(c.B)
@@ -575,6 +617,48 @@ func quantizeFloydSteinberg(img image.Image, palette []color.NRGBA) []uint8 {
 		}
 	}
 	return indexed
+}
+
+func quantizeDirect(img image.Image, palette []color.NRGBA) []uint8 {
+	return quantizeDirectRegion(img, palette, img.Bounds())
+}
+
+func quantizeDirectRegion(img image.Image, palette []color.NRGBA, rect image.Rectangle) []uint8 {
+	width := rect.Dx()
+	height := rect.Dy()
+	indexed := make([]uint8, width*height)
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			current := color.NRGBAModel.Convert(img.At(rect.Min.X+x, rect.Min.Y+y)).(color.NRGBA)
+			indexed[y*width+x] = uint8(nearestPaletteIndex(current, palette))
+		}
+	}
+	return indexed
+}
+
+func quantizeInfoRegionBlackWhite(img image.Image, palette []color.NRGBA, rect image.Rectangle) []uint8 {
+	width := rect.Dx()
+	height := rect.Dy()
+	indexed := make([]uint8, width*height)
+	whiteIndex := nearestPaletteIndex(color.NRGBA{R: 255, G: 255, B: 255, A: 255}, palette)
+	blackIndex := nearestPaletteIndex(color.NRGBA{R: 0, G: 0, B: 0, A: 255}, palette)
+
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			current := color.NRGBAModel.Convert(img.At(rect.Min.X+x, rect.Min.Y+y)).(color.NRGBA)
+			if infoLuminance(current) >= infoBinaryThreshold {
+				indexed[y*width+x] = uint8(whiteIndex)
+				continue
+			}
+			indexed[y*width+x] = uint8(blackIndex)
+		}
+	}
+
+	return indexed
+}
+
+func infoLuminance(c color.NRGBA) float64 {
+	return 0.299*float64(c.R) + 0.587*float64(c.G) + 0.114*float64(c.B)
 }
 
 func spreadError(r, g, b [][]float64, x, y, width, height int, errR, errG, errB, factor float64) {
