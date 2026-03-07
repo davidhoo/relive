@@ -148,8 +148,8 @@
           </div>
           <div class="storage-size">{{ formatSize(stats?.database_size) }}</div>
           <div class="storage-footer">
-            <div class="storage-label">启动时间</div>
-            <div class="storage-count">{{ formatTime(stats?.started_at) }}</div>
+            <div class="storage-label">最后修改时间</div>
+            <div class="storage-count">{{ formatTime(stats?.database_updated_at) }}</div>
           </div>
         </div>
       </el-col>

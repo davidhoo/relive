@@ -119,6 +119,7 @@ func (h *SystemHandler) Stats(c *gin.Context) {
 
 	// 获取数据库文件大小
 	stats.DatabaseSize = h.getDatabaseSize()
+	stats.DatabaseUpdatedAt = h.getDatabaseUpdatedAt()
 
 	// 获取 Go 版本
 	stats.GoVersion = runtime.Version()
@@ -160,6 +161,41 @@ func (h *SystemHandler) getDatabaseSize() int64 {
 	}
 
 	return totalSize
+}
+
+func (h *SystemHandler) getDatabaseUpdatedAt() *time.Time {
+	if h.cfg == nil {
+		return nil
+	}
+
+	if strings.ToLower(strings.TrimSpace(h.cfg.Database.Type)) != "sqlite" {
+		return nil
+	}
+
+	dbPath := strings.TrimSpace(h.cfg.Database.Path)
+	if dbPath == "" {
+		dbPath = "./data/relive.db"
+	}
+
+	dbPath = filepath.Clean(dbPath)
+
+	var latest time.Time
+	for _, path := range []string{dbPath, dbPath + "-wal"} {
+		fileInfo, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		if fileInfo.ModTime().After(latest) {
+			latest = fileInfo.ModTime()
+		}
+	}
+
+	if latest.IsZero() {
+		return nil
+	}
+
+	updatedAt := latest
+	return &updatedAt
 }
 
 // Environment 获取系统环境信息

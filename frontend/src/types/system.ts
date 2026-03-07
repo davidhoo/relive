@@ -8,8 +8,8 @@ export interface SystemStats {
   total_displays: number
   storage_size?: number
   database_size?: number
+  database_updated_at?: string
   go_version?: string
-  started_at?: string
   uptime?: number
 }
 

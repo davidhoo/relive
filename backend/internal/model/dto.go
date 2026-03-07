@@ -306,11 +306,12 @@ type SystemStatsResponse struct {
 	TotalDevices     int64     `json:"total_devices"`
 	OnlineDevices    int64     `json:"online_devices"`
 	TotalDisplays    int64     `json:"total_displays"`
-	StorageSize      int64     `json:"storage_size"`  // 存储空间（字节）
-	DatabaseSize     int64     `json:"database_size"` // 数据库大小（字节）
-	GoVersion        string    `json:"go_version"`    // Go 版本
-	Uptime           int64     `json:"uptime"`        // 运行时长（秒）
-	Timestamp        time.Time `json:"timestamp"`     // 统计时间
+	StorageSize      int64      `json:"storage_size"`                  // 存储空间（字节）
+	DatabaseSize     int64      `json:"database_size"`                 // 数据库大小（字节）
+	DatabaseUpdatedAt *time.Time `json:"database_updated_at,omitempty"` // 数据库最后修改时间
+	GoVersion        string     `json:"go_version"`                    // Go 版本
+	Uptime           int64      `json:"uptime"`                        // 运行时长（秒）
+	Timestamp        time.Time  `json:"timestamp"`                     // 统计时间
 }
 
 // SystemEnvironmentResponse 系统环境信息响应
