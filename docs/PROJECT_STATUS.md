@@ -61,7 +61,7 @@
 - ✅ OFFLINE_WORKFLOW.md - 离线工作流 ⭐（1,800 行）
 - ✅ IMAGE_PREPROCESSING.md - 图片预处理（656 行）
 - ✅ EXIF_HANDLING.md - EXIF 处理（550 行）
-- ✅ ESP32_PROTOCOL.md - ESP32 通信协议（780 行）
+- ✅ DEVICE_PROTOCOL.md - 设备通信协议（780 行）
 - ✅ DEPLOYMENT.md - 部署指南（1,150 行）
 - ✅ DEVELOPMENT.md - 开发指南（920 行）
 - ✅ TESTING.md - 测试策略（1,080 行）
@@ -286,7 +286,7 @@
 - JSON 库: ArduinoJson
 
 #### 参考资源
-- [ESP32_PROTOCOL.md](ESP32_PROTOCOL.md) - 通信协议设计
+- [DEVICE_PROTOCOL.md](DEVICE_PROTOCOL.md) - 通信协议设计
 - [InkTime ESP32 代码](https://github.com/dai-hongtao/InkTime) - 参考实现
 
 ---

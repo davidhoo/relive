@@ -37,7 +37,7 @@ docs/
 ├── ARCHITECTURE.md          # 架构设计文档
 ├── API_DESIGN.md            # API 接口设计
 ├── DATABASE_SCHEMA.md       # 数据库设计
-├── ESP32_PROTOCOL.md        # ESP32 通信协议
+├── DEVICE_PROTOCOL.md       # 设备通信协议
 ├── SCORING_ALGORITHM.md     # 评分算法详细设计
 ├── DEVELOPMENT_GUIDE.md     # 开发指南
 └── CHANGELOG.md             # 变更日志
@@ -55,7 +55,7 @@ docs/
 
 **Phase 3：实现阶段**
 5. `SCORING_ALGORITHM.md` - 算法详细设计
-6. `ESP32_PROTOCOL.md` - 硬件通信协议
+6. `DEVICE_PROTOCOL.md` - 硬件通信协议
 7. `DEVELOPMENT_GUIDE.md` - 开发规范
 
 **Phase 4：迭代阶段**

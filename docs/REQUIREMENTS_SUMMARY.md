@@ -145,7 +145,7 @@
 ### 待创建文档
 - [ ] DATABASE_SCHEMA.md - 数据库详细设计
 - [ ] API_DESIGN.md - API 接口规范
-- [ ] ESP32_PROTOCOL.md - ESP32 通信协议
+- [ ] DEVICE_PROTOCOL.md - 设备通信协议
 - [ ] DEPLOYMENT.md - 部署指南
 
 ---

@@ -332,7 +332,7 @@ relive/
 │   ├── OFFLINE_WORKFLOW.md    # 离线工作流 ⭐ ✅
 │   ├── IMAGE_PREPROCESSING.md # 图片预处理 ✅
 │   ├── EXIF_HANDLING.md       # EXIF 处理策略 ✅
-│   ├── ESP32_PROTOCOL.md      # ESP32 通信协议 ✅
+│   ├── DEVICE_PROTOCOL.md     # 设备通信协议 ✅
 │   ├── DEPLOYMENT.md          # 部署指南 ✅
 │   ├── DEVELOPMENT.md         # 开发指南 ✅
 │   ├── TESTING.md             # 测试策略 ✅
@@ -385,9 +385,11 @@ relive/
 │   ├── tsconfig.json         # TypeScript 配置 ✅
 │   └── README.md             # 前端文档 ✅
 │
-├── esp32/                     # ESP32 固件 📋
-│   ├── src/
-│   └── platformio.ini
+├── devices/                   # 设备端代码 📋
+│   └── photo-frame/           # 墨水屏相册设备
+│       ├── protocol/          # 设备协议入口
+│       ├── common/            # 跨平台共享内容
+│       └── esp32/             # ESP32 平台实现
 │
 └── CHANGELOG.md               # 更新日志 ✅
 ```
@@ -715,7 +717,7 @@ go build -o relive-analyzer ./cmd/relive-analyzer
 | ~~DEPLOYMENT.md~~ | ✅ 已完成（见上方部署文档） | - |
 | DEVELOPMENT.md | 开发指南 | 🟢 P2 |
 | TESTING.md | 测试策略 | 🟢 P2 |
-| ESP32_PROTOCOL.md | ESP32 通信协议 | 🟡 P1 |
+| DEVICE_PROTOCOL.md | 设备通信协议 | 🟡 P1 |
 
 ---
 

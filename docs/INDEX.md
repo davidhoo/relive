@@ -40,7 +40,7 @@
 - [DEVELOPMENT.md](DEVELOPMENT.md) - 开发环境和规范
 - [TESTING.md](TESTING.md) - 测试策略和用例
 - [DEPLOYMENT.md](DEPLOYMENT.md) - 部署指南（Docker/NAS）
-- [ESP32_PROTOCOL.md](ESP32_PROTOCOL.md) - ESP32 通信协议
+- [DEVICE_PROTOCOL.md](DEVICE_PROTOCOL.md) - 设备通信协议
 
 ---
 
@@ -77,7 +77,7 @@
 |------|------|------|------|
 | [API_DESIGN.md](API_DESIGN.md) | RESTful API 设计（29个接口规范） | ~1,100 | ✅ |
 | [BACKEND_API.md](BACKEND_API.md) | 后端 API 文档（26个全部实现）| ~1,000 | ✅ v0.3.0 |
-| [ESP32_PROTOCOL.md](ESP32_PROTOCOL.md) | ESP32 通信协议 | ~780 | ✅ |
+| [DEVICE_PROTOCOL.md](DEVICE_PROTOCOL.md) | 设备通信协议 | ~780 | ✅ |
 
 #### 5. 数据处理
 
@@ -173,7 +173,7 @@
 3. 参考 [OFFLINE_WORKFLOW.md](OFFLINE_WORKFLOW.md) - 离线部署场景
 
 ### 我想开发 ESP32 固件
-1. 阅读 [ESP32_PROTOCOL.md](ESP32_PROTOCOL.md) - 通信协议
+1. 阅读 [DEVICE_PROTOCOL.md](DEVICE_PROTOCOL.md) - 通信协议
 2. 阅读 [API_DESIGN.md](API_DESIGN.md) - 展示相关 API
 
 ### 我想了解数据处理
@@ -194,7 +194,7 @@
 
 ### 待创建文档
 - **高优先级**：2 个（INDEX.md ✅、CHANGELOG.md）
-- **中优先级**：3 个（ESP32_PROTOCOL.md、DEPLOYMENT.md、DEVELOPMENT.md）
+- **中优先级**：3 个（DEVICE_PROTOCOL.md、DEPLOYMENT.md、DEVELOPMENT.md）
 - **低优先级**：1 个（TESTING.md）
 
 ### 文档质量评分

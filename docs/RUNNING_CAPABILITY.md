@@ -215,8 +215,10 @@ relive/
 │   ├── ANALYZER.md            # 离线工具文档
 │   └── ...
 │
-├── esp32/                     # ESP32 固件
-│   └── README.md              # 固件文档 ✅ NEW
+├── devices/                   # 设备端代码 ✅ NEW
+│   └── photo-frame/
+│       └── esp32/
+│           └── README.md      # ESP32 平台文档 ✅ NEW
 │
 ├── docker-compose.yml         # 容器编排 ✅ NEW
 ├── nginx.conf                 # Nginx 配置 ✅ NEW

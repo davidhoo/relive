@@ -225,7 +225,7 @@ type AIProvider interface {
 | DEPLOYMENT.md | ~1,150 | ✅ | 部署指南 |
 | DEVELOPMENT.md | ~920 | ✅ | 开发指南 |
 | TESTING.md | ~1,080 | ✅ | 测试策略 |
-| ESP32_PROTOCOL.md | ~780 | ✅ | ESP32 协议 |
+| DEVICE_PROTOCOL.md | ~780 | ✅ | 设备协议 |
 | **总计** | **~11,000** | **✅** | **完整** |
 
 ### API 文档（26个接口）

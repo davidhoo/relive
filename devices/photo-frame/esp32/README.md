@@ -1,8 +1,13 @@
-# Relive ESP32 固件
+# Relive Photo Frame for ESP32
+
+该目录用于存放 `photo-frame` 设备在 ESP32 平台上的固件实现。
 
 ## 概述
 
-ESP32 固件用于驱动墨水屏相框，从 Relive 后端获取照片并展示。
+ESP32 固件负责驱动墨水屏相框，从 Relive 后端获取照片并展示。
+
+与旧的顶层 `esp32/` 目录相比，这里只描述 **ESP32 平台特有** 的内容；
+设备通用协议已经统一收敛到 `../protocol/` 和 `../../../docs/DEVICE_PROTOCOL.md`。
 
 ## 硬件要求
 
@@ -19,7 +24,7 @@ ESP32 固件用于驱动墨水屏相框，从 Relive 后端获取照片并展示
 pip install platformio
 
 # 初始化项目
-cd esp32
+cd devices/photo-frame/esp32
 pio init --board esp32-s3-devkitc-1
 
 # 编译
@@ -32,10 +37,10 @@ pio run --target upload
 pio device monitor
 ```
 
-## 项目结构
+## 计划中的项目结构
 
-```
-esp32/
+```text
+devices/photo-frame/esp32/
 ├── src/
 │   └── main.cpp              # 主程序入口
 ├── lib/
@@ -49,7 +54,7 @@ esp32/
 └── README.md                 # 本文件
 ```
 
-## 核心功能
+## 平台职责
 
 ### 1. 硬件初始化
 - ESP32-S3 配置
@@ -62,11 +67,11 @@ esp32/
 - 图片渲染和显示
 - 局部刷新（可选）
 
-### 3. API 通信
-- 设备注册：`POST /esp32/register`
-- 心跳上报：`POST /esp32/heartbeat`
-- 获取照片：`GET /display/photo`
-- 记录展示：`POST /display/record`
+### 3. 设备通信接入
+- 设备激活 / 注册
+- 心跳上报
+- 获取照片
+- 记录展示
 
 ### 4. 电源管理
 - 深度睡眠模式
@@ -77,9 +82,19 @@ esp32/
 - 按钮手动刷新
 - LED 状态指示
 
-## 通信协议
+## 协议与接口
 
-详见：`../docs/ESP32_PROTOCOL.md`
+- 通用设备协议：`../../../docs/DEVICE_PROTOCOL.md`
+- 平台目录不再单独维护一份 ESP32 专属协议副本
+
+当前建议优先以以下接口口径对齐：
+
+- 设备注册：`POST /api/v1/devices/register`
+- 设备心跳：`POST /api/v1/devices/heartbeat`
+- 获取照片：`GET /api/v1/display/photo`
+- 记录展示：`POST /api/v1/display/record`
+
+兼容旧接口时，应在实现中单独注明 deprecated 行为。
 
 ## 配置
 
@@ -100,7 +115,7 @@ esp32/
 ## 开发计划
 
 ### Phase 1：基础功能（1 周）
-- [ ] 项目初始化（PlatformIO）
+- [ ] PlatformIO 工程初始化
 - [ ] WiFi 连接管理
 - [ ] HTTP 客户端封装
 - [ ] 设备注册和心跳
@@ -131,17 +146,16 @@ platform = espressif32
 board = esp32-s3-devkitc-1
 framework = arduino
 lib_deps =
-    GxEPD2              # 墨水屏驱动
-    ArduinoJson         # JSON 解析
-    WiFiManager         # WiFi 配置
-    HTTPClient          # HTTP 客户端
+    GxEPD2
+    ArduinoJson
+    WiFiManager
 ```
 
 ## 参考资源
 
-- [ESP32_PROTOCOL.md](../docs/ESP32_PROTOCOL.md) - 通信协议设计
-- [InkTime ESP32 代码](https://github.com/dai-hongtao/InkTime) - 参考实现
-- [GxEPD2 文档](https://github.com/ZinggJM/GxEPD2) - 墨水屏驱动库
+- `../../../docs/DEVICE_PROTOCOL.md` - 设备通信协议
+- <https://github.com/dai-hongtao/InkTime> - 参考实现
+- <https://github.com/ZinggJM/GxEPD2> - 墨水屏驱动库
 
 ## 故障排除
 
@@ -159,7 +173,3 @@ lib_deps =
 - 检查 API 地址配置
 - 确认网络连接
 - 验证 API Key
-
-## License
-
-MIT License
