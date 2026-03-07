@@ -117,6 +117,8 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 		deviceDisplay.Use(middleware.APIKeyAuth(services.Device))
 		{
 			deviceDisplay.GET("/display", handlers.Display.GetDeviceDisplay)
+			deviceDisplay.HEAD("/display.bin", handlers.Display.HeadDeviceDisplayBin)
+			deviceDisplay.GET("/display.bin", handlers.Display.GetDeviceDisplayBin)
 		}
 
 		// 分析器相关（API Key 认证，离线分析器使用）

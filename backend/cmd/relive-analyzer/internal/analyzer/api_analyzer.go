@@ -472,6 +472,12 @@ func (a *APIAnalyzer) processTask(ctx context.Context, task *model.AnalysisTask)
 		return err
 	}
 
+	caption, captionErr := provider.EnsureCaption(a.aiProvider, request, result)
+	if captionErr != nil {
+		logger.Warnf("Caption generation failed for photo %d, using fallback: %v", task.PhotoID, captionErr)
+	}
+	result.Caption = caption
+
 	// 构建分析结果
 	analysisResult := model.AnalysisResult{
 		PhotoID:      task.PhotoID,

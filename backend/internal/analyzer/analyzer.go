@@ -362,6 +362,12 @@ func (a *Analyzer) analyzePhoto(ctx context.Context, photo *model.Photo) error {
 		return fmt.Errorf("analyze: %w", err)
 	}
 
+	caption, captionErr := provider.EnsureCaption(a.provider, request, result)
+	if captionErr != nil {
+		logger.Warn(fmt.Sprintf("Caption generation failed for photo %d, using fallback: %v", photo.ID, captionErr))
+	}
+	result.Caption = caption
+
 	// Save result to database
 	if err := a.saveResult(photo.ID, result); err != nil {
 		return fmt.Errorf("save result: %w", err)

@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -14,43 +15,8 @@ import (
 )
 
 func (h *DisplayHandler) GetDeviceDisplay(c *gin.Context) {
-	deviceIDValue, exists := c.Get("device_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, model.Response{
-			Success: false,
-			Error:   &model.ErrorInfo{Code: "UNAUTHORIZED", Message: "Device context missing"},
-		})
-		return
-	}
-	deviceID, ok := deviceIDValue.(uint)
+	selection, ok := h.resolveDeviceDisplaySelection(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, model.Response{
-			Success: false,
-			Error:   &model.ErrorInfo{Code: "UNAUTHORIZED", Message: "Invalid device context"},
-		})
-		return
-	}
-
-	device, err := h.esp32Service.GetByID(deviceID)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, model.Response{
-			Success: false,
-			Error:   &model.ErrorInfo{Code: "UNAUTHORIZED", Message: "Device not found"},
-		})
-		return
-	}
-
-	renderProfile := device.RenderProfile
-	if device.DeviceType == "embedded" && renderProfile == "" {
-		renderProfile = util.DefaultRenderProfile()
-	}
-	selection, err := h.displayService.GetDeviceDisplay(deviceID, renderProfile)
-	if err != nil {
-		logger.Errorf("Get device display failed: %v", err)
-		c.JSON(http.StatusInternalServerError, model.Response{
-			Success: false,
-			Error:   &model.ErrorInfo{Code: "DISPLAY_FAILED", Message: err.Error()},
-		})
 		return
 	}
 
@@ -67,6 +33,101 @@ func (h *DisplayHandler) GetDeviceDisplay(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, model.Response{Success: true, Message: "Success", Data: resp})
+}
+
+func (h *DisplayHandler) GetDeviceDisplayBin(c *gin.Context) {
+	selection, ok := h.resolveDeviceDisplaySelection(c)
+	if !ok {
+		return
+	}
+
+	fullPath, ok := h.prepareDeviceDisplayBinResponse(c, selection)
+	if !ok {
+		return
+	}
+	c.File(fullPath)
+}
+
+func (h *DisplayHandler) HeadDeviceDisplayBin(c *gin.Context) {
+	selection, ok := h.resolveDeviceDisplaySelection(c)
+	if !ok {
+		return
+	}
+
+	if _, ok := h.prepareDeviceDisplayBinResponse(c, selection); !ok {
+		return
+	}
+
+	c.Status(http.StatusOK)
+}
+
+func (h *DisplayHandler) prepareDeviceDisplayBinResponse(c *gin.Context, selection *model.DeviceDisplaySelection) (string, bool) {
+	asset := selection.Asset
+	fullPath := filepath.Join(util.DisplayBatchRoot(h.cfg.Photos.ThumbnailPath), asset.BinPath)
+	fileInfo, err := os.Stat(fullPath)
+	if err != nil {
+		logger.Errorf("Get device display bin failed: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "DISPLAY_FAILED", Message: err.Error()},
+		})
+		return "", false
+	}
+
+	c.Header("Content-Type", "application/octet-stream")
+	c.Header("Content-Length", strconv.FormatInt(fileInfo.Size(), 10))
+	c.Header("X-Asset-ID", strconv.FormatUint(uint64(asset.ID), 10))
+	c.Header("X-Checksum", asset.Checksum)
+	c.Header("X-Photo-ID", strconv.FormatUint(uint64(selection.Item.PhotoID), 10))
+	c.Header("X-Render-Profile", asset.RenderProfile)
+	c.Header("X-Batch-Date", selection.BatchDate)
+	c.Header("X-Sequence", strconv.Itoa(selection.Sequence))
+
+	return fullPath, true
+}
+
+func (h *DisplayHandler) resolveDeviceDisplaySelection(c *gin.Context) (*model.DeviceDisplaySelection, bool) {
+	deviceIDValue, exists := c.Get("device_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "UNAUTHORIZED", Message: "Device context missing"},
+		})
+		return nil, false
+	}
+	deviceID, ok := deviceIDValue.(uint)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "UNAUTHORIZED", Message: "Invalid device context"},
+		})
+		return nil, false
+	}
+
+	device, err := h.esp32Service.GetByID(deviceID)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "UNAUTHORIZED", Message: "Device not found"},
+		})
+		return nil, false
+	}
+
+	renderProfile := device.RenderProfile
+	if device.DeviceType == "embedded" && renderProfile == "" {
+		renderProfile = util.DefaultRenderProfile()
+	}
+	selection, err := h.displayService.GetDeviceDisplay(deviceID, renderProfile)
+	if err != nil {
+		logger.Errorf("Get device display failed: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "DISPLAY_FAILED", Message: err.Error()},
+		})
+		return nil, false
+	}
+
+	return selection, true
 }
 
 func (h *DisplayHandler) GenerateDailyBatch(c *gin.Context) {
