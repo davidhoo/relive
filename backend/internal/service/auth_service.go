@@ -42,9 +42,9 @@ type JWTClaims struct {
 
 // authService 认证服务实现
 type authService struct {
-	userRepo   repository.UserRepository
-	cfg        *config.Config
-	jwtSecret  []byte
+	userRepo    repository.UserRepository
+	cfg         *config.Config
+	jwtSecret   []byte
 	tokenExpiry time.Duration
 }
 
@@ -197,6 +197,22 @@ func (s *authService) ValidateToken(tokenString string) (*JWTClaims, error) {
 	}
 
 	if claims, ok := token.Claims.(*JWTClaims); ok && token.Valid {
+		if claims.IssuedAt == nil {
+			return nil, ErrInvalidToken
+		}
+
+		user, err := s.userRepo.GetByID(claims.UserID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, ErrInvalidToken
+			}
+			return nil, ErrInvalidToken
+		}
+
+		if user.UpdatedAt.After(claims.IssuedAt.Time) {
+			return nil, ErrInvalidToken
+		}
+
 		return claims, nil
 	}
 

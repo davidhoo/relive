@@ -2,7 +2,6 @@ package handler
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"sync"
@@ -316,7 +315,6 @@ func (h *AIHandler) GetProgress(c *gin.Context) {
 		"status":           "idle",
 		"current_message":  "",
 		"provider":         progress.Provider,
-		"estimated_cost":   progress.EstimatedCost,
 	}
 
 	if task != nil {
@@ -474,14 +472,6 @@ func (h *AIHandler) GetProviderInfo(c *gin.Context) {
 		"max_concurrency": provider.MaxConcurrency(),
 		"supports_batch":  provider.SupportsBatch(),
 		"max_batch_size":  provider.MaxBatchSize(),
-	}
-
-	// 计算预估成本
-	progress, _ := svc.GetAnalyzeProgress()
-	if progress != nil && progress.EstimatedCost > 0 {
-		info["estimated_cost"] = fmt.Sprintf("¥%.2f", progress.EstimatedCost)
-	} else {
-		info["estimated_cost"] = "免费"
 	}
 
 	c.JSON(http.StatusOK, model.Response{

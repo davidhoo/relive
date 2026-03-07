@@ -231,7 +231,6 @@
             <el-button
               v-if="currentDevice.device_type === 'embedded'"
               type="primary"
-              plain
               @click="saveRenderProfile"
             >
               保存规格

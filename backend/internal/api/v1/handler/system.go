@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
+	"github.com/davidhoo/relive/internal/util"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/logger"
 	"github.com/davidhoo/relive/pkg/version"
@@ -285,41 +287,25 @@ func (h *SystemHandler) Reset(c *gin.Context) {
 	response := model.SystemResetResponse{
 		Success: true,
 	}
+	generatedFilesCleared := true
 
-	// 1. 清除数据库表数据（保留 cities 表，因为城市数据是离线地理编码的基础）
-	tables := []string{"display_records", "devices", "photos", "app_config", "api_keys"}
-	for _, table := range tables {
-		// 检查表是否存在（SQLite 中使用 sqlite_master 表查询）
-		var count int64
-		typeCheckQuery := "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?"
-		if err := h.db.Raw(typeCheckQuery, table).Scan(&count).Error; err != nil {
-			logger.Warnf("Failed to check if table %s exists: %v", table, err)
-			continue
-		}
-		if count == 0 {
-			logger.Infof("Table %s does not exist, skipping", table)
-			continue
-		}
-
-		if err := h.db.Exec(fmt.Sprintf("DELETE FROM %s", table)).Error; err != nil {
-			logger.Errorf("Failed to clear table %s: %v", table, err)
-			response.DatabaseCleared = false
-			c.JSON(http.StatusInternalServerError, model.Response{
-				Success: false,
-				Error: &model.ErrorInfo{
-					Code:    "DATABASE_ERROR",
-					Message: fmt.Sprintf("Failed to clear table %s", table),
-				},
-			})
-			return
-		}
-		logger.Infof("Table %s cleared", table)
+	if err := h.resetDatabaseState(); err != nil {
+		logger.Errorf("Failed to reset database state: %v", err)
+		response.DatabaseCleared = false
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "DATABASE_ERROR",
+				Message: "Failed to reset database state",
+			},
+		})
+		return
 	}
 	response.DatabaseCleared = true
 
 	// 2. 清除缩略图
 	if h.cfg.Photos.ThumbnailPath != "" {
-		if err := h.clearThumbnails(h.cfg.Photos.ThumbnailPath); err != nil {
+		if err := h.clearDirectoryContents(h.cfg.Photos.ThumbnailPath); err != nil {
 			logger.Errorf("Failed to clear thumbnails: %v", err)
 			response.ThumbnailsCleared = false
 		} else {
@@ -328,9 +314,18 @@ func (h *SystemHandler) Reset(c *gin.Context) {
 		}
 	}
 
-	// 3. 清除缓存目录（如果有）
-	cachePath := filepath.Join(h.cfg.Database.Path, "..", "cache")
-	if err := h.clearCache(cachePath); err != nil {
+	// 3. 清除展示批次文件
+	displayBatchPath := util.DisplayBatchRoot(h.cfg.Photos.ThumbnailPath)
+	if err := h.clearDirectoryContents(displayBatchPath); err != nil {
+		logger.Errorf("Failed to clear display batch assets: %v", err)
+		generatedFilesCleared = false
+	} else {
+		logger.Info("Display batch assets cleared")
+	}
+
+	// 4. 清除缓存目录（如果有）
+	cachePath := h.getCachePath()
+	if err := h.clearDirectoryContents(cachePath); err != nil {
 		logger.Errorf("Failed to clear cache: %v", err)
 		response.CacheCleared = false
 	} else {
@@ -338,17 +333,13 @@ func (h *SystemHandler) Reset(c *gin.Context) {
 		logger.Info("Cache cleared")
 	}
 
-	// 4. 重置用户密码为 admin/admin
-	if err := h.resetUserPassword(); err != nil {
-		logger.Errorf("Failed to reset user password: %v", err)
-		response.PasswordReset = false
-	} else {
-		response.PasswordReset = true
-		logger.Info("User password reset to admin/admin")
-	}
+	response.PasswordReset = true
 
 	response.Success = true
 	response.Message = "System has been reset to initial state. Please login with admin/admin"
+	if !response.ThumbnailsCleared || !response.CacheCleared || !generatedFilesCleared {
+		response.Message = "System data has been reset, but some generated files could not be removed completely"
+	}
 
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
@@ -357,60 +348,131 @@ func (h *SystemHandler) Reset(c *gin.Context) {
 	})
 }
 
-// clearThumbnails 清除缩略图目录
-func (h *SystemHandler) clearThumbnails(thumbnailPath string) error {
-	// 检查目录是否存在
-	if _, err := os.Stat(thumbnailPath); os.IsNotExist(err) {
-		// 目录不存在，无需清理
+func (h *SystemHandler) resetDatabaseState() error {
+	return h.db.Transaction(func(tx *gorm.DB) error {
+		for _, table := range h.resettableNames() {
+			exists, err := h.tableExists(tx, table)
+			if err != nil {
+				return fmt.Errorf("check table %s exists: %w", table, err)
+			}
+			if !exists {
+				continue
+			}
+
+			if err := tx.Exec(fmt.Sprintf("DELETE FROM %s", table)).Error; err != nil {
+				return fmt.Errorf("clear table %s: %w", table, err)
+			}
+			logger.Infof("Table %s cleared", table)
+		}
+
+		if err := h.resetSQLiteSequences(tx); err != nil {
+			return err
+		}
+
+		if err := h.resetUserPasswordTx(tx); err != nil {
+			return err
+		}
+
+		return nil
+	})
+}
+
+func (h *SystemHandler) resettableNames() []string {
+	return []string{
+		"result_queue",
+		"display_records",
+		"daily_display_assets",
+		"daily_display_items",
+		"device_playback_states",
+		"daily_display_batches",
+		"analysis_runtime_leases",
+		"devices",
+		"photos",
+		"app_config",
+		"api_keys",
+	}
+}
+
+func (h *SystemHandler) tableExists(tx *gorm.DB, table string) (bool, error) {
+	var count int64
+	typeCheckQuery := "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?"
+	if err := tx.Raw(typeCheckQuery, table).Scan(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (h *SystemHandler) resetSQLiteSequences(tx *gorm.DB) error {
+	if h.cfg == nil || strings.ToLower(strings.TrimSpace(h.cfg.Database.Type)) != "sqlite" {
 		return nil
 	}
 
-	// 读取目录内容
-	entries, err := os.ReadDir(thumbnailPath)
-	if err != nil {
-		return fmt.Errorf("read thumbnail directory: %w", err)
+	exists, err := h.tableExists(tx, "sqlite_sequence")
+	if err != nil || !exists {
+		return err
 	}
 
-	// 删除所有子目录和文件
-	for _, entry := range entries {
-		fullPath := filepath.Join(thumbnailPath, entry.Name())
-		if err := os.RemoveAll(fullPath); err != nil {
-			logger.Errorf("Failed to remove %s: %v", fullPath, err)
-			// 继续删除其他文件
-		}
+	tableNames := append(h.resettableNames(), "users")
+	placeholders := make([]string, 0, len(tableNames))
+	args := make([]interface{}, 0, len(tableNames))
+	for _, tableName := range tableNames {
+		placeholders = append(placeholders, "?")
+		args = append(args, tableName)
+	}
+
+	query := fmt.Sprintf("DELETE FROM sqlite_sequence WHERE name IN (%s)", strings.Join(placeholders, ","))
+	if err := tx.Exec(query, args...).Error; err != nil {
+		return fmt.Errorf("reset sqlite sequences: %w", err)
 	}
 
 	return nil
 }
 
-// clearCache 清除缓存目录
-func (h *SystemHandler) clearCache(cachePath string) error {
+// clearDirectoryContents 清除目录内所有文件和子目录，但保留目录本身
+func (h *SystemHandler) clearDirectoryContents(dirPath string) error {
 	// 检查目录是否存在
-	if _, err := os.Stat(cachePath); os.IsNotExist(err) {
+	if dirPath == "" {
+		return nil
+	}
+	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
 		// 目录不存在，无需清理
 		return nil
 	}
 
 	// 读取目录内容
-	entries, err := os.ReadDir(cachePath)
+	entries, err := os.ReadDir(dirPath)
 	if err != nil {
-		return fmt.Errorf("read cache directory: %w", err)
+		return fmt.Errorf("read directory: %w", err)
 	}
 
+	var removeErrs []error
 	// 删除所有子目录和文件
 	for _, entry := range entries {
-		fullPath := filepath.Join(cachePath, entry.Name())
+		fullPath := filepath.Join(dirPath, entry.Name())
 		if err := os.RemoveAll(fullPath); err != nil {
 			logger.Errorf("Failed to remove %s: %v", fullPath, err)
-			// 继续删除其他文件
+			removeErrs = append(removeErrs, fmt.Errorf("remove %s: %w", fullPath, err))
 		}
 	}
 
-	return nil
+	return errors.Join(removeErrs...)
 }
 
-// resetUserPassword 重置用户密码为 admin/admin
-func (h *SystemHandler) resetUserPassword() error {
+func (h *SystemHandler) getCachePath() string {
+	if h.cfg == nil {
+		return ""
+	}
+
+	dbPath := strings.TrimSpace(h.cfg.Database.Path)
+	if dbPath == "" {
+		dbPath = "./data/relive.db"
+	}
+
+	return filepath.Join(filepath.Dir(filepath.Clean(dbPath)), "cache")
+}
+
+// resetUserPasswordTx 重置用户密码为 admin/admin
+func (h *SystemHandler) resetUserPasswordTx(tx *gorm.DB) error {
 	// 生成默认密码哈希（admin）
 	PasswordHash, err := bcrypt.GenerateFromPassword([]byte("admin"), bcrypt.DefaultCost)
 	if err != nil {
@@ -418,7 +480,7 @@ func (h *SystemHandler) resetUserPassword() error {
 	}
 
 	// 删除所有现有用户
-	if err := h.db.Exec("DELETE FROM users").Error; err != nil {
+	if err := tx.Exec("DELETE FROM users").Error; err != nil {
 		return fmt.Errorf("failed to clear users table: %w", err)
 	}
 
@@ -429,9 +491,11 @@ func (h *SystemHandler) resetUserPassword() error {
 		IsFirstLogin: true,
 	}
 
-	if err := h.db.Create(defaultUser).Error; err != nil {
+	if err := tx.Create(defaultUser).Error; err != nil {
 		return fmt.Errorf("failed to create default user: %w", err)
 	}
+
+	logger.Info("User password reset to admin/admin")
 
 	return nil
 }

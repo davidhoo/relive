@@ -43,7 +43,6 @@ export interface AIBackgroundLogsResponse {
 export interface AIProviderInfo {
   name: string
   is_available: boolean
-  estimated_cost?: string
 }
 
 export interface AnalysisRuntimeStatus {

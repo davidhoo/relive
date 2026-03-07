@@ -445,8 +445,9 @@
               :min="30"
               :max="300"
               :step="10"
-              style="width: 100%"
+              style="width: 150px"
             />
+            <span style="margin-left: 12px">秒</span>
             <div class="form-hint">
               默认 60 秒，使用 qwen3.5-plus 建议设置为 120 秒或更长
             </div>
@@ -1243,6 +1244,7 @@ onMounted(() => {
   font-size: 13px;
   color: var(--color-text-tertiary);
   margin-top: 4px;
+  padding-left: 4px;
   line-height: 1.5;
 }
 

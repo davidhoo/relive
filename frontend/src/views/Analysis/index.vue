@@ -32,9 +32,6 @@
             {{ providerInfo.is_available ? '可用' : '不可用' }}
           </el-tag>
         </el-descriptions-item>
-        <el-descriptions-item label="估算成本" :span="2">
-          {{ providerInfo.estimated_cost || '免费' }}
-        </el-descriptions-item>
       </el-descriptions>
     </el-card>
 

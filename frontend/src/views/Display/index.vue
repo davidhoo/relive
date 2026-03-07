@@ -224,7 +224,7 @@
     </el-card>
     <el-dialog
       v-model="ditherPreviewVisible"
-      title="抖动预览"
+      title="设备预览"
       width="min(720px, calc(100vw - 24px))"
       align-center
       destroy-on-close

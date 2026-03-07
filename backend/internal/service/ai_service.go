@@ -1210,20 +1210,12 @@ func (s *aiService) GetAnalyzeProgress() (*model.AIAnalyzeProgressResponse, erro
 		progress = float64(analyzed) / float64(total) * 100
 	}
 
-	// 估算剩余成本（如果 provider 可用）
-	estimatedCost := 0.0
-	if s.provider != nil {
-		// 使用批量成本估算
-		estimatedCost = float64(unanalyzed) * s.provider.BatchCost()
-	}
-
 	return &model.AIAnalyzeProgressResponse{
-		Total:         total,
-		Analyzed:      analyzed,
-		Unanalyzed:    unanalyzed,
-		Progress:      progress,
-		EstimatedCost: estimatedCost,
-		Provider:      s.config.AI.Provider,
+		Total:      total,
+		Analyzed:   analyzed,
+		Unanalyzed: unanalyzed,
+		Progress:   progress,
+		Provider:   s.config.AI.Provider,
 	}, nil
 }
 

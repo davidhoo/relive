@@ -267,12 +267,11 @@ type AIAnalyzeBatchResponse struct {
 
 // AIAnalyzeProgressResponse AI 分析进度响应
 type AIAnalyzeProgressResponse struct {
-	Total         int64   `json:"total"`          // 照片总数
-	Analyzed      int64   `json:"analyzed"`       // 已分析数
-	Unanalyzed    int64   `json:"unanalyzed"`     // 未分析数
-	Progress      float64 `json:"progress"`       // 进度百分比
-	EstimatedCost float64 `json:"estimated_cost"` // 预估剩余成本
-	Provider      string  `json:"provider"`       // 当前使用的 provider
+	Total      int64   `json:"total"`      // 照片总数
+	Analyzed   int64   `json:"analyzed"`   // 已分析数
+	Unanalyzed int64   `json:"unanalyzed"` // 未分析数
+	Progress   float64 `json:"progress"`   // 进度百分比
+	Provider   string  `json:"provider"`   // 当前使用的 provider
 }
 
 // SystemHealthResponse 系统健康检查响应
@@ -300,18 +299,18 @@ type SystemResetResponse struct {
 
 // SystemStatsResponse 系统统计响应
 type SystemStatsResponse struct {
-	TotalPhotos      int64     `json:"total_photos"`
-	AnalyzedPhotos   int64     `json:"analyzed_photos"`
-	UnanalyzedPhotos int64     `json:"unanalyzed_photos"`
-	TotalDevices     int64     `json:"total_devices"`
-	OnlineDevices    int64     `json:"online_devices"`
-	TotalDisplays    int64     `json:"total_displays"`
-	StorageSize      int64      `json:"storage_size"`                  // 存储空间（字节）
-	DatabaseSize     int64      `json:"database_size"`                 // 数据库大小（字节）
+	TotalPhotos       int64      `json:"total_photos"`
+	AnalyzedPhotos    int64      `json:"analyzed_photos"`
+	UnanalyzedPhotos  int64      `json:"unanalyzed_photos"`
+	TotalDevices      int64      `json:"total_devices"`
+	OnlineDevices     int64      `json:"online_devices"`
+	TotalDisplays     int64      `json:"total_displays"`
+	StorageSize       int64      `json:"storage_size"`                  // 存储空间（字节）
+	DatabaseSize      int64      `json:"database_size"`                 // 数据库大小（字节）
 	DatabaseUpdatedAt *time.Time `json:"database_updated_at,omitempty"` // 数据库最后修改时间
-	GoVersion        string     `json:"go_version"`                    // Go 版本
-	Uptime           int64      `json:"uptime"`                        // 运行时长（秒）
-	Timestamp        time.Time  `json:"timestamp"`                     // 统计时间
+	GoVersion         string     `json:"go_version"`                    // Go 版本
+	Uptime            int64      `json:"uptime"`                        // 运行时长（秒）
+	Timestamp         time.Time  `json:"timestamp"`                     // 统计时间
 }
 
 // SystemEnvironmentResponse 系统环境信息响应

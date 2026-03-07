@@ -100,7 +100,21 @@ func FirstLoginCheck(authService service.AuthService) gin.HandlerFunc {
 		// 获取用户信息
 		userInfo, err := authService.GetUserInfo(userID.(uint))
 		if err != nil {
-			c.Next()
+			statusCode := http.StatusUnauthorized
+			message := "用户不存在或登录态已失效，请重新登录"
+			if err != service.ErrUserNotFound {
+				statusCode = http.StatusInternalServerError
+				message = "验证登录状态失败"
+			}
+
+			c.JSON(statusCode, model.Response{
+				Success: false,
+				Error: &model.ErrorInfo{
+					Code:    "UNAUTHORIZED",
+					Message: message,
+				},
+			})
+			c.Abort()
 			return
 		}
 
