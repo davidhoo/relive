@@ -89,12 +89,12 @@ devices/photo-frame/esp32/
 
 当前建议优先以以下接口口径对齐：
 
-- 设备注册：`POST /api/v1/devices/register`
-- 设备心跳：`POST /api/v1/devices/heartbeat`
-- 获取照片：`GET /api/v1/display/photo`
+- 获取展示信息：`GET /api/v1/device/display`
+- 获取展示二进制：`GET /api/v1/device/display.bin`
+- 获取照片信息：`GET /api/v1/display/photo`
 - 记录展示：`POST /api/v1/display/record`
 
-兼容旧接口时，应在实现中单独注明 deprecated 行为。
+设备通过后台预分配的 `api_key` 接入，不再使用注册、激活、心跳流程。
 
 ## 配置
 
