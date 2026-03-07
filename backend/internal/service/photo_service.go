@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -216,26 +217,89 @@ func (s *photoService) buildScanTreeSnapshot(rootPath string) (*scanTreeSnapshot
 	return &scanTreeSnapshot{RootPath: rootPath, GeneratedAt: time.Now(), Nodes: nodes}, nil
 }
 
-func (s *photoService) scanTreeChanged(snapshot *scanTreeSnapshot) (bool, error) {
+func (s *photoService) scanTreeChangedDirs(snapshot *scanTreeSnapshot) ([]string, error) {
 	if snapshot == nil {
-		return false, nil
+		return nil, nil
 	}
+
+	changedDirs := make([]string, 0)
 	for _, node := range snapshot.Nodes {
 		info, err := os.Stat(node.Path)
 		if os.IsNotExist(err) {
-			return true, nil
+			changedDirs = append(changedDirs, nearestExistingAncestor(node.Path, snapshot.RootPath))
+			continue
 		}
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 		if !info.IsDir() {
 			continue
 		}
 		if info.ModTime().UnixNano() != node.ModTime {
-			return true, nil
+			changedDirs = append(changedDirs, node.Path)
 		}
 	}
-	return false, nil
+
+	return compressChangedDirs(changedDirs, snapshot.RootPath), nil
+}
+
+func nearestExistingAncestor(path string, rootPath string) string {
+	current := path
+	for {
+		if _, err := os.Stat(current); err == nil {
+			return current
+		}
+		if current == rootPath {
+			return rootPath
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return rootPath
+		}
+		current = parent
+	}
+}
+
+func compressChangedDirs(changedDirs []string, rootPath string) []string {
+	if len(changedDirs) == 0 {
+		return nil
+	}
+
+	unique := make(map[string]struct{}, len(changedDirs))
+	for _, dir := range changedDirs {
+		if dir == "" {
+			continue
+		}
+		clean := filepath.Clean(dir)
+		unique[clean] = struct{}{}
+	}
+
+	dirs := make([]string, 0, len(unique))
+	for dir := range unique {
+		dirs = append(dirs, dir)
+	}
+	sort.Slice(dirs, func(i, j int) bool {
+		return len(dirs[i]) < len(dirs[j])
+	})
+
+	result := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		covered := false
+		for _, existing := range result {
+			if dir == existing || strings.HasPrefix(dir, existing+string(os.PathSeparator)) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			result = append(result, dir)
+		}
+	}
+
+	if len(result) == 0 {
+		return []string{rootPath}
+	}
+	return result
 }
 
 func (s *photoService) shouldRunAutoScan(intervalMinutes int) bool {
@@ -298,18 +362,29 @@ func (s *photoService) RunAutoScanCheck() error {
 			continue
 		}
 
-		changed, err := s.scanTreeChanged(snapshot)
+		changedDirs, err := s.scanTreeChangedDirs(snapshot)
 		if err != nil {
 			logger.Warnf("Check scan tree changes failed for %s: %v", path.Path, err)
 			continue
 		}
-		if changed {
-			if _, err := s.StartScan(path.Path); err != nil {
-				logger.Warnf("Auto scan start failed for %s: %v", path.Path, err)
-			}
-			return nil
+		if len(changedDirs) == 0 {
+			continue
 		}
+
+		scanRoot := path.Path
+		if len(changedDirs) == 1 {
+			scanRoot = changedDirs[0]
+			logger.Infof("Auto scan detected single changed subtree for %s: %s", path.Path, scanRoot)
+		} else {
+			logger.Infof("Auto scan detected multiple changed subtrees for %s, falling back to full path scan: %v", path.Path, changedDirs)
+		}
+
+		if _, err := s.StartScan(scanRoot); err != nil {
+			logger.Warnf("Auto scan start failed for %s: %v", scanRoot, err)
+		}
+		return nil
 	}
+
 	return nil
 }
 
