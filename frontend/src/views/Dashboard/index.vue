@@ -2,59 +2,59 @@
   <div class="dashboard">
     <PageHeader title="仪表盘" subtitle="照片管理系统概览" :gradient="true" />
 
-    <!-- 统计卡片网格 - WeDance 风格 -->
-    <div class="stats-grid animate-fade-in">
-      <!-- 总照片数 -->
-      <div class="stat-card">
-        <div class="stat-card-icon stat-icon-primary">
-          <el-icon><Picture /></el-icon>
-        </div>
-        <div class="stat-card-title">总照片数</div>
-        <div class="stat-card-value">{{ systemStats?.total_photos || 0 }}</div>
-        <div class="stat-card-subtitle">所有照片</div>
-      </div>
-
-      <!-- 已分析 -->
-      <div class="stat-card">
-        <div class="stat-card-icon stat-icon-success">
-          <el-icon><MagicStick /></el-icon>
-        </div>
-        <div class="stat-card-title">已分析</div>
-        <div class="stat-card-value">{{ systemStats?.analyzed_photos || 0 }}</div>
-        <div class="stat-card-subtitle">
-          分析率 <span class="stat-highlight">{{ analysisRate }}%</span>
-        </div>
-      </div>
-
-      <!-- 在线设备 -->
-      <div class="stat-card">
-        <div class="stat-card-icon stat-icon-warning">
-          <el-icon><Monitor /></el-icon>
-        </div>
-        <div class="stat-card-title">在线设备</div>
-        <div class="stat-card-value">{{ systemStats?.online_devices || 0 }}</div>
-        <div class="stat-card-subtitle">
-          共 {{ systemStats?.total_devices || 0 }} 台
-        </div>
-      </div>
-
-      <!-- 存储空间 -->
-      <div class="stat-card">
-        <div class="stat-card-icon stat-icon-info">
-          <el-icon><DataLine /></el-icon>
-        </div>
-        <div class="stat-card-title">存储空间</div>
-        <div class="stat-card-value storage-value">{{ storageSize }}</div>
-        <div class="stat-card-subtitle">
-          {{ systemStats?.total_photos || 0 }} 张
-        </div>
-      </div>
-    </div>
+    <!-- 统计卡片 -->
+    <el-row :gutter="20" class="stats-row animate-fade-in">
+      <el-col :xs="24" :sm="12" :md="6">
+        <el-card shadow="hover">
+          <el-statistic title="总照片数" :value="systemStats?.total_photos || 0">
+            <template #prefix>
+              <el-icon><Picture /></el-icon>
+            </template>
+            <template #suffix>
+              <span class="stat-suffix">张</span>
+            </template>
+          </el-statistic>
+        </el-card>
+      </el-col>
+      <el-col :xs="24" :sm="12" :md="6">
+        <el-card shadow="hover">
+          <el-statistic title="已分析" :value="systemStats?.analyzed_photos || 0">
+            <template #prefix>
+              <el-icon class="success-icon"><MagicStick /></el-icon>
+            </template>
+            <template #suffix>
+              <span class="stat-suffix success-text">{{ analysisRate }}%</span>
+            </template>
+          </el-statistic>
+        </el-card>
+      </el-col>
+      <el-col :xs="24" :sm="12" :md="6">
+        <el-card shadow="hover">
+          <el-statistic title="在线设备" :value="systemStats?.online_devices || 0">
+            <template #prefix>
+              <el-icon class="warning-icon"><Monitor /></el-icon>
+            </template>
+            <template #suffix>
+              <span class="stat-suffix">/ {{ systemStats?.total_devices || 0 }}</span>
+            </template>
+          </el-statistic>
+        </el-card>
+      </el-col>
+      <el-col :xs="24" :sm="12" :md="6">
+        <el-card shadow="hover">
+          <el-statistic title="存储空间" :value="storageSize">
+            <template #prefix>
+              <el-icon class="info-icon"><DataLine /></el-icon>
+            </template>
+          </el-statistic>
+        </el-card>
+      </el-col>
+    </el-row>
 
     <!-- AI 分析进度 - 简洁卡片 -->
     <el-row :gutter="20" class="progress-row">
       <el-col :span="24">
-        <div class="progress-card modern-card animate-fade-in animate-delay-1">
+        <el-card shadow="never" class="progress-card animate-fade-in animate-delay-1">
           <SectionHeader :icon="MagicStick" title="AI 分析进度">
             <template #actions>
               <el-button
@@ -96,14 +96,14 @@
             </div>
           </div>
           <el-empty v-else description="暂无分析任务" :image-size="80" />
-        </div>
+        </el-card>
       </el-col>
     </el-row>
 
     <!-- 最近照片 - 简洁卡片 -->
     <el-row :gutter="20" class="photos-row">
       <el-col :span="24">
-        <div class="photos-card modern-card animate-fade-in animate-delay-2">
+        <el-card shadow="never" class="photos-card animate-fade-in animate-delay-2">
           <SectionHeader :icon="Picture" title="最近照片">
             <template #actions>
               <div class="photos-title-actions">
@@ -162,7 +162,7 @@
               扫描照片
             </el-button>
           </el-empty>
-        </div>
+        </el-card>
       </el-col>
     </el-row>
   </div>
@@ -355,7 +355,7 @@ onMounted(async () => {
 <style scoped>
 /* ============ Dashboard 容器 - WeDance 风格 ============ */
 .dashboard {
-  padding: 48px;
+  padding: var(--spacing-xl);
   background: var(--color-bg-primary);
   min-height: 100vh;
 }
@@ -417,13 +417,44 @@ onMounted(async () => {
   font-weight: var(--font-weight-semibold);
 }
 
+/* ============ 统计卡片 ============ */
+.stats-row {
+  margin-bottom: var(--spacing-xl);
+}
+
+.success-icon {
+  color: var(--color-success);
+}
+
+.warning-icon {
+  color: var(--color-warning);
+}
+
+.info-icon {
+  color: var(--color-info);
+}
+
+.stat-suffix {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.success-text {
+  color: var(--color-success);
+  font-weight: var(--font-weight-semibold);
+}
+
 /* ============ AI 进度卡片 ============ */
 .progress-row {
   margin-bottom: var(--spacing-xl);
 }
 
-.progress-card {
-  padding: var(--spacing-xl) !important;
+.progress-card :deep(.el-card__body) {
+  padding: var(--spacing-xl);
+}
+
+.progress-card > :deep(.section-header) {
+  margin-bottom: var(--spacing-lg);
 }
 
 .start-button {
@@ -487,8 +518,12 @@ onMounted(async () => {
   margin-bottom: var(--spacing-xl);
 }
 
-.photos-card {
-  padding: var(--spacing-xl) !important;
+.photos-card :deep(.el-card__body) {
+  padding: var(--spacing-xl);
+}
+
+.photos-card > :deep(.section-header) {
+  margin-bottom: var(--spacing-lg);
 }
 
 .photos-count {
@@ -623,10 +658,6 @@ onMounted(async () => {
     padding: var(--spacing-xl);
   }
 
-  .stats-grid {
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  }
-
   .page-title {
     font-size: var(--font-size-3xl);
   }
@@ -637,14 +668,6 @@ onMounted(async () => {
     padding: var(--spacing-lg);
   }
 
-  .stats-grid {
-    grid-template-columns: repeat(2, 1fr);
-    gap: 16px;
-  }
-
-  .stat-card .stat-card-value {
-    font-size: 36px;
-  }
 
   .page-title {
     font-size: var(--font-size-2xl);
@@ -669,18 +692,7 @@ onMounted(async () => {
     padding: var(--spacing-md);
   }
 
-  .stats-grid {
-    grid-template-columns: 1fr;
-  }
 
-  .stat-card .stat-card-value {
-    font-size: 32px;
-  }
-
-  .progress-title,
-  .photos-title {
-    font-size: var(--font-size-base);
-  }
 
   .image-card {
     height: 180px;
