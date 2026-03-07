@@ -404,99 +404,63 @@ Content-Type: application/json
 
 ## 4. 设备管理 API
 
-### 4.1 设备注册 ✅
+### 4.1 设备接入模型 ✅
 
-设备首次连接时注册到系统。支持多种设备类型（嵌入式设备、移动端、Web浏览器、离线分析程序、后台服务）。
+当前采用 **后台预创建设备 + 预分配 API Key** 的简单接入模型：
 
-**请求**
-```http
-POST /api/v1/devices/register
-Content-Type: application/json
-
-{
-  "device_id": "ESP32-001",
-  "name": "客厅相框",
-  "device_type": "embedded",
-  "description": "客厅7.3寸墨水屏相框",
-  "ip_address": "192.168.1.100"
-}
-```
-
-**请求字段**
-- `device_id`: 设备唯一 ID（必填，如 MAC 地址）
-- `name`: 设备名称（必填）
-- `device_type`: 设备类型（可选，默认 `embedded`）
-  - `embedded`: 嵌入式设备（电子相框等）
-  - `mobile`: 移动端（手机、平板）
-  - `web`: Web 浏览器
-  - `offline`: 离线分析程序
-  - `service`: 后台服务
-- `description`: 设备描述（可选）
-- `ip_address`: IP 地址（可选）
-
-**响应**
-```json
-{
-  "success": true,
-  "data": {
-    "device_id": "ESP32-001",
-    "api_key": "sk-relive-f210686c20583cf53be417f595c07d9e...",
-    "config": {
-      "refresh_hour": [8, 20],
-      "brightness": 100,
-      "sleep_mode": "deep",
-      "ota_enabled": true,
-      "timezone": "Asia/Shanghai"
-    }
-  },
-  "message": "Success"
-}
-```
-
-**说明**
-- 如果设备已注册，返回现有 API Key
-- API Key 格式：`sk-relive-{64位随机hex}`
-- 配置包含默认刷新时间、亮度、睡眠模式等
+- 管理员通过后台创建一条设备记录
+- 系统生成 `device_id` 和 `api_key`
+- 将 `api_key` 写入离线分析程序或嵌入式设备配置
+- 客户端直接访问业务接口，不再经过注册、激活、心跳流程
+- 服务端通过认证中间件自动更新最近活跃时间和来源 IP
 
 ---
 
-### 4.2 设备心跳 ✅
+### 4.2 创建设备 ✅
 
-设备定期发送心跳以更新在线状态。
+管理员在后台创建设备，系统自动生成 `device_id` 和 `api_key`。
 
 **请求**
 ```http
-POST /api/v1/devices/heartbeat
+POST /api/v1/devices
+Authorization: Bearer <admin-jwt>
 Content-Type: application/json
 
 {
-  "device_id": "ESP32-001",
-  "battery_level": 85,
-  "wifi_rssi": -45
+  "name": "客厅相框",
+  "device_type": "embedded",
+  "description": "客厅 7.3 寸墨水屏相框",
+  "render_profile": "waveshare_7in3e"
 }
 ```
 
 **请求字段**
-- `device_id`: 设备 ID（必填）
-- `battery_level`: 电池电量（0-100，可选）
-- `wifi_rssi`: WiFi 信号强度（dBm，负值，可选）
+- `name`: 设备名称（必填）
+- `device_type`: 设备类型（可选，默认 `embedded`）
+- `description`: 设备描述（可选）
+- `render_profile`: 嵌入式设备渲染规格（可选）
 
 **响应**
 ```json
 {
   "success": true,
   "data": {
-    "server_time": "2026-02-28T18:00:00+08:00",
-    "next_refresh_in_seconds": 7200,
-    "has_new_firmware": false
+    "id": 1,
+    "created_at": "2026-02-28T18:00:00+08:00",
+    "device_id": "ABCD1234",
+    "name": "客厅相框",
+    "api_key": "sk-relive-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "device_type": "embedded",
+    "render_profile": "waveshare_7in3e"
   },
   "message": "Success"
 }
 ```
 
 **说明**
-- 更新设备的在线状态和最后心跳时间
-- 计算距离下次刷新的秒数（8:00 或 20:00）
+- `api_key` 仅在创建设备时返回一次
+- 客户端后续直接使用该 `api_key` 访问业务接口
+- 不再提供设备注册、激活、心跳接口
 
 ---
 
@@ -1060,22 +1024,13 @@ curl http://localhost:8080/api/v1/system/stats
 # 照片统计
 curl http://localhost:8080/api/v1/photos/stats
 
-# 设备注册
-curl -X POST http://localhost:8080/api/v1/devices/register \
+# 创建设备
+curl -X POST http://localhost:8080/api/v1/devices \
+  -H "Authorization: Bearer <admin-jwt>" \
   -H "Content-Type: application/json" \
   -d '{
-    "device_id": "ESP32-001",
     "name": "客厅相框",
     "device_type": "embedded"
-  }'
-
-# 设备心跳
-curl -X POST http://localhost:8080/api/v1/devices/heartbeat \
-  -H "Content-Type: application/json" \
-  -d '{
-    "device_id": "ESP32-001",
-    "battery_level": 85,
-    "wifi_rssi": -45
   }'
 
 # 获取展示照片

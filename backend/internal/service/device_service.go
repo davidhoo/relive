@@ -22,12 +22,6 @@ type DeviceService interface {
 	UpdateEnabled(id uint, enabled bool) error // 更新设备可用状态
 	UpdateRenderProfile(id uint, renderProfile string) error
 
-	// 设备激活（设备使用预分配的 API Key 激活）
-	Activate(req *model.DeviceActivateRequest) (*model.DeviceActivateResponse, error)
-
-	// 心跳
-	Heartbeat(req *model.DeviceHeartbeatRequest) (*model.DeviceHeartbeatResponse, error)
-
 	// 查询
 	GetByID(id uint) (*model.Device, error)
 	GetByDeviceID(deviceID string) (*model.Device, error)
@@ -94,8 +88,8 @@ func (s *deviceService) Create(req *model.CreateDeviceRequest) (*model.CreateDev
 		APIKey:        apiKey,
 		DeviceType:    deviceType,
 		RenderProfile: renderProfile,
-		IsEnabled:     true,  // 新设备默认可用
-		Online:        false, // 新设备默认离线，等待激活
+		IsEnabled:     true,
+		Online:        false,
 	}
 
 	if err := s.repo.Create(device); err != nil {
@@ -171,61 +165,6 @@ func (s *deviceService) GetByID(id uint) (*model.Device, error) {
 	return s.repo.GetByID(id)
 }
 
-// Activate 设备激活（设备使用预分配的 API Key 激活）
-func (s *deviceService) Activate(req *model.DeviceActivateRequest) (*model.DeviceActivateResponse, error) {
-	// 查找设备
-	device, err := s.repo.GetByDeviceID(req.DeviceID)
-	if err != nil {
-		return nil, fmt.Errorf("device not found: %w", err)
-	}
-
-	// 更新设备信息（设备上报的信息）
-	if req.Name != "" {
-		device.Name = req.Name
-	}
-	if req.DeviceType != "" {
-		device.DeviceType = req.DeviceType
-	}
-
-	// 激活时更新状态
-	device.Online = true
-	now := time.Now()
-	device.LastHeartbeat = &now
-	if req.IPAddress != "" {
-		device.IPAddress = req.IPAddress
-	}
-
-	if err := s.repo.Update(device); err != nil {
-		return nil, fmt.Errorf("update device: %w", err)
-	}
-
-	logger.Infof("Device activated: %s (IP: %s)", req.DeviceID, req.IPAddress)
-
-	return &model.DeviceActivateResponse{
-		DeviceID: device.DeviceID,
-		Name:     device.Name,
-		Config:   s.getDefaultConfig(),
-	}, nil
-}
-
-// Heartbeat 处理心跳
-func (s *deviceService) Heartbeat(req *model.DeviceHeartbeatRequest) (*model.DeviceHeartbeatResponse, error) {
-	// 更新心跳信息
-	err := s.repo.UpdateHeartbeat(req.DeviceID, req.BatteryLevel, req.WiFiRSSI)
-	if err != nil {
-		return nil, fmt.Errorf("update heartbeat: %w", err)
-	}
-
-	// 计算下次刷新时间
-	nextRefreshIn := s.calculateNextRefresh()
-
-	return &model.DeviceHeartbeatResponse{
-		ServerTime:           time.Now(),
-		NextRefreshInSeconds: nextRefreshIn,
-		HasNewFirmware:       false, // TODO: 实现固件更新检查
-	}, nil
-}
-
 // GetByDeviceID 根据设备 ID 获取设备
 func (s *deviceService) GetByDeviceID(deviceID string) (*model.Device, error) {
 	return s.repo.GetByDeviceID(deviceID)
@@ -281,7 +220,8 @@ func (s *deviceService) CountByPlatform(platform string) (int64, error) {
 	return s.repo.CountByPlatform(platform)
 }
 
-// UpdateLastSeen 更新设备最后请求时间和 IP。
+// UpdateLastSeen 更新设备最近活跃时间和 IP。
+// 当前仍复用 last_heartbeat 字段存储最近请求时间，以避免额外迁移。
 func (s *deviceService) UpdateLastSeen(deviceID uint, ip string) {
 	device, err := s.repo.GetByID(deviceID)
 	if err != nil {
@@ -353,42 +293,6 @@ func (s *deviceService) generateAPIKey() (string, error) {
 	}
 
 	return apiKey, nil
-}
-
-// getDefaultConfig 获取默认设备配置
-func (s *deviceService) getDefaultConfig() map[string]interface{} {
-	return map[string]interface{}{
-		"refresh_hour": []int{8, 20}, // 每天 8:00 和 20:00 刷新
-		"brightness":   100,
-		"sleep_mode":   "deep",
-		"ota_enabled":  true,
-		"timezone":     "Asia/Shanghai",
-	}
-}
-
-// calculateNextRefresh 计算下次刷新时间（秒）
-func (s *deviceService) calculateNextRefresh() int {
-	now := time.Now()
-	currentHour := now.Hour()
-
-	// 找到下一个刷新时间
-	var nextHour int
-	if currentHour < 8 {
-		nextHour = 8
-	} else if currentHour < 20 {
-		nextHour = 20
-	} else {
-		nextHour = 8 + 24 // 明天 8:00
-	}
-
-	// 计算距离下次刷新的秒数
-	nextRefresh := time.Date(now.Year(), now.Month(), now.Day(), nextHour%24, 0, 0, 0, now.Location())
-	if nextHour >= 24 {
-		nextRefresh = nextRefresh.AddDate(0, 0, 1)
-	}
-
-	duration := nextRefresh.Sub(now)
-	return int(duration.Seconds())
 }
 
 // ============= 向后兼容 =============

@@ -31,9 +31,7 @@ type DeviceRepository interface {
 	// 在线状态
 	GetOnlineDevices() ([]*model.Device, error)
 	GetOfflineDevices() ([]*model.Device, error)
-	UpdateHeartbeat(deviceID string, batteryLevel int, wifiRSSI int) error
 	UpdateStatus(deviceID string, online bool) error
-	UpdateOnActivate(deviceID string, ip string, firmware string) error
 
 	// 统计
 	Count() (int64, error)
@@ -181,43 +179,11 @@ func (r *deviceRepository) GetOfflineDevices() ([]*model.Device, error) {
 	return devices, err
 }
 
-// UpdateHeartbeat 更新心跳
-func (r *deviceRepository) UpdateHeartbeat(deviceID string, batteryLevel int, wifiRSSI int) error {
-	now := time.Now()
-	return r.db.Model(&model.Device{}).
-		Where("device_id = ?", deviceID).
-		Updates(map[string]interface{}{
-			"last_heartbeat": now,
-			"battery_level":  batteryLevel,
-			"wifi_rssi":      wifiRSSI,
-			"online":         true,
-		}).Error
-}
-
 // UpdateStatus 更新在线状态
 func (r *deviceRepository) UpdateStatus(deviceID string, online bool) error {
 	return r.db.Model(&model.Device{}).
 		Where("device_id = ?", deviceID).
 		Update("online", online).Error
-}
-
-// UpdateOnActivate 设备激活时更新信息
-func (r *deviceRepository) UpdateOnActivate(deviceID string, ip string, firmware string) error {
-	updates := map[string]interface{}{
-		"online": true,
-	}
-	if ip != "" {
-		updates["ip_address"] = ip
-	}
-	if firmware != "" {
-		updates["firmware_version"] = firmware
-	}
-	now := time.Now()
-	updates["last_heartbeat"] = &now
-
-	return r.db.Model(&model.Device{}).
-		Where("device_id = ?", deviceID).
-		Updates(updates).Error
 }
 
 // Count 统计设备总数

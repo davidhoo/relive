@@ -209,11 +209,11 @@ Handler 层（HTTP API，26个接口）
 │   ├── GET /display/photo
 │   └── POST /display/record
 ├── DeviceHandler（7个）
-│   ├── POST /devices/register
-│   ├── POST /devices/heartbeat
+│   ├── POST /devices
 │   ├── GET /devices
 │   ├── GET /devices/:id
-│   ├── PUT /devices/:id
+│   ├── PUT /devices/:id/enabled
+│   ├── PUT /devices/:id/render-profile
 │   ├── DELETE /devices/:id
 │   └── GET /devices/stats
 ├── AIHandler（5个）

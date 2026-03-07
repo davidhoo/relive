@@ -169,76 +169,18 @@ func (h *DeviceHandler) UpdateDeviceEnabled(c *gin.Context) {
 	})
 }
 
-// Activate 设备激活
-// @Summary 设备激活
-// @Description 设备使用预分配的 API Key 激活并获取配置
+// UpdateDeviceRenderProfile 更新设备渲染规格
+// @Summary 更新设备渲染规格
+// @Description 更新指定设备的嵌入式渲染规格
 // @Tags devices
 // @Accept json
 // @Produce json
-// @Param request body model.DeviceActivateRequest true "激活请求"
-// @Success 200 {object} model.Response{data=model.DeviceActivateResponse}
+// @Param id path int true "设备 ID"
+// @Param request body model.UpdateDeviceRenderProfileRequest true "更新渲染规格请求"
+// @Success 200 {object} model.Response
 // @Failure 400 {object} model.Response
 // @Failure 500 {object} model.Response
-// @Router /api/v1/devices/activate [post]
-func (h *DeviceHandler) Activate(c *gin.Context) {
-	var req model.DeviceActivateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		logger.Warnf("Invalid request: %v", err)
-		c.JSON(http.StatusBadRequest, model.Response{
-			Success: false,
-			Error: &model.ErrorInfo{
-				Code:    "INVALID_REQUEST",
-				Message: "Invalid request",
-			},
-		})
-		return
-	}
-
-	// 验证必填字段
-	if req.DeviceID == "" {
-		c.JSON(http.StatusBadRequest, model.Response{
-			Success: false,
-			Error: &model.ErrorInfo{
-				Code:    "INVALID_REQUEST",
-				Message: "device_id is required",
-			},
-		})
-		return
-	}
-
-	// 激活设备
-	resp, err := h.deviceService.Activate(&req)
-	if err != nil {
-		logger.Errorf("Activate device failed: %v", err)
-		c.JSON(http.StatusInternalServerError, model.Response{
-			Success: false,
-			Error: &model.ErrorInfo{
-				Code:    "ACTIVATE_FAILED",
-				Message: "Failed to activate device: " + err.Error(),
-			},
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, model.Response{
-		Success: true,
-		Message: "Device activated successfully",
-		Data:    resp,
-	})
-}
-
-// Heartbeat 设备心跳
-// @Summary 设备心跳
-// @Description 设备发送心跳
-// @Tags devices
-// @Accept json
-// @Produce json
-// @Param request body model.DeviceHeartbeatRequest true "心跳请求"
-// @Success 200 {object} model.Response{data=model.DeviceHeartbeatResponse}
-// @Failure 400 {object} model.Response
-// @Failure 500 {object} model.Response
-// @Router /api/v1/devices/heartbeat [post]
-// @Router /api/v1/esp32/heartbeat [post]
+// @Router /api/v1/devices/{id}/render-profile [put]
 func (h *DeviceHandler) UpdateDeviceRenderProfile(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
@@ -265,53 +207,6 @@ func (h *DeviceHandler) UpdateDeviceRenderProfile(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, model.Response{Success: true, Message: "Render profile updated successfully"})
-}
-
-func (h *DeviceHandler) Heartbeat(c *gin.Context) {
-	var req model.DeviceHeartbeatRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		logger.Warnf("Invalid request: %v", err)
-		c.JSON(http.StatusBadRequest, model.Response{
-			Success: false,
-			Error: &model.ErrorInfo{
-				Code:    "INVALID_REQUEST",
-				Message: "Invalid request",
-			},
-		})
-		return
-	}
-
-	// 验证设备 ID
-	if req.DeviceID == "" {
-		c.JSON(http.StatusBadRequest, model.Response{
-			Success: false,
-			Error: &model.ErrorInfo{
-				Code:    "INVALID_REQUEST",
-				Message: "device_id is required",
-			},
-		})
-		return
-	}
-
-	// 处理心跳
-	resp, err := h.deviceService.Heartbeat(&req)
-	if err != nil {
-		logger.Errorf("Heartbeat failed: %v", err)
-		c.JSON(http.StatusInternalServerError, model.Response{
-			Success: false,
-			Error: &model.ErrorInfo{
-				Code:    "UPDATE_FAILED",
-				Message: "Failed to process heartbeat: " + err.Error(),
-			},
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, model.Response{
-		Success: true,
-		Message: "Success",
-		Data:    resp,
-	})
 }
 
 // GetDevices 获取设备列表
@@ -570,10 +465,4 @@ type ESP32Handler = DeviceHandler
 // Deprecated: 使用 NewDeviceHandler 代替
 func NewESP32Handler(deviceService service.DeviceService) *DeviceHandler {
 	return NewDeviceHandler(deviceService)
-}
-
-// Register 注册设备（兼容旧接口，重定向到 Activate）
-// @Deprecated: 使用 /activate 接口
-func (h *DeviceHandler) Register(c *gin.Context) {
-	h.Activate(c)
 }

@@ -85,24 +85,10 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 			devicesManage.POST("", handlers.Device.CreateDevice)                   // 创建设备
 			devicesManage.DELETE("/:id", handlers.Device.DeleteDevice)             // 删除设备
 			devicesManage.PUT("/:id/enabled", handlers.Device.UpdateDeviceEnabled) // 启用/禁用设备
+			devicesManage.PUT("/:id/render-profile", handlers.Device.UpdateDeviceRenderProfile)
 			devicesManage.GET("/stats", handlers.Device.GetDeviceStats)
 			devicesManage.GET("", handlers.Device.GetDevices)
 			devicesManage.GET("/:device_id", handlers.Device.GetDeviceByID)
-		}
-
-		// 设备 API（API Key 认证 - 设备使用）
-		// 认证中间件会自动更新设备的 IP 和最后请求时间
-		devicesAPI := v1.Group("/devices")
-		devicesAPI.Use(middleware.APIKeyAuth(services.Device))
-		{
-			devicesAPI.POST("/activate", handlers.Device.Activate) // 设备激活
-		}
-
-		// ESP32 兼容路径（API Key 认证）
-		esp32 := v1.Group("/esp32")
-		esp32.Use(middleware.APIKeyAuth(services.Device))
-		{
-			esp32.POST("/activate", handlers.ESP32.Activate) // 兼容：指向 Activate
 		}
 
 		// 展示相关（API Key 认证，兼容旧接口）

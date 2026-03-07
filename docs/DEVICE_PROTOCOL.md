@@ -141,85 +141,35 @@ const int SERVER_PORT = 8080;
 
 | 接口 | 方法 | 路径 | 说明 |
 |------|------|---------|------|
-| **设备注册** | POST | `/api/v1/devices/register` | 首次注册设备 |
-| **设备心跳** | POST | `/api/v1/devices/heartbeat` | 上报状态 |
-| **获取展示照片** | GET | `/api/v1/display/photo` | 获取要展示的照片信息 |
+| **获取展示信息** | GET | `/api/v1/device/display` | 获取当前要展示的资源信息 |
+| **获取展示二进制** | GET | `/api/v1/device/display.bin` | 直接获取设备可显示的 bin 文件 |
+| **获取展示照片** | GET | `/api/v1/display/photo` | 获取要展示的照片信息（兼容通用客户端） |
 | **下载照片图片** | GET | `/api/v1/photos/{id}/image` | 下载照片图片 |
 | **上报展示记录** | POST | `/api/v1/display/record` | 记录展示历史 |
 
 **注意**：
-- 设备注册和心跳统一使用 `/api/v1/devices/*` 路径
-- 支持多种设备类型：嵌入式设备、移动端、Web浏览器等
+- 设备采用后台预分配 `api_key` 的方式接入，不再走注册 / 激活 / 心跳流程
+- 所有设备请求都直接使用 `Authorization: Bearer <api_key>` 或 `X-API-Key`
+- 服务端会自动记录最近活跃时间和来源 IP
 
-### 3.2 设备注册
+### 3.2 设备接入方式
 
-**请求**（支持多种设备类型）：
-```http
-POST /api/v1/devices/register HTTP/1.1
-Host: 192.168.1.100:8080
-Content-Type: application/json
+设备由管理员在后台预先创建，客户端只需保存分配好的 `api_key`。
 
-{
-  "device_id": "ESP32-ABCD1234",
-  "name": "客厅相框",
-  "device_type": "embedded",        // 设备类型（embedded/mobile/web/offline/service）
-  "description": "客厅7.3寸墨水屏相框",
-  "ip_address": "192.168.1.150"
-}
-```
+嵌入式设备推荐流程：
 
-**设备类型说明**：
-- `embedded`: 嵌入式设备（电子相框、ESP32等）
-- `mobile`: 移动端（手机、平板）
-- `web`: Web 浏览器
-- `offline`: 离线分析程序
-- `service`: 后台服务
+1. 在后台创建设备并保存 `api_key`
+2. 将 `api_key` 烧录或写入本地配置
+3. 直接请求 `/api/v1/device/display` 或 `/api/v1/device/display.bin`
+4. 可选调用 `/api/v1/display/record` 记录展示结果
 
-**注意**：`device_type` 为可选字段，默认值为 `embedded`
-
-**简化请求**（推荐格式）：
-```http
-POST /api/v1/devices/register HTTP/1.1
-Host: 192.168.1.100:8080
-Content-Type: application/json
-
-{
-  "device_id": "ESP32-ABCD1234",
-  "name": "客厅相框",
-  "device_type": "embedded"
-}
-```
-
-**响应**：
-```json
-{
-  "success": true,
-  "data": {
-    "device_id": "ESP32-ABCD1234",
-    "api_key": "sk-relive-xxxxxxxxxxxxxxxx",
-    "config": {
-      "refresh_hour": [8, 20],
-      "brightness": 100
-    }
-  },
-  "message": "设备注册成功"
-}
-```
-
-### 3.3 设备心跳
+### 3.3 获取展示信息
 
 **请求**：
 ```http
-POST /api/v1/devices/heartbeat HTTP/1.1
+GET /api/v1/device/display HTTP/1.1
 Host: 192.168.1.100:8080
 Authorization: Bearer sk-relive-xxxxxxxxxxxxxxxx
-Content-Type: application/json
-
-{
-  "device_id": "ESP32-ABCD1234",
-  "battery_level": 85,
-  "wifi_rssi": -45
-}
 ```
 
 **响应**：
@@ -227,13 +177,37 @@ Content-Type: application/json
 {
   "success": true,
   "data": {
-    "server_time": "2026-02-28T10:30:00Z",
-    "next_refresh_in_seconds": 43200,
-    "has_new_firmware": false
+    "batch_date": "2026-03-07",
+    "sequence": 1,
+    "total_count": 1,
+    "photo_id": 123,
+    "item_id": 10,
+    "asset_id": 25,
+    "render_profile": "waveshare_7in3e",
+    "bin_url": "/api/v1/display/assets/25/bin",
+    "checksum": "sha256:..."
   },
-  "message": "心跳成功"
+  "message": "Success"
 }
 ```
+
+### 3.4 获取展示二进制
+
+**请求**：
+```http
+GET /api/v1/device/display.bin HTTP/1.1
+Host: 192.168.1.100:8080
+Authorization: Bearer sk-relive-xxxxxxxxxxxxxxxx
+```
+
+**响应头**：
+- `Content-Type: application/octet-stream`
+- `X-Asset-ID`
+- `X-Checksum`
+- `X-Photo-ID`
+- `X-Render-Profile`
+- `X-Batch-Date`
+- `X-Sequence`
 
 ### 3.4 获取展示照片
 
@@ -819,18 +793,12 @@ void setup() {
   // 2. 加载配置
   loadConfiguration();
 
-  // 3. 如果未注册，先注册
-  if (apiKey.isEmpty()) {
-    registerDevice();
-  }
+  // 3. apiKey 由后台预分配，本地配置中直接读取
 
-  // 4. 发送心跳
-  sendHeartbeat();
-
-  // 5. 获取并显示照片
+  // 4. 获取并显示照片
   displayPhoto();
 
-  // 6. 进入深度睡眠
+  // 5. 进入深度睡眠
   uint64_t sleepTime = calculateSleepTime();
   enterDeepSleep(sleepTime);
 }
@@ -848,48 +816,15 @@ void connectWiFi() {
   Serial.println("\nWiFi 连接成功");
 }
 
-void registerDevice() {
-  HTTPClient http;
-  String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT + "/api/v1/esp32/register";
-
-  http.begin(url);
-  http.addHeader("Content-Type", "application/json");
-
-  // 构造请求
-  StaticJsonDocument<512> doc;
-  doc["device_id"] = deviceID;
-  doc["name"] = "客厅相框";
-  doc["screen_width"] = 800;
-  doc["screen_height"] = 480;
-  doc["firmware_version"] = "1.0.0";
-
-  String requestBody;
-  serializeJson(doc, requestBody);
-
-  int httpCode = http.POST(requestBody);
-  if (httpCode == 200) {
-    String response = http.getString();
-
-    // 解析响应
-    StaticJsonDocument<1024> responseDoc;
-    deserializeJson(responseDoc, response);
-
-    apiKey = responseDoc["data"]["api_key"].as<String>();
-    saveConfiguration();
-
-    Serial.println("设备注册成功");
-  }
-
-  http.end();
-}
+// apiKey 由后台预先分配，并保存在本地配置
 
 void displayPhoto() {
-  // 1. 获取照片信息
+  // 1. 直接获取设备展示二进制
   HTTPClient http;
-  String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT +
-               "/api/v1/esp32/display/photo?device_id=" + deviceID;
+  String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT + "/api/v1/device/display.bin";
 
   http.begin(url);
+  http.addHeader("Authorization", "Bearer " + apiKey);
   http.addHeader("Authorization", "Bearer " + apiKey);
 
   int httpCode = http.GET();
