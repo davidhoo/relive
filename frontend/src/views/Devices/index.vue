@@ -45,12 +45,12 @@
     </el-row>
 
     <!-- 设备列表 -->
-    <el-card shadow="never" v-loading="loading">
+    <el-card shadow="never" class="devices-list-card" v-loading="loading">
       <template #header>
         <SectionHeader :icon="List" title="设备列表" />
       </template>
 
-      <el-table :data="devices" stripe>
+      <el-table :data="devices" stripe class="devices-table" size="small">
         <el-table-column prop="device_id" label="设备 ID" width="120" />
         <el-table-column prop="name" label="设备名称" />
         <el-table-column label="类型" width="100">
@@ -482,7 +482,7 @@ onMounted(async () => {
 
 <style scoped>
 .devices-page {
-  padding: 20px;
+  padding: var(--spacing-xl);
 }
 
 .form-hint {
@@ -512,6 +512,38 @@ onMounted(async () => {
 
 .action-link {
   color: var(--color-primary);
+}
+
+.devices-list-card :deep(.el-card__body) {
+  padding: var(--spacing-md);
+}
+
+.devices-list-card > :deep(.section-header) {
+  margin-bottom: var(--spacing-md);
+}
+
+.devices-table {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.devices-table :deep(.el-table__header) {
+  background: var(--color-bg-secondary);
+}
+
+.devices-table :deep(th.el-table__cell) {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+.devices-table :deep(td.el-table__cell) {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-primary);
+}
+
+.devices-table :deep(.cell) {
+  line-height: 1.6;
 }
 
 .pagination-wrapper {

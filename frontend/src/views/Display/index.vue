@@ -17,15 +17,6 @@
         <SectionHeader :icon="View" title="展示策略" />
       </template>
 
-      <el-alert
-        title="展示策略说明"
-        type="info"
-        :closable="false"
-        class="section-alert-bottom"
-      >
-        <p>根据不同算法，设备会从照片库中挑选当天最适合展示的照片。下方日历可直接预览指定日期的展示结果。</p>
-      </el-alert>
-
       <el-form :model="form" label-width="150px" class="display-form">
         <el-form-item label="展示策略">
           <el-select v-model="form.algorithm" placeholder="请选择策略" class="full-width">
@@ -68,6 +59,10 @@
         </el-form-item>
 
       </el-form>
+
+      <div class="inline-note display-note">
+        根据不同算法，设备会从照片库中挑选当天最适合展示的照片。下方日历可直接预览指定日期的展示结果。
+      </div>
     </el-card>
 
     <div class="preview-layout">
@@ -622,7 +617,7 @@ onUnmounted(() => {
 
 <style scoped>
 .display-page {
-  padding: 20px;
+  padding: var(--spacing-xl);
   display: grid;
   gap: 12px;
 }
@@ -1078,8 +1073,11 @@ onUnmounted(() => {
     --frame-shell-padding: 16px;
   }
 }
-.section-alert-bottom {
-  margin-bottom: 20px;
+.display-note {
+  margin-top: 16px;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  line-height: 1.7;
 }
 
 .display-form {

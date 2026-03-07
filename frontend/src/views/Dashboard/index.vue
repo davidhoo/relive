@@ -2,13 +2,12 @@
   <div class="dashboard">
     <PageHeader title="仪表盘" subtitle="照片管理系统概览" :gradient="true" />
 
-    <!-- 统计卡片 -->
     <el-row :gutter="20" class="stats-row animate-fade-in">
       <el-col :xs="24" :sm="12" :md="6">
         <el-card shadow="hover">
           <el-statistic title="总照片数" :value="systemStats?.total_photos || 0">
             <template #prefix>
-              <el-icon><Picture /></el-icon>
+              <el-icon class="photo-icon"><Picture /></el-icon>
             </template>
             <template #suffix>
               <span class="stat-suffix">张</span>
@@ -51,111 +50,147 @@
       </el-col>
     </el-row>
 
-    <!-- AI 分析进度 - 简洁卡片 -->
     <el-row :gutter="20" class="progress-row">
       <el-col :span="24">
         <el-card shadow="never" class="progress-card animate-fade-in animate-delay-1">
-          <SectionHeader :icon="MagicStick" title="AI 分析进度">
-            <template #actions>
-              <el-button
-                type="primary"
-                size="default"
-                @click="handleStartAnalysis"
-                :disabled="analyzing"
-                class="start-button"
-              >
-                <el-icon v-if="!analyzing"><VideoPlay /></el-icon>
-                {{ analyzing ? '分析中...' : '开始批量分析' }}
-              </el-button>
-            </template>
-          </SectionHeader>
+          <template #header>
+            <SectionHeader :icon="MagicStick" title="AI 分析进度">
+              <template #actions>
+                <div class="panel-actions">
+                  <span class="count-pill">{{ aiProgress?.is_running ? '进行中' : '待机' }}</span>
+                  <el-button
+                    type="primary"
+                    size="small"
+                    @click="handleStartAnalysis"
+                    :disabled="analyzing"
+                    class="action-pill action-pill-primary"
+                  >
+                    <el-icon v-if="!analyzing"><VideoPlay /></el-icon>
+                    {{ analyzing ? '分析中...' : '开始分析' }}
+                  </el-button>
+                </div>
+              </template>
+            </SectionHeader>
+          </template>
+
           <div v-if="aiProgress" class="progress-content">
-            <div class="modern-progress">
-              <div
-                class="modern-progress-bar"
-                :style="{ width: progressPercentage + '%' }"
-              ></div>
+            <div class="progress-overview-panel">
+              <div class="progress-hero">
+                <div class="progress-hero-top">
+                  <span class="progress-status-dot" :class="{ running: aiProgress.is_running }"></span>
+                  <span class="progress-status-text">{{ progressStateText }}</span>
+                </div>
+                <div class="progress-hero-value">{{ progressPercentage }}<span>%</span></div>
+                <div class="progress-hero-desc">{{ progressDescription }}</div>
+              </div>
+
+              <div class="progress-stats-grid">
+                <div class="progress-stat-card">
+                  <span class="progress-stat-card-label">总任务</span>
+                  <strong class="progress-stat-card-value">{{ aiProgress.total }}</strong>
+                </div>
+                <div class="progress-stat-card">
+                  <span class="progress-stat-card-label">已完成</span>
+                  <strong class="progress-stat-card-value success">{{ aiProgress.completed }}</strong>
+                </div>
+                <div class="progress-stat-card">
+                  <span class="progress-stat-card-label">待处理</span>
+                  <strong class="progress-stat-card-value">{{ remainingCount }}</strong>
+                </div>
+                <div class="progress-stat-card" :class="{ warning: aiProgress.failed > 0 }">
+                  <span class="progress-stat-card-label">失败</span>
+                  <strong class="progress-stat-card-value danger">{{ aiProgress.failed }}</strong>
+                </div>
+              </div>
             </div>
-            <div class="progress-info">
-              <div class="progress-stat">
-                <span class="progress-label">已完成</span>
-                <span class="progress-value">{{ aiProgress.completed }}/{{ aiProgress.total }}</span>
+
+            <div class="progress-track-panel">
+              <div class="modern-progress">
+                <div class="modern-progress-bar" :style="{ width: progressPercentage + '%' }"></div>
               </div>
-              <div class="progress-stat">
-                <span class="progress-label">进度</span>
-                <span class="progress-value">{{ progressPercentage }}%</span>
+
+              <div class="progress-info">
+                <div class="progress-stat">
+                  <span class="progress-label">当前照片</span>
+                  <span class="progress-value compact">{{ currentPhotoText }}</span>
+                </div>
+                <div class="progress-stat">
+                  <span class="progress-label">运行模式</span>
+                  <span class="progress-value compact">{{ progressModeText }}</span>
+                </div>
+                <div class="progress-stat">
+                  <span class="progress-label">开始时间</span>
+                  <span class="progress-value compact">{{ startedAtText }}</span>
+                </div>
+                <div class="progress-stat">
+                  <span class="progress-label">当前状态</span>
+                  <span class="progress-value compact">{{ progressStatusText }}</span>
+                </div>
               </div>
-              <div class="progress-stat" v-if="aiProgress.failed > 0">
-                <span class="progress-label">失败</span>
-                <span class="progress-value error">{{ aiProgress.failed }}</span>
-              </div>
-              <div class="progress-stat" v-if="aiProgress.current_photo_id">
-                <span class="progress-label">当前照片</span>
-                <span class="progress-value">#{{ aiProgress.current_photo_id }}</span>
-              </div>
+            </div>
+
+            <div class="progress-meta-row" v-if="aiProgress.current_message">
+              <span class="progress-meta-label">运行消息</span>
+              <span class="progress-meta-text">{{ aiProgress.current_message }}</span>
             </div>
           </div>
-          <el-empty v-else description="暂无分析任务" :image-size="80" />
+
+          <el-empty v-else description="暂无分析任务" :image-size="80">
+            <el-button type="primary" size="small" @click="handleStartAnalysis" class="action-pill action-pill-primary">
+              <el-icon><VideoPlay /></el-icon>
+              开始分析
+            </el-button>
+          </el-empty>
         </el-card>
       </el-col>
     </el-row>
 
-    <!-- 最近照片 - 简洁卡片 -->
     <el-row :gutter="20" class="photos-row">
       <el-col :span="24">
         <el-card shadow="never" class="photos-card animate-fade-in animate-delay-2">
-          <SectionHeader :icon="Picture" title="最近照片">
-            <template #actions>
-              <div class="photos-title-actions">
-                <span class="photos-count">{{ recentPhotos.length }} 张</span>
-                <el-button link @click="gotoPhotos" class="view-all-btn">
-                  查看全部
-                  <el-icon><ArrowRight /></el-icon>
-                </el-button>
-              </div>
-            </template>
-          </SectionHeader>
-          <el-row :gutter="16" v-if="recentPhotos.length" class="photos-grid">
-            <el-col
-              :xs="12"
-              :sm="8"
-              :md="6"
-              :lg="4"
-              v-for="(photo, index) in recentPhotos"
-              :key="photo.id"
-              class="photo-col"
-            >
+          <template #header>
+            <SectionHeader :icon="Picture" title="最近照片">
+              <template #actions>
+                <div class="photos-title-actions">
+                  <span class="count-pill">共 {{ recentPhotos.length }} 张</span>
+                  <el-button size="small" plain @click="gotoPhotos" class="view-all-btn">
+                    查看全部
+                    <el-icon><ArrowRight /></el-icon>
+                  </el-button>
+                </div>
+              </template>
+            </SectionHeader>
+          </template>
+
+          <div v-if="recentPhotos.length" class="recent-photos-grid">
               <div
-                class="image-card animate-scale-in"
+                v-for="(photo, index) in recentPhotos"
+                :key="photo.id"
+                class="recent-photo-card animate-scale-in"
                 :style="{ animationDelay: `${index * 30}ms` }"
                 @click="gotoPhotoDetail(photo.id)"
               >
-                <el-image
-                  :src="getPhotoThumbnailUrl(photo.id, photo.updated_at)"
-                  :preview-src-list="[getPhotoUrl(photo.id)]"
-                  fit="cover"
-                  class="image-card-image"
-                  loading="lazy"
-                />
-                <div class="image-card-badge score-badge" v-if="photo.ai_analyzed">
-                  <el-icon><Star /></el-icon>
-                  {{ photo.overall_score?.toFixed(1) }}
-                </div>
-                <div class="image-card-badge badge-info" v-else>
-                  <el-icon><QuestionFilled /></el-icon>
-                  未分析
-                </div>
-                <div class="image-card-overlay">
-                  <div class="overlay-content">
-                    <div class="photo-name">{{ getFileName(photo.file_path) }}</div>
-                    <div class="photo-date" v-if="photo.taken_at">
-                      {{ formatDate(photo.taken_at) }}
-                    </div>
+                <div class="recent-photo-cover">
+                  <el-image
+                    :src="getPhotoThumbnailUrl(photo.id, photo.updated_at)"
+                    :preview-src-list="[getPhotoUrl(photo.id)]"
+                    fit="cover"
+                    class="recent-photo-image"
+                    loading="lazy"
+                  />
+                  <div v-if="photo.ai_analyzed && photo.overall_score !== undefined" class="recent-photo-badge score">
+                    <el-icon><Star /></el-icon>
+                    {{ photo.overall_score.toFixed(1) }}
+                  </div>
+                  <div v-else class="recent-photo-badge pending">
+                    <el-icon><QuestionFilled /></el-icon>
+                    未分析
                   </div>
                 </div>
+
               </div>
-            </el-col>
-          </el-row>
+          </div>
+
           <el-empty v-else description="暂无照片" :image-size="100">
             <el-button type="primary" @click="handleScan">
               <el-icon><FolderOpened /></el-icon>
@@ -169,10 +204,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowRight, DataLine, FolderOpened, MagicStick, Monitor, Picture, QuestionFilled, Star, VideoPlay } from '@element-plus/icons-vue'
+import {
+  ArrowRight,
+  DataLine,
+  FolderOpened,
+  MagicStick,
+  Monitor,
+  Picture,
+  QuestionFilled,
+  Star,
+  VideoPlay,
+} from '@element-plus/icons-vue'
 import { useSystemStore } from '@/stores/system'
 import { photoApi } from '@/api/photo'
 import { aiApi } from '@/api/ai'
@@ -190,18 +235,13 @@ const recentPhotos = ref<Photo[]>([])
 const aiProgress = ref<AIAnalyzeProgress | null>(null)
 const analyzing = ref(false)
 
-// 系统统计
 const systemStats = computed(() => systemStore.stats)
 
-// 分析率
 const analysisRate = computed(() => {
   if (!systemStats.value?.total_photos) return 0
-  return Math.round(
-    (systemStats.value.analyzed_photos / systemStats.value.total_photos) * 100
-  )
+  return Math.round((systemStats.value.analyzed_photos / systemStats.value.total_photos) * 100)
 })
 
-// 存储大小格式化
 const storageSize = computed(() => {
   const size = systemStats.value?.storage_size || 0
   if (size < 1024) return `${size} B`
@@ -210,21 +250,70 @@ const storageSize = computed(() => {
   return `${(size / 1024 / 1024 / 1024).toFixed(2)} GB`
 })
 
-// AI 进度百分比
 const progressPercentage = computed(() => {
   if (!aiProgress.value?.total) return 0
   return Math.round((aiProgress.value.completed / aiProgress.value.total) * 100)
 })
 
-// 进度状态
-const progressStatus = computed(() => {
-  if (!aiProgress.value) return undefined
-  if (aiProgress.value.is_running) return undefined
-  if (aiProgress.value.failed > 0) return 'warning'
-  return 'success'
+const remainingCount = computed(() => {
+  if (!aiProgress.value) return 0
+  return Math.max(aiProgress.value.total - aiProgress.value.completed - aiProgress.value.failed, 0)
 })
 
-// 获取照片缩略图 URL
+const progressModeText = computed(() => {
+  switch (aiProgress.value?.mode) {
+    case 'batch':
+      return '批量分析'
+    case 'background':
+      return '后台分析'
+    default:
+      return aiProgress.value?.mode || '未指定'
+  }
+})
+
+const progressStatusText = computed(() => {
+  switch (aiProgress.value?.status) {
+    case 'running':
+      return '运行中'
+    case 'completed':
+      return '已完成'
+    case 'failed':
+      return '失败'
+    case 'pending':
+      return '排队中'
+    default:
+      return aiProgress.value?.is_running ? '处理中' : '待机'
+  }
+})
+
+const progressStateText = computed(() => {
+  if (!aiProgress.value) return '待机'
+  if (aiProgress.value.is_running) return '分析进行中'
+  if (aiProgress.value.total === 0) return '暂无待处理任务'
+  if (remainingCount.value === 0) return aiProgress.value.failed > 0 ? '任务已结束' : '任务已完成'
+  return '等待开始'
+})
+
+const progressDescription = computed(() => {
+  if (!aiProgress.value) return '当前没有运行中的分析任务'
+  if (aiProgress.value.current_message) return aiProgress.value.current_message
+  if (aiProgress.value.is_running) {
+    return `已完成 ${aiProgress.value.completed} 张，剩余 ${remainingCount.value} 张待处理`
+  }
+  if (aiProgress.value.total === 0) return '当前没有待分析照片'
+  if (aiProgress.value.failed > 0) return `本轮任务已停止，失败 ${aiProgress.value.failed} 张`
+  return '当前批量分析任务已经完成'
+})
+
+const currentPhotoText = computed(() => {
+  if (!aiProgress.value?.current_photo_id) return '—'
+  return `#${aiProgress.value.current_photo_id}`
+})
+
+const startedAtText = computed(() => {
+  return formatDateTime(aiProgress.value?.started_at)
+})
+
 const getPhotoThumbnailUrl = (photoId: number, version?: string) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
   const token = userStore.token
@@ -235,33 +324,31 @@ const getPhotoThumbnailUrl = (photoId: number, version?: string) => {
   return `${baseUrl}/photos/${photoId}/thumbnail${query ? `?${query}` : ''}`
 }
 
-// 获取照片原图 URL（用于预览）
 const getPhotoUrl = (photoId: number) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
   const token = userStore.token
   return `${baseUrl}/photos/${photoId}/image${token ? `?token=${token}` : ''}`
 }
 
-// 获取文件名
-const getFileName = (filePath: string) => {
-  return filePath.split('/').pop() || filePath
-}
 
-// 格式化日期
-const formatDate = (dateStr: string) => {
+
+const formatDateTime = (dateStr?: string) => {
+  if (!dateStr) return '—'
   try {
     const date = new Date(dateStr)
-    return date.toLocaleDateString('zh-CN', {
+    return date.toLocaleString('zh-CN', {
       year: 'numeric',
       month: '2-digit',
-      day: '2-digit'
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
     })
   } catch {
-    return ''
+    return '—'
   }
 }
 
-// 加载最近照片
+
 const loadRecentPhotos = async () => {
   try {
     const res = await photoApi.getList({ page: 1, page_size: 12 })
@@ -271,46 +358,44 @@ const loadRecentPhotos = async () => {
   }
 }
 
-// 加载 AI 进度
 const loadAIProgress = async () => {
   try {
     const res = await aiApi.getProgress()
     aiProgress.value = res.data?.data || null
+    analyzing.value = Boolean(aiProgress.value?.is_running)
   } catch (error: any) {
-    // AI 服务未配置时返回 503，这是正常情况，不需要显示错误
     if (error?.response?.status === 503) {
       console.log('AI service is not configured')
       aiProgress.value = null
+      analyzing.value = false
     } else {
       console.error('Failed to load AI progress:', error)
     }
   }
 }
 
-// 开始批量分析
 const handleStartAnalysis = async () => {
   try {
     analyzing.value = true
-    await aiApi.analyzeBatch(100)
-    ElMessage.success('批量分析已开始')
+    await aiApi.startBackground()
+    await loadAIProgress()
+    ElMessage.success('后台分析已启动')
 
-    // 轮询进度
-    const timer = setInterval(async () => {
+    const timer = window.setInterval(async () => {
       await loadAIProgress()
       if (!aiProgress.value?.is_running) {
         clearInterval(timer)
         analyzing.value = false
         await systemStore.fetchStats()
-        ElMessage.success('批量分析已完成')
+        ElMessage.success('后台分析已停止')
       }
     }, 2000)
   } catch (error: any) {
     analyzing.value = false
-    ElMessage.error(error.message || '启动批量分析失败')
+    ElMessage.error(error.message || '启动后台分析失败')
   }
 }
 
-// 扫描照片
 const handleScan = async () => {
   try {
     await photoApi.startScan()
@@ -326,7 +411,7 @@ const handleScan = async () => {
           await systemStore.fetchStats()
           ElMessage.success('扫描任务已完成')
         }
-      } catch (error) {
+      } catch {
         clearInterval(timer)
       }
     }, 2000)
@@ -335,12 +420,10 @@ const handleScan = async () => {
   }
 }
 
-// 跳转到照片列表
 const gotoPhotos = () => {
   router.push('/photos')
 }
 
-// 跳转到照片详情
 const gotoPhotoDetail = (photoId: number) => {
   router.push(`/photos/${photoId}`)
 }
@@ -353,73 +436,20 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-/* ============ Dashboard 容器 - WeDance 风格 ============ */
 .dashboard {
   padding: var(--spacing-xl);
   background: var(--color-bg-primary);
   min-height: 100vh;
 }
 
-/* ============ 页面标题 ============ */
-.page-header {
-  margin-bottom: 40px;
-}
-
-.page-title {
-  font-size: var(--font-size-4xl);
-  font-weight: var(--font-weight-bold);
-  margin-bottom: var(--spacing-sm);
-  line-height: 1.2;
-  color: var(--color-text-primary);
-}
-
-.page-subtitle {
-  font-size: var(--font-size-lg);
-  color: var(--color-text-secondary);
-}
-
-.text-gradient {
-  color: var(--color-primary);
-}
-
-/* ============ 统计卡片网格 ============ */
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 20px;
-  margin-bottom: 40px;
-}
-
-/* 统计卡片样式 - 继承自 common.css */
-.stat-card .stat-card-icon {
-  width: 56px;
-  height: 56px;
-  font-size: 28px;
-  margin-bottom: 16px;
-}
-
-.stat-card .stat-card-title {
-  margin-bottom: 8px;
-}
-
-.stat-card .stat-card-value {
-  font-size: 48px;
-  font-weight: 600;
-  margin-bottom: 8px;
-}
-
-.storage-value {
-  font-size: 24px !important;
-}
-
-.stat-highlight {
-  color: var(--color-primary);
-  font-weight: var(--font-weight-semibold);
-}
-
-/* ============ 统计卡片 ============ */
-.stats-row {
+.stats-row,
+.progress-row,
+.photos-row {
   margin-bottom: var(--spacing-xl);
+}
+
+.photo-icon {
+  color: var(--color-primary);
 }
 
 .success-icon {
@@ -444,222 +474,349 @@ onMounted(async () => {
   font-weight: var(--font-weight-semibold);
 }
 
-/* ============ AI 进度卡片 ============ */
-.progress-row {
-  margin-bottom: var(--spacing-xl);
+.progress-card,
+.photos-card {
+  border-radius: 24px;
+  border: 1px solid var(--color-border);
+  overflow: hidden;
 }
 
-.progress-card :deep(.el-card__body) {
-  padding: var(--spacing-xl);
+.progress-card :deep(.el-card__header),
+.photos-card :deep(.el-card__header) {
+  padding: 22px 28px;
+  border-bottom: 1px solid var(--color-border);
 }
 
-.progress-card > :deep(.section-header) {
-  margin-bottom: var(--spacing-lg);
+.progress-card :deep(.el-card__body),
+.photos-card :deep(.el-card__body) {
+  padding: 28px;
 }
 
-.start-button {
-  border-radius: var(--radius-sm);
+.panel-actions,
+.photos-title-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.count-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid #d9d9d9;
+  background: #fff;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+}
+
+.action-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding-inline: 16px;
+  border-radius: 999px;
   font-weight: var(--font-weight-semibold);
-  transition: all var(--transition-base);
+}
+
+.action-pill-primary {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.view-all-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 32px;
+  padding-inline: 14px;
+  border-radius: 999px;
+  border-color: var(--color-border);
+  color: var(--color-text-secondary);
+  background: #fff;
+  font-weight: var(--font-weight-medium);
+}
+
+.view-all-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: #fff;
 }
 
 .progress-content {
-  margin-top: var(--spacing-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.progress-overview-panel {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) 1fr;
+  gap: 20px;
+  padding: 24px;
+  background: linear-gradient(180deg, #f9fbfd 0%, #f5f7fa 100%);
+  border: 1px solid var(--color-border);
+  border-radius: 20px;
+}
+
+.progress-hero {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 8px 4px;
+}
+
+.progress-hero-top {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.progress-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #cfd8dc;
+}
+
+.progress-status-dot.running {
+  background: #52c41a;
+  box-shadow: 0 0 0 6px rgba(82, 196, 26, 0.12);
+}
+
+.progress-status-text {
+  font-size: 14px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.progress-hero-value {
+  font-size: 52px;
+  line-height: 1;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.progress-hero-value span {
+  margin-left: 4px;
+  font-size: 22px;
+  color: var(--color-text-secondary);
+}
+
+.progress-hero-desc {
+  margin-top: 12px;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.progress-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.progress-stat-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  min-height: 112px;
+  padding: 18px 20px;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: 18px;
+}
+
+.progress-stat-card.warning {
+  border-color: #ffd591;
+  background: #fffaf2;
+}
+
+.progress-stat-card-label {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.progress-stat-card-value {
+  color: var(--color-text-primary);
+  font-size: 32px;
+  line-height: 1;
+}
+
+.progress-stat-card-value.success {
+  color: #0d8a4f;
+}
+
+.progress-stat-card-value.danger {
+  color: #cf1322;
+}
+
+.progress-track-panel {
+  padding: 22px 24px;
+  border-radius: 20px;
+  border: 1px solid var(--color-border);
+  background: #fff;
 }
 
 .modern-progress {
-  margin-bottom: var(--spacing-lg);
-  height: 8px;
-  background: var(--color-bg-secondary);
-  border-radius: var(--radius-full);
+  height: 12px;
+  margin-bottom: 20px;
+  background: #eef2f6;
+  border-radius: 999px;
   overflow: hidden;
 }
 
 .modern-progress-bar {
   height: 100%;
-  background: linear-gradient(to right, var(--color-success) 0%, var(--color-warning) 100%);
-  border-radius: var(--radius-full);
+  border-radius: 999px;
+  background: linear-gradient(90deg, #33c18d 0%, #20b2aa 100%);
   transition: width var(--transition-slow);
 }
 
 .progress-info {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: var(--spacing-lg);
-  padding: var(--spacing-lg);
-  background: var(--color-bg-secondary);
-  border-radius: var(--radius-sm);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
 }
 
 .progress-stat {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-xs);
+  gap: 8px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: var(--color-bg-secondary);
 }
 
 .progress-label {
-  font-size: var(--font-size-xs);
+  font-size: 12px;
   color: var(--color-text-tertiary);
   font-weight: var(--font-weight-medium);
 }
 
 .progress-value {
-  font-size: var(--font-size-xl);
-  font-weight: var(--font-weight-bold);
   color: var(--color-text-primary);
-}
-
-.progress-value.error {
-  color: var(--color-error);
-}
-
-/* ============ 照片卡片 ============ */
-.photos-row {
-  margin-bottom: var(--spacing-xl);
-}
-
-.photos-card :deep(.el-card__body) {
-  padding: var(--spacing-xl);
-}
-
-.photos-card > :deep(.section-header) {
-  margin-bottom: var(--spacing-lg);
-}
-
-.photos-count {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 12px;
-  background: var(--color-primary);
-  color: white;
-  border-radius: var(--radius-full);
-  font-size: var(--font-size-xs);
+  font-size: 20px;
   font-weight: var(--font-weight-semibold);
 }
 
-.view-all-btn {
+.progress-value.compact {
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.progress-meta-row {
   display: flex;
-  align-items: center;
-  gap: 4px;
-  font-weight: var(--font-weight-medium);
-  transition: all var(--transition-fast);
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 18px;
+  background: #f8fafc;
+  border: 1px dashed #d9e2ec;
+  border-radius: 16px;
 }
 
-.view-all-btn:hover {
-  transform: translateX(4px);
+.progress-meta-label {
+  flex-shrink: 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: var(--font-weight-semibold);
 }
 
-.photos-grid {
-  margin-top: var(--spacing-lg);
+.progress-meta-text {
+  color: var(--color-text-primary);
+  font-size: 14px;
+  line-height: 1.6;
 }
 
-.photo-col {
-  margin-bottom: var(--spacing-md);
+
+
+
+
+
+
+.recent-photos-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 18px;
 }
 
-.image-card {
-  height: 240px;
-  position: relative;
-  border-radius: var(--radius-md);
+.recent-photo-card {
   overflow: hidden;
-  cursor: pointer;
-  transition: all var(--transition-base);
-  background: var(--color-bg-secondary);
-  box-shadow: var(--shadow-sm);
+  border-radius: 18px;
   border: 1px solid var(--color-border);
+  background: #fff;
+  cursor: pointer;
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast);
 }
 
-.image-card:hover {
-  box-shadow: var(--shadow-lg);
-  border-color: var(--color-primary);
+.recent-photo-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(0, 184, 148, 0.28);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
 }
 
-.image-card-image {
+.recent-photo-cover {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  background: var(--color-bg-secondary);
+}
+
+.recent-photo-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.recent-photo-image :deep(.el-image__inner) {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transition: transform var(--transition-base);
 }
 
-.image-card:hover .image-card-image {
-  transform: scale(1.05);
-}
-
-/* 分数徽章 */
-.image-card-badge {
+.recent-photo-badge {
   position: absolute;
-  top: var(--spacing-sm);
-  right: var(--spacing-sm);
-  padding: 4px 12px;
-  border-radius: var(--radius-full);
-  background: rgba(255, 255, 255, 0.95);
-  color: var(--color-text-primary);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-semibold);
-  display: flex;
+  top: 12px;
+  right: 12px;
+  display: inline-flex;
   align-items: center;
   gap: 4px;
-  z-index: 2;
-  transition: transform var(--transition-base);
-  box-shadow: var(--shadow-sm);
-}
-
-.score-badge {
-  background: var(--color-primary);
-  color: white;
-}
-
-.badge-info {
-  background: var(--color-info);
-  color: white;
-}
-
-.image-card:hover .image-card-badge {
-  transform: scale(1.05);
-}
-
-.image-card-overlay {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.8), transparent);
-  padding: var(--spacing-md);
-  transform: translateY(100%);
-  transition: transform var(--transition-base);
-  z-index: 1;
-}
-
-.image-card:hover .image-card-overlay {
-  transform: translateY(0);
-}
-
-.overlay-content {
-  color: white;
-}
-
-.photo-name {
-  font-size: var(--font-size-sm);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
   font-weight: var(--font-weight-semibold);
-  margin-bottom: var(--spacing-xs);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
 }
 
-.photo-date {
-  font-size: var(--font-size-xs);
-  color: rgba(255, 255, 255, 0.8);
+.recent-photo-badge.score {
+  background: rgba(19, 194, 194, 0.94);
+  color: #fff;
 }
 
-/* ============ 响应式设计 ============ */
+.recent-photo-badge.pending {
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--color-text-secondary);
+}
+
+
+.photos-filter-empty {
+  padding-block: 16px;
+}
+
 @media (max-width: 1200px) {
-  .dashboard {
-    padding: var(--spacing-xl);
+  .progress-overview-panel {
+    grid-template-columns: 1fr;
   }
 
-  .page-title {
-    font-size: var(--font-size-3xl);
+  .progress-info {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -668,23 +825,19 @@ onMounted(async () => {
     padding: var(--spacing-lg);
   }
 
-
-  .page-title {
-    font-size: var(--font-size-2xl);
+  .progress-card :deep(.el-card__header),
+  .photos-card :deep(.el-card__header),
+  .progress-card :deep(.el-card__body),
+  .photos-card :deep(.el-card__body) {
+    padding: 20px;
   }
 
-  .page-subtitle {
-    font-size: var(--font-size-base);
+  .progress-stats-grid,
+  .progress-info,
+  .recent-photos-grid {
+    grid-template-columns: 1fr;
   }
 
-  .progress-card,
-  .photos-card {
-    padding: var(--spacing-lg) !important;
-  }
-
-  .image-card {
-    height: 200px;
-  }
 }
 
 @media (max-width: 480px) {
@@ -692,10 +845,9 @@ onMounted(async () => {
     padding: var(--spacing-md);
   }
 
-
-
-  .image-card {
-    height: 180px;
+  .panel-actions,
+  .photos-title-actions {
+    align-items: stretch;
   }
 }
 </style>

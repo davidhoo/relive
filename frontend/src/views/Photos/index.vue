@@ -8,7 +8,7 @@
         <SectionHeader :icon="FolderOpened" title="扫描路径">
         <template #actions>
           <div class="scan-paths-actions">
-            <el-tag type="info" size="small" effect="plain" class="count-tag">{{ scanPaths.length }}</el-tag>
+            <span class="count-pill">{{ scanPaths.length }}</span>
             <el-button
               type="danger"
               size="small"
@@ -21,10 +21,10 @@
               <el-icon><Delete /></el-icon>
               清理
             </el-button>
-            <el-link type="primary" @click="goToConfig" class="manage-link">
+            <el-button plain size="small" @click="goToConfig" class="manage-btn">
               <el-icon><Setting /></el-icon>
               管理路径
-            </el-link>
+            </el-button>
           </div>
         </template>
       </SectionHeader>
@@ -148,7 +148,7 @@
         <SectionHeader :icon="Picture" title="照片列表">
         <template #actions>
           <div class="photos-list-actions">
-            <el-tag type="info" effect="plain">共 {{ total }} 张</el-tag>
+            <span class="count-pill">共 {{ total }} 张</span>
             <el-radio-group v-model="filterAnalyzed" @change="handleSearch" size="default" class="filter-group">
               <el-radio-button label="">全部</el-radio-button>
               <el-radio-button label="true">已分析</el-radio-button>
@@ -879,12 +879,33 @@ defineExpose({
 }
 
 .filter-group {
-  display: flex;
-  gap: var(--spacing-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
 }
 
 .filter-group :deep(.el-radio-button__inner) {
-  border-radius: var(--radius-sm);
+  min-width: 72px;
+  height: 32px;
+  padding: 0 16px;
+  border: none !important;
+  border-radius: 10px !important;
+  background: transparent;
+  color: var(--color-text-secondary);
+  box-shadow: none !important;
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+  line-height: 32px;
+}
+
+.filter-group :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
+  background: var(--color-primary);
+  color: #fff;
+  box-shadow: 0 8px 18px rgba(0, 184, 148, 0.18) !important;
 }
 
 /* ============ 扫描路径卡片 ============ */
@@ -900,24 +921,53 @@ defineExpose({
   margin-bottom: var(--spacing-md);
 }
 
-.scan-paths-title .count-tag {
-  margin-left: var(--spacing-xs);
-}
-
-.manage-link {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-xs);
-  font-size: var(--font-size-sm);
-}
-
 .scan-paths-actions {
   display: flex;
   align-items: center;
-  gap: var(--spacing-md);
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
-/* 清理按钮样式 */
+.count-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid #d9d9d9;
+  background: #fff;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+  line-height: 1;
+}
+
+.manage-btn,
+.cleanup-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 32px;
+  padding-inline: 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+}
+
+.manage-btn {
+  border-color: var(--color-border) !important;
+  color: var(--color-text-secondary) !important;
+  background: #fff !important;
+}
+
+.manage-btn:hover:not(:disabled) {
+  border-color: var(--color-primary) !important;
+  color: var(--color-primary) !important;
+  background: #fff !important;
+}
+
 .cleanup-btn {
   background-color: #fff1f0 !important;
   border-color: #ffa39e !important;

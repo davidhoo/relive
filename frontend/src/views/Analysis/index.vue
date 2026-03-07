@@ -2,20 +2,18 @@
   <div class="analysis-page">
     <PageHeader title="AI 分析" subtitle="管理分析任务、查看运行状态与批量处理进度" :gradient="true">
       <template #actions>
-        <el-button @click="$router.push('/config')">
+        <el-button class="header-action-btn" @click="$router.push('/config')">
           <el-icon><Setting /></el-icon>
           前往配置
         </el-button>
       </template>
     </PageHeader>
 
-    <!-- AI Provider 信息 -->
-    <el-card shadow="never" class="section-card">
+    <el-card shadow="never" class="section-card animate-fade-in">
       <template #header>
         <SectionHeader :icon="Setting" title="AI Provider 配置" />
       </template>
 
-      <!-- AI 未配置提示 -->
       <el-alert
         v-if="!providerInfo"
         type="warning"
@@ -24,124 +22,143 @@
         show-icon
         :closable="false"
         class="provider-alert"
-      >
-      </el-alert>
+      />
 
-      <el-descriptions :column="2" border v-if="providerInfo">
-        <el-descriptions-item label="当前 Provider">
-          <el-tag type="primary" size="large">{{ providerInfo.name }}</el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="状态">
-          <el-tag :type="providerInfo.is_available ? 'success' : 'danger'">
+      <div v-else class="provider-inline-row">
+        <div class="provider-inline-item">
+          <span class="provider-inline-label">当前 Provider</span>
+          <el-tag type="primary" effect="light" round>{{ providerInfo.name }}</el-tag>
+        </div>
+        <div class="provider-inline-item">
+          <span class="provider-inline-label">服务状态</span>
+          <el-tag :type="providerInfo.is_available ? 'success' : 'danger'" effect="light" round>
             {{ providerInfo.is_available ? '可用' : '不可用' }}
           </el-tag>
-        </el-descriptions-item>
-      </el-descriptions>
+        </div>
+      </div>
     </el-card>
 
-    <el-card shadow="never" class="section-card">
+    <el-card shadow="never" class="section-card animate-fade-in animate-delay-1">
       <template #header>
         <SectionHeader :icon="Cpu" title="分析运行状态" />
       </template>
 
-      <el-descriptions :column="2" border>
-        <el-descriptions-item label="当前状态">
-          <el-tag :type="runtimeStatus?.is_active ? 'warning' : 'success'">
-            {{ runtimeStatus?.is_active ? '已占用' : '空闲' }}
-          </el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="占用模式">
-          {{ runtimeModeText }}
-        </el-descriptions-item>
-        <el-descriptions-item label="占用实例">
-          {{ runtimeStatus?.owner_id || '-' }}
-        </el-descriptions-item>
-        <el-descriptions-item label="开始时间">
-          {{ formatTime(runtimeStatus?.started_at) }}
-        </el-descriptions-item>
-        <el-descriptions-item label="说明" :span="2">
-          {{ runtimeStatus?.message || '当前没有分析器占用运行权' }}
-        </el-descriptions-item>
-      </el-descriptions>
+      <div class="runtime-inline-list">
+        <div class="runtime-inline-row">
+          <div class="runtime-inline-item">
+            <span class="runtime-inline-label">当前状态</span>
+            <el-tag :type="runtimeStatus?.is_active ? 'warning' : 'success'" effect="light" round>
+              {{ runtimeStatus?.is_active ? '已占用' : '空闲' }}
+            </el-tag>
+          </div>
+          <div class="runtime-inline-item">
+            <span class="runtime-inline-label">占用模式</span>
+            <span class="runtime-inline-value">{{ runtimeModeText }}</span>
+          </div>
+        </div>
+        <div class="runtime-inline-row">
+          <div class="runtime-inline-item">
+            <span class="runtime-inline-label">占用实例</span>
+            <span class="runtime-inline-value mono">{{ runtimeStatus?.owner_id || '-' }}</span>
+          </div>
+          <div class="runtime-inline-item">
+            <span class="runtime-inline-label">开始时间</span>
+            <span class="runtime-inline-value">{{ formatTime(runtimeStatus?.started_at) }}</span>
+          </div>
+        </div>
+        <div class="runtime-inline-row runtime-inline-row-full">
+          <div class="runtime-inline-item runtime-inline-item-full">
+            <span class="runtime-inline-label">说明</span>
+            <span class="runtime-inline-value">{{ runtimeStatus?.message || '当前没有分析器占用运行权' }}</span>
+          </div>
+        </div>
+      </div>
     </el-card>
 
-    <!-- 批量分析 -->
-    <el-card shadow="never" class="section-card">
+    <el-card shadow="never" class="section-card animate-fade-in animate-delay-2">
       <template #header>
         <SectionHeader :icon="MagicStick" title="批量分析" />
       </template>
-      <div class="batch-analyze-form">
-        <div class="batch-analyze-row">
-          <span class="batch-label">分析数量：</span>
-          <el-input-number
-            v-model="batchLimit"
-            :min="1"
-            :max="1000"
-            :step="10"
-            class="input-number-width-lg"
-          />
-          <el-button
-            type="primary"
-            size="large"
-            @click="handleBatchAnalyze"
-            :loading="analyzing"
-            :disabled="batchAnalyzeDisabled"
-          >
-            {{ analyzing ? '分析中...' : '开始批量分析' }}
-          </el-button>
+
+      <div class="section-content">
+        <div class="control-row">
+          <div class="control-row-main">
+            <span class="control-label">分析数量</span>
+            <el-input-number
+              v-model="batchLimit"
+              :min="1"
+              :max="1000"
+              :step="10"
+              class="input-number-width-lg"
+            />
+            <el-button
+              type="primary"
+              size="large"
+              @click="handleBatchAnalyze"
+              :loading="analyzing"
+              :disabled="batchAnalyzeDisabled"
+              class="action-btn-primary"
+            >
+              {{ analyzing ? '分析中...' : '开始批量分析' }}
+            </el-button>
+          </div>
           <el-text v-if="batchDisabledReason" type="info" class="inline-info-text">
             {{ batchDisabledReason }}
           </el-text>
         </div>
-        <el-alert
-          title="批量分析说明"
-          type="info"
-          :closable="false"
-          description="批量分析将按照队列顺序处理未分析的照片。建议每次处理数量不超过 500 张，避免长时间占用资源。"
-          class="section-alert"
-        />
+        <div class="inline-note">
+          批量分析将按照队列顺序处理未分析的照片，建议每次处理数量不超过 500 张，避免长时间占用资源。
+        </div>
       </div>
     </el-card>
 
-    <el-card shadow="never" class="section-card">
+    <el-card shadow="never" class="section-card animate-fade-in animate-delay-3">
       <template #header>
-        <SectionHeader :icon="MagicStick" title="后台分析" />
+        <SectionHeader :icon="MagicStick" title="后台分析">
+          <template #actions>
+            <span class="status-pill" :class="backgroundRunning ? 'warning' : 'success'">
+              {{ backgroundRunning ? '运行中' : '未运行' }}
+            </span>
+          </template>
+        </SectionHeader>
       </template>
-      <div class="batch-analyze-form">
-        <div class="batch-analyze-row">
-          <el-button
-            v-if="!backgroundRunning"
-            type="primary"
-            size="large"
-            @click="handleStartBackground"
-            :disabled="backgroundStartDisabled"
-          >
-            开启后台分析
-          </el-button>
-          <el-button
-            v-else
-            type="danger"
-            size="large"
-            @click="handleStopBackground"
-          >
-            停止后台分析
-          </el-button>
+
+      <div class="section-content">
+        <div class="control-row control-row-stack">
+          <div class="control-row-main">
+            <el-button
+              v-if="!backgroundRunning"
+              type="primary"
+              size="large"
+              @click="handleStartBackground"
+              :disabled="backgroundStartDisabled"
+              class="action-btn-primary"
+            >
+              开启后台分析
+            </el-button>
+            <el-button
+              v-else
+              type="danger"
+              size="large"
+              @click="handleStopBackground"
+              class="action-btn-danger"
+            >
+              停止后台分析
+            </el-button>
+          </div>
           <el-text v-if="backgroundDisabledReason" type="info" class="inline-info-text">
             {{ backgroundDisabledReason }}
           </el-text>
         </div>
-        <el-alert
-          title="后台分析说明"
-          type="info"
-          :closable="false"
-          description="后台分析会持续扫描未分析照片并自动处理；没有新照片时会短暂等待后继续轮询。"
-          class="section-alert"
-        />
 
-        <div class="background-log-panel">
+        <div class="inline-note">
+          后台分析会持续扫描未分析照片并自动处理，没有新照片时会短暂等待后继续轮询。
+        </div>
+
+        <div class="background-log-panel flat-log-panel">
           <div class="background-log-header">
             <span>任务日志（最后 100 行）</span>
-            <el-button size="small" text @click="loadBackgroundLogs">刷新</el-button>
+            <el-button size="small" plain class="mini-action-btn" @click="loadBackgroundLogs">刷新</el-button>
           </div>
           <div class="background-log-body" ref="logContainerRef">
             <pre v-if="backgroundLogs.length">{{ backgroundLogs.join('\n') }}</pre>
@@ -151,60 +168,74 @@
       </div>
     </el-card>
 
-    <!-- 分析进度 -->
-    <el-card shadow="never" v-if="progress">
+    <el-card shadow="never" class="section-card animate-fade-in animate-delay-4" v-if="progress">
       <template #header>
         <SectionHeader :icon="DataLine" title="分析进度">
           <template #actions>
-          <el-button size="small" @click="loadProgress">刷新</el-button>
-        </template>
+            <div class="header-actions-inline">
+              <span class="status-pill" :class="progressPillClass">{{ progressPillText }}</span>
+              <el-button size="small" plain class="mini-action-btn" @click="loadProgress">刷新</el-button>
+            </div>
+          </template>
         </SectionHeader>
       </template>
 
-      <el-row :gutter="20" class="stats-row">
-        <el-col :span="6">
-          <el-statistic title="总任务数" :value="progress.total" />
-        </el-col>
-        <el-col :span="6">
-          <el-statistic title="已完成" :value="progress.completed" />
-        </el-col>
-        <el-col :span="6">
-          <el-statistic title="失败" :value="progress.failed" />
-        </el-col>
-        <el-col :span="6">
-          <el-statistic title="剩余" :value="progress.total - progress.completed - progress.failed" />
-        </el-col>
-      </el-row>
+      <div class="progress-summary-strip">
+        <div class="progress-summary-item">
+          <span class="progress-stat-label">总任务数</span>
+          <strong class="progress-stat-value">{{ progress.total }}</strong>
+        </div>
+        <div class="progress-summary-item">
+          <span class="progress-stat-label">已完成</span>
+          <strong class="progress-stat-value success">{{ progress.completed }}</strong>
+        </div>
+        <div class="progress-summary-item" :class="{ warning: progress.failed > 0 }">
+          <span class="progress-stat-label">失败</span>
+          <strong class="progress-stat-value danger">{{ progress.failed }}</strong>
+        </div>
+        <div class="progress-summary-item">
+          <span class="progress-stat-label">剩余</span>
+          <strong class="progress-stat-value">{{ remainingProgress }}</strong>
+        </div>
+      </div>
 
-      <el-progress
-        :percentage="progressPercentage"
-        :status="progressStatus"
-        :stroke-width="24"
-      />
+      <div class="progress-bar-inline">
+        <el-progress :percentage="progressPercentage" :status="progressStatus" :stroke-width="16" />
+      </div>
 
-      <div class="log-section">
-        <el-descriptions :column="2" border>
-          <el-descriptions-item label="运行状态">
-            <el-tag :type="progress.is_running ? 'success' : 'info'">
+      <div class="runtime-inline-list progress-inline-list progress-table-shell">
+        <div class="runtime-inline-row">
+          <div class="runtime-inline-item">
+            <span class="runtime-inline-label">运行状态</span>
+            <el-tag :type="progress.is_running ? 'success' : 'info'" effect="light" round>
               {{ progress.is_running ? '运行中' : '已停止' }}
             </el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="当前照片">
-            {{ progress.current_photo_id ? `Photo #${progress.current_photo_id}` : '-' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="开始时间" :span="2">
-            {{ formatTime(progress.started_at) }}
-          </el-descriptions-item>
-          <el-descriptions-item label="运行模式">
-            {{ progressModeText }}
-          </el-descriptions-item>
-          <el-descriptions-item label="当前状态">
-            {{ progressStatusText }}
-          </el-descriptions-item>
-          <el-descriptions-item label="当前消息" :span="2">
-            {{ progress.current_message || '-' }}
-          </el-descriptions-item>
-        </el-descriptions>
+          </div>
+          <div class="runtime-inline-item">
+            <span class="runtime-inline-label">当前照片</span>
+            <span class="runtime-inline-value mono">{{ progress.current_photo_id ? `Photo #${progress.current_photo_id}` : '-' }}</span>
+          </div>
+        </div>
+        <div class="runtime-inline-row">
+          <div class="runtime-inline-item">
+            <span class="runtime-inline-label">开始时间</span>
+            <span class="runtime-inline-value">{{ formatTime(progress.started_at) }}</span>
+          </div>
+          <div class="runtime-inline-item">
+            <span class="runtime-inline-label">运行模式</span>
+            <span class="runtime-inline-value">{{ progressModeText }}</span>
+          </div>
+        </div>
+        <div class="runtime-inline-row">
+          <div class="runtime-inline-item">
+            <span class="runtime-inline-label">当前状态</span>
+            <span class="runtime-inline-value">{{ progressStatusText }}</span>
+          </div>
+          <div class="runtime-inline-item">
+            <span class="runtime-inline-label">当前消息</span>
+            <span class="runtime-inline-value">{{ progress.current_message || '-' }}</span>
+          </div>
+        </div>
       </div>
     </el-card>
 
@@ -303,13 +334,46 @@ const progressStatusText = computed(() => {
   }
 })
 
-// 进度百分比
+const providerPillText = computed(() => {
+  if (!providerInfo.value) return '未配置'
+  return providerInfo.value.is_available ? '可用' : '不可用'
+})
+
+const providerPillClass = computed(() => {
+  if (!providerInfo.value) return 'warning'
+  return providerInfo.value.is_available ? 'success' : 'danger'
+})
+
+const runtimePillText = computed(() => {
+  return runtimeStatus.value?.is_active ? '运行中' : '空闲'
+})
+
+const runtimePillClass = computed(() => {
+  return runtimeStatus.value?.is_active ? 'warning' : 'success'
+})
+
+const progressPillText = computed(() => {
+  if (!progress.value) return '未开始'
+  return progress.value.is_running ? '运行中' : '已停止'
+})
+
+const progressPillClass = computed(() => {
+  if (!progress.value) return 'info'
+  if (progress.value.is_running) return 'success'
+  if (progress.value.failed > 0) return 'warning'
+  return 'info'
+})
+
+const remainingProgress = computed(() => {
+  if (!progress.value) return 0
+  return Math.max(progress.value.total - progress.value.completed - progress.value.failed, 0)
+})
+
 const progressPercentage = computed(() => {
   if (!progress.value?.total) return 0
   return Math.round((progress.value.completed / progress.value.total) * 100)
 })
 
-// 进度状态
 const progressStatus = computed(() => {
   if (!progress.value) return undefined
   if (progress.value.is_running) return undefined
@@ -317,13 +381,11 @@ const progressStatus = computed(() => {
   return 'success'
 })
 
-// 格式化时间
 const formatTime = (time?: string) => {
   if (!time) return '-'
   return dayjs(time).format('YYYY-MM-DD HH:mm:ss')
 }
 
-// 加载 Provider 信息
 const loadProviderInfo = async () => {
   try {
     const res = await aiApi.getProviderInfo()
@@ -333,7 +395,6 @@ const loadProviderInfo = async () => {
   }
 }
 
-// 加载进度
 const loadProgress = async () => {
   try {
     const res = await aiApi.getProgress()
@@ -362,7 +423,6 @@ const loadBackgroundLogs = async () => {
   }
 }
 
-// 批量分析
 const handleBatchAnalyze = async () => {
   if (!providerInfo.value) {
     ElMessage.warning('请先配置 AI Provider')
@@ -373,10 +433,7 @@ const handleBatchAnalyze = async () => {
     analyzing.value = true
     const res = await aiApi.analyzeBatch(batchLimit.value)
     ElMessage.success(`已提交 ${res.data?.data?.queued || 0} 张照片进行分析`)
-
     await loadRuntimeStatus()
-
-    // 开始轮询进度
     startProgressPolling()
   } catch (error: any) {
     if (error.response?.status === 409) {
@@ -393,7 +450,7 @@ const handleBatchAnalyze = async () => {
     } else if (error.response?.status === 503) {
       ElMessage.warning({
         message: 'AI 服务未配置或不可用，请先在配置管理中配置 AI Provider',
-        duration: 5000
+        duration: 5000,
       })
     } else {
       ElMessage.error(error.message || '批量分析失败')
@@ -444,7 +501,6 @@ const handleStopBackground = async () => {
   }
 }
 
-// 开始轮询进度
 const startProgressPolling = () => {
   if (progressTimer) {
     clearInterval(progressTimer)
@@ -466,7 +522,6 @@ const startProgressPolling = () => {
   }, 2000)
 }
 
-// 停止轮询
 const stopProgressPolling = () => {
   if (progressTimer) {
     clearInterval(progressTimer)
@@ -478,7 +533,6 @@ onMounted(async () => {
   await loadProviderInfo()
   await Promise.all([loadProgress(), loadRuntimeStatus(), loadBackgroundLogs()])
 
-  // 如果有正在运行的任务，开始轮询
   if (progress.value?.is_running || runtimeStatus.value?.is_active) {
     analyzing.value = !!progress.value?.is_running && progress.value?.mode === 'batch'
     startProgressPolling()
@@ -499,42 +553,288 @@ watch(backgroundLogs, async () => {
 
 <style scoped>
 .analysis-page {
-  padding: 20px;
+  padding: var(--spacing-xl);
+  background: var(--color-bg-primary);
+  min-height: 100vh;
 }
 
-.batch-analyze-form {
+.header-action-btn {
+  height: 36px;
+  padding-inline: 16px;
+  border-radius: 999px;
+  border-color: var(--color-border);
+}
+
+.section-card {
+  margin-bottom: var(--spacing-xl);
+  border-radius: 24px;
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+}
+
+.section-card :deep(.el-card__header) {
+  padding: 22px 28px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.section-card :deep(.el-card__body) {
+  padding: 24px 28px;
+}
+
+.status-pill,
+.header-actions-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.status-pill {
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid #d9d9d9;
+  background: #fff;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+}
+
+.status-pill.success {
+  color: #389e0d;
+  background: #f6ffed;
+  border-color: #b7eb8f;
+}
+
+.status-pill.warning {
+  color: #d46b08;
+  background: #fff7e6;
+  border-color: #ffd591;
+}
+
+.status-pill.danger {
+  color: #cf1322;
+  background: #fff1f0;
+  border-color: #ffa39e;
+}
+
+.status-pill.info {
+  color: var(--color-text-secondary);
+  background: #fafafa;
+  border-color: #d9d9d9;
+}
+
+.provider-alert {
+  border-radius: 18px;
+}
+
+.provider-inline-row {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  padding: 4px 12px;
+  flex-wrap: wrap;
+}
+
+.provider-inline-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+}
+
+.provider-inline-label {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: var(--font-weight-medium);
+}
+
+.runtime-inline-list {
   width: 100%;
 }
 
-.batch-analyze-row {
+.runtime-inline-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+  min-height: 56px;
+  padding: 0 12px;
+  align-items: center;
+  border-top: 1px solid var(--color-border);
+}
+
+.runtime-inline-row:first-child {
+  border-top: none;
+}
+
+.runtime-inline-row-full {
+  min-height: auto;
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+.runtime-inline-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.runtime-inline-item-full {
+  align-items: flex-start;
+}
+
+.runtime-inline-label {
+  flex-shrink: 0;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: var(--font-weight-medium);
+}
+
+.runtime-inline-value {
+  color: var(--color-text-primary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.flat-table {
+  width: 100%;
+}
+
+.info-table-head,
+.info-table-row {
+  display: grid;
+  align-items: center;
+}
+
+.info-table-provider,
+.info-table-runtime,
+.info-table-progress {
+  grid-template-columns: 180px minmax(0, 1fr);
+}
+
+.info-table-head {
+  min-height: 44px;
+  padding: 0 12px 12px;
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+  font-weight: var(--font-weight-semibold);
+}
+
+.info-table-row {
+  min-height: 56px;
+  padding: 0 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.info-table-label {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: var(--font-weight-medium);
+}
+
+.info-table-value {
+  color: var(--color-text-primary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.info-table-value.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.info-table-row-full {
+  align-items: flex-start;
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+.section-content {
+  padding-inline: 4px;
+}
+
+.control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.control-row-stack {
+  align-items: flex-start;
+}
+
+.control-row-main {
   display: flex;
   align-items: center;
   gap: 16px;
+  flex-wrap: wrap;
 }
 
-.batch-label {
-  font-size: 14px;
+.control-label {
   color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: var(--font-weight-medium);
 }
 
-.background-log-panel {
+.input-number-width-lg {
+  width: 200px;
+}
+
+.action-btn-primary,
+.action-btn-danger,
+.mini-action-btn {
+  border-radius: 999px;
+  font-weight: var(--font-weight-semibold);
+}
+
+.action-btn-primary,
+.action-btn-danger {
+  min-width: 132px;
+}
+
+.mini-action-btn {
+  height: 32px;
+  padding-inline: 14px;
+}
+
+.inline-note {
   margin-top: 16px;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.section-alert {
+  margin-top: 16px;
+  border-radius: 16px;
+}
+
+.flat-log-panel {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
 }
 
 .background-log-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  gap: 12px;
+  margin-bottom: 12px;
+  color: var(--color-text-primary);
+  font-size: 14px;
+  font-weight: var(--font-weight-semibold);
 }
 
 .background-log-body {
   height: 240px;
-  padding: 12px;
+  padding: 14px 16px;
   overflow-y: auto;
-  border: 1px solid var(--el-border-color);
-  border-radius: 6px;
-  background: var(--el-fill-color-light);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: #fff;
 }
 
 .background-log-body pre {
@@ -543,38 +843,154 @@ watch(backgroundLogs, async () => {
   word-break: break-word;
   font-family: var(--el-font-family-monospace, monospace);
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
 .background-log-empty {
   color: var(--color-text-secondary);
   font-size: 13px;
 }
-.section-card {
-  margin-bottom: 20px;
+
+.progress-summary-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 16px;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
 }
 
-.provider-alert {
-  margin-bottom: 20px;
+.progress-summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 12px;
 }
 
-.input-number-width-lg {
-  width: 200px;
+.progress-summary-item + .progress-summary-item {
+  border-left: 1px solid var(--color-border);
 }
 
-.inline-info-text {
-  margin-left: 10px;
+.progress-summary-item.warning {
+  background: #fffaf2;
 }
 
-.section-alert {
-  margin-top: 16px;
+.progress-stat-label {
+  color: var(--color-text-secondary);
+  font-size: 13px;
 }
 
-.stats-row {
-  margin-bottom: 20px;
+.progress-stat-value {
+  color: var(--color-text-primary);
+  font-size: 30px;
+  line-height: 1;
 }
 
-.log-section {
-  margin-top: 20px;
+.progress-stat-value.success {
+  color: #0d8a4f;
+}
+
+.progress-stat-value.danger {
+  color: #cf1322;
+}
+
+.progress-bar-inline {
+  margin: 16px 0 20px;
+}
+
+.progress-bar-inline :deep(.el-progress-bar__outer) {
+  background: #eef2f6;
+}
+
+.progress-bar-inline :deep(.el-progress-bar__inner) {
+  border-radius: 999px;
+}
+
+.progress-inline-list .runtime-inline-item {
+  align-items: flex-start;
+}
+
+.progress-table-shell {
+  margin-top: 0;
+}
+
+@media (max-width: 960px) {
+  .progress-summary-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .progress-summary-item:nth-child(3),
+  .progress-summary-item:nth-child(4) {
+    border-top: 1px solid var(--color-border);
+  }
+
+  .progress-summary-item:nth-child(3) {
+    border-left: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .analysis-page {
+    padding: var(--spacing-lg);
+  }
+
+  .section-card :deep(.el-card__header),
+  .section-card :deep(.el-card__body) {
+    padding: 20px;
+  }
+
+  .info-table-provider,
+  .info-table-runtime,
+  .info-table-progress {
+    grid-template-columns: 120px minmax(0, 1fr);
+  }
+
+  .runtime-inline-row {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
+
+  .control-row,
+  .control-row-main {
+    align-items: stretch;
+  }
+}
+
+@media (max-width: 640px) {
+  .analysis-page {
+    padding: var(--spacing-md);
+  }
+
+  .progress-summary-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .progress-summary-item + .progress-summary-item {
+    border-left: none;
+    border-top: 1px solid var(--color-border);
+  }
+
+  .info-table-head {
+    display: none;
+  }
+
+  .info-table-provider,
+  .info-table-runtime,
+  .info-table-progress,
+  .info-table-row {
+    grid-template-columns: 1fr;
+  }
+
+  .info-table-row {
+    gap: 6px;
+    padding-top: 14px;
+    padding-bottom: 14px;
+  }
+
+  .background-log-header,
+  .header-actions-inline {
+    flex-wrap: wrap;
+  }
 }
 </style>
