@@ -90,11 +90,13 @@ func (s *TaskScheduler) cleanExpiredLocksTask() {
 	// 立即执行一次
 	s.cleanExpiredLocks()
 	s.ensureTodayDailyBatch()
+	s.runAutoScanCheck()
 
 	for {
 		select {
 		case <-ticker.C:
 			s.cleanExpiredLocks()
+			s.runAutoScanCheck()
 		case <-s.stopCh:
 			return
 		}
@@ -117,6 +119,7 @@ func (s *TaskScheduler) cleanExpiredLocks() {
 func (s *TaskScheduler) RunOnce() {
 	s.cleanExpiredLocks()
 	s.ensureTodayDailyBatch()
+	s.runAutoScanCheck()
 }
 
 // RunWithContext 使用上下文运行调度器（支持外部取消）
