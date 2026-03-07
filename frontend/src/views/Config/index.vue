@@ -429,14 +429,23 @@
           </el-form-item>
 
           <el-form-item label="模型">
-            <el-select v-model="aiConfig.qwen_model" style="width: 100%">
-              <el-option value="qwen-vl-max" label="qwen-vl-max (推荐)" />
-              <el-option value="qwen-vl-plus" label="qwen-vl-plus (经济)" />
-              <el-option value="qwen3.5-flash" label="qwen3.5-flash (更快更便宜)" />
-              <el-option value="qwen3.5-plus" label="qwen3.5-plus (最新，需更长超时)" />
-              <el-option value="qwen3-vl-plus" label="qwen3-vl-plus (新一代视觉增强)" />
-              <el-option value="qwen3-vl-flash" label="qwen3-vl-flash (新一代视觉快速版)" />
-            </el-select>
+            <div class="model-select-row">
+              <el-select v-model="qwenModelSelection" style="width: 360px" @change="handleQwenModelSelectionChange">
+                <el-option value="qwen-vl-max" label="qwen-vl-max (推荐)" />
+                <el-option value="qwen-vl-plus" label="qwen-vl-plus (经济)" />
+                <el-option value="qwen3.5-flash" label="qwen3.5-flash (更快更便宜)" />
+                <el-option value="qwen3.5-plus" label="qwen3.5-plus (最新，需更长超时)" />
+                <el-option value="qwen3-vl-plus" label="qwen3-vl-plus (新一代视觉增强)" />
+                <el-option value="qwen3-vl-flash" label="qwen3-vl-flash (新一代视觉快速版)" />
+                <el-option value="__custom__" label="自定义" />
+              </el-select>
+              <el-input
+                v-if="qwenModelSelection === '__custom__'"
+                v-model="aiConfig.qwen_model"
+                placeholder="请输入自定义千问模型名"
+                style="flex: 1; min-width: 280px"
+              />
+            </div>
           </el-form-item>
 
           <el-form-item label="超时时间(秒)">
@@ -482,11 +491,20 @@
           </el-form-item>
 
           <el-form-item label="模型">
-            <el-select v-model="aiConfig.openai_model" style="width: 100%">
-              <el-option value="gpt-4-vision-preview" label="GPT-4 Vision (推荐)" />
-              <el-option value="gpt-4o" label="GPT-4o" />
-              <el-option value="gpt-4o-mini" label="GPT-4o Mini (经济)" />
-            </el-select>
+            <div class="model-select-row">
+              <el-select v-model="openAIModelSelection" style="width: 360px" @change="handleOpenAIModelSelectionChange">
+                <el-option value="gpt-4-vision-preview" label="GPT-4 Vision (推荐)" />
+                <el-option value="gpt-4o" label="GPT-4o" />
+                <el-option value="gpt-4o-mini" label="GPT-4o Mini (经济)" />
+                <el-option value="__custom__" label="自定义" />
+              </el-select>
+              <el-input
+                v-if="openAIModelSelection === '__custom__'"
+                v-model="aiConfig.openai_model"
+                placeholder="请输入自定义 OpenAI 模型名"
+                style="flex: 1; min-width: 280px"
+              />
+            </div>
           </el-form-item>
 
           <el-form-item label="最大 Tokens">
@@ -787,6 +805,32 @@ const savingGeocode = ref(false)
 const aiConfig = ref<AIConfig>(configApi.getDefaultAIConfig())
 const loadingAI = ref(false)
 const savingAI = ref(false)
+const qwenPresetModels = ['qwen-vl-max', 'qwen-vl-plus', 'qwen3.5-flash', 'qwen3.5-plus', 'qwen3-vl-plus', 'qwen3-vl-flash']
+const openAIPresetModels = ['gpt-4-vision-preview', 'gpt-4o', 'gpt-4o-mini']
+const qwenModelSelection = ref('qwen-vl-max')
+const openAIModelSelection = ref('gpt-4-vision-preview')
+
+const syncAIModelSelections = () => {
+  qwenModelSelection.value = qwenPresetModels.includes(aiConfig.value.qwen_model) ? aiConfig.value.qwen_model : '__custom__'
+  openAIModelSelection.value = openAIPresetModels.includes(aiConfig.value.openai_model) ? aiConfig.value.openai_model : '__custom__'
+}
+
+const handleQwenModelSelectionChange = (value: string) => {
+  if (value !== '__custom__') {
+    aiConfig.value.qwen_model = value
+  } else if (qwenPresetModels.includes(aiConfig.value.qwen_model)) {
+    aiConfig.value.qwen_model = ''
+  }
+}
+
+const handleOpenAIModelSelectionChange = (value: string) => {
+  if (value !== '__custom__') {
+    aiConfig.value.openai_model = value
+  } else if (openAIPresetModels.includes(aiConfig.value.openai_model)) {
+    aiConfig.value.openai_model = ''
+  }
+}
+
 
 // Prompt configuration state
 const promptConfig = ref<PromptConfig>({ ...defaultPrompts })
@@ -1008,6 +1052,7 @@ const loadAIConfig = async () => {
   try {
     const config = await configApi.getAIConfig()
     aiConfig.value = config
+    syncAIModelSelections()
   } catch (error: any) {
     ElMessage.error('加载 AI 配置失败')
   } finally {
@@ -1016,6 +1061,15 @@ const loadAIConfig = async () => {
 }
 
 const handleSaveAIConfig = async () => {
+  if (qwenModelSelection.value === '__custom__' && !aiConfig.value.qwen_model.trim()) {
+    ElMessage.warning('请输入自定义千问模型名')
+    return
+  }
+  if (openAIModelSelection.value === '__custom__' && !aiConfig.value.openai_model.trim()) {
+    ElMessage.warning('请输入自定义 OpenAI 模型名')
+    return
+  }
+
   savingAI.value = true
   try {
     await configApi.updateAIConfig(aiConfig.value)
@@ -1320,4 +1374,12 @@ onMounted(() => {
 .prompt-card :deep(.el-form-item__content) {
   width: calc(100% - 120px);
 }
+
+.model-select-row {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  align-items: center;
+}
+
 </style>
