@@ -224,7 +224,7 @@
             v-model="resetConfirmText"
             placeholder="请输入 RESET"
             size="large"
-            :input-style="{ textAlign: 'center', fontSize: '16px', letterSpacing: '2px' }"
+            input-class="reset-confirm-input-field"
           />
         </div>
       </div>
@@ -900,5 +900,10 @@ onMounted(async () => {
   display: flex;
   justify-content: flex-end;
   gap: var(--spacing-md);
+}
+.reset-confirm-input-field {
+  text-align: center;
+  font-size: 16px;
+  letter-spacing: 2px;
 }
 </style>
