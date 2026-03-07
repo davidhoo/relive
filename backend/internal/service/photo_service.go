@@ -25,6 +25,7 @@ type PhotoService interface {
 	StartScan(path string) (*model.ScanTask, error)
 	StartRebuild(path string) (*model.ScanTask, error)
 	GetScanTask() *model.ScanTask
+	RunAutoScanCheck() error
 
 	// 查询
 	GetPhotoByID(id uint) (*model.Photo, error)
@@ -61,6 +62,8 @@ type photoService struct {
 	thumbnailGenerator *util.ThumbnailGenerator
 	scanTask           *model.ScanTask
 	taskMutex          sync.RWMutex
+	autoScanMutex      sync.Mutex
+	lastAutoScanCheck  time.Time
 }
 
 // NewPhotoService 创建照片服务
@@ -75,6 +78,239 @@ func NewPhotoService(repo repository.PhotoRepository, cfg *config.Config, config
 		geocodeService:     geocodeService,
 		thumbnailGenerator: thumbnailGenerator,
 	}
+}
+
+type autoScanConfig struct {
+	Enabled         bool `json:"enabled"`
+	IntervalMinutes int  `json:"interval_minutes"`
+}
+
+type scanPathConfig struct {
+	ID              string     `json:"id"`
+	Name            string     `json:"name"`
+	Path            string     `json:"path"`
+	IsDefault       bool       `json:"is_default"`
+	Enabled         bool       `json:"enabled"`
+	AutoScanEnabled *bool      `json:"auto_scan_enabled,omitempty"`
+	CreatedAt       *time.Time `json:"created_at,omitempty"`
+	LastScannedAt   *time.Time `json:"last_scanned_at,omitempty"`
+}
+
+type scanPathsConfig struct {
+	Paths []scanPathConfig `json:"paths"`
+}
+
+type scanTreeNode struct {
+	Path    string `json:"path"`
+	ModTime int64  `json:"mod_time"`
+}
+
+type scanTreeSnapshot struct {
+	RootPath    string         `json:"root_path"`
+	GeneratedAt time.Time      `json:"generated_at"`
+	Nodes       []scanTreeNode `json:"nodes"`
+}
+
+func defaultAutoScanConfig() autoScanConfig {
+	return autoScanConfig{Enabled: false, IntervalMinutes: 60}
+}
+
+func (s *photoService) loadAutoScanConfig() (autoScanConfig, error) {
+	if s.configService == nil {
+		return defaultAutoScanConfig(), nil
+	}
+	value, err := s.configService.GetWithDefault("photos.auto_scan", "")
+	if err != nil || value == "" {
+		return defaultAutoScanConfig(), nil
+	}
+	cfg := defaultAutoScanConfig()
+	if err := json.Unmarshal([]byte(value), &cfg); err != nil {
+		return defaultAutoScanConfig(), err
+	}
+	if cfg.IntervalMinutes <= 0 {
+		cfg.IntervalMinutes = 60
+	}
+	return cfg, nil
+}
+
+func (s *photoService) loadScanPathsConfig() (scanPathsConfig, error) {
+	var cfg scanPathsConfig
+	if s.configService == nil {
+		return cfg, nil
+	}
+	value, err := s.configService.GetWithDefault("photos.scan_paths", "")
+	if err != nil || value == "" {
+		return cfg, nil
+	}
+	if err := json.Unmarshal([]byte(value), &cfg); err != nil {
+		return scanPathsConfig{}, err
+	}
+	for i := range cfg.Paths {
+		if cfg.Paths[i].AutoScanEnabled == nil {
+			enabled := true
+			cfg.Paths[i].AutoScanEnabled = &enabled
+		}
+	}
+	return cfg, nil
+}
+
+func (s *photoService) saveScanPathsConfig(cfg scanPathsConfig) error {
+	if s.configService == nil {
+		return nil
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return s.configService.Set("photos.scan_paths", string(data))
+}
+
+func (s *photoService) scanTreeConfigKey(pathID string) string {
+	return "photos.scan_tree." + pathID
+}
+
+func (s *photoService) loadScanTreeSnapshot(pathID string) (*scanTreeSnapshot, error) {
+	if s.configService == nil {
+		return nil, nil
+	}
+	value, err := s.configService.GetWithDefault(s.scanTreeConfigKey(pathID), "")
+	if err != nil || value == "" {
+		return nil, nil
+	}
+	var snapshot scanTreeSnapshot
+	if err := json.Unmarshal([]byte(value), &snapshot); err != nil {
+		return nil, err
+	}
+	return &snapshot, nil
+}
+
+func (s *photoService) saveScanTreeSnapshot(pathID string, snapshot *scanTreeSnapshot) error {
+	if s.configService == nil || snapshot == nil {
+		return nil
+	}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		return err
+	}
+	return s.configService.Set(s.scanTreeConfigKey(pathID), string(data))
+}
+
+func (s *photoService) buildScanTreeSnapshot(rootPath string) (*scanTreeSnapshot, error) {
+	nodes := make([]scanTreeNode, 0, 32)
+	err := filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			return nil
+		}
+		if path != rootPath && s.shouldExcludeDir(info.Name()) {
+			return filepath.SkipDir
+		}
+		nodes = append(nodes, scanTreeNode{Path: path, ModTime: info.ModTime().UnixNano()})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &scanTreeSnapshot{RootPath: rootPath, GeneratedAt: time.Now(), Nodes: nodes}, nil
+}
+
+func (s *photoService) scanTreeChanged(snapshot *scanTreeSnapshot) (bool, error) {
+	if snapshot == nil {
+		return false, nil
+	}
+	for _, node := range snapshot.Nodes {
+		info, err := os.Stat(node.Path)
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if !info.IsDir() {
+			continue
+		}
+		if info.ModTime().UnixNano() != node.ModTime {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *photoService) shouldRunAutoScan(intervalMinutes int) bool {
+	s.autoScanMutex.Lock()
+	defer s.autoScanMutex.Unlock()
+	if intervalMinutes <= 0 {
+		intervalMinutes = 60
+	}
+	now := time.Now()
+	if s.lastAutoScanCheck.IsZero() || now.Sub(s.lastAutoScanCheck) >= time.Duration(intervalMinutes)*time.Minute {
+		s.lastAutoScanCheck = now
+		return true
+	}
+	return false
+}
+
+func (s *photoService) RunAutoScanCheck() error {
+	cfg, err := s.loadAutoScanConfig()
+	if err != nil {
+		return err
+	}
+	if !cfg.Enabled || !s.shouldRunAutoScan(cfg.IntervalMinutes) {
+		return nil
+	}
+
+	task := s.GetScanTask()
+	if task != nil && task.IsRunning() {
+		logger.Infof("Skipping auto scan check because a scan task is already running")
+		return nil
+	}
+
+	pathsCfg, err := s.loadScanPathsConfig()
+	if err != nil {
+		return err
+	}
+
+	for _, path := range pathsCfg.Paths {
+		if !path.Enabled || path.AutoScanEnabled == nil || !*path.AutoScanEnabled || path.LastScannedAt == nil {
+			continue
+		}
+		if _, err := os.Stat(path.Path); os.IsNotExist(err) {
+			logger.Warnf("Auto scan skipped for missing path: %s", path.Path)
+			continue
+		}
+
+		snapshot, err := s.loadScanTreeSnapshot(path.ID)
+		if err != nil {
+			logger.Warnf("Load scan tree snapshot failed for %s: %v", path.Path, err)
+			continue
+		}
+		if snapshot == nil {
+			snapshot, err = s.buildScanTreeSnapshot(path.Path)
+			if err != nil {
+				logger.Warnf("Build initial scan tree snapshot failed for %s: %v", path.Path, err)
+				continue
+			}
+			if err := s.saveScanTreeSnapshot(path.ID, snapshot); err != nil {
+				logger.Warnf("Save initial scan tree snapshot failed for %s: %v", path.Path, err)
+			}
+			continue
+		}
+
+		changed, err := s.scanTreeChanged(snapshot)
+		if err != nil {
+			logger.Warnf("Check scan tree changes failed for %s: %v", path.Path, err)
+			continue
+		}
+		if changed {
+			if _, err := s.StartScan(path.Path); err != nil {
+				logger.Warnf("Auto scan start failed for %s: %v", path.Path, err)
+			}
+			return nil
+		}
+	}
+	return nil
 }
 
 // CleanupNonExistentPhotos 清理数据库中所有文件已不存在的照片
@@ -534,8 +770,10 @@ func (s *photoService) runScanTask(task *model.ScanTask, path string, rebuild bo
 	// 第二步：逐个处理文件
 	newCount, updatedCount := 0, 0
 	processedCount := 0
+	currentFiles := make(map[string]struct{}, len(fileList))
 
 	for _, filePath := range fileList {
+		currentFiles[filePath] = struct{}{}
 		// 更新当前文件
 		s.taskMutex.Lock()
 		task.CurrentFile = filepath.Base(filePath)
@@ -625,12 +863,30 @@ func (s *photoService) runScanTask(task *model.ScanTask, path string, rebuild bo
 	task.CompletedAt = &now
 	s.taskMutex.Unlock()
 
-	logger.Infof("[Task %s] Completed: total=%d, new=%d, updated=%d",
-		task.ID, totalFiles, newCount, updatedCount)
+	deletedCount := 0
+	existingPhotos, err := s.repo.ListByPathPrefix(path)
+	if err != nil {
+		logger.Warnf("[Task %s] List existing photos for deletion check failed: %v", task.ID, err)
+	} else {
+		for _, existing := range existingPhotos {
+			if _, ok := currentFiles[existing.FilePath]; !ok {
+				if err := s.repo.Delete(existing.ID); err != nil {
+					logger.Warnf("[Task %s] Delete missing photo failed: %v", task.ID, err)
+				} else {
+					deletedCount++
+				}
+			}
+		}
+	}
 
-	// 更新扫描路径的 last_scanned_at
+	logger.Infof("[Task %s] Completed: total=%d, new=%d, updated=%d, deleted=%d",
+		task.ID, totalFiles, newCount, updatedCount, deletedCount)
+
 	if err := s.updateScanPathTimestamp(path); err != nil {
 		logger.Warnf("[Task %s] Failed to update scan path timestamp: %v", task.ID, err)
+	}
+	if err := s.updateScanTreeSnapshot(path); err != nil {
+		logger.Warnf("[Task %s] Failed to update scan tree snapshot: %v", task.ID, err)
 	}
 }
 
@@ -675,18 +931,7 @@ func (s *photoService) updateScanPathTimestamp(scanPath string) error {
 		return nil
 	}
 
-	// 解析扫描路径配置
-	var pathsConfig struct {
-		Paths []struct {
-			ID            string     `json:"id"`
-			Name          string     `json:"name"`
-			Path          string     `json:"path"`
-			IsDefault     bool       `json:"is_default"`
-			Enabled       bool       `json:"enabled"`
-			CreatedAt     time.Time  `json:"created_at"`
-			LastScannedAt *time.Time `json:"last_scanned_at,omitempty"`
-		} `json:"paths"`
-	}
+	var pathsConfig scanPathsConfig
 
 	if err := json.Unmarshal([]byte(configValue), &pathsConfig); err != nil {
 		return fmt.Errorf("parse scan paths config: %w", err)
@@ -719,6 +964,24 @@ func (s *photoService) updateScanPathTimestamp(scanPath string) error {
 	}
 
 	logger.Infof("Updated last_scanned_at for scan path: %s", scanPath)
+	return nil
+}
+
+func (s *photoService) updateScanTreeSnapshot(scanPath string) error {
+	pathsCfg, err := s.loadScanPathsConfig()
+	if err != nil {
+		return fmt.Errorf("load scan paths config: %w", err)
+	}
+	for _, path := range pathsCfg.Paths {
+		if path.Path != scanPath {
+			continue
+		}
+		snapshot, err := s.buildScanTreeSnapshot(scanPath)
+		if err != nil {
+			return err
+		}
+		return s.saveScanTreeSnapshot(path.ID, snapshot)
+	}
 	return nil
 }
 

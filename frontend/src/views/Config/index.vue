@@ -15,13 +15,51 @@
         </div>
       </template>
 
-      <el-empty v-if="!scanPaths.length && !loading" description="暂无扫描路径配置">
-        <el-button type="primary" @click="handleAddPath">添加第一个路径</el-button>
-      </el-empty>
+      <div v-loading="loading">
+        <div class="auto-scan-config-panel">
+          <div class="auto-scan-config-header">
+            <div class="auto-scan-config-title">自动扫描设置</div>
+            <el-button type="primary" @click="handleSaveAutoScanConfig" :loading="savingAutoScan">
+              <el-icon><Check /></el-icon>
+              保存自动扫描配置
+            </el-button>
+          </div>
+          <el-form :model="autoScanConfig" label-width="120px">
+            <el-form-item label="全局自动扫描">
+              <el-switch v-model="autoScanConfig.enabled" />
+              <div class="form-hint">关闭后，所有路径都不会自动检查目录变化。</div>
+            </el-form-item>
+            <el-form-item label="扫描频率">
+              <div class="model-select-row">
+                <el-select v-model="autoScanIntervalSelection" style="width: 240px" @change="handleAutoScanIntervalSelectionChange">
+                  <el-option :value="10" label="10 分钟" />
+                  <el-option :value="30" label="30 分钟" />
+                  <el-option :value="60" label="1 小时" />
+                  <el-option :value="120" label="2 小时" />
+                  <el-option :value="720" label="12 小时" />
+                  <el-option :value="1440" label="1 天" />
+                  <el-option value="__custom__" label="自定义" />
+                </el-select>
+                <el-input-number
+                  v-if="autoScanIntervalSelection === '__custom__'"
+                  v-model="autoScanConfig.interval_minutes"
+                  :min="1"
+                  :max="10080"
+                  style="width: 180px"
+                />
+                <span v-if="autoScanIntervalSelection === '__custom__'">分钟</span>
+              </div>
+              <div class="form-hint">仅对已启用且开启自动扫描的路径生效。系统按设定周期检查目录变化，检测到变化才触发异步扫描。</div>
+            </el-form-item>
+          </el-form>
+        </div>
 
-      <div v-else class="paths-list" v-loading="loading">
-        <div
-          v-for="path in scanPaths"
+        <div class="paths-list">
+          <el-empty v-if="!scanPaths.length" description="暂无扫描路径配置">
+            <el-button type="primary" @click="handleAddPath">添加第一个路径</el-button>
+          </el-empty>
+          <div
+            v-for="path in scanPaths"
           :key="path.id"
           class="path-item"
           :class="{ disabled: !path.enabled }"
@@ -35,6 +73,11 @@
             </div>
             <div class="path-location">{{ path.path }}</div>
             <div class="path-meta">
+              <span>
+                <el-tag :type="path.auto_scan_enabled ? 'success' : 'info'" size="small" effect="light">
+                  {{ path.auto_scan_enabled ? '自动扫描' : '仅手动' }}
+                </el-tag>
+              </span>
               <span v-if="path.last_scanned_at">
                 <el-icon><Clock /></el-icon>
                 上次扫描: {{ formatTime(path.last_scanned_at) }}
@@ -43,6 +86,12 @@
             </div>
           </div>
           <div class="path-actions">
+            <el-switch
+              v-model="path.auto_scan_enabled"
+              active-text="自动"
+              inactive-text="手动"
+              @change="handleToggleAutoScan(path)"
+            />
             <el-button
               v-if="!path.is_default"
               link
@@ -59,6 +108,7 @@
             </el-button>
           </div>
         </div>
+      </div>
       </div>
     </el-card>
 
@@ -735,6 +785,7 @@
         <el-form-item label="设置">
           <el-checkbox v-model="pathForm.is_default">设为默认路径</el-checkbox>
           <el-checkbox v-model="pathForm.enabled">启用此路径</el-checkbox>
+          <el-checkbox v-model="pathForm.auto_scan_enabled">启用自动扫描</el-checkbox>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -752,7 +803,7 @@
 import { ref, onMounted } from 'vue'
 import PathBrowser from '@/components/PathBrowser.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { configApi, promptApi, type ScanPathConfig, type GeocodeConfig, type AIConfig, type PromptConfig, defaultPrompts, getCitiesDataStatus, downloadCitiesData, type CitiesDataStatus } from '@/api/config'
+import { configApi, promptApi, type ScanPathConfig, type AutoScanConfig, type GeocodeConfig, type AIConfig, type PromptConfig, defaultPrompts, getCitiesDataStatus, downloadCitiesData, type CitiesDataStatus } from '@/api/config'
 import { photoApi } from '@/api/photo'
 import dayjs from 'dayjs'
 import { v4 as uuidv4 } from 'uuid'
@@ -767,6 +818,9 @@ const saving = ref(false)
 const validating = ref(false)
 const validationResult = ref<{ valid: boolean; error?: string } | null>(null)
 const pathBrowserVisible = ref(false)
+const autoScanConfig = ref<AutoScanConfig>(configApi.getDefaultAutoScanConfig())
+const savingAutoScan = ref(false)
+const autoScanIntervalSelection = ref<number | '__custom__'>(60)
 
 // Cities data state
 const downloadingCities = ref(false)
@@ -782,6 +836,7 @@ const pathForm = ref<Partial<ScanPathConfig>>({
   path: '',
   is_default: false,
   enabled: true,
+  auto_scan_enabled: true,
 })
 
 // Geocode configuration state
@@ -843,12 +898,26 @@ const formatTime = (time?: string) => {
   return dayjs(time).format('YYYY-MM-DD HH:mm:ss')
 }
 
+const autoScanPresetIntervals = [10, 30, 60, 120, 720, 1440]
+
+const syncAutoScanIntervalSelection = () => {
+  autoScanIntervalSelection.value = autoScanPresetIntervals.includes(autoScanConfig.value.interval_minutes)
+    ? autoScanConfig.value.interval_minutes
+    : '__custom__'
+}
+
+const handleAutoScanIntervalSelectionChange = (value: number | '__custom__') => {
+  if (value !== '__custom__') {
+    autoScanConfig.value.interval_minutes = value
+  }
+}
+
 // Scan paths functions
 const loadScanPaths = async () => {
   loading.value = true
   try {
     const config = await configApi.getScanPaths()
-    scanPaths.value = config.paths || []
+    scanPaths.value = (config.paths || []).map(path => ({ ...path, auto_scan_enabled: path.auto_scan_enabled ?? true }))
   } catch (error: any) {
     ElMessage.error('加载扫描路径失败')
   } finally {
@@ -863,6 +932,7 @@ const handleAddPath = () => {
     path: '',
     is_default: scanPaths.value.length === 0, // First path is default
     enabled: true,
+    auto_scan_enabled: true,
   }
   validationResult.value = null
   dialogVisible.value = true
@@ -931,6 +1001,7 @@ const handleSavePath = async () => {
         path: pathForm.value.path!,
         is_default: pathForm.value.is_default || false,
         enabled: pathForm.value.enabled ?? true,
+        auto_scan_enabled: pathForm.value.auto_scan_enabled ?? true,
         created_at: new Date().toISOString(),
       }
 
@@ -1008,8 +1079,39 @@ const handleToggleEnabled = async (path: ScanPathConfig) => {
     ElMessage.success(path.enabled ? '已启用' : '已禁用')
   } catch (error: any) {
     ElMessage.error('操作失败')
-    // Revert
     path.enabled = !path.enabled
+  }
+}
+
+const handleToggleAutoScan = async (path: ScanPathConfig) => {
+  try {
+    await configApi.updateScanPaths({ paths: scanPaths.value })
+    ElMessage.success(path.auto_scan_enabled ? '已开启自动扫描' : '已切换为仅手动扫描')
+  } catch (error: any) {
+    ElMessage.error('操作失败')
+    path.auto_scan_enabled = !path.auto_scan_enabled
+  }
+}
+
+const loadAutoScanConfig = async () => {
+  autoScanConfig.value = await configApi.getAutoScanConfig()
+  syncAutoScanIntervalSelection()
+}
+
+const handleSaveAutoScanConfig = async () => {
+  if (autoScanIntervalSelection.value === '__custom__' && (!autoScanConfig.value.interval_minutes || autoScanConfig.value.interval_minutes < 1)) {
+    ElMessage.warning('请输入有效的扫描频率（分钟）')
+    return
+  }
+
+  savingAutoScan.value = true
+  try {
+    await configApi.updateAutoScanConfig(autoScanConfig.value)
+    ElMessage.success('自动扫描配置保存成功')
+  } catch (error: any) {
+    ElMessage.error('保存失败')
+  } finally {
+    savingAutoScan.value = false
   }
 }
 
@@ -1173,6 +1275,7 @@ const handleResetPrompts = async () => {
 
 onMounted(() => {
   loadScanPaths()
+  loadAutoScanConfig()
   loadGeocodeConfig()
   loadAIConfig()
   loadPromptConfig()
@@ -1210,6 +1313,27 @@ onMounted(() => {
 .header-title {
   font-size: 16px;
   font-weight: 600;
+}
+
+.auto-scan-config-panel {
+  padding: 16px 20px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg-secondary);
+  margin-bottom: 16px;
+}
+
+.auto-scan-config-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.auto-scan-config-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text-primary);
 }
 
 .paths-list {

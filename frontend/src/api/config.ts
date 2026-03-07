@@ -9,12 +9,18 @@ export interface ScanPathConfig {
   path: string
   is_default: boolean
   enabled: boolean
+  auto_scan_enabled: boolean
   created_at: string
   last_scanned_at?: string
 }
 
 export interface ScanPathsConfig {
   paths: ScanPathConfig[]
+}
+
+export interface AutoScanConfig {
+  enabled: boolean
+  interval_minutes: number
 }
 
 // Geocode provider configuration
@@ -343,15 +349,45 @@ export const configApi = {
   getScanPaths: async (): Promise<ScanPathsConfig> => {
     try {
       const response = await http.get<ApiResponse<BackendConfigResponse>>('/config/photos.scan_paths')
-      // response.data is ApiResponse, response.data.data is BackendConfigResponse
       if (response.data?.data?.value) {
-        return JSON.parse(response.data.data.value)
+        const parsed = JSON.parse(response.data.data.value) as ScanPathsConfig
+        return {
+          paths: (parsed.paths || []).map((path) => ({
+            ...path,
+            auto_scan_enabled: path.auto_scan_enabled ?? true,
+          })),
+        }
       }
       return { paths: [] }
     } catch (error) {
-      // Config doesn't exist yet
       return { paths: [] }
     }
+  },
+
+  getDefaultAutoScanConfig: (): AutoScanConfig => ({
+    enabled: false,
+    interval_minutes: 60,
+  }),
+
+  getAutoScanConfig: async (): Promise<AutoScanConfig> => {
+    try {
+      const response = await http.get<ApiResponse<BackendConfigResponse>>('/config/photos.auto_scan')
+      if (response.data?.data?.value) {
+        const parsed = JSON.parse(response.data.data.value)
+        return {
+          ...configApi.getDefaultAutoScanConfig(),
+          ...parsed,
+        }
+      }
+      return configApi.getDefaultAutoScanConfig()
+    } catch (error) {
+      return configApi.getDefaultAutoScanConfig()
+    }
+  },
+
+  updateAutoScanConfig: async (config: AutoScanConfig): Promise<void> => {
+    const value = JSON.stringify(config)
+    await http.put('/config/photos.auto_scan', { value })
   },
 
   // Update scan paths configuration

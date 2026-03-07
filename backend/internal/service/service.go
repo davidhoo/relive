@@ -51,14 +51,13 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		logger.Warnf("Failed to initialize default user: %v", err)
 	}
 
-	// 创建分析服务
+	// 创建分析、照片与展示服务
 	analysisService := NewAnalysisService(db, repos.Photo, cfg)
-
-	// 创建展示服务
+	photoService := NewPhotoService(repos.Photo, cfg, configService, geocodeService)
 	displayService := NewDisplayService(db, repos.Photo, repos.DisplayRecord, repos.Device, configService, cfg)
 
 	// 创建定时任务调度器
-	scheduler := NewTaskScheduler(analysisService, displayService)
+	scheduler := NewTaskScheduler(analysisService, displayService, photoService)
 
 	// 创建提示词配置服务
 	promptService := NewPromptService(repos.Config)
@@ -87,7 +86,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	analysisService.SetResultQueue(resultQueue)
 
 	return &Services{
-		Photo:           NewPhotoService(repos.Photo, cfg, configService, geocodeService),
+		Photo:           photoService,
 		Display:         displayService,
 		Device:          deviceService,
 		AI:              aiService,

@@ -432,13 +432,14 @@ func (h *ConfigHandler) SetBatchConfigs(c *gin.Context) {
 
 // ScanPathConfig 扫描路径配置（用于解析）
 type ScanPathConfig struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	Path          string `json:"path"`
-	IsDefault     bool   `json:"is_default"`
-	Enabled       bool   `json:"enabled"`
-	CreatedAt     string `json:"created_at"`
-	LastScannedAt string `json:"last_scanned_at,omitempty"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Path            string `json:"path"`
+	IsDefault       bool   `json:"is_default"`
+	Enabled         bool   `json:"enabled"`
+	AutoScanEnabled bool   `json:"auto_scan_enabled"`
+	CreatedAt       string `json:"created_at"`
+	LastScannedAt   string `json:"last_scanned_at,omitempty"`
 }
 
 // ScanPathsConfig 扫描路径配置集合
@@ -575,6 +576,10 @@ func (h *ConfigHandler) DeleteScanPath(c *gin.Context) {
 			},
 		})
 		return
+	}
+
+	if err := h.service.Delete("photos.scan_tree." + pathID); err != nil {
+		logger.Warnf("Failed to delete scan tree snapshot for path %s: %v", pathID, err)
 	}
 
 	message := "Scan path deleted successfully"

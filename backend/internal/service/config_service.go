@@ -134,6 +134,7 @@ func (s *configService) validateConfigKey(key string) error {
 		"display.avoid_repeat_days": true,
 		"display.fallback_days":     true,
 		"display.strategy":          true,
+		"photos.auto_scan":          true,
 		"ai.provider":               true,
 		"ai.temperature":            true,
 		"ai.timeout":                true,

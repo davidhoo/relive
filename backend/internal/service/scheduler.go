@@ -12,6 +12,7 @@ import (
 type TaskScheduler struct {
 	analysisService AnalysisService
 	displayService  DisplayService
+	photoService    PhotoService
 	stopCh          chan struct{}
 	wg              sync.WaitGroup
 	running         bool
@@ -19,10 +20,11 @@ type TaskScheduler struct {
 }
 
 // NewTaskScheduler 创建定时任务调度器
-func NewTaskScheduler(analysisService AnalysisService, displayService DisplayService) *TaskScheduler {
+func NewTaskScheduler(analysisService AnalysisService, displayService DisplayService, photoService PhotoService) *TaskScheduler {
 	return &TaskScheduler{
 		analysisService: analysisService,
 		displayService:  displayService,
+		photoService:    photoService,
 		stopCh:          make(chan struct{}),
 	}
 }
@@ -47,6 +49,10 @@ func (s *TaskScheduler) Start() {
 	// 启动每日展示批次确保任务
 	s.wg.Add(1)
 	go s.ensureDailyBatchTask()
+
+	// 启动自动扫描检查任务
+	s.wg.Add(1)
+	go s.autoScanCheckTask()
 
 	logger.Info("Task scheduler started")
 }
@@ -175,5 +181,32 @@ func (s *TaskScheduler) ensureTodayDailyBatch() {
 	}
 	if _, err := s.displayService.GenerateDailyBatch(time.Now(), false); err != nil {
 		logger.Warnf("Failed to ensure daily display batch: %v", err)
+	}
+}
+
+func (s *TaskScheduler) autoScanCheckTask() {
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	s.runAutoScanCheck()
+
+	for {
+		select {
+		case <-ticker.C:
+			s.runAutoScanCheck()
+		case <-s.stopCh:
+			return
+		}
+	}
+}
+
+func (s *TaskScheduler) runAutoScanCheck() {
+	if s.photoService == nil {
+		return
+	}
+	if err := s.photoService.RunAutoScanCheck(); err != nil {
+		logger.Warnf("Failed to run auto scan check: %v", err)
 	}
 }
