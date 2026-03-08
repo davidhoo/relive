@@ -267,6 +267,9 @@ func (s *displayService) getOnThisDayPhotos(targetDate time.Time, excludePhotoID
 		fallbackDays = []int{3, 7, 30, 365}
 	}
 	targetPoolSize := max(limit*cfg.CandidatePoolFactor, max(limit*2, 6))
+	collectedAll := make([]*model.Photo, 0, targetPoolSize)
+	collectedSeen := make(map[uint]struct{}, targetPoolSize)
+	bestSelected := make([]*model.Photo, 0, limit)
 
 	for _, days := range fallbackDays {
 		logger.Debugf("Trying on_this_day fallback: target=%s, ±%d days", targetDate.Format("2006-01-02"), days)
@@ -296,16 +299,27 @@ func (s *displayService) getOnThisDayPhotos(targetDate time.Time, excludePhotoID
 		}
 
 		if len(collected) > 0 {
-			selected := selectOnThisDayPhotos(collected, limit, cfg)
+			collectedAll = appendUniquePhotos(collectedAll, collected, collectedSeen)
+			selected := selectOnThisDayPhotos(targetDate, collectedAll, limit, cfg)
 			logger.Infof(
-				"Found on_this_day candidates with fallback ±%d days, years=%d, candidates=%d, selected=%d",
+				"Found on_this_day candidates with fallback ±%d days, years=%d, window_candidates=%d, total_candidates=%d, selected=%d",
 				days,
 				yearsHit,
 				len(collected),
+				len(collectedAll),
 				len(selected),
 			)
-			return selected, nil
+			if len(selected) > len(bestSelected) {
+				bestSelected = append([]*model.Photo(nil), selected...)
+			}
+			if len(selected) >= limit {
+				return selected, nil
+			}
 		}
+	}
+
+	if len(bestSelected) > 0 {
+		return bestSelected, nil
 	}
 
 	logger.Infof("No strict on_this_day match found, trying smart calendar fallback")
@@ -460,8 +474,8 @@ func pickRandomPhotos(photos []*model.Photo, limit int) []*model.Photo {
 	return result[:limit]
 }
 
-func selectOnThisDayPhotos(photos []*model.Photo, limit int, cfg model.DisplayStrategyConfig) []*model.Photo {
-	return selectDiversifiedPhotos(photos, limit, cfg)
+func selectOnThisDayPhotos(targetDate time.Time, photos []*model.Photo, limit int, cfg model.DisplayStrategyConfig) []*model.Photo {
+	return selectDiversifiedRankedPhotos(rankOnThisDayCandidates(targetDate, photos), limit, cfg)
 }
 
 func selectSmartFallbackPhotos(photos []*model.Photo, limit int, cfg model.DisplayStrategyConfig) []*model.Photo {
@@ -479,7 +493,14 @@ func selectDiversifiedPhotos(photos []*model.Photo, limit int, cfg model.Display
 		return nil
 	}
 
-	ranked := selectTopPhotos(photos, len(photos))
+	return selectDiversifiedRankedPhotos(selectTopPhotos(photos, len(photos)), limit, cfg)
+}
+
+func selectDiversifiedRankedPhotos(ranked []*model.Photo, limit int, cfg model.DisplayStrategyConfig) []*model.Photo {
+	if len(ranked) == 0 || limit <= 0 {
+		return nil
+	}
+
 	poolSize := min(len(ranked), max(limit*cfg.CandidatePoolFactor, max(limit*2, 6)))
 	primaryPool := ranked[:poolSize]
 	remainder := ranked[poolSize:]
@@ -507,6 +528,70 @@ func selectDiversifiedPhotos(photos []*model.Photo, limit int, cfg model.Display
 	}
 
 	return selected
+}
+
+func rankOnThisDayCandidates(targetDate time.Time, photos []*model.Photo) []*model.Photo {
+	if len(photos) == 0 {
+		return nil
+	}
+
+	ranked := append([]*model.Photo(nil), photos...)
+	sort.SliceStable(ranked, func(i, j int) bool {
+		left := ranked[i]
+		right := ranked[j]
+
+		leftDistance := onThisDayDateDistance(targetDate, left)
+		rightDistance := onThisDayDateDistance(targetDate, right)
+		if leftDistance != rightDistance {
+			return leftDistance < rightDistance
+		}
+
+		leftYearGap := onThisDayYearGap(targetDate, left)
+		rightYearGap := onThisDayYearGap(targetDate, right)
+		if leftYearGap != rightYearGap {
+			return leftYearGap < rightYearGap
+		}
+
+		if left.OverallScore != right.OverallScore {
+			return left.OverallScore > right.OverallScore
+		}
+		if left.MemoryScore != right.MemoryScore {
+			return left.MemoryScore > right.MemoryScore
+		}
+		if left.TakenAt == nil {
+			return false
+		}
+		if right.TakenAt == nil {
+			return true
+		}
+		return left.TakenAt.After(*right.TakenAt)
+	})
+
+	return ranked
+}
+
+func onThisDayDateDistance(targetDate time.Time, photo *model.Photo) int {
+	if photo == nil || photo.TakenAt == nil {
+		return math.MaxInt
+	}
+	anchor := time.Date(photo.TakenAt.Year(), targetDate.Month(), targetDate.Day(), 0, 0, 0, 0, time.Local)
+	photoDate := time.Date(photo.TakenAt.Year(), photo.TakenAt.Month(), photo.TakenAt.Day(), 0, 0, 0, 0, time.Local)
+	delta := photoDate.Sub(anchor)
+	if delta < 0 {
+		delta = -delta
+	}
+	return int(delta / (24 * time.Hour))
+}
+
+func onThisDayYearGap(targetDate time.Time, photo *model.Photo) int {
+	if photo == nil || photo.TakenAt == nil {
+		return math.MaxInt
+	}
+	gap := targetDate.Year() - photo.TakenAt.Year()
+	if gap < 0 {
+		gap = -gap
+	}
+	return gap
 }
 
 func appendDiversePhotos(selected []*model.Photo, candidates []*model.Photo, limit int, cfg model.DisplayStrategyConfig, options diversitySelectionOptions, selectedIDs map[uint]struct{}) []*model.Photo {
@@ -538,15 +623,17 @@ func appendDiversePhotos(selected []*model.Photo, candidates []*model.Photo, lim
 }
 
 func hasTimeGapConflict(photo *model.Photo, selected []*model.Photo, minTimeGapHours int) bool {
-	if photo == nil || photo.TakenAt == nil || minTimeGapHours <= 0 {
+	photoTime, ok := effectivePhotoTime(photo)
+	if !ok || minTimeGapHours <= 0 {
 		return false
 	}
 	minGap := time.Duration(minTimeGapHours) * time.Hour
 	for _, existing := range selected {
-		if existing == nil || existing.TakenAt == nil {
+		existingTime, exists := effectivePhotoTime(existing)
+		if !exists {
 			continue
 		}
-		delta := photo.TakenAt.Sub(*existing.TakenAt)
+		delta := photoTime.Sub(existingTime)
 		if delta < 0 {
 			delta = -delta
 		}
@@ -596,8 +683,8 @@ func buildPhotoEventKey(photo *model.Photo, cfg model.DisplayStrategyConfig) str
 		return ""
 	}
 	dateKey := "unknown-date"
-	if photo.TakenAt != nil {
-		dateKey = photo.TakenAt.In(time.Local).Format("2006-01-02")
+	if photoTime, ok := effectivePhotoTime(photo); ok {
+		dateKey = photoTime.In(time.Local).Format("2006-01-02")
 	}
 	if locationKey := buildPhotoLocationBucket(photo, cfg); locationKey != "" {
 		return dateKey + "|" + locationKey
@@ -630,6 +717,20 @@ func buildPhotoLocationBucket(photo *model.Photo, cfg model.DisplayStrategyConfi
 		return ""
 	}
 	return "loc:" + location
+}
+
+func appendUniquePhotos(dst []*model.Photo, incoming []*model.Photo, seen map[uint]struct{}) []*model.Photo {
+	for _, photo := range incoming {
+		if photo == nil {
+			continue
+		}
+		if _, exists := seen[photo.ID]; exists {
+			continue
+		}
+		seen[photo.ID] = struct{}{}
+		dst = append(dst, photo)
+	}
+	return dst
 }
 
 func filterDisplayCandidates(photos []*model.Photo, excludePhotoIDs []uint, cfg model.DisplayStrategyConfig, requireTakenAt bool) []*model.Photo {
@@ -689,7 +790,7 @@ func selectTopMemoryPhoto(photos []*model.Photo) *model.Photo {
 			continue
 		}
 		if photo.MemoryScore == best.MemoryScore && photo.OverallScore == best.OverallScore &&
-			photo.TakenAt != nil && (best.TakenAt == nil || photo.TakenAt.After(*best.TakenAt)) {
+			isLaterPhotoTime(photo, best) {
 			best = photo
 		}
 	}
@@ -710,13 +811,15 @@ func selectTopPhotos(photos []*model.Photo, limit int) []*model.Photo {
 		if result[i].MemoryScore != result[j].MemoryScore {
 			return result[i].MemoryScore > result[j].MemoryScore
 		}
-		if result[i].TakenAt == nil {
+		leftTime, leftOK := effectivePhotoTime(result[i])
+		rightTime, rightOK := effectivePhotoTime(result[j])
+		if !leftOK {
 			return false
 		}
-		if result[j].TakenAt == nil {
+		if !rightOK {
 			return true
 		}
-		return result[i].TakenAt.After(*result[j].TakenAt)
+		return leftTime.After(rightTime)
 	})
 
 	if limit >= len(result) {
@@ -741,4 +844,35 @@ func contains(slice []uint, item uint) bool {
 		}
 	}
 	return false
+}
+
+func effectivePhotoTime(photo *model.Photo) (time.Time, bool) {
+	if photo == nil {
+		return time.Time{}, false
+	}
+	if photo.TakenAt != nil && !photo.TakenAt.IsZero() {
+		return *photo.TakenAt, true
+	}
+	if photo.FileCreateTime != nil && !photo.FileCreateTime.IsZero() {
+		return *photo.FileCreateTime, true
+	}
+	if photo.FileModTime != nil && !photo.FileModTime.IsZero() {
+		return *photo.FileModTime, true
+	}
+	if !photo.CreatedAt.IsZero() {
+		return photo.CreatedAt, true
+	}
+	return time.Time{}, false
+}
+
+func isLaterPhotoTime(left, right *model.Photo) bool {
+	leftTime, leftOK := effectivePhotoTime(left)
+	rightTime, rightOK := effectivePhotoTime(right)
+	if !leftOK {
+		return false
+	}
+	if !rightOK {
+		return true
+	}
+	return leftTime.After(rightTime)
 }

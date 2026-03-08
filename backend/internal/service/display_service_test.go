@@ -105,7 +105,7 @@ func TestGetOnThisDayPhotos_PrefersStrictMatchWithThresholds(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, photos, 1)
-	require.Equal(t, uint(1), photos[0].ID)
+	require.Equal(t, uint(2), photos[0].ID)
 }
 
 func TestGetOnThisDayPhotos_FallsBackToCalendarMemoryWhenNoStrictMatch(t *testing.T) {
@@ -185,4 +185,99 @@ func TestGetOnThisDayPhotos_DiversifiesTimeAndLocationAcrossYears(t *testing.T) 
 	require.Len(t, photos, 2)
 	require.Equal(t, uint(21), photos[0].ID)
 	require.Equal(t, uint(23), photos[1].ID)
+}
+
+func TestGetOnThisDayPhotos_PrefersCloserCalendarDateForAdjacentPreviewDays(t *testing.T) {
+	previewMarch5 := time.Date(2026, 3, 5, 10, 0, 0, 0, time.Local)
+	previewMarch6 := time.Date(2026, 3, 6, 10, 0, 0, 0, time.Local)
+	march5Photo := time.Date(2025, 3, 5, 9, 0, 0, 0, time.Local)
+	march6Photo := time.Date(2025, 3, 6, 9, 0, 0, 0, time.Local)
+	march8HighScore := time.Date(2025, 3, 8, 9, 0, 0, 0, time.Local)
+
+	repo := &stubPhotoRepo{
+		getByDateRangeFunc: func(start, end time.Time) ([]*model.Photo, error) {
+			return []*model.Photo{
+				{ID: 31, FilePath: "/photos/day-5.jpg", TakenAt: &march5Photo, AIAnalyzed: true, MemoryScore: 80, BeautyScore: 80, OverallScore: 80, Location: "苏州"},
+				{ID: 32, FilePath: "/photos/day-6.jpg", TakenAt: &march6Photo, AIAnalyzed: true, MemoryScore: 82, BeautyScore: 82, OverallScore: 82, Location: "苏州"},
+				{ID: 33, FilePath: "/photos/day-8.jpg", TakenAt: &march8HighScore, AIAnalyzed: true, MemoryScore: 95, BeautyScore: 95, OverallScore: 95, Location: "苏州"},
+			}, nil
+		},
+	}
+
+	svc := &displayService{
+		photoRepo: repo,
+		config: &config.Config{
+			Display: config.DisplayConfig{FallbackDays: []int{3, 7, 30, 365}},
+		},
+	}
+
+	cfg := model.DisplayStrategyConfig{Algorithm: "on_this_day", MinBeautyScore: 70, MinMemoryScore: 60, DailyCount: 1}
+
+	photosMarch5, err := svc.getOnThisDayPhotos(previewMarch5, nil, cfg, 1)
+	require.NoError(t, err)
+	require.Len(t, photosMarch5, 1)
+	require.Equal(t, uint(31), photosMarch5[0].ID)
+
+	photosMarch6, err := svc.getOnThisDayPhotos(previewMarch6, nil, cfg, 1)
+	require.NoError(t, err)
+	require.Len(t, photosMarch6, 1)
+	require.Equal(t, uint(32), photosMarch6[0].ID)
+}
+
+func TestGetOnThisDayPhotos_FillsRemainingSlotsFromWiderFallbackWindow(t *testing.T) {
+	targetDate := time.Date(2026, 3, 6, 10, 0, 0, 0, time.Local)
+	exactA := time.Date(2025, 3, 6, 9, 0, 0, 0, time.Local)
+	exactB := time.Date(2024, 3, 6, 9, 0, 0, 0, time.Local)
+	nearby := time.Date(2023, 3, 2, 9, 0, 0, 0, time.Local)
+
+	repo := &stubPhotoRepo{
+		getByDateRangeFunc: func(start, end time.Time) ([]*model.Photo, error) {
+			windowDays := int(end.Sub(start) / (24 * time.Hour) / 2)
+			if windowDays <= 3 {
+				return []*model.Photo{
+					{ID: 41, FilePath: "/photos/exact-a.jpg", TakenAt: &exactA, AIAnalyzed: true, MemoryScore: 86, BeautyScore: 78, OverallScore: 82, Location: "广州"},
+					{ID: 42, FilePath: "/photos/exact-b.jpg", TakenAt: &exactB, AIAnalyzed: true, MemoryScore: 86, BeautyScore: 78, OverallScore: 82, Location: "深圳"},
+				}, nil
+			}
+			return []*model.Photo{
+				{ID: 41, FilePath: "/photos/exact-a.jpg", TakenAt: &exactA, AIAnalyzed: true, MemoryScore: 86, BeautyScore: 78, OverallScore: 82, Location: "广州"},
+				{ID: 42, FilePath: "/photos/exact-b.jpg", TakenAt: &exactB, AIAnalyzed: true, MemoryScore: 86, BeautyScore: 78, OverallScore: 82, Location: "深圳"},
+				{ID: 43, FilePath: "/photos/nearby.jpg", TakenAt: &nearby, AIAnalyzed: true, MemoryScore: 91, BeautyScore: 79, OverallScore: 85, Location: "杭州"},
+			}, nil
+		},
+	}
+
+	svc := &displayService{
+		photoRepo: repo,
+		config: &config.Config{
+			Display: config.DisplayConfig{FallbackDays: []int{3, 7, 30, 365}},
+		},
+	}
+
+	cfg := model.DisplayStrategyConfig{Algorithm: "on_this_day", MinBeautyScore: 70, MinMemoryScore: 85, DailyCount: 3}
+	photos, err := svc.getOnThisDayPhotos(targetDate, nil, cfg, 3)
+
+	require.NoError(t, err)
+	require.Len(t, photos, 3)
+	require.Equal(t, []uint{41, 42, 43}, []uint{photos[0].ID, photos[1].ID, photos[2].ID})
+}
+
+func TestSelectDiversifiedPhotos_UsesEffectiveTimeWhenTakenAtMissing(t *testing.T) {
+	baseTime := time.Date(2024, 6, 1, 10, 0, 0, 0, time.Local)
+	closeCreateA := baseTime
+	closeCreateB := baseTime.Add(10 * time.Minute)
+	farCreate := baseTime.Add(48 * time.Hour)
+
+	photos := []*model.Photo{
+		{ID: 51, FilePath: "/photos/scan-a.jpg", FileCreateTime: &closeCreateA, AIAnalyzed: true, MemoryScore: 95, BeautyScore: 90, OverallScore: 93, Location: "成都"},
+		{ID: 52, FilePath: "/photos/scan-b.jpg", FileCreateTime: &closeCreateB, AIAnalyzed: true, MemoryScore: 94, BeautyScore: 89, OverallScore: 92, Location: "成都"},
+		{ID: 53, FilePath: "/photos/scan-c.jpg", FileCreateTime: &farCreate, AIAnalyzed: true, MemoryScore: 90, BeautyScore: 88, OverallScore: 90, Location: "重庆"},
+	}
+
+	cfg := defaultDisplayStrategyConfig()
+	selected := selectDiversifiedPhotos(photos, 2, cfg)
+
+	require.Len(t, selected, 2)
+	require.Equal(t, uint(51), selected[0].ID)
+	require.Equal(t, uint(53), selected[1].ID)
 }
