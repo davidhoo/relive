@@ -61,8 +61,11 @@ func (s *analysisService) GetPendingTasks(limit int, analyzerID string) ([]model
 
 	// 1. 统计剩余待分析数量
 	err := s.db.Model(&model.Photo{}).
-		Where("ai_analyzed = ? AND (analysis_lock_expired_at IS NULL OR analysis_lock_expired_at < ?)",
-			false, time.Now()).
+		Where(`ai_analyzed = ?
+			AND thumbnail_status = ?
+			AND (gps_latitude IS NULL OR gps_longitude IS NULL OR geocode_status = ?)
+			AND (analysis_lock_expired_at IS NULL OR analysis_lock_expired_at < ?)`,
+			false, "ready", "ready", time.Now()).
 		Count(&totalRemaining).Error
 	if err != nil {
 		return nil, 0, err
@@ -77,11 +80,13 @@ func (s *analysisService) GetPendingTasks(limit int, analyzerID string) ([]model
 		Where(`id IN (
 			SELECT id FROM photos
 			WHERE ai_analyzed = ?
+			  AND thumbnail_status = ?
+			  AND (gps_latitude IS NULL OR gps_longitude IS NULL OR geocode_status = ?)
 			  AND (analysis_lock_expired_at IS NULL OR analysis_lock_expired_at < ?)
 			  AND deleted_at IS NULL
 			ORDER BY id ASC
 			LIMIT ?
-		)`, false, time.Now(), limit).
+		)`, false, "ready", "ready", time.Now(), limit).
 		Updates(map[string]interface{}{
 			"analysis_lock_id":         analyzerID,
 			"analysis_lock_expired_at": lockExpiredAt,

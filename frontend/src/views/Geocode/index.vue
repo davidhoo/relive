@@ -24,6 +24,7 @@
           <div class="control-row-main">
             <el-button v-if="!taskRunning && !taskStopping" type="primary" size="large" @click="handleStart" :loading="starting" class="action-btn-primary">开启后台解析</el-button>
             <el-button v-else type="danger" size="large" @click="handleStop" :loading="stopping" :disabled="taskStopping" class="action-btn-danger">{{ taskStopping ? '停止中...' : '停止后台解析' }}</el-button>
+            <el-button plain size="large" @click="handleRepairLegacyStatus" :loading="repairing">修复历史状态</el-button>
           </div>
           <div class="inline-note-wrap">
             <el-text type="info" class="inline-info-text aligned-note">后台解析会持续处理 GPS 逆地理编码队列。照片详情访问到未解析位置的照片时，会自动触发热点优先补队列。</el-text>
@@ -88,6 +89,7 @@ const task = ref<GeocodeTask | null>(null)
 const stats = ref<GeocodeStats>({ total: 0, pending: 0, queued: 0, processing: 0, completed: 0, failed: 0, cancelled: 0 })
 const starting = ref(false)
 const stopping = ref(false)
+const repairing = ref(false)
 const backgroundLogs = ref<string[]>([])
 const logContainerRef = ref<HTMLElement | null>(null)
 let timer: number | null = null
@@ -99,6 +101,7 @@ const loadBackgroundLogs = async () => { const res = await geocodeApi.getBackgro
 const loadData = async () => { const [taskRes, statsRes, logsRes] = await Promise.all([geocodeApi.getTask(), geocodeApi.getStats(), geocodeApi.getBackgroundLogs()]); task.value = taskRes.data?.data || null; stats.value = statsRes.data?.data || stats.value; backgroundLogs.value = logsRes.data?.data?.lines || [] }
 const handleStart = async () => { try { starting.value = true; await geocodeApi.startBackground(); ElMessage.success('GPS 逆地理编码后台任务已启动'); await loadData() } catch (error: any) { ElMessage.error(error.message || '启动 GPS 逆地理编码后台任务失败') } finally { starting.value = false } }
 const handleStop = async () => { try { stopping.value = true; await geocodeApi.stopBackground(); ElMessage.info('已请求停止 GPS 逆地理编码后台任务'); await loadData() } catch (error: any) { ElMessage.error(error.message || '停止 GPS 逆地理编码后台任务失败') } finally { stopping.value = false } }
+const handleRepairLegacyStatus = async () => { try { repairing.value = true; const res = await geocodeApi.repairLegacyStatus(); ElMessage.success(`历史 GPS 状态修复完成，共更新 ${res.data?.data?.count || 0} 张照片`); await loadData() } catch (error: any) { ElMessage.error(error.message || '修复历史 GPS 状态失败') } finally { repairing.value = false } }
 onMounted(async () => { await loadData(); timer = window.setInterval(loadData, 2000) })
 onUnmounted(() => { if (timer) clearInterval(timer) })
 watch(backgroundLogs, async () => { await nextTick(); if (logContainerRef.value) logContainerRef.value.scrollTop = logContainerRef.value.scrollHeight })

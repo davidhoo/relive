@@ -496,7 +496,9 @@ const loadPathDerivedStatus = async () => {
 const getPathAnalysisDerivedState = (path: string) => {
   const stats = pathDerivedStatus.value[path]
   if (!stats || !stats.photo_total) return 'is-idle'
-  return stats.analyzed_total > 0 ? 'is-ready' : 'is-idle'
+  if ((stats.analyzed_total || 0) <= 0) return 'is-idle'
+  if ((stats.analyzed_total || 0) >= stats.photo_total) return 'is-ready'
+  return 'is-progress'
 }
 
 const getPathAnalysisDerivedTooltip = (path: string) => {

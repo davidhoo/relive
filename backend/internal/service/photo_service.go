@@ -783,10 +783,10 @@ func (s *photoService) GetPathDerivedStatus(pathPrefix string) (*model.PathDeriv
 		}
 		if photo.GPSLatitude != nil && photo.GPSLongitude != nil {
 			status.GeocodeTotal++
-			switch photo.GeocodeStatus {
-			case "ready":
+			switch {
+			case photo.GeocodeStatus == "ready", strings.TrimSpace(photo.Location) != "":
 				status.GeocodeReady++
-			case "failed":
+			case photo.GeocodeStatus == "failed":
 				status.GeocodeFailed++
 			default:
 				status.GeocodePending++

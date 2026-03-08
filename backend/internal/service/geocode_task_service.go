@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +29,7 @@ type GeocodeTaskService interface {
 	GetTaskStatus() *model.GeocodeTask
 	GetStats() (*model.GeocodeStatsResponse, error)
 	GetBackgroundLogs() []string
+	RepairLegacyStatus() (int64, error)
 	EnqueuePhoto(photoID uint, source string, priority int) error
 	EnqueueByPath(path string, source string, priority int) (int, error)
 	HandleShutdown() error
@@ -102,6 +104,22 @@ func (s *geocodeTaskService) GetTaskStatus() *model.GeocodeTask {
 	return cloneGeocodeTask(s.task)
 }
 
+func (s *geocodeTaskService) RepairLegacyStatus() (int64, error) {
+	now := time.Now()
+	result := s.db.Model(&model.Photo{}).
+		Where("location != '' AND (geocode_status IS NULL OR geocode_status = '' OR geocode_status = 'none')").
+		Updates(map[string]interface{}{
+			"geocode_status":   "ready",
+			"geocode_provider": gorm.Expr("COALESCE(NULLIF(geocode_provider, ''), ?)", "legacy"),
+			"geocoded_at":      gorm.Expr("COALESCE(geocoded_at, updated_at, created_at, ?)", now),
+		})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	s.appendBackgroundLog(fmt.Sprintf("历史 GPS 状态修复完成，回填 %d 张照片", result.RowsAffected))
+	return result.RowsAffected, nil
+}
+
 func (s *geocodeTaskService) GetStats() (*model.GeocodeStatsResponse, error) {
 	stats, err := s.jobRepo.GetStats()
 	if err != nil {
@@ -165,8 +183,12 @@ func (s *geocodeTaskService) enqueuePhotoModel(photo *model.Photo, source string
 	if priority <= 0 {
 		priority = geocodePriorityManual
 	}
-	if photo.Location != "" && photo.GeocodeStatus == "ready" {
-		return nil
+	if strings.TrimSpace(photo.Location) != "" && (photo.GeocodeStatus == "ready" || photo.GeocodeStatus == "" || photo.GeocodeStatus == "none") {
+		now := time.Now()
+		return s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+			"geocode_status": "ready",
+			"geocoded_at":    gorm.Expr("COALESCE(geocoded_at, ?)", &now),
+		}).Error
 	}
 	now := time.Now()
 	if err := s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{

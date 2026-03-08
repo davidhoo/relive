@@ -467,6 +467,32 @@ func (s *aiService) getImageDataForAI(photo *model.Photo) ([]byte, string, error
 	return data, photo.FilePath, nil
 }
 
+func isPhotoReadyForAI(photo *model.Photo) bool {
+	if photo == nil {
+		return false
+	}
+	if photo.ThumbnailStatus != "ready" {
+		return false
+	}
+	if photo.GPSLatitude != nil && photo.GPSLongitude != nil && photo.GeocodeStatus != "ready" {
+		return false
+	}
+	return true
+}
+
+func photoNotReadyReason(photo *model.Photo) string {
+	if photo == nil {
+		return "photo not found"
+	}
+	if photo.ThumbnailStatus != "ready" {
+		return "thumbnail not ready"
+	}
+	if photo.GPSLatitude != nil && photo.GPSLongitude != nil && photo.GeocodeStatus != "ready" {
+		return "geocode not ready"
+	}
+	return "photo not ready for ai analysis"
+}
+
 // AnalyzePhoto 分析单张照片
 func (s *aiService) AnalyzePhoto(photoID uint) error {
 	return s.analyzePhotoInternal(photoID, false)
@@ -495,6 +521,10 @@ func (s *aiService) analyzePhotoInternal(photoID uint, force bool) error {
 	if photo.AIAnalyzed && !force {
 		logger.Warnf("Photo %d already analyzed, skipping", photoID)
 		return nil
+	}
+
+	if !isPhotoReadyForAI(photo) {
+		return fmt.Errorf("photo %d is not ready for ai analysis: %s", photoID, photoNotReadyReason(photo))
 	}
 
 	// 获取图片数据（优先使用缩略图）

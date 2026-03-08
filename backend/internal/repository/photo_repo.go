@@ -252,7 +252,9 @@ func (r *photoRepository) ListByIDs(ids []uint) ([]*model.Photo, error) {
 // GetUnanalyzed 获取未分析的照片
 func (r *photoRepository) GetUnanalyzed(limit int) ([]*model.Photo, error) {
 	var photos []*model.Photo
-	err := r.db.Where("ai_analyzed = ?", false).
+	err := r.db.Where(`ai_analyzed = ?
+		AND thumbnail_status = ?
+		AND (gps_latitude IS NULL OR gps_longitude IS NULL OR geocode_status = ?)`, false, "ready", "ready").
 		Order("taken_at DESC").
 		Limit(limit).
 		Find(&photos).Error

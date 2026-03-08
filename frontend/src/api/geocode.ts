@@ -18,6 +18,9 @@ export const geocodeApi = {
   getBackgroundLogs() {
     return http.get<ApiResponse<GeocodeBackgroundLogsResponse>>('/geocode/background/logs')
   },
+  repairLegacyStatus() {
+    return http.post<ApiResponse<{ count: number }>>('/geocode/repair-legacy-status')
+  },
   enqueue(photoId: number) {
     return http.post<ApiResponse<void>>('/geocode/enqueue', { photo_id: photoId })
   },

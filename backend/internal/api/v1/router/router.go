@@ -188,6 +188,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				geocode.GET("/background/logs", handlers.Geocode.GetBackgroundLogs)
 				geocode.GET("/task", handlers.Geocode.GetTask)
 				geocode.GET("/stats", handlers.Geocode.GetStats)
+				geocode.POST("/repair-legacy-status", handlers.Geocode.RepairLegacyStatus)
 				geocode.POST("/enqueue", handlers.Geocode.Enqueue)
 				geocode.POST("/enqueue-by-path", handlers.Geocode.EnqueueByPath)
 			}

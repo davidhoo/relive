@@ -179,13 +179,15 @@ func TestPhotoRepository_GetUnanalyzed(t *testing.T) {
 	// 插入测试数据
 	for i := 0; i < 10; i++ {
 		photo := &model.Photo{
-			FilePath:   "/test/photos/IMG_" + string(rune(i)) + ".jpg",
-			FileName:   "IMG_" + string(rune(i)) + ".jpg",
-			FileSize:   1024000,
-			FileHash:   "hash" + string(rune(i)),
-			Width:      1920,
-			Height:     1080,
-			AIAnalyzed: i >= 5, // 前 5 个未分析
+			FilePath:        "/test/photos/IMG_" + string(rune(i)) + ".jpg",
+			FileName:        "IMG_" + string(rune(i)) + ".jpg",
+			FileSize:        1024000,
+			FileHash:        "hash" + string(rune(i)),
+			Width:           1920,
+			Height:          1080,
+			ThumbnailStatus: "ready",
+			GeocodeStatus:   "none",
+			AIAnalyzed:      i >= 5, // 前 5 个未分析
 		}
 		repo.Create(photo)
 	}

@@ -620,7 +620,7 @@ export const defaultPrompts: PromptConfig = {
 【字段说明】
 1. description (string): 详细描述照片内容（80-200字），包括人物、场景、活动、氛围等
 2. main_category (string): 必须从以下12个中只选其一（禁止使用英文）：
-   - 人物、孩子、猫咪、家庭、旅行、风景、美食、宠物、日常、文档、杂物、其他
+   - 人物、孩子、猫咪、家庭、旅行、风景、美食、宠物、日常、文档、杂物、截屏、其他
 3. tags (string): 3-8个标签，用逗号分隔，如：旅游,美食,家人,朋友,户外,室内
 4. memory_score (number): 0-100的"值得回忆度"，精确到一位小数
 5. beauty_score (number): 0-100的"美观程度"，精确到一位小数
@@ -692,7 +692,7 @@ export const defaultPrompts: PromptConfig = {
 
 1. description (string): 详细描述照片内容（80-200字），包括人物、场景、活动、氛围等
 2. main_category (string): 必须从以下12个中只选其一（禁止使用英文）：
-   - 人物、孩子、猫咪、家庭、旅行、风景、美食、宠物、日常、文档、杂物、其他
+   - 人物、孩子、猫咪、家庭、旅行、风景、美食、宠物、日常、文档、杂物、截屏、其他
 3. tags (string): 3-8个标签，用逗号分隔，如：旅游,美食,家人,朋友,户外,室内
 4. memory_score (number): 0-100的"值得回忆度"，精确到一位小数
 5. beauty_score (number): 0-100的"美观程度"，精确到一位小数

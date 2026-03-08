@@ -50,6 +50,15 @@ func (h *GeocodeHandler) GetStats(c *gin.Context) {
 	c.JSON(http.StatusOK, model.Response{Success: true, Data: stats})
 }
 
+func (h *GeocodeHandler) RepairLegacyStatus(c *gin.Context) {
+	count, err := h.service.RepairLegacyStatus()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.Response{Success: false, Error: &model.ErrorInfo{Code: "REPAIR_FAILED", Message: err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "历史 GPS 状态修复完成", Data: gin.H{"count": count}})
+}
+
 func (h *GeocodeHandler) Enqueue(c *gin.Context) {
 	var req model.GeocodeEnqueueRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
