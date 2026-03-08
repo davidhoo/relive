@@ -250,6 +250,64 @@ func TestPhotoService_HandleShutdown_MarksInterrupted(t *testing.T) {
 	}
 }
 
+func TestPhotoService_StartScan_SkipsUnchangedExistingPhotoProcessing(t *testing.T) {
+	rootDir := t.TempDir()
+	service, _ := newAutoScanTestService(t, rootDir)
+
+	filePath := filepath.Join(rootDir, "existing.jpg")
+	content := []byte("test")
+	if err := os.WriteFile(filePath, content, 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	info, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatalf("stat file: %v", err)
+	}
+
+	now := time.Now()
+	photo := &model.Photo{
+		FilePath:    filePath,
+		FileName:    filepath.Base(filePath),
+		FileSize:    info.Size(),
+		FileHash:    "existing-hash",
+		Width:       100,
+		Height:      100,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		FileModTime: ptrTime(info.ModTime()),
+	}
+	if err := service.repo.Create(photo); err != nil {
+		t.Fatalf("create existing photo: %v", err)
+	}
+
+	called := 0
+	service.processPhotoFunc = func(filePath string, info os.FileInfo) (*model.Photo, error) {
+		called++
+		return nil, fmt.Errorf("processPhoto should not be called for unchanged files")
+	}
+
+	if _, err := service.StartScan(rootDir); err != nil {
+		t.Fatalf("start scan: %v", err)
+	}
+
+	completed := waitForTaskStatus(t, service, map[string]bool{"completed": true}, 3*time.Second)
+	if completed.ProcessedFiles != 1 {
+		t.Fatalf("expected 1 processed file, got %d", completed.ProcessedFiles)
+	}
+	if called != 0 {
+		t.Fatalf("expected processPhoto to be skipped, called %d times", called)
+	}
+
+	photos, err := service.repo.ListByPathPrefix(rootDir)
+	if err != nil {
+		t.Fatalf("list photos by path prefix: %v", err)
+	}
+	if len(photos) != 1 {
+		t.Fatalf("expected 1 photo record, got %d", len(photos))
+	}
+}
+
 func waitForTaskStatus(t *testing.T, service *photoService, statuses map[string]bool, timeout time.Duration) *model.ScanTask {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -269,5 +327,9 @@ func waitForTaskStatus(t *testing.T, service *photoService, statuses map[string]
 }
 
 func boolPtr(value bool) *bool {
+	return &value
+}
+
+func ptrTime(value time.Time) *time.Time {
 	return &value
 }

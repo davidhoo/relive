@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
@@ -286,6 +287,27 @@ func Load(path string) (*Config, error) {
 	}
 	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
 		cfg.AI.OpenAI.APIKey = apiKey
+	}
+	if value := os.Getenv("MAX_SCAN_WORKERS"); value != "" {
+		workers, convErr := strconv.Atoi(value)
+		if convErr != nil {
+			return nil, fmt.Errorf("invalid MAX_SCAN_WORKERS: %w", convErr)
+		}
+		cfg.Performance.MaxScanWorkers = workers
+	}
+	if value := os.Getenv("MAX_THUMBNAIL_WORKERS"); value != "" {
+		workers, convErr := strconv.Atoi(value)
+		if convErr != nil {
+			return nil, fmt.Errorf("invalid MAX_THUMBNAIL_WORKERS: %w", convErr)
+		}
+		cfg.Performance.MaxThumbnailWorkers = workers
+	}
+	if value := os.Getenv("MAX_GEOCODE_WORKERS"); value != "" {
+		workers, convErr := strconv.Atoi(value)
+		if convErr != nil {
+			return nil, fmt.Errorf("invalid MAX_GEOCODE_WORKERS: %w", convErr)
+		}
+		cfg.Performance.MaxGeocodeWorkers = workers
 	}
 
 	// 验证配置

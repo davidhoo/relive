@@ -1140,6 +1140,15 @@ func (s *photoService) processScanFile(ctx context.Context, jobID string, task s
 	}
 
 	progress.setCurrentFile(filepath.Base(task.path))
+	existing := existingByPath[task.path]
+	if s.canReuseExistingPhoto(existing, task.info, rebuild) {
+		seenFiles.Lock()
+		seenFiles.items[existing.FilePath] = struct{}{}
+		seenFiles.Unlock()
+		progress.incrementProcessed(1)
+		return nil
+	}
+
 	photo, err := s.processPhotoFunc(task.path, task.info)
 	if err != nil {
 		logger.Warnf("[Task %s] Process photo failed: %s, error: %v", jobID, task.path, err)
@@ -1152,7 +1161,7 @@ func (s *photoService) processScanFile(ctx context.Context, jobID string, task s
 	seenFiles.items[photo.FilePath] = struct{}{}
 	seenFiles.Unlock()
 
-	existing := existingByPath[photo.FilePath]
+	existing = existingByPath[photo.FilePath]
 	if existing == nil {
 		if err := s.repo.Create(photo); err != nil {
 			logger.Errorf("[Task %s] Create photo failed: %v", jobID, err)
@@ -1196,6 +1205,16 @@ func (s *photoService) processScanFile(ctx context.Context, jobID string, task s
 
 	progress.incrementProcessed(1)
 	return nil
+}
+
+func (s *photoService) canReuseExistingPhoto(existing *model.Photo, info os.FileInfo, rebuild bool) bool {
+	if rebuild || existing == nil || existing.FileModTime == nil {
+		return false
+	}
+	if existing.FileSize != info.Size() {
+		return false
+	}
+	return existing.FileModTime.Equal(info.ModTime())
 }
 
 func (s *photoService) preserveAnalysisFields(existing, photo *model.Photo) {
