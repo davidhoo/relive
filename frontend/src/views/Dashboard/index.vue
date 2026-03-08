@@ -41,7 +41,7 @@
       </el-col>
       <el-col :xs="24" :sm="12" :md="6">
         <el-card shadow="hover">
-          <el-statistic title="存储空间" :value="storageSize">
+          <el-statistic title="照片库总大小" :value="storageSize">
             <template #prefix>
               <el-icon class="info-icon"><DataLine /></el-icon>
             </template>

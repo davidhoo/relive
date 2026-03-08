@@ -114,16 +114,17 @@
     </div>
 
     <el-row :gutter="20" class="storage-grid">
-      <!-- 照片存储 -->
+      <!-- 照片库总大小 -->
       <el-col :xs="24" :sm="12" class="animate-fade-in">
         <div class="storage-card">
           <div class="storage-header">
             <div class="storage-icon">
               <el-icon><PictureFilled /></el-icon>
             </div>
-            <div class="storage-title">照片存储</div>
+            <div class="storage-title">照片库总大小</div>
           </div>
           <div class="storage-size">{{ formatSize(stats?.storage_size) }}</div>
+          <div class="storage-note">系统已索引照片的总大小，不代表真实磁盘占用</div>
           <div class="storage-footer">
             <div class="storage-label">总照片数</div>
             <div class="storage-count">{{ stats?.total_photos || 0 }} 张</div>
@@ -662,6 +663,13 @@ onMounted(async () => {
   line-height: 1;
 }
 
+.storage-note {
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  opacity: 0.85;
+  margin-bottom: var(--spacing-lg);
+}
+
 .storage-footer {
   display: flex;
   justify-content: space-between;
@@ -740,6 +748,10 @@ onMounted(async () => {
 
   .storage-size {
     font-size: var(--font-size-3xl);
+  }
+
+  .storage-note {
+    font-size: 11px;
   }
 }
 
