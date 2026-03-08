@@ -121,10 +121,14 @@
             <div class="storage-icon">
               <el-icon><PictureFilled /></el-icon>
             </div>
-            <div class="storage-title">照片库总大小</div>
+            <div class="storage-title-group">
+              <div class="storage-title">照片库总大小</div>
+              <el-tooltip content="系统已索引照片的总大小，不代表真实磁盘占用" placement="top">
+                <el-icon class="storage-tip"><InfoFilled /></el-icon>
+              </el-tooltip>
+            </div>
           </div>
           <div class="storage-size">{{ formatSize(stats?.storage_size) }}</div>
-          <div class="storage-note">系统已索引照片的总大小，不代表真实磁盘占用</div>
           <div class="storage-footer">
             <div class="storage-label">总照片数</div>
             <div class="storage-count">{{ stats?.total_photos || 0 }} 张</div>
@@ -256,6 +260,7 @@ import {
   WarningFilled,
   Platform,
   DocumentCopy,
+  InfoFilled,
   Timer,
   DataAnalysis,
   FolderOpened,
@@ -656,6 +661,12 @@ onMounted(async () => {
   font-weight: var(--font-weight-semibold);
 }
 
+.storage-title-group {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
 .storage-size {
   font-size: var(--font-size-4xl);
   font-weight: var(--font-weight-bold);
@@ -663,11 +674,10 @@ onMounted(async () => {
   line-height: 1;
 }
 
-.storage-note {
-  font-size: var(--font-size-xs);
-  line-height: 1.5;
-  opacity: 0.85;
-  margin-bottom: var(--spacing-lg);
+.storage-tip {
+  font-size: 14px;
+  opacity: 0.75;
+  cursor: help;
 }
 
 .storage-footer {
@@ -750,9 +760,6 @@ onMounted(async () => {
     font-size: var(--font-size-3xl);
   }
 
-  .storage-note {
-    font-size: 11px;
-  }
 }
 
 @media (max-width: 480px) {
