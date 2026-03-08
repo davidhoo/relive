@@ -3,8 +3,11 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand/v2"
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
@@ -206,6 +209,7 @@ func (s *displayService) RecordDisplay(record *model.DisplayRecord) error {
 }
 
 func (s *displayService) getSmartPhotos(cfg model.DisplayStrategyConfig, excludePhotoIDs []uint, limit int, referenceDate time.Time) ([]*model.Photo, error) {
+	normalizeDisplayStrategyConfig(&cfg)
 	if limit <= 0 {
 		limit = 1
 	}
@@ -244,7 +248,7 @@ func (s *displayService) getSmartPhotos(cfg model.DisplayStrategyConfig, exclude
 		monthDay := referenceDate.AddDate(0, 0, -offset).Format("01-02")
 		candidates := candidatesByMonthDay[monthDay]
 		if len(candidates) > 0 {
-			return selectSmartFallbackPhotos(candidates, limit), nil
+			return selectSmartFallbackPhotos(candidates, limit, cfg), nil
 		}
 	}
 
@@ -252,6 +256,7 @@ func (s *displayService) getSmartPhotos(cfg model.DisplayStrategyConfig, exclude
 }
 
 func (s *displayService) getOnThisDayPhotos(targetDate time.Time, excludePhotoIDs []uint, cfg model.DisplayStrategyConfig, limit int) ([]*model.Photo, error) {
+	normalizeDisplayStrategyConfig(&cfg)
 	if limit <= 0 {
 		limit = 1
 	}
@@ -261,9 +266,12 @@ func (s *displayService) getOnThisDayPhotos(targetDate time.Time, excludePhotoID
 	if len(fallbackDays) == 0 {
 		fallbackDays = []int{3, 7, 30, 365}
 	}
+	targetPoolSize := max(limit*cfg.CandidatePoolFactor, max(limit*2, 6))
 
 	for _, days := range fallbackDays {
 		logger.Debugf("Trying on_this_day fallback: target=%s, ±%d days", targetDate.Format("2006-01-02"), days)
+		collected := make([]*model.Photo, 0, targetPoolSize)
+		yearsHit := 0
 
 		// 逐年查找（从最近的年份开始）
 		for year := 1; year <= 100; year++ {
@@ -279,15 +287,24 @@ func (s *displayService) getOnThisDayPhotos(targetDate time.Time, excludePhotoID
 			candidates := filterDisplayCandidates(photos, excludePhotoIDs, cfg, true)
 
 			if len(candidates) > 0 {
-				selected := selectOnThisDayPhotos(candidates, limit)
-				logger.Infof(
-					"Found on_this_day candidates with fallback ±%d days, year=%d, count=%d",
-					days,
-					year,
-					len(selected),
-				)
-				return selected, nil
+				collected = append(collected, candidates...)
+				yearsHit++
+				if len(collected) >= targetPoolSize && yearsHit >= min(limit, 3) {
+					break
+				}
 			}
+		}
+
+		if len(collected) > 0 {
+			selected := selectOnThisDayPhotos(collected, limit, cfg)
+			logger.Infof(
+				"Found on_this_day candidates with fallback ±%d days, years=%d, candidates=%d, selected=%d",
+				days,
+				yearsHit,
+				len(collected),
+				len(selected),
+			)
+			return selected, nil
 		}
 	}
 
@@ -320,13 +337,13 @@ func (s *displayService) selectGlobalFallbackPhotos(excludePhotoIDs []uint, cfg 
 
 	candidates := filterDisplayCandidates(photos, excludePhotoIDs, cfg, false)
 	if len(candidates) > 0 {
-		return selectTopPhotos(candidates, limit), nil
+		return selectDiversifiedPhotos(candidates, limit, cfg), nil
 	}
 
 	if len(excludePhotoIDs) > 0 {
 		candidates = filterDisplayCandidates(photos, nil, cfg, false)
 		if len(candidates) > 0 {
-			return selectTopPhotos(candidates, limit), nil
+			return selectDiversifiedPhotos(candidates, limit, cfg), nil
 		}
 	}
 
@@ -337,7 +354,7 @@ func (s *displayService) selectGlobalFallbackPhotos(excludePhotoIDs []uint, cfg 
 		}
 	}
 
-	return selectTopPhotos(unrestricted, limit), nil
+	return selectDiversifiedPhotos(unrestricted, limit, cfg), nil
 }
 
 func (s *displayService) getDisplayStrategyConfig() model.DisplayStrategyConfig {
@@ -366,10 +383,15 @@ func (s *displayService) getDisplayStrategyConfig() model.DisplayStrategyConfig 
 
 func defaultDisplayStrategyConfig() model.DisplayStrategyConfig {
 	return model.DisplayStrategyConfig{
-		Algorithm:      "on_this_day",
-		MinBeautyScore: 70,
-		MinMemoryScore: 60,
-		DailyCount:     3,
+		Algorithm:            "on_this_day",
+		MinBeautyScore:       70,
+		MinMemoryScore:       60,
+		DailyCount:           3,
+		CandidatePoolFactor:  5,
+		MinTimeGapHours:      24,
+		MaxPhotosPerEvent:    1,
+		MaxPhotosPerLocation: 1,
+		LocationBucketKM:     3,
 	}
 }
 
@@ -398,6 +420,27 @@ func normalizeDisplayStrategyConfig(cfg *model.DisplayStrategyConfig) {
 	if cfg.DailyCount > 20 {
 		cfg.DailyCount = 20
 	}
+	if cfg.CandidatePoolFactor <= 0 {
+		cfg.CandidatePoolFactor = 5
+	}
+	if cfg.CandidatePoolFactor > 20 {
+		cfg.CandidatePoolFactor = 20
+	}
+	if cfg.MinTimeGapHours < 0 {
+		cfg.MinTimeGapHours = 0
+	}
+	if cfg.MinTimeGapHours == 0 {
+		cfg.MinTimeGapHours = 24
+	}
+	if cfg.MaxPhotosPerEvent <= 0 {
+		cfg.MaxPhotosPerEvent = 1
+	}
+	if cfg.MaxPhotosPerLocation <= 0 {
+		cfg.MaxPhotosPerLocation = 1
+	}
+	if cfg.LocationBucketKM <= 0 {
+		cfg.LocationBucketKM = 3
+	}
 }
 
 func pickRandomPhotos(photos []*model.Photo, limit int) []*model.Photo {
@@ -417,28 +460,176 @@ func pickRandomPhotos(photos []*model.Photo, limit int) []*model.Photo {
 	return result[:limit]
 }
 
-func selectOnThisDayPhotos(photos []*model.Photo, limit int) []*model.Photo {
-	return selectTopPhotos(photos, limit)
+func selectOnThisDayPhotos(photos []*model.Photo, limit int, cfg model.DisplayStrategyConfig) []*model.Photo {
+	return selectDiversifiedPhotos(photos, limit, cfg)
 }
 
-func selectSmartFallbackPhotos(photos []*model.Photo, limit int) []*model.Photo {
+func selectSmartFallbackPhotos(photos []*model.Photo, limit int, cfg model.DisplayStrategyConfig) []*model.Photo {
+	return selectDiversifiedPhotos(photos, limit, cfg)
+}
+
+type diversitySelectionOptions struct {
+	ignoreTimeGap      bool
+	ignoreEventLimit   bool
+	ignoreLocationCaps bool
+}
+
+func selectDiversifiedPhotos(photos []*model.Photo, limit int, cfg model.DisplayStrategyConfig) []*model.Photo {
 	if len(photos) == 0 || limit <= 0 {
 		return nil
 	}
 
 	ranked := selectTopPhotos(photos, len(photos))
-	if len(ranked) <= limit*2 {
-		return ranked[:min(limit, len(ranked))]
+	poolSize := min(len(ranked), max(limit*cfg.CandidatePoolFactor, max(limit*2, 6)))
+	primaryPool := ranked[:poolSize]
+	remainder := ranked[poolSize:]
+	selected := make([]*model.Photo, 0, min(limit, len(ranked)))
+	selectedIDs := make(map[uint]struct{}, limit)
+	passes := []diversitySelectionOptions{
+		{},
+		{ignoreLocationCaps: true},
+		{ignoreLocationCaps: true, ignoreEventLimit: true},
+		{ignoreLocationCaps: true, ignoreEventLimit: true, ignoreTimeGap: true},
 	}
 
-	poolSize := min(len(ranked), max(limit*3, 6))
-	pool := append([]*model.Photo(nil), ranked[:poolSize]...)
-	rand.Shuffle(len(pool), func(i, j int) {
-		pool[i], pool[j] = pool[j], pool[i]
-	})
+	for _, pass := range passes {
+		selected = appendDiversePhotos(selected, primaryPool, limit, cfg, pass, selectedIDs)
+		if len(selected) >= limit {
+			return selected
+		}
+	}
 
-	selected := pool[:min(limit, len(pool))]
-	return selectTopPhotos(selected, len(selected))
+	for _, pass := range passes {
+		selected = appendDiversePhotos(selected, remainder, limit, cfg, pass, selectedIDs)
+		if len(selected) >= limit {
+			return selected
+		}
+	}
+
+	return selected
+}
+
+func appendDiversePhotos(selected []*model.Photo, candidates []*model.Photo, limit int, cfg model.DisplayStrategyConfig, options diversitySelectionOptions, selectedIDs map[uint]struct{}) []*model.Photo {
+	for _, photo := range candidates {
+		if len(selected) >= limit {
+			return selected
+		}
+		if photo == nil {
+			continue
+		}
+		if _, exists := selectedIDs[photo.ID]; exists {
+			continue
+		}
+		if !options.ignoreTimeGap && hasTimeGapConflict(photo, selected, cfg.MinTimeGapHours) {
+			continue
+		}
+		if !options.ignoreEventLimit && exceedsEventLimit(photo, selected, cfg) {
+			continue
+		}
+		if !options.ignoreLocationCaps && exceedsLocationLimit(photo, selected, cfg) {
+			continue
+		}
+
+		selected = append(selected, photo)
+		selectedIDs[photo.ID] = struct{}{}
+	}
+
+	return selected
+}
+
+func hasTimeGapConflict(photo *model.Photo, selected []*model.Photo, minTimeGapHours int) bool {
+	if photo == nil || photo.TakenAt == nil || minTimeGapHours <= 0 {
+		return false
+	}
+	minGap := time.Duration(minTimeGapHours) * time.Hour
+	for _, existing := range selected {
+		if existing == nil || existing.TakenAt == nil {
+			continue
+		}
+		delta := photo.TakenAt.Sub(*existing.TakenAt)
+		if delta < 0 {
+			delta = -delta
+		}
+		if delta < minGap {
+			return true
+		}
+	}
+	return false
+}
+
+func exceedsEventLimit(photo *model.Photo, selected []*model.Photo, cfg model.DisplayStrategyConfig) bool {
+	if photo == nil || cfg.MaxPhotosPerEvent <= 0 {
+		return false
+	}
+	eventKey := buildPhotoEventKey(photo, cfg)
+	if eventKey == "" {
+		return false
+	}
+	count := 0
+	for _, existing := range selected {
+		if buildPhotoEventKey(existing, cfg) == eventKey {
+			count++
+		}
+	}
+	return count >= cfg.MaxPhotosPerEvent
+}
+
+func exceedsLocationLimit(photo *model.Photo, selected []*model.Photo, cfg model.DisplayStrategyConfig) bool {
+	if photo == nil || cfg.MaxPhotosPerLocation <= 0 {
+		return false
+	}
+	locationKey := buildPhotoLocationBucket(photo, cfg)
+	if locationKey == "" {
+		return false
+	}
+	count := 0
+	for _, existing := range selected {
+		if buildPhotoLocationBucket(existing, cfg) == locationKey {
+			count++
+		}
+	}
+	return count >= cfg.MaxPhotosPerLocation
+}
+
+func buildPhotoEventKey(photo *model.Photo, cfg model.DisplayStrategyConfig) string {
+	if photo == nil {
+		return ""
+	}
+	dateKey := "unknown-date"
+	if photo.TakenAt != nil {
+		dateKey = photo.TakenAt.In(time.Local).Format("2006-01-02")
+	}
+	if locationKey := buildPhotoLocationBucket(photo, cfg); locationKey != "" {
+		return dateKey + "|" + locationKey
+	}
+	parentDir := strings.TrimSpace(filepath.Base(filepath.Dir(photo.FilePath)))
+	if parentDir != "" && parentDir != "." && parentDir != string(filepath.Separator) {
+		return dateKey + "|dir:" + strings.ToLower(parentDir)
+	}
+	return dateKey
+}
+
+func buildPhotoLocationBucket(photo *model.Photo, cfg model.DisplayStrategyConfig) string {
+	if photo == nil {
+		return ""
+	}
+	if photo.GPSLatitude != nil && photo.GPSLongitude != nil {
+		bucketKM := cfg.LocationBucketKM
+		if bucketKM <= 0 {
+			bucketKM = 3
+		}
+		latStep := bucketKM / 111.0
+		latRad := *photo.GPSLatitude * math.Pi / 180.0
+		lonStep := bucketKM / (111.0 * math.Max(0.1, math.Cos(latRad)))
+		latBucket := math.Round(*photo.GPSLatitude / latStep)
+		lonBucket := math.Round(*photo.GPSLongitude / lonStep)
+		return fmt.Sprintf("gps:%d:%d", int64(latBucket), int64(lonBucket))
+	}
+	location := strings.TrimSpace(strings.ToLower(photo.Location))
+	if location == "" {
+		return ""
+	}
+	return "loc:" + location
 }
 
 func filterDisplayCandidates(photos []*model.Photo, excludePhotoIDs []uint, cfg model.DisplayStrategyConfig, requireTakenAt bool) []*model.Photo {

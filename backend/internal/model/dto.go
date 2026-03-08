@@ -68,10 +68,15 @@ type GetDisplayPhotoResponse struct {
 
 // DisplayStrategyConfig 展示策略配置
 type DisplayStrategyConfig struct {
-	Algorithm      string `json:"algorithm"`
-	MinBeautyScore int    `json:"minBeautyScore"`
-	MinMemoryScore int    `json:"minMemoryScore"`
-	DailyCount     int    `json:"dailyCount"`
+	Algorithm            string  `json:"algorithm"`
+	MinBeautyScore       int     `json:"minBeautyScore"`
+	MinMemoryScore       int     `json:"minMemoryScore"`
+	DailyCount           int     `json:"dailyCount"`
+	CandidatePoolFactor  int     `json:"candidatePoolFactor,omitempty"`
+	MinTimeGapHours      int     `json:"minTimeGapHours,omitempty"`
+	MaxPhotosPerEvent    int     `json:"maxPhotosPerEvent,omitempty"`
+	MaxPhotosPerLocation int     `json:"maxPhotosPerLocation,omitempty"`
+	LocationBucketKM     float64 `json:"locationBucketKm,omitempty"`
 }
 
 // PreviewDisplayPhotosRequest 展示策略预览请求

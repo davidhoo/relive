@@ -139,3 +139,50 @@ func TestGetOnThisDayPhotos_FallsBackToCalendarMemoryWhenNoStrictMatch(t *testin
 	require.Len(t, photos, 1)
 	require.Equal(t, uint(11), photos[0].ID)
 }
+
+func TestGetOnThisDayPhotos_DiversifiesTimeAndLocationAcrossYears(t *testing.T) {
+	targetDate := time.Date(2026, 3, 6, 10, 0, 0, 0, time.Local)
+	closeTakenAtA := time.Date(2025, 3, 6, 10, 0, 0, 0, time.Local)
+	closeTakenAtB := time.Date(2025, 3, 6, 10, 10, 0, 0, time.Local)
+	diverseTakenAt := time.Date(2024, 3, 5, 8, 0, 0, 0, time.Local)
+	otherYearTakenAt := time.Date(2023, 3, 7, 7, 30, 0, 0, time.Local)
+
+	repo := &stubPhotoRepo{
+		getByDateRangeFunc: func(start, end time.Time) ([]*model.Photo, error) {
+			switch start.Year() {
+			case 2025:
+				lat := 39.9000
+				lon := 116.3900
+				latClose := 39.9004
+				lonClose := 116.3903
+				return []*model.Photo{
+					{ID: 21, FilePath: "/photos/trip-a/1.jpg", TakenAt: &closeTakenAtA, AIAnalyzed: true, MemoryScore: 92, BeautyScore: 91, OverallScore: 92, GPSLatitude: &lat, GPSLongitude: &lon, Location: "北京"},
+					{ID: 22, FilePath: "/photos/trip-a/2.jpg", TakenAt: &closeTakenAtB, AIAnalyzed: true, MemoryScore: 90, BeautyScore: 90, OverallScore: 91, GPSLatitude: &latClose, GPSLongitude: &lonClose, Location: "北京"},
+				}, nil
+			case 2024:
+				lat := 31.2304
+				lon := 121.4737
+				return []*model.Photo{{ID: 23, FilePath: "/photos/trip-b/1.jpg", TakenAt: &diverseTakenAt, AIAnalyzed: true, MemoryScore: 84, BeautyScore: 83, OverallScore: 84, GPSLatitude: &lat, GPSLongitude: &lon, Location: "上海"}}, nil
+			case 2023:
+				return []*model.Photo{{ID: 24, FilePath: "/photos/trip-c/1.jpg", TakenAt: &otherYearTakenAt, AIAnalyzed: true, MemoryScore: 80, BeautyScore: 82, OverallScore: 81, Location: "杭州"}}, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
+
+	svc := &displayService{
+		photoRepo: repo,
+		config: &config.Config{
+			Display: config.DisplayConfig{FallbackDays: []int{3, 7, 30, 365}},
+		},
+	}
+
+	cfg := model.DisplayStrategyConfig{Algorithm: "on_this_day", MinBeautyScore: 70, MinMemoryScore: 60, DailyCount: 2}
+	photos, err := svc.getOnThisDayPhotos(targetDate, nil, cfg, 2)
+
+	require.NoError(t, err)
+	require.Len(t, photos, 2)
+	require.Equal(t, uint(21), photos[0].ID)
+	require.Equal(t, uint(23), photos[1].ID)
+}
