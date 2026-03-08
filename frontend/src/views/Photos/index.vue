@@ -64,11 +64,30 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="enabled" label="状态" width="80" align="center">
+        <el-table-column label="状态" width="130" align="center">
           <template #default="{ row }">
-            <el-tag :type="row.enabled ? 'success' : 'info'" size="small" effect="light">
-              {{ row.enabled ? '启用' : '禁用' }}
-            </el-tag>
+            <div class="derived-status-icons">
+              <el-tooltip :content="row.enabled ? '路径已启用' : '路径已禁用'" placement="top">
+                <span class="derived-status-icon" :class="row.enabled ? 'is-ready' : 'is-idle'">
+                  <el-icon><SwitchButton /></el-icon>
+                </span>
+              </el-tooltip>
+              <el-tooltip :content="getPathAnalysisDerivedTooltip(row.path)" placement="top">
+                <span class="derived-status-icon" :class="getPathAnalysisDerivedState(row.path)">
+                  <el-icon><MagicStick /></el-icon>
+                </span>
+              </el-tooltip>
+              <el-tooltip :content="getPathThumbnailDerivedTooltip(row.path)" placement="top">
+                <span class="derived-status-icon" :class="getPathThumbnailDerivedState(row.path)">
+                  <el-icon><Files /></el-icon>
+                </span>
+              </el-tooltip>
+              <el-tooltip :content="getPathGeocodeDerivedTooltip(row.path)" placement="top">
+                <span class="derived-status-icon" :class="getPathGeocodeDerivedState(row.path)">
+                  <el-icon><Location /></el-icon>
+                </span>
+              </el-tooltip>
+            </div>
           </template>
         </el-table-column>
 
@@ -374,7 +393,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { ArrowDown, ArrowUp, Clock, Collection, Delete, Files, Filter, Folder, FolderOpened, FullScreen, Loading, Location, MagicStick, Picture, PictureFilled, PriceTag, QuestionFilled, Refresh, Search, Setting, Star } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowUp, Clock, Collection, Delete, Files, Filter, Folder, FolderOpened, FullScreen, Loading, Location, MagicStick, Picture, PictureFilled, PriceTag, QuestionFilled, Refresh, Search, Setting, Star, SwitchButton } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
@@ -422,6 +441,7 @@ const displayedTags = computed(() => {
 // 存储每个路径的照片数量（从数据库获取）
 const pathPhotoCounts = ref<Record<string, number>>({})
 const pathPhotoCountDeltas = ref<Record<string, number>>({})
+const pathDerivedStatus = ref<Record<string, any>>({})
 
 const getDisplayPathPhotoCount = (path: string) => {
   return Math.max(0, (pathPhotoCounts.value[path] || 0) + (pathPhotoCountDeltas.value[path] || 0))
@@ -459,6 +479,60 @@ const loadPathPhotoCounts = async () => {
   } catch (error) {
     console.error('Failed to load path photo counts:', error)
   }
+}
+
+const loadPathDerivedStatus = async () => {
+  if (scanPaths.value.length === 0) return
+
+  try {
+    const paths = scanPaths.value.map(p => p.path)
+    const res = await photoApi.countDerivedStatusByPaths({ paths })
+    pathDerivedStatus.value = res.data?.data?.stats || {}
+  } catch (error) {
+    console.error('Failed to load path derived status:', error)
+  }
+}
+
+const getPathAnalysisDerivedState = (path: string) => {
+  const stats = pathDerivedStatus.value[path]
+  if (!stats || !stats.photo_total) return 'is-idle'
+  return stats.analyzed_total > 0 ? 'is-ready' : 'is-idle'
+}
+
+const getPathAnalysisDerivedTooltip = (path: string) => {
+  const stats = pathDerivedStatus.value[path]
+  if (!stats || !stats.photo_total) return 'AI 分析：无照片'
+  return `AI 分析：${stats.analyzed_total || 0}/${stats.photo_total}`
+}
+
+const getPathThumbnailDerivedState = (path: string) => {
+  const stats = pathDerivedStatus.value[path]
+  if (!stats || !stats.thumbnail_total) return 'is-idle'
+  if (stats.thumbnail_failed > 0) return 'is-failed'
+  if (stats.thumbnail_ready >= stats.thumbnail_total) return 'is-ready'
+  return 'is-progress'
+}
+
+const getPathThumbnailDerivedTooltip = (path: string) => {
+  const stats = pathDerivedStatus.value[path]
+  if (!stats || !stats.thumbnail_total) return '缩略图：无照片'
+  if (stats.thumbnail_failed > 0) return `缩略图：失败 ${stats.thumbnail_failed}`
+  return `缩略图：${stats.thumbnail_ready}/${stats.thumbnail_total}`
+}
+
+const getPathGeocodeDerivedState = (path: string) => {
+  const stats = pathDerivedStatus.value[path]
+  if (!stats || !stats.geocode_total) return 'is-idle'
+  if (stats.geocode_failed > 0) return 'is-failed'
+  if (stats.geocode_ready >= stats.geocode_total) return 'is-ready'
+  return 'is-progress'
+}
+
+const getPathGeocodeDerivedTooltip = (path: string) => {
+  const stats = pathDerivedStatus.value[path]
+  if (!stats || !stats.geocode_total) return 'GPS：无GPS照片'
+  if (stats.geocode_failed > 0) return `GPS：失败 ${stats.geocode_failed}`
+  return `GPS：${stats.geocode_ready}/${stats.geocode_total}`
 }
 
 // 获取照片缩略图 URL
@@ -615,7 +689,7 @@ const loadScanPaths = async () => {
     const config = await configApi.getScanPaths()
     scanPaths.value = config.paths || []
     // 加载每个路径的照片数量
-    await loadPathPhotoCounts()
+    await Promise.all([loadPathPhotoCounts(), loadPathDerivedStatus()])
   } catch (error: any) {
     console.error('Failed to load scan paths:', error)
     ElMessage.error('加载扫描路径失败')
@@ -780,6 +854,7 @@ const startPollingScanProgress = (pathName: string) => {
           ? Math.round((task.processed_files / discovered) * 100)
           : 0
         console.log(`[${pathName}] 进度: ${percent}% (${task.processed_files}/${discovered}) status=${task.status}`)
+        await loadPathDerivedStatus()
       } else {
         // 任务完成
         clearInterval(scanProgressTimer!)
@@ -805,7 +880,7 @@ const startPollingScanProgress = (pathName: string) => {
         clearPathPhotoCountDelta(task.path || currentScanPath.value)
         await loadPhotos()
         await loadScanPaths()
-        await loadPathPhotoCounts()
+        await Promise.all([loadPathPhotoCounts(), loadPathDerivedStatus()])
       }
     } catch (error: any) {
       console.error('查询扫描进度失败:', error)
@@ -832,7 +907,7 @@ const handleCleanup = async () => {
     // Reload photos to update the list
     await loadPhotos()
     // 刷新路径照片数量
-    await loadPathPhotoCounts()
+    await Promise.all([loadPathPhotoCounts(), loadPathDerivedStatus()])
   } catch (error: any) {
     ElMessage.error(error.message || '清理照片失败')
   } finally {
@@ -1184,6 +1259,48 @@ defineExpose({
 }
 
 /* 照片数量 */
+.derived-status-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.derived-status-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(80, 80, 80, 0.72);
+  color: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+.derived-status-icon.is-ready {
+  background: rgba(103, 194, 58, 0.92);
+  color: #fff;
+}
+
+.derived-status-icon.is-progress {
+  background: rgba(230, 162, 60, 0.92);
+  color: #fff;
+}
+
+.derived-status-icon.is-failed {
+  background: rgba(245, 108, 108, 0.92);
+  color: #fff;
+}
+
+.derived-status-icon.is-idle {
+  background: rgba(80, 80, 80, 0.72);
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.derived-status-icon :deep(.el-icon) {
+  font-size: 10px;
+}
+
 .photo-count {
   font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);

@@ -284,6 +284,27 @@ type CountPhotosByPathsResponse struct {
 	Counts map[string]int64 `json:"counts"` // key: path, value: count
 }
 
+type PathDerivedStatus struct {
+	PhotoTotal       int64 `json:"photo_total"`
+	AnalyzedTotal    int64 `json:"analyzed_total"`
+	ThumbnailTotal   int64 `json:"thumbnail_total"`
+	ThumbnailReady   int64 `json:"thumbnail_ready"`
+	ThumbnailFailed  int64 `json:"thumbnail_failed"`
+	ThumbnailPending int64 `json:"thumbnail_pending"`
+	GeocodeTotal     int64 `json:"geocode_total"`
+	GeocodeReady     int64 `json:"geocode_ready"`
+	GeocodeFailed    int64 `json:"geocode_failed"`
+	GeocodePending   int64 `json:"geocode_pending"`
+}
+
+type CountDerivedStatusByPathsRequest struct {
+	Paths []string `json:"paths" binding:"required"`
+}
+
+type CountDerivedStatusByPathsResponse struct {
+	Stats map[string]PathDerivedStatus `json:"stats"`
+}
+
 // ScanTask 扫描任务状态
 type ScanTask struct {
 	ID              string     `json:"id"`

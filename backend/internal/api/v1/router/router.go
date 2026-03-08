@@ -162,6 +162,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				photos.POST("/validate-path", handlers.Photo.ValidatePath)
 				photos.POST("/list-directories", handlers.Photo.ListDirectories)
 				photos.POST("/count-by-paths", handlers.Photo.CountPhotosByPaths)
+				photos.POST("/derived-status-by-paths", handlers.Photo.CountDerivedStatusByPaths)
 				photos.GET("/stats", handlers.Photo.GetPhotoStats)
 				photos.GET("/categories", handlers.Photo.GetCategories)
 				photos.GET("/tags", handlers.Photo.GetTags)

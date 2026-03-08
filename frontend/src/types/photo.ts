@@ -93,3 +93,24 @@ export interface CountPhotosByPathsRequest {
 export interface CountPhotosByPathsResponse {
   counts: Record<string, number>  // key: path, value: count
 }
+
+export interface PathDerivedStatus {
+  photo_total: number
+  analyzed_total: number
+  thumbnail_total: number
+  thumbnail_ready: number
+  thumbnail_failed: number
+  thumbnail_pending: number
+  geocode_total: number
+  geocode_ready: number
+  geocode_failed: number
+  geocode_pending: number
+}
+
+export interface CountDerivedStatusByPathsRequest {
+  paths: string[]
+}
+
+export interface CountDerivedStatusByPathsResponse {
+  stats: Record<string, PathDerivedStatus>
+}

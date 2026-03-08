@@ -1017,6 +1017,28 @@ func (h *PhotoHandler) CountPhotosByPaths(c *gin.Context) {
 	})
 }
 
+// CountDerivedStatusByPaths 按路径统计缩略图与 GPS 派生状态
+func (h *PhotoHandler) CountDerivedStatusByPaths(c *gin.Context) {
+	var req model.CountDerivedStatusByPathsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: err.Error()}})
+		return
+	}
+	stats := make(map[string]model.PathDerivedStatus)
+	for _, path := range req.Paths {
+		derived, err := h.photoService.GetPathDerivedStatus(path)
+		if err != nil {
+			logger.Errorf("Count derived status by path failed: %s, error: %v", path, err)
+			stats[path] = model.PathDerivedStatus{}
+			continue
+		}
+		if derived != nil {
+			stats[path] = *derived
+		}
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "Success", Data: model.CountDerivedStatusByPathsResponse{Stats: stats}})
+}
+
 // StartScan 启动异步扫描任务
 // @Summary 启动异步扫描任务
 // @Description 启动后台扫描任务，立即返回任务 ID，通过 GetScanTask 查询进度

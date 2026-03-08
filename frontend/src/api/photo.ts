@@ -1,5 +1,5 @@
 import http from '@/utils/request'
-import type { Photo, PhotoListParams, PhotoStats, ScanPhotosRequest, RebuildPhotosRequest, CleanupPhotosResponse, CountPhotosByPathsRequest, CountPhotosByPathsResponse } from '@/types/photo'
+import type { Photo, PhotoListParams, PhotoStats, ScanPhotosRequest, RebuildPhotosRequest, CleanupPhotosResponse, CountPhotosByPathsRequest, CountPhotosByPathsResponse, CountDerivedStatusByPathsRequest, CountDerivedStatusByPathsResponse } from '@/types/photo'
 import type { ApiResponse, PagedResponse } from '@/types/api'
 
 export const photoApi = {
@@ -56,5 +56,10 @@ export const photoApi = {
   // 按路径统计照片数量
   countByPaths(data: CountPhotosByPathsRequest) {
     return http.post<ApiResponse<CountPhotosByPathsResponse>>('/photos/count-by-paths', data)
+  },
+
+  // 按路径统计缩略图/GPS 派生状态
+  countDerivedStatusByPaths(data: CountDerivedStatusByPathsRequest) {
+    return http.post<ApiResponse<CountDerivedStatusByPathsResponse>>('/photos/derived-status-by-paths', data)
   },
 }

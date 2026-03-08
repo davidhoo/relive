@@ -57,6 +57,7 @@ type PhotoService interface {
 
 	// 路径统计
 	CountPhotosByPathPrefix(pathPrefix string) (int64, error)
+	GetPathDerivedStatus(pathPrefix string) (*model.PathDerivedStatus, error)
 }
 
 // photoService 照片服务实现
@@ -758,6 +759,41 @@ func (s *photoService) CountPhotosByPathPrefix(pathPrefix string) (int64, error)
 		return 0, fmt.Errorf("count photos by path prefix: %w", err)
 	}
 	return count, nil
+}
+
+func (s *photoService) GetPathDerivedStatus(pathPrefix string) (*model.PathDerivedStatus, error) {
+	photos, err := s.repo.ListByPathPrefix(pathPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("list photos by path prefix: %w", err)
+	}
+	status := &model.PathDerivedStatus{}
+	status.PhotoTotal = int64(len(photos))
+	status.ThumbnailTotal = status.PhotoTotal
+	for _, photo := range photos {
+		if photo.AIAnalyzed {
+			status.AnalyzedTotal++
+		}
+		switch photo.ThumbnailStatus {
+		case "ready":
+			status.ThumbnailReady++
+		case "failed":
+			status.ThumbnailFailed++
+		default:
+			status.ThumbnailPending++
+		}
+		if photo.GPSLatitude != nil && photo.GPSLongitude != nil {
+			status.GeocodeTotal++
+			switch photo.GeocodeStatus {
+			case "ready":
+				status.GeocodeReady++
+			case "failed":
+				status.GeocodeFailed++
+			default:
+				status.GeocodePending++
+			}
+		}
+	}
+	return status, nil
 }
 
 // getEnabledScanPaths 获取启用的扫描路径列表
