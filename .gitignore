@@ -47,8 +47,10 @@ backend/data/
 !backend/data/.gitkeep
 
 # Thumbnails
-thumbnails/
+/thumbnails/
 backend/data/thumbnails/
+!frontend/src/views/Thumbnails/
+!frontend/src/views/Thumbnails/index.vue
 
 # Logs
 logs/
