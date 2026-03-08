@@ -521,7 +521,7 @@ func (h *PhotoHandler) GetPhotoImage(c *gin.Context) {
 
 		// 如果缩略图文件已存在，直接返回
 		if _, err := os.Stat(thumbnailFile); err == nil {
-			if !util.ShouldRefreshHEICCache(photo.FilePath, thumbnailFile) {
+			if !util.ShouldRefreshThumbnailCache(photo.FilePath, thumbnailFile) {
 				c.Header("Content-Type", "image/jpeg")
 				c.File(thumbnailFile)
 				return
@@ -715,7 +715,7 @@ func (h *PhotoHandler) GetPhotoThumbnail(c *gin.Context) {
 	if photo.ThumbnailPath != "" {
 		thumbnailFullPath := filepath.Join(h.cfg.Photos.ThumbnailPath, photo.ThumbnailPath)
 		if _, err := os.Stat(thumbnailFullPath); err == nil {
-			if !util.ShouldRefreshHEICCache(photo.FilePath, thumbnailFullPath) {
+			if !util.ShouldRefreshThumbnailCache(photo.FilePath, thumbnailFullPath) {
 				c.Header("Content-Type", "image/jpeg")
 				c.File(thumbnailFullPath)
 				return

@@ -25,6 +25,8 @@ type heifTransformInfo struct {
 	visualHeight int
 }
 
+var extractEXIFFunc = ExtractEXIF
+
 // ImageProcessor 图片处理器
 type ImageProcessor struct {
 	MaxLongSide int // 最大长边（像素）
@@ -181,6 +183,19 @@ func OpenImage(filePath string) (image.Image, error) {
 	return imaging.Open(filePath)
 }
 
+func normalizeImageForDisplay(filePath string, img image.Image) image.Image {
+	if IsHEIC(filePath) {
+		return img
+	}
+
+	exifData, err := extractEXIFFunc(filePath)
+	if err != nil || exifData == nil {
+		return img
+	}
+
+	return NormalizeOrientation(img, exifData.Orientation)
+}
+
 func readHEIFTransformInfo(filePath string) (heifTransformInfo, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -246,12 +261,27 @@ func applyHEIFTransforms(img image.Image, info heifTransformInfo) image.Image {
 	return transformed
 }
 
-func ShouldRefreshHEICCache(sourcePath, cachePath string) bool {
-	if !IsHEIC(sourcePath) {
-		return false
+func GetDisplayImageSize(filePath string) (width, height int, err error) {
+	width, height, err = GetImageSize(filePath)
+	if err != nil {
+		return 0, 0, err
 	}
 
-	sourceWidth, sourceHeight, err := GetImageSize(sourcePath)
+	if IsHEIC(filePath) {
+		return width, height, nil
+	}
+
+	exifData, exifErr := extractEXIFFunc(filePath)
+	if exifErr != nil || exifData == nil {
+		return width, height, nil
+	}
+
+	width, height = normalizeDimensionsForOrientation(width, height, exifData.Orientation)
+	return width, height, nil
+}
+
+func ShouldRefreshThumbnailCache(sourcePath, cachePath string) bool {
+	sourceWidth, sourceHeight, err := GetDisplayImageSize(sourcePath)
 	if err != nil || sourceWidth <= 0 || sourceHeight <= 0 {
 		return false
 	}
@@ -264,6 +294,23 @@ func ShouldRefreshHEICCache(sourcePath, cachePath string) bool {
 	sourceLandscape := sourceWidth > sourceHeight
 	cacheLandscape := cacheWidth > cacheHeight
 	return sourceLandscape != cacheLandscape
+}
+
+func normalizeDimensionsForOrientation(width, height, orientation int) (int, int) {
+	if orientationSwapsAxes(orientation) {
+		return height, width
+	}
+
+	return width, height
+}
+
+func orientationSwapsAxes(orientation int) bool {
+	switch orientation {
+	case 5, 6, 7, 8:
+		return true
+	default:
+		return false
+	}
 }
 
 // NormalizeOrientation 根据 EXIF orientation 将图片旋正。
@@ -523,6 +570,7 @@ func (g *ThumbnailGenerator) GenerateThumbnail(filePath string) (string, error) 
 	if err != nil {
 		return "", err
 	}
+	img = normalizeImageForDisplay(filePath, img)
 
 	// 获取原始尺寸
 	bounds := img.Bounds()
@@ -560,7 +608,7 @@ func (g *ThumbnailGenerator) GenerateThumbnailIfNotExists(filePath string) (stri
 
 	// 检查缩略图是否已存在
 	if _, err := os.Stat(thumbnailPath); err == nil {
-		if ShouldRefreshHEICCache(filePath, thumbnailPath) {
+		if ShouldRefreshThumbnailCache(filePath, thumbnailPath) {
 			return g.GenerateThumbnail(filePath)
 		}
 		// 已存在，直接返回路径
