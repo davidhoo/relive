@@ -6,6 +6,11 @@ services:
     image: davidhu/relive:latest
     container_name: relive
     restart: unless-stopped
+    # Synology 兼容版 4 核 NAS 推荐：
+    # - 部分群晖内核/容器环境不支持 cpus(CFS quota)，会导致容器启动失败
+    # - 因此这里改用 cpu_shares + GOMAXPROCS + 应用层 worker 限制
+    # - 如果后续观察到系统仍然很空闲，可逐步把 MAX_SCAN_WORKERS 提到 3
+    cpu_shares: 512
     ports:
       - "8080:8080"
     volumes:
@@ -34,6 +39,16 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - JWT_SECRET=${JWT_SECRET}
+      # 4 核 NAS 推荐值：
+      # - GOMAXPROCS=2：Go 最多并行使用 2 个 CPU 核心
+      # - MAX_SCAN_WORKERS=2：扫描同时处理 2 张照片
+      # - MAX_THUMBNAIL_WORKERS=1：缩略图后台单线程生成
+      # - MAX_GEOCODE_WORKERS=1：GPS 逆地理编码后台单线程处理
+      # 这组配置更适合首次扫描 10 万+ 照片，整体更稳、更不容易把 NAS 拖慢。
+      - GOMAXPROCS=2
+      - MAX_SCAN_WORKERS=2
+      - MAX_THUMBNAIL_WORKERS=1
+      - MAX_GEOCODE_WORKERS=1
       # AI Provider API Keys（如果使用）
       - QWEN_API_KEY=${QWEN_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
