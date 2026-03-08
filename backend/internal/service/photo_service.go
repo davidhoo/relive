@@ -1,7 +1,9 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/davidhoo/relive/internal/analyzer"
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/internal/util"
@@ -25,7 +28,9 @@ type PhotoService interface {
 	// 异步扫描
 	StartScan(path string) (*model.ScanTask, error)
 	StartRebuild(path string) (*model.ScanTask, error)
+	StopScanTask(id string) (*model.ScanTask, error)
 	GetScanTask() *model.ScanTask
+	HandleShutdown() error
 	RunAutoScanCheck() error
 
 	// 查询
@@ -57,28 +62,69 @@ type PhotoService interface {
 // photoService 照片服务实现
 type photoService struct {
 	repo               repository.PhotoRepository
+	scanJobRepo        repository.ScanJobRepository
 	config             *config.Config
 	configService      ConfigService
 	geocodeService     GeocodeService
 	thumbnailGenerator *util.ThumbnailGenerator
-	scanTask           *model.ScanTask
+	thumbnailService   ThumbnailService
+	geocodeTaskService GeocodeTaskService
+	processPhotoFunc   func(string, os.FileInfo) (*model.Photo, error)
+	activeJob          *activeScanJob
 	taskMutex          sync.RWMutex
 	autoScanMutex      sync.Mutex
 	lastAutoScanCheck  time.Time
 }
 
 // NewPhotoService 创建照片服务
-func NewPhotoService(repo repository.PhotoRepository, cfg *config.Config, configService ConfigService, geocodeService GeocodeService) PhotoService {
+func NewPhotoService(repo repository.PhotoRepository, scanJobRepo repository.ScanJobRepository, cfg *config.Config, configService ConfigService, geocodeService GeocodeService, thumbnailService ThumbnailService, geocodeTaskService GeocodeTaskService) PhotoService {
 	// 初始化缩略图生成器（1024px，兼顾展示和 AI 理解）
 	thumbnailGenerator := util.NewThumbnailGenerator(1024, 1024, 90, cfg.Photos.ThumbnailPath)
 
-	return &photoService{
+	service := &photoService{
 		repo:               repo,
+		scanJobRepo:        scanJobRepo,
 		config:             cfg,
 		configService:      configService,
 		geocodeService:     geocodeService,
 		thumbnailGenerator: thumbnailGenerator,
+		thumbnailService:   thumbnailService,
+		geocodeTaskService: geocodeTaskService,
 	}
+	service.processPhotoFunc = service.processPhoto
+
+	if service.scanJobRepo != nil {
+		if err := service.scanJobRepo.InterruptNonTerminal("task interrupted because service restarted"); err != nil {
+			logger.Warnf("Interrupt stale scan jobs failed: %v", err)
+		}
+	}
+
+	return service
+}
+
+type activeScanJob struct {
+	id              string
+	taskType        string
+	path            string
+	ctx             context.Context
+	cancel          context.CancelFunc
+	done            chan struct{}
+	terminalStatus  string
+	terminalMessage string
+	mu              sync.RWMutex
+}
+
+func (j *activeScanJob) setTerminal(status, message string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.terminalStatus = status
+	j.terminalMessage = message
+}
+
+func (j *activeScanJob) terminal() (string, string) {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return j.terminalStatus, j.terminalMessage
 }
 
 type autoScanConfig struct {
@@ -488,6 +534,9 @@ func (s *photoService) processPhoto(filePath string, info os.FileInfo) (*model.P
 		logger.Warnf("Extract EXIF failed: %s, error: %v", filePath, err)
 		exifData = &util.EXIFData{} // 使用空数据
 	}
+	if exifData == nil {
+		exifData = &util.EXIFData{}
+	}
 
 	// 获取图片尺寸（如果 EXIF 中没有）
 	width := exifData.Width
@@ -525,28 +574,17 @@ func (s *photoService) processPhoto(filePath string, info os.FileInfo) (*model.P
 		UpdatedAt:      now,
 	}
 
-	// 如果有 GPS 坐标，尝试进行地理编码
-	if photo.GPSLatitude != nil && photo.GPSLongitude != nil && s.geocodeService != nil {
-		location, err := s.geocodeService.ReverseGeocode(*photo.GPSLatitude, *photo.GPSLongitude)
-		if err != nil {
-			logger.Warnf("Geocode failed for (%f, %f): %v", *photo.GPSLatitude, *photo.GPSLongitude, err)
-		} else {
-			// 设置位置信息 - 使用标准显示格式（城市+区县+商圈/街道）
-			photo.Location = location.FormatDisplay()
-			logger.Debugf("Geocoded: (%f, %f) -> %s", *photo.GPSLatitude, *photo.GPSLongitude, photo.Location)
-		}
+	if photo.GPSLatitude != nil && photo.GPSLongitude != nil {
+		photo.GeocodeStatus = "pending"
+	} else {
+		photo.GeocodeStatus = "none"
 	}
+	photo.GeocodeProvider = ""
+	photo.GeocodedAt = nil
 
-	// 生成缩略图（如果尚未存在）
-	if s.thumbnailGenerator != nil {
-		thumbnailPath, err := s.thumbnailGenerator.GenerateThumbnailIfNotExists(filePath)
-		if err != nil {
-			logger.Warnf("Generate thumbnail failed: %s, error: %v", filePath, err)
-		} else {
-			photo.ThumbnailPath = thumbnailPath
-			logger.Debugf("Thumbnail generated: %s -> %s", filePath, thumbnailPath)
-		}
-	}
+	photo.ThumbnailPath = util.GenerateDerivedImagePath(filePath)
+	photo.ThumbnailStatus = "pending"
+	photo.ThumbnailGeneratedAt = nil
 
 	return photo, nil
 }
@@ -756,213 +794,609 @@ func (s *photoService) getEnabledScanPaths() ([]string, error) {
 
 // ==================== Async Scan Methods ====================
 
-// StartScan 启动异步扫描任务
+type scanProgress struct {
+	mu sync.Mutex
+
+	phase           string
+	totalFiles      int
+	discoveredFiles int
+	processedFiles  int
+	newPhotos       int
+	updatedPhotos   int
+	deletedPhotos   int
+	skippedFiles    int
+	currentFile     string
+	dirty           bool
+}
+
+type scanFileTask struct {
+	path string
+	info os.FileInfo
+}
+
 func (s *photoService) StartScan(path string) (*model.ScanTask, error) {
-	// 检查是否已有运行中的任务
-	s.taskMutex.Lock()
-	if s.scanTask != nil && s.scanTask.IsRunning() {
-		s.taskMutex.Unlock()
-		return nil, fmt.Errorf("scan task already running")
-	}
-
-	// 检查路径是否存在
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		s.taskMutex.Unlock()
-		return nil, fmt.Errorf("path does not exist: %s", path)
-	}
-
-	// 创建新任务
-	task := &model.ScanTask{
-		ID:        fmt.Sprintf("scan_%d", time.Now().Unix()),
-		Status:    "running",
-		Type:      "scan",
-		Path:      path,
-		StartedAt: time.Now(),
-	}
-	s.scanTask = task
-	s.taskMutex.Unlock()
-
-	logger.Infof("Starting async scan: path=%s, task_id=%s", path, task.ID)
-
-	// 异步执行扫描
-	go s.runScanTask(task, path, false)
-
-	return task, nil
+	return s.startScanJob(path, "scan", false)
 }
 
-// StartRebuild 启动异步重建任务
 func (s *photoService) StartRebuild(path string) (*model.ScanTask, error) {
-	// 检查是否已有运行中的任务
+	return s.startScanJob(path, "rebuild", true)
+}
+
+func (s *photoService) StopScanTask(id string) (*model.ScanTask, error) {
+	s.taskMutex.RLock()
+	active := s.activeJob
+	s.taskMutex.RUnlock()
+
+	if active == nil {
+		return nil, fmt.Errorf("no active scan task")
+	}
+	if id != "" && active.id != id {
+		return nil, fmt.Errorf("scan task not found")
+	}
+
+	now := time.Now()
+	active.setTerminal("stopped", "task stopped by user")
+	if err := s.scanJobRepo.UpdateFields(active.id, map[string]interface{}{
+		"status":            "stopping",
+		"phase":             "stopping",
+		"stop_requested_at": &now,
+		"last_heartbeat_at": &now,
+	}); err != nil {
+		return nil, err
+	}
+	active.cancel()
+
+	job, err := s.scanJobRepo.GetByID(active.id)
+	if err != nil {
+		return nil, err
+	}
+	return scanJobToTask(job), nil
+}
+
+func (s *photoService) GetScanTask() *model.ScanTask {
+	if s.scanJobRepo == nil {
+		return nil
+	}
+	job, err := s.scanJobRepo.GetLatest()
+	if err != nil {
+		logger.Warnf("Get latest scan task failed: %v", err)
+		return nil
+	}
+	return scanJobToTask(job)
+}
+
+func (s *photoService) HandleShutdown() error {
+	s.taskMutex.RLock()
+	active := s.activeJob
+	s.taskMutex.RUnlock()
+	if active == nil {
+		if s.scanJobRepo == nil {
+			return nil
+		}
+		return s.scanJobRepo.InterruptNonTerminal("task interrupted by service shutdown")
+	}
+
+	now := time.Now()
+	active.setTerminal("interrupted", "task interrupted by service shutdown")
+	if err := s.scanJobRepo.UpdateFields(active.id, map[string]interface{}{
+		"status":            "interrupted",
+		"phase":             "stopping",
+		"error_message":     "task interrupted by service shutdown",
+		"completed_at":      &now,
+		"last_heartbeat_at": &now,
+	}); err != nil {
+		return err
+	}
+	active.cancel()
+	return nil
+}
+
+func (s *photoService) startScanJob(path string, taskType string, rebuild bool) (*model.ScanTask, error) {
 	s.taskMutex.Lock()
-	if s.scanTask != nil && s.scanTask.IsRunning() {
+	if s.activeJob != nil {
 		s.taskMutex.Unlock()
 		return nil, fmt.Errorf("scan task already running")
 	}
 
-	// 检查路径是否存在
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		s.taskMutex.Unlock()
 		return nil, fmt.Errorf("path does not exist: %s", path)
 	}
 
-	// 创建新任务
-	task := &model.ScanTask{
-		ID:        fmt.Sprintf("rebuild_%d", time.Now().Unix()),
-		Status:    "running",
-		Type:      "rebuild",
-		Path:      path,
-		StartedAt: time.Now(),
-	}
-	s.scanTask = task
-	s.taskMutex.Unlock()
-
-	logger.Infof("Starting async rebuild: path=%s, task_id=%s", path, task.ID)
-
-	// 异步执行重建
-	go s.runScanTask(task, path, true)
-
-	return task, nil
-}
-
-// GetScanTask 获取当前扫描任务
-func (s *photoService) GetScanTask() *model.ScanTask {
-	s.taskMutex.RLock()
-	defer s.taskMutex.RUnlock()
-	return s.scanTask
-}
-
-// runScanTask 后台执行扫描任务
-func (s *photoService) runScanTask(task *model.ScanTask, path string, rebuild bool) {
-	// 第一步：遍历目录统计文件总数
-	totalFiles, fileList := s.countAndListFiles(path)
-
-	s.taskMutex.Lock()
-	task.TotalFiles = totalFiles
-	s.taskMutex.Unlock()
-
-	logger.Infof("[Task %s] Found %d files to process", task.ID, totalFiles)
-
-	// 第二步：逐个处理文件
-	newCount, updatedCount := 0, 0
-	processedCount := 0
-	currentFiles := make(map[string]struct{}, len(fileList))
-
-	for _, filePath := range fileList {
-		currentFiles[filePath] = struct{}{}
-		// 更新当前文件
-		s.taskMutex.Lock()
-		task.CurrentFile = filepath.Base(filePath)
-		task.ProcessedFiles = processedCount
-		s.taskMutex.Unlock()
-
-		// 获取文件信息
-		info, err := os.Stat(filePath)
-		if err != nil {
-			logger.Warnf("[Task %s] Stat file failed: %s, error: %v", task.ID, filePath, err)
-			processedCount++
-			continue
-		}
-
-		// 处理照片
-		photo, err := s.processPhoto(filePath, info)
-		if err != nil {
-			logger.Warnf("[Task %s] Process photo failed: %s, error: %v", task.ID, filePath, err)
-			processedCount++
-			continue
-		}
-
-		// 检查是否已存在
-		exists, _ := s.repo.ExistsByFilePath(photo.FilePath)
-
-		if !exists {
-			// 新照片
-			if err := s.repo.Create(photo); err != nil {
-				logger.Errorf("[Task %s] Create photo failed: %v", task.ID, err)
-			} else {
-				newCount++
-			}
-		} else if rebuild {
-			// 重建模式：更新现有照片
-			existing, _ := s.repo.GetByFilePath(photo.FilePath)
-			if existing != nil {
-				photo.ID = existing.ID
-				// 保留 AI 分析结果
-				if existing.Description != "" {
-					photo.Description = existing.Description
-					photo.MainCategory = existing.MainCategory
-					photo.Tags = existing.Tags
-				}
-				if err := s.repo.Update(photo); err != nil {
-					logger.Errorf("[Task %s] Update photo failed: %v", task.ID, err)
-				} else {
-					updatedCount++
-				}
-			}
-		} else {
-			// 扫描模式：检查文件哈希是否变化
-			existing, _ := s.repo.GetByFilePath(photo.FilePath)
-			if existing != nil && existing.FileHash != photo.FileHash {
-				photo.ID = existing.ID
-				// 保留 AI 分析结果
-				if existing.Description != "" {
-					photo.Description = existing.Description
-					photo.MainCategory = existing.MainCategory
-					photo.Tags = existing.Tags
-				}
-				if err := s.repo.Update(photo); err != nil {
-					logger.Errorf("[Task %s] Update photo failed: %v", task.ID, err)
-				} else {
-					updatedCount++
-				}
-			}
-		}
-
-		processedCount++
-
-		// 更新进度
-		s.taskMutex.Lock()
-		task.NewPhotos = newCount
-		task.UpdatedPhotos = updatedCount
-		task.ProcessedFiles = processedCount
-		s.taskMutex.Unlock()
-	}
-
-	// 更新任务完成状态
-	s.taskMutex.Lock()
-	task.Status = "completed"
-	task.NewPhotos = newCount
-	task.UpdatedPhotos = updatedCount
-	task.ProcessedFiles = processedCount
-	task.CurrentFile = ""
 	now := time.Now()
-	task.CompletedAt = &now
+	job := &model.ScanJob{
+		ID:              fmt.Sprintf("%s_%d", taskType, now.UnixNano()),
+		Type:            taskType,
+		Status:          "pending",
+		Path:            path,
+		Phase:           "pending",
+		StartedAt:       now,
+		LastHeartbeatAt: &now,
+	}
+	if err := s.scanJobRepo.Create(job); err != nil {
+		s.taskMutex.Unlock()
+		return nil, fmt.Errorf("create scan job: %w", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runtime := &activeScanJob{
+		id:             job.ID,
+		taskType:       taskType,
+		path:           path,
+		ctx:            ctx,
+		cancel:         cancel,
+		done:           make(chan struct{}),
+		terminalStatus: "completed",
+	}
+	s.activeJob = runtime
 	s.taskMutex.Unlock()
 
-	deletedCount := 0
+	logger.Infof("Starting async %s: path=%s, task_id=%s", taskType, path, job.ID)
+	go s.runScanTask(runtime, path, rebuild)
+
+	return scanJobToTask(job), nil
+}
+
+func (s *photoService) runScanTask(runtime *activeScanJob, path string, rebuild bool) {
+	defer func() {
+		close(runtime.done)
+		s.clearActiveJob(runtime.id)
+	}()
+
+	now := time.Now()
+	if err := s.scanJobRepo.UpdateFields(runtime.id, map[string]interface{}{
+		"status":            "running",
+		"phase":             "discovering",
+		"last_heartbeat_at": &now,
+	}); err != nil {
+		logger.Errorf("[Task %s] Update start status failed: %v", runtime.id, err)
+		return
+	}
+
+	workers := s.config.Performance.MaxScanWorkers
+	if workers <= 0 {
+		workers = 1
+	}
+
 	existingPhotos, err := s.repo.ListByPathPrefix(path)
 	if err != nil {
-		logger.Warnf("[Task %s] List existing photos for deletion check failed: %v", task.ID, err)
-	} else {
+		logger.Warnf("[Task %s] Load existing photos failed: %v", runtime.id, err)
+		existingPhotos = nil
+	}
+	existingByPath := make(map[string]*model.Photo, len(existingPhotos))
+	for _, photo := range existingPhotos {
+		existingByPath[photo.FilePath] = photo
+	}
+
+	seenFiles := struct {
+		sync.Mutex
+		items map[string]struct{}
+	}{items: make(map[string]struct{}, workers*2)}
+
+	progress := &scanProgress{phase: "discovering", dirty: true}
+	flushStop := make(chan struct{})
+	flushDone := make(chan struct{})
+	go s.flushScanProgressLoop(runtime.id, progress, flushStop, flushDone)
+
+	var scanNodes []scanTreeNode
+	pool := analyzer.NewWorkerPool(workers)
+	pool.Start()
+
+	walkErr := filepath.Walk(path, func(currentPath string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			progress.incrementSkipped(1)
+			return nil
+		}
+
+		select {
+		case <-runtime.ctx.Done():
+			return runtime.ctx.Err()
+		default:
+		}
+
+		if info.IsDir() {
+			if currentPath != path && s.shouldExcludeDir(info.Name()) {
+				return filepath.SkipDir
+			}
+			scanNodes = append(scanNodes, scanTreeNode{Path: currentPath, ModTime: info.ModTime().UnixNano()})
+			return nil
+		}
+
+		if !s.isSupportedFormat(currentPath) {
+			return nil
+		}
+
+		progress.onDiscovered(filepath.Base(currentPath))
+		task := scanFileTask{path: currentPath, info: info}
+		if err := pool.Submit(func(ctx context.Context) error {
+			return s.processScanFile(ctx, runtime.id, task, rebuild, existingByPath, &seenFiles, progress)
+		}); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return err
+			}
+			progress.incrementSkipped(1)
+			logger.Warnf("[Task %s] Submit scan task failed for %s: %v", runtime.id, currentPath, err)
+		}
+		return nil
+	})
+
+	if walkErr == nil {
+		progress.setPhase("processing")
+	}
+
+	pool.Wait()
+	close(flushStop)
+	<-flushDone
+
+	if walkErr != nil && !errors.Is(walkErr, context.Canceled) {
+		logger.Errorf("[Task %s] Walk scan path failed: %v", runtime.id, walkErr)
+		s.finishScanTask(runtime, progress, "failed", walkErr.Error(), false, nil)
+		return
+	}
+
+	if errors.Is(runtime.ctx.Err(), context.Canceled) {
+		status, message := runtime.terminal()
+		if status == "" {
+			status = "stopped"
+			message = "task cancelled"
+		}
+		s.finishScanTask(runtime, progress, status, message, false, nil)
+		return
+	}
+
+	progress.setPhase("finalizing")
+	if len(existingPhotos) > 0 {
 		for _, existing := range existingPhotos {
-			if _, ok := currentFiles[existing.FilePath]; !ok {
-				if err := s.repo.Delete(existing.ID); err != nil {
-					logger.Warnf("[Task %s] Delete missing photo failed: %v", task.ID, err)
-				} else {
-					deletedCount++
-				}
+			seenFiles.Lock()
+			_, ok := seenFiles.items[existing.FilePath]
+			seenFiles.Unlock()
+			if ok {
+				continue
+			}
+			if err := s.repo.Delete(existing.ID); err != nil {
+				logger.Warnf("[Task %s] Delete missing photo failed: %v", runtime.id, err)
+				continue
+			}
+			progress.incrementDeleted(1)
+		}
+	}
+
+	if err := s.updateScanPathTimestamp(path); err != nil {
+		logger.Warnf("[Task %s] Failed to update scan path timestamp: %v", runtime.id, err)
+	}
+	if err := s.updateScanTreeSnapshotWithSnapshot(path, &scanTreeSnapshot{RootPath: path, GeneratedAt: time.Now(), Nodes: scanNodes}); err != nil {
+		logger.Warnf("[Task %s] Failed to update scan tree snapshot: %v", runtime.id, err)
+	}
+
+	logger.Infof("[Task %s] Completed: total=%d, new=%d, updated=%d, deleted=%d, skipped=%d",
+		runtime.id, progress.totalFilesSnapshot(), progress.newPhotosSnapshot(), progress.updatedPhotosSnapshot(), progress.deletedPhotosSnapshot(), progress.skippedFilesSnapshot())
+
+	if s.thumbnailService != nil {
+		if task := s.thumbnailService.GetTaskStatus(); task == nil || (task.Status != "running" && task.Status != "stopping") {
+			if _, err := s.thumbnailService.StartBackground(); err != nil {
+				logger.Warnf("[Task %s] Auto start thumbnail background failed: %v", runtime.id, err)
+			} else {
+				logger.Infof("[Task %s] Thumbnail background started automatically after scan completion", runtime.id)
+			}
+		}
+	}
+	if s.geocodeTaskService != nil {
+		if task := s.geocodeTaskService.GetTaskStatus(); task == nil || (task.Status != "running" && task.Status != "stopping") {
+			if _, err := s.geocodeTaskService.StartBackground(); err != nil {
+				logger.Warnf("[Task %s] Auto start geocode background failed: %v", runtime.id, err)
+			} else {
+				logger.Infof("[Task %s] Geocode background started automatically after scan completion", runtime.id)
 			}
 		}
 	}
 
-	logger.Infof("[Task %s] Completed: total=%d, new=%d, updated=%d, deleted=%d",
-		task.ID, totalFiles, newCount, updatedCount, deletedCount)
+	s.finishScanTask(runtime, progress, "completed", "", true, nil)
+}
 
-	if err := s.updateScanPathTimestamp(path); err != nil {
-		logger.Warnf("[Task %s] Failed to update scan path timestamp: %v", task.ID, err)
+func (s *photoService) processScanFile(ctx context.Context, jobID string, task scanFileTask, rebuild bool, existingByPath map[string]*model.Photo, seenFiles *struct {
+	sync.Mutex
+	items map[string]struct{}
+}, progress *scanProgress) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
-	if err := s.updateScanTreeSnapshot(path); err != nil {
-		logger.Warnf("[Task %s] Failed to update scan tree snapshot: %v", task.ID, err)
+
+	progress.setCurrentFile(filepath.Base(task.path))
+	photo, err := s.processPhotoFunc(task.path, task.info)
+	if err != nil {
+		logger.Warnf("[Task %s] Process photo failed: %s, error: %v", jobID, task.path, err)
+		progress.incrementProcessed(1)
+		progress.incrementSkipped(1)
+		return nil
 	}
+
+	seenFiles.Lock()
+	seenFiles.items[photo.FilePath] = struct{}{}
+	seenFiles.Unlock()
+
+	existing := existingByPath[photo.FilePath]
+	if existing == nil {
+		if err := s.repo.Create(photo); err != nil {
+			logger.Errorf("[Task %s] Create photo failed: %v", jobID, err)
+			progress.incrementSkipped(1)
+		} else {
+			progress.incrementNew(1)
+			s.enqueueThumbnailForPhoto(photo, thumbnailSourceScan, thumbnailPriorityScan)
+			s.enqueueGeocodeForPhoto(photo, geocodeSourceScan, geocodePriorityScan)
+		}
+		progress.incrementProcessed(1)
+		return nil
+	}
+
+	if rebuild {
+		photo.ID = existing.ID
+		s.preserveAnalysisFields(existing, photo)
+		if err := s.repo.Update(photo); err != nil {
+			logger.Errorf("[Task %s] Update photo failed: %v", jobID, err)
+			progress.incrementSkipped(1)
+		} else {
+			progress.incrementUpdated(1)
+			s.enqueueThumbnailForPhoto(photo, thumbnailSourceScan, thumbnailPriorityScan)
+			s.enqueueGeocodeForPhoto(photo, geocodeSourceScan, geocodePriorityScan)
+		}
+		progress.incrementProcessed(1)
+		return nil
+	}
+
+	if existing.FileHash != photo.FileHash {
+		photo.ID = existing.ID
+		s.preserveAnalysisFields(existing, photo)
+		if err := s.repo.Update(photo); err != nil {
+			logger.Errorf("[Task %s] Update photo failed: %v", jobID, err)
+			progress.incrementSkipped(1)
+		} else {
+			progress.incrementUpdated(1)
+			s.enqueueThumbnailForPhoto(photo, thumbnailSourceScan, thumbnailPriorityScan)
+			s.enqueueGeocodeForPhoto(photo, geocodeSourceScan, geocodePriorityScan)
+		}
+	}
+
+	progress.incrementProcessed(1)
+	return nil
+}
+
+func (s *photoService) preserveAnalysisFields(existing, photo *model.Photo) {
+	if existing == nil || photo == nil {
+		return
+	}
+	if existing.Description != "" {
+		photo.Description = existing.Description
+		photo.MainCategory = existing.MainCategory
+		photo.Tags = existing.Tags
+	}
+	photo.AIAnalyzed = existing.AIAnalyzed
+	photo.AnalyzedAt = existing.AnalyzedAt
+	photo.AIProvider = existing.AIProvider
+	photo.Caption = existing.Caption
+	photo.MemoryScore = existing.MemoryScore
+	photo.BeautyScore = existing.BeautyScore
+	photo.OverallScore = existing.OverallScore
+	photo.ScoreReason = existing.ScoreReason
+}
+
+func (s *photoService) enqueueGeocodeForPhoto(photo *model.Photo, source string, priority int) {
+	if s.geocodeTaskService == nil || photo == nil || photo.ID == 0 {
+		return
+	}
+	if err := s.geocodeTaskService.EnqueuePhoto(photo.ID, source, priority); err != nil {
+		logger.Warnf("enqueue geocode failed for photo %d: %v", photo.ID, err)
+	}
+}
+
+func (s *photoService) enqueueThumbnailForPhoto(photo *model.Photo, source string, priority int) {
+	if s.thumbnailService == nil || photo == nil || photo.ID == 0 {
+		return
+	}
+	if err := s.thumbnailService.EnqueuePhoto(photo.ID, source, priority); err != nil {
+		logger.Warnf("enqueue thumbnail failed for photo %d: %v", photo.ID, err)
+	}
+}
+
+func (s *photoService) clearActiveJob(jobID string) {
+	s.taskMutex.Lock()
+	defer s.taskMutex.Unlock()
+	if s.activeJob != nil && s.activeJob.id == jobID {
+		s.activeJob = nil
+	}
+}
+
+func (s *photoService) flushScanProgressLoop(jobID string, progress *scanProgress, stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			s.flushScanProgress(jobID, progress, false)
+		case <-stop:
+			s.flushScanProgress(jobID, progress, true)
+			return
+		}
+	}
+}
+
+func (s *photoService) flushScanProgress(jobID string, progress *scanProgress, force bool) {
+	fields, ok := progress.snapshotFields(force)
+	if !ok {
+		return
+	}
+	now := time.Now()
+	fields["last_heartbeat_at"] = &now
+	if err := s.scanJobRepo.UpdateFields(jobID, fields); err != nil {
+		logger.Warnf("[Task %s] Flush scan progress failed: %v", jobID, err)
+	}
+}
+
+func (s *photoService) finishScanTask(runtime *activeScanJob, progress *scanProgress, status string, message string, clearError bool, completedAt *time.Time) {
+	now := time.Now()
+	if completedAt == nil {
+		completedAt = &now
+	}
+	fields, _ := progress.snapshotFields(true)
+	fields["status"] = status
+	fields["phase"] = progress.phaseSnapshot()
+	fields["completed_at"] = completedAt
+	fields["last_heartbeat_at"] = completedAt
+	fields["current_file"] = ""
+	if clearError {
+		fields["error_message"] = ""
+	} else if message != "" {
+		fields["error_message"] = message
+	}
+	if status == "stopped" {
+		fields["stop_requested_at"] = completedAt
+	}
+	if err := s.scanJobRepo.UpdateFields(runtime.id, fields); err != nil {
+		logger.Warnf("[Task %s] Finalize scan task failed: %v", runtime.id, err)
+	}
+}
+
+func scanJobToTask(job *model.ScanJob) *model.ScanTask {
+	if job == nil {
+		return nil
+	}
+	return &model.ScanTask{
+		ID:              job.ID,
+		Status:          job.Status,
+		Type:            job.Type,
+		Path:            job.Path,
+		Phase:           job.Phase,
+		TotalFiles:      job.TotalFiles,
+		DiscoveredFiles: job.DiscoveredFiles,
+		ProcessedFiles:  job.ProcessedFiles,
+		NewPhotos:       job.NewPhotos,
+		UpdatedPhotos:   job.UpdatedPhotos,
+		DeletedPhotos:   job.DeletedPhotos,
+		SkippedFiles:    job.SkippedFiles,
+		CurrentFile:     job.CurrentFile,
+		ErrorMessage:    job.ErrorMessage,
+		StartedAt:       job.StartedAt,
+		StopRequestedAt: job.StopRequestedAt,
+		CompletedAt:     job.CompletedAt,
+	}
+}
+
+func (p *scanProgress) onDiscovered(fileName string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.discoveredFiles++
+	p.totalFiles = p.discoveredFiles
+	p.currentFile = fileName
+	p.dirty = true
+}
+
+func (p *scanProgress) incrementProcessed(n int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.processedFiles += n
+	p.dirty = true
+}
+
+func (p *scanProgress) incrementNew(n int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.newPhotos += n
+	p.dirty = true
+}
+
+func (p *scanProgress) incrementUpdated(n int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.updatedPhotos += n
+	p.dirty = true
+}
+
+func (p *scanProgress) incrementDeleted(n int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.deletedPhotos += n
+	p.dirty = true
+}
+
+func (p *scanProgress) incrementSkipped(n int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.skippedFiles += n
+	p.dirty = true
+}
+
+func (p *scanProgress) setCurrentFile(fileName string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.currentFile = fileName
+	p.dirty = true
+}
+
+func (p *scanProgress) setPhase(phase string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.phase = phase
+	p.dirty = true
+}
+
+func (p *scanProgress) snapshotFields(force bool) (map[string]interface{}, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !force && !p.dirty {
+		return nil, false
+	}
+	fields := map[string]interface{}{
+		"phase":            p.phase,
+		"total_files":      p.totalFiles,
+		"discovered_files": p.discoveredFiles,
+		"processed_files":  p.processedFiles,
+		"new_photos":       p.newPhotos,
+		"updated_photos":   p.updatedPhotos,
+		"deleted_photos":   p.deletedPhotos,
+		"skipped_files":    p.skippedFiles,
+		"current_file":     p.currentFile,
+	}
+	p.dirty = false
+	return fields, true
+}
+
+func (p *scanProgress) phaseSnapshot() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.phase
+}
+
+func (p *scanProgress) totalFilesSnapshot() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.totalFiles
+}
+
+func (p *scanProgress) newPhotosSnapshot() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.newPhotos
+}
+
+func (p *scanProgress) updatedPhotosSnapshot() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.updatedPhotos
+}
+
+func (p *scanProgress) deletedPhotosSnapshot() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.deletedPhotos
+}
+
+func (p *scanProgress) skippedFilesSnapshot() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.skippedFiles
 }
 
 // countAndListFiles 统计并列出所有需要处理的文件
@@ -1043,6 +1477,10 @@ func (s *photoService) updateScanPathTimestamp(scanPath string) error {
 }
 
 func (s *photoService) updateScanTreeSnapshot(scanPath string) error {
+	return s.updateScanTreeSnapshotWithSnapshot(scanPath, nil)
+}
+
+func (s *photoService) updateScanTreeSnapshotWithSnapshot(scanPath string, snapshot *scanTreeSnapshot) error {
 	pathsCfg, err := s.loadScanPathsConfig()
 	if err != nil {
 		return fmt.Errorf("load scan paths config: %w", err)
@@ -1051,9 +1489,11 @@ func (s *photoService) updateScanTreeSnapshot(scanPath string) error {
 		if path.Path != scanPath {
 			continue
 		}
-		snapshot, err := s.buildScanTreeSnapshot(scanPath)
-		if err != nil {
-			return err
+		if snapshot == nil {
+			snapshot, err = s.buildScanTreeSnapshot(scanPath)
+			if err != nil {
+				return err
+			}
 		}
 		return s.saveScanTreeSnapshot(path.ID, snapshot)
 	}

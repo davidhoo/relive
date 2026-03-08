@@ -92,6 +92,9 @@ func GetDB() *gorm.DB {
 func AutoMigrate(db *gorm.DB) error {
 	models := []interface{}{
 		&model.Photo{},
+		&model.ScanJob{},
+		&model.ThumbnailJob{},
+		&model.GeocodeJob{},
 		&model.AnalysisRuntimeLease{},
 		&model.DisplayRecord{},
 		&model.Device{},

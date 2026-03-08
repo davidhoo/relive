@@ -286,23 +286,28 @@ type CountPhotosByPathsResponse struct {
 
 // ScanTask 扫描任务状态
 type ScanTask struct {
-	ID             string     `json:"id"`
-	Status         string     `json:"status"` // pending, running, completed, failed
-	Type           string     `json:"type"`   // scan, rebuild
-	Path           string     `json:"path"`
-	TotalFiles     int        `json:"total_files"`
-	ProcessedFiles int        `json:"processed_files"`
-	NewPhotos      int        `json:"new_photos"`
-	UpdatedPhotos  int        `json:"updated_photos"`
-	CurrentFile    string     `json:"current_file,omitempty"`
-	ErrorMessage   string     `json:"error_message,omitempty"`
-	StartedAt      time.Time  `json:"started_at"`
-	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	ID              string     `json:"id"`
+	Status          string     `json:"status"` // pending, running, completed, failed
+	Type            string     `json:"type"`   // scan, rebuild
+	Path            string     `json:"path"`
+	Phase           string     `json:"phase,omitempty"`
+	TotalFiles      int        `json:"total_files"`
+	DiscoveredFiles int        `json:"discovered_files,omitempty"`
+	ProcessedFiles  int        `json:"processed_files"`
+	NewPhotos       int        `json:"new_photos"`
+	UpdatedPhotos   int        `json:"updated_photos"`
+	DeletedPhotos   int        `json:"deleted_photos,omitempty"`
+	SkippedFiles    int        `json:"skipped_files,omitempty"`
+	CurrentFile     string     `json:"current_file,omitempty"`
+	ErrorMessage    string     `json:"error_message,omitempty"`
+	StartedAt       time.Time  `json:"started_at"`
+	StopRequestedAt *time.Time `json:"stop_requested_at,omitempty"`
+	CompletedAt     *time.Time `json:"completed_at,omitempty"`
 }
 
 // IsRunning 检查任务是否运行中
 func (t *ScanTask) IsRunning() bool {
-	return t.Status == "running"
+	return t.Status == "running" || t.Status == "stopping"
 }
 
 // StartScanRequest 开始扫描请求
@@ -319,6 +324,59 @@ type StartScanResponse struct {
 type GetScanProgressResponse struct {
 	Task      *ScanTask `json:"task"`
 	IsRunning bool      `json:"is_running"`
+}
+
+type ThumbnailTask struct {
+	Status         string     `json:"status"`
+	CurrentPhotoID uint       `json:"current_photo_id,omitempty"`
+	CurrentFile    string     `json:"current_file,omitempty"`
+	ProcessedJobs  int64      `json:"processed_jobs"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	StoppedAt      *time.Time `json:"stopped_at,omitempty"`
+}
+
+type ThumbnailStatsResponse struct {
+	Total      int64 `json:"total"`
+	Pending    int64 `json:"pending"`
+	Queued     int64 `json:"queued"`
+	Processing int64 `json:"processing"`
+	Completed  int64 `json:"completed"`
+	Failed     int64 `json:"failed"`
+	Cancelled  int64 `json:"cancelled"`
+}
+
+type ThumbnailEnqueueRequest struct {
+	PhotoID uint `json:"photo_id" binding:"required"`
+}
+
+type ThumbnailBatchEnqueueRequest struct {
+	Path string `json:"path" binding:"required"`
+}
+
+type GeocodeTask struct {
+	Status         string     `json:"status"`
+	CurrentPhotoID uint       `json:"current_photo_id,omitempty"`
+	ProcessedJobs  int64      `json:"processed_jobs"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	StoppedAt      *time.Time `json:"stopped_at,omitempty"`
+}
+
+type GeocodeStatsResponse struct {
+	Total      int64 `json:"total"`
+	Pending    int64 `json:"pending"`
+	Queued     int64 `json:"queued"`
+	Processing int64 `json:"processing"`
+	Completed  int64 `json:"completed"`
+	Failed     int64 `json:"failed"`
+	Cancelled  int64 `json:"cancelled"`
+}
+
+type GeocodeEnqueueRequest struct {
+	PhotoID uint `json:"photo_id" binding:"required"`
+}
+
+type GeocodeBatchEnqueueRequest struct {
+	Path string `json:"path" binding:"required"`
 }
 
 // ==================== Auth related DTOs ====================

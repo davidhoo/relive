@@ -60,7 +60,7 @@
 
         <el-table-column label="照片数" width="80" align="center">
           <template #default="{ row }">
-            <span class="photo-count">{{ pathPhotoCounts[row.path] || 0 }}</span>
+            <span class="photo-count">{{ getDisplayPathPhotoCount(row.path) }}</span>
           </template>
         </el-table-column>
 
@@ -104,6 +104,18 @@
         <el-table-column label="操作" width="170" align="center">
           <template #default="{ row }">
             <div class="path-action-group">
+              <el-button
+                v-if="shouldShowStopButton(row)"
+                type="danger"
+                size="small"
+                plain
+                :loading="currentTaskStatus === 'stopping'"
+                :disabled="currentTaskStatus === 'stopping'"
+                @click="handleStopTask(row)"
+                class="scan-btn"
+              >
+                {{ currentTaskStatus === 'stopping' ? '停止中' : '停止' }}
+              </el-button>
               <el-button
                 v-if="shouldShowScanButton(row)"
                 type="primary"
@@ -298,9 +310,25 @@
                   <el-icon><Star /></el-icon>
                   <span>{{ photo.overall_score?.toFixed(1) }}</span>
                 </div>
-                <div class="photo-badge badge-unanalyzed" v-else>
-                  <el-icon><QuestionFilled /></el-icon>
-                  <span>未分析</span>
+
+                <div class="photo-status-icons">
+                  <span
+                    class="photo-status-icon"
+                    :class="photo.ai_analyzed ? 'is-ready' : 'is-idle'"
+                    title="AI 分析状态"
+                  >
+                    <el-icon><MagicStick /></el-icon>
+                  </span>
+                  <span class="photo-status-icon" :class="photo.thumbnail_status === 'ready' ? 'is-ready' : 'is-idle'" title="缩略图状态">
+                    <el-icon><Files /></el-icon>
+                  </span>
+                  <span
+                    class="photo-status-icon"
+                    :class="photo.location ? 'is-ready' : 'is-idle'"
+                    :title="photo.gps_latitude && photo.gps_longitude ? 'GPS 位置状态' : '无 GPS 信息'"
+                  >
+                    <el-icon><Location /></el-icon>
+                  </span>
                 </div>
 
                 <!-- 悬停信息 -->
@@ -346,7 +374,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { ArrowDown, ArrowUp, Clock, Collection, Delete, Filter, Folder, FolderOpened, FullScreen, Loading, Picture, PictureFilled, PriceTag, QuestionFilled, Refresh, Search, Setting, Star } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowUp, Clock, Collection, Delete, Files, Filter, Folder, FolderOpened, FullScreen, Loading, Location, MagicStick, Picture, PictureFilled, PriceTag, QuestionFilled, Refresh, Search, Setting, Star } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
@@ -371,6 +399,8 @@ const scanPaths = ref<ScanPathConfig[]>([])
 const scanPathLoading = ref(false)
 const scanningPathId = ref<string>('')
 const rebuildingPathId = ref<string>('')
+const currentTaskId = ref<string>('')
+const currentTaskStatus = ref<string>('')
 const currentScanPath = ref<string>('') // 当前正在扫描的路径
 const currentScanType = ref<'scan' | 'rebuild' | ''>('') // 当前扫描类型
 const cleaningUp = ref(false)
@@ -391,9 +421,35 @@ const displayedTags = computed(() => {
 
 // 存储每个路径的照片数量（从数据库获取）
 const pathPhotoCounts = ref<Record<string, number>>({})
+const pathPhotoCountDeltas = ref<Record<string, number>>({})
+
+const getDisplayPathPhotoCount = (path: string) => {
+  return Math.max(0, (pathPhotoCounts.value[path] || 0) + (pathPhotoCountDeltas.value[path] || 0))
+}
+
+const updatePathPhotoCountDelta = (path: string, task: any) => {
+  if (!path) return
+
+  pathPhotoCountDeltas.value = {
+    ...pathPhotoCountDeltas.value,
+    [path]: (task?.new_photos || 0) - (task?.deleted_photos || 0)
+  }
+}
+
+const clearPathPhotoCountDelta = (path?: string) => {
+  if (!path) {
+    pathPhotoCountDeltas.value = {}
+    return
+  }
+
+  const next = { ...pathPhotoCountDeltas.value }
+  delete next[path]
+  pathPhotoCountDeltas.value = next
+}
 
 // 获取每个路径的照片数量
 const loadPathPhotoCounts = async () => {
+
   if (scanPaths.value.length === 0) return
 
   try {
@@ -619,6 +675,8 @@ const handleScanPath = async (path: ScanPathConfig) => {
     currentScanPath.value = path.path
     currentScanType.value = 'scan'
     const res = await photoApi.startScan({ path: path.path })
+    currentTaskId.value = res.data?.data?.task_id || ''
+    currentTaskStatus.value = 'running'
     ElMessage.info(`「${path.name}」扫描任务已启动，正在后台处理...`)
 
     // 开始轮询进度
@@ -627,6 +685,8 @@ const handleScanPath = async (path: ScanPathConfig) => {
     scanningPathId.value = ''
     currentScanPath.value = ''
     currentScanType.value = ''
+    currentTaskId.value = ''
+    currentTaskStatus.value = ''
     ElMessage.error(error.message || '扫描照片失败')
   }
 }
@@ -643,6 +703,8 @@ const handleRebuildPath = async (path: ScanPathConfig) => {
     currentScanPath.value = path.path
     currentScanType.value = 'rebuild'
     const res = await photoApi.startRebuild({ path: path.path })
+    currentTaskId.value = res.data?.data?.task_id || ''
+    currentTaskStatus.value = 'running'
     ElMessage.info(`「${path.name}」重建任务已启动，正在后台处理...`)
 
     // 开始轮询进度
@@ -651,7 +713,34 @@ const handleRebuildPath = async (path: ScanPathConfig) => {
     rebuildingPathId.value = ''
     currentScanPath.value = ''
     currentScanType.value = ''
+    currentTaskId.value = ''
+    currentTaskStatus.value = ''
     ElMessage.error(error.message || '重建照片失败')
+  }
+}
+
+const clearCurrentTaskState = () => {
+  clearPathPhotoCountDelta(currentScanPath.value)
+  scanningPathId.value = ""
+  rebuildingPathId.value = ""
+  currentTaskId.value = ""
+  currentTaskStatus.value = ""
+  currentScanPath.value = ""
+  currentScanType.value = ""
+}
+
+const handleStopTask = async (path: ScanPathConfig) => {
+  if (!currentTaskId.value) {
+    ElMessage.warning('当前没有可停止的任务')
+    return
+  }
+
+  try {
+    await photoApi.stopScanTask(currentTaskId.value)
+    currentTaskStatus.value = 'stopping'
+    ElMessage.info(`已请求停止「${path.name}」任务，正在等待当前文件处理完成...`)
+  } catch (error: any) {
+    ElMessage.error(error.message || '停止任务失败')
   }
 }
 
@@ -674,38 +763,46 @@ const startPollingScanProgress = (pathName: string) => {
         // 没有任务信息，停止轮询
         clearInterval(scanProgressTimer!)
         scanProgressTimer = null
-        scanningPathId.value = ''
-        rebuildingPathId.value = ''
-        currentScanPath.value = ''
-        currentScanType.value = ''
+        clearCurrentTaskState()
         return
       }
 
+      currentTaskId.value = task.id || ''
+      currentTaskStatus.value = task.status || ''
+      currentScanPath.value = task.path || currentScanPath.value
+      currentScanType.value = task.type || currentScanType.value
+
       if (is_running) {
+        updatePathPhotoCountDelta(task.path || currentScanPath.value, task)
         // 任务进行中，显示进度
-        const percent = task.total_files > 0
-          ? Math.round((task.processed_files / task.total_files) * 100)
+        const discovered = task.discovered_files || task.total_files || 0
+        const percent = discovered > 0
+          ? Math.round((task.processed_files / discovered) * 100)
           : 0
-        console.log(`[${pathName}] 进度: ${percent}% (${task.processed_files}/${task.total_files})`)
+        console.log(`[${pathName}] 进度: ${percent}% (${task.processed_files}/${discovered}) status=${task.status}`)
       } else {
         // 任务完成
         clearInterval(scanProgressTimer!)
         scanProgressTimer = null
-        scanningPathId.value = ''
-        rebuildingPathId.value = ''
-        currentScanPath.value = ''
-        currentScanType.value = ''
+        clearCurrentTaskState()
 
         // 显示结果
-        if (task.type === 'scan') {
+        if (task.status === 'stopped') {
+          ElMessage.info(`「${pathName}」任务已停止，已处理 ${task.processed_files || 0} 张照片`)
+        } else if (task.status === 'interrupted') {
+          ElMessage.warning(`「${pathName}」任务已中断，请重新扫描或重建`)
+        } else if (task.status === 'failed') {
+          ElMessage.error(task.error_message || `「${pathName}」任务失败`)
+        } else if (task.type === 'scan') {
           ElMessage.success(`「${pathName}」扫描完成，新增 ${task.new_photos || 0} 张照片`)
         } else {
           ElMessage.success(
-            `「${pathName}」重建完成：新增 ${task.new_photos || 0} 张，更新 ${task.updated_photos || 0} 张`
+            `「${pathName}」重建完成：新增 ${task.new_photos || 0} 张，更新 ${task.updated_photos || 0} 张，删除 ${task.deleted_photos || 0} 张`
           )
         }
 
         // 刷新数据
+        clearPathPhotoCountDelta(task.path || currentScanPath.value)
         await loadPhotos()
         await loadScanPaths()
         await loadPathPhotoCounts()
@@ -776,6 +873,8 @@ const checkOngoingScanTask = async () => {
       // 有正在进行的任务，设置状态
       currentScanPath.value = task.path
       currentScanType.value = task.type
+      currentTaskId.value = task.id || ''
+      currentTaskStatus.value = task.status || ''
 
       // 找到对应的路径并设置扫描状态
       const pathConfig = scanPaths.value.find(p => p.path === task.path)
@@ -805,13 +904,23 @@ const isPathRebuilding = (path: ScanPathConfig) => {
   return currentScanPath.value === path.path && currentScanType.value === 'rebuild'
 }
 
+const isPathTaskActive = (path: ScanPathConfig) => {
+  return currentScanPath.value === path.path && ['running', 'stopping'].includes(currentTaskStatus.value)
+}
+
+const shouldShowStopButton = (path: ScanPathConfig) => {
+  return isPathTaskActive(path)
+}
+
 const shouldShowScanButton = (path: ScanPathConfig) => {
+  if (shouldShowStopButton(path)) return false
   if (isPathScanning(path)) return true
   if (isPathRebuilding(path)) return false
   return !path.last_scanned_at
 }
 
 const shouldShowRebuildButton = (path: ScanPathConfig) => {
+  if (shouldShowStopButton(path)) return false
   if (isPathRebuilding(path)) return true
   if (isPathScanning(path)) return false
   return !!path.last_scanned_at
@@ -1315,6 +1424,44 @@ defineExpose({
 }
 
 /* 分析状态徽章 */
+.photo-status-icons {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.photo-status-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.32);
+  color: rgba(255, 255, 255, 0.7);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
+  backdrop-filter: blur(8px);
+}
+
+.photo-status-icon.is-ready {
+  background: rgba(103, 194, 58, 0.92);
+  color: #fff;
+}
+
+.photo-status-icon.is-idle {
+  background: rgba(80, 80, 80, 0.72);
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.photo-status-icon :deep(.el-icon) {
+  font-size: 10px;
+}
+
 .photo-badge {
   position: absolute;
   top: var(--spacing-sm);

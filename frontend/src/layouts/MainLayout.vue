@@ -112,6 +112,8 @@ import {
   MagicStick,
   Monitor,
   Picture,
+  Files,
+  Location,
   PictureFilled,
   Setting,
   SwitchButton,
@@ -128,6 +130,8 @@ const isCollapsed = ref(false)
 const menuIconMap = {
   DataLine,
   Picture,
+  Files,
+  Location,
   MagicStick,
   Monitor,
   View,

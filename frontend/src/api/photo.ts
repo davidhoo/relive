@@ -23,6 +23,11 @@ export const photoApi = {
     return http.get<ApiResponse<{ task: any; is_running: boolean }>>('/photos/scan/task')
   },
 
+  // 停止当前扫描/重建任务
+  stopScanTask(taskId: string) {
+    return http.post<ApiResponse<any>>(`/photos/tasks/${taskId}/stop`, {})
+  },
+
   // 异步重建照片（新接口，立即返回任务 ID）
   startRebuild(data?: RebuildPhotosRequest) {
     return http.post<ApiResponse<{ task_id: string }>>('/photos/rebuild/async', data || {})

@@ -156,6 +156,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				// 异步扫描
 				photos.POST("/scan/async", handlers.Photo.StartScan)
 				photos.POST("/rebuild/async", handlers.Photo.StartRebuild)
+				photos.POST("/tasks/:id/stop", handlers.Photo.StopScanTask)
 				photos.GET("/scan/task", handlers.Photo.GetScanTask)
 				photos.POST("/cleanup", handlers.Photo.CleanupPhotos)
 				photos.POST("/validate-path", handlers.Photo.ValidatePath)
@@ -166,6 +167,28 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				photos.GET("/tags", handlers.Photo.GetTags)
 				photos.GET("", handlers.Photo.GetPhotos)
 				photos.GET("/:id", handlers.Photo.GetPhotoByID)
+			}
+
+			thumbnails := authorized.Group("/thumbnails")
+			{
+				thumbnails.POST("/background/start", handlers.Thumbnail.StartBackground)
+				thumbnails.POST("/background/stop", handlers.Thumbnail.StopBackground)
+				thumbnails.GET("/background/logs", handlers.Thumbnail.GetBackgroundLogs)
+				thumbnails.GET("/task", handlers.Thumbnail.GetTask)
+				thumbnails.GET("/stats", handlers.Thumbnail.GetStats)
+				thumbnails.POST("/enqueue", handlers.Thumbnail.Enqueue)
+				thumbnails.POST("/enqueue-by-path", handlers.Thumbnail.EnqueueByPath)
+			}
+
+			geocode := authorized.Group("/geocode")
+			{
+				geocode.POST("/background/start", handlers.Geocode.StartBackground)
+				geocode.POST("/background/stop", handlers.Geocode.StopBackground)
+				geocode.GET("/background/logs", handlers.Geocode.GetBackgroundLogs)
+				geocode.GET("/task", handlers.Geocode.GetTask)
+				geocode.GET("/stats", handlers.Geocode.GetStats)
+				geocode.POST("/enqueue", handlers.Geocode.Enqueue)
+				geocode.POST("/enqueue-by-path", handlers.Geocode.EnqueueByPath)
 			}
 
 			// AI 分析相关

@@ -10,6 +10,8 @@ import (
 // Services 所有服务的集合
 type Services struct {
 	Photo           PhotoService
+	Thumbnail       ThumbnailService
+	GeocodeTask     GeocodeTaskService
 	Display         DisplayService
 	Device          DeviceService
 	AI              AIService
@@ -53,7 +55,9 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 
 	// 创建分析、照片与展示服务
 	analysisService := NewAnalysisService(db, repos.Photo, cfg)
-	photoService := NewPhotoService(repos.Photo, cfg, configService, geocodeService)
+	thumbnailService := NewThumbnailService(db, repos.Photo, repos.ThumbnailJob, cfg)
+	geocodeTaskService := NewGeocodeTaskService(db, repos.Photo, repos.GeocodeJob, geocodeService)
+	photoService := NewPhotoService(repos.Photo, repos.ScanJob, cfg, configService, geocodeService, thumbnailService, geocodeTaskService)
 	displayService := NewDisplayService(db, repos.Photo, repos.DisplayRecord, repos.Device, configService, cfg)
 
 	// 创建定时任务调度器
@@ -87,6 +91,8 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 
 	return &Services{
 		Photo:           photoService,
+		Thumbnail:       thumbnailService,
+		GeocodeTask:     geocodeTaskService,
 		Display:         displayService,
 		Device:          deviceService,
 		AI:              aiService,

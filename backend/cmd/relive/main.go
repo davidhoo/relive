@@ -102,6 +102,22 @@ func main() {
 	// 停止调度器
 	services.Scheduler.Stop()
 
+	if services.Photo != nil {
+		if err := services.Photo.HandleShutdown(); err != nil {
+			logger.Warnf("Failed to notify photo service shutdown: %v", err)
+		}
+	}
+	if services.Thumbnail != nil {
+		if err := services.Thumbnail.HandleShutdown(); err != nil {
+			logger.Warnf("Failed to notify thumbnail service shutdown: %v", err)
+		}
+	}
+	if services.GeocodeTask != nil {
+		if err := services.GeocodeTask.HandleShutdown(); err != nil {
+			logger.Warnf("Failed to notify geocode task service shutdown: %v", err)
+		}
+	}
+
 	// 优雅关闭服务器
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

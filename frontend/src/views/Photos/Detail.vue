@@ -60,7 +60,11 @@
                 ? `${photo.gps_latitude.toFixed(6)}, ${photo.gps_longitude.toFixed(6)}`
                 : '-' }}
             </el-descriptions-item>
-            <el-descriptions-item label="位置">{{ photo.location || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="位置">{{ photo.location || (photo.geocode_status === 'pending' ? '解析中' : '-') }}</el-descriptions-item>
+            <el-descriptions-item label="位置来源">{{ formatGeocodeProvider(photo.geocode_provider) }}</el-descriptions-item>
+            <el-descriptions-item label="解析时间">{{ formatTime(photo.geocoded_at) }}</el-descriptions-item>
+            <el-descriptions-item label="缩略图状态">{{ formatThumbnailStatus(photo.thumbnail_status) }}</el-descriptions-item>
+            <el-descriptions-item label="缩略图时间">{{ formatTime(photo.thumbnail_generated_at) }}</el-descriptions-item>
           </el-descriptions>
 
           <!-- 文件时间信息 -->
@@ -209,6 +213,27 @@ const getScoreColor = (score: number) => {
 }
 
 // 格式化 AI 提供商名称
+const formatThumbnailStatus = (status?: string) => {
+  const statusMap: Record<string, string> = {
+    none: '未生成',
+    pending: '待生成',
+    ready: '已生成',
+    failed: '生成失败'
+  }
+  return status ? (statusMap[status] || status) : '-'
+}
+
+const formatGeocodeProvider = (provider?: string) => {
+  if (!provider) return '-'
+  const providerMap: Record<string, string> = {
+    'weibo': '微博地图',
+    'offline': '离线库',
+    'nominatim': 'OpenStreetMap',
+    'amap': '高德地图'
+  }
+  return providerMap[provider] || provider
+}
+
 const formatAIProvider = (provider?: string) => {
   if (!provider) return '-'
   const providerMap: Record<string, string> = {

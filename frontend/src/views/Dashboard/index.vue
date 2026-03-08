@@ -182,9 +182,17 @@
                     <el-icon><Star /></el-icon>
                     {{ photo.overall_score.toFixed(1) }}
                   </div>
-                  <div v-else class="recent-photo-badge pending">
-                    <el-icon><QuestionFilled /></el-icon>
-                    未分析
+
+                  <div class="recent-photo-status-icons">
+                    <span class="recent-photo-status-icon" :class="photo.ai_analyzed ? 'is-ready' : 'is-idle'" title="AI 分析状态">
+                      <el-icon><MagicStick /></el-icon>
+                    </span>
+                    <span class="recent-photo-status-icon" :class="photo.thumbnail_status === 'ready' ? 'is-ready' : 'is-idle'" title="缩略图状态">
+                      <el-icon><Files /></el-icon>
+                    </span>
+                    <span class="recent-photo-status-icon" :class="photo.location ? 'is-ready' : 'is-idle'" :title="photo.gps_latitude && photo.gps_longitude ? 'GPS 位置状态' : '无 GPS 信息'">
+                      <el-icon><Location /></el-icon>
+                    </span>
                   </div>
                 </div>
 
@@ -210,7 +218,9 @@ import { ElMessage } from 'element-plus'
 import {
   ArrowRight,
   DataLine,
+  Files,
   FolderOpened,
+  Location,
   MagicStick,
   Monitor,
   Picture,
@@ -798,6 +808,39 @@ onMounted(async () => {
 .recent-photo-badge.score {
   background: rgba(19, 194, 194, 0.94);
   color: #fff;
+}
+
+.recent-photo-status-icons {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.recent-photo-status-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(80, 80, 80, 0.72);
+  color: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
+  backdrop-filter: blur(8px);
+}
+
+.recent-photo-status-icon.is-ready {
+  background: rgba(103, 194, 58, 0.92);
+  color: #fff;
+}
+
+.recent-photo-status-icon :deep(.el-icon) {
+  font-size: 10px;
 }
 
 .recent-photo-badge.pending {

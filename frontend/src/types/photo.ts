@@ -17,6 +17,12 @@ export interface Photo {
   gps_latitude?: number
   gps_longitude?: number
   location?: string
+  geocode_status?: string
+  geocode_provider?: string
+  geocoded_at?: string
+  thumbnail_path?: string
+  thumbnail_status?: string
+  thumbnail_generated_at?: string
 
   // 设备信息
   esp32_device_id?: string

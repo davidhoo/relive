@@ -9,14 +9,15 @@ import (
 
 // Config 应用配置
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Database DatabaseConfig `yaml:"database"`
-	Photos   PhotosConfig   `yaml:"photos"`
-	AI       AIConfig       `yaml:"ai"`
-	Display  DisplayConfig  `yaml:"display"`
-	Geocode  GeocodeConfig  `yaml:"geocode"`  // 新增：地理编码配置
-	Logging  LoggingConfig  `yaml:"logging"`
-	Security SecurityConfig `yaml:"security"`
+	Server      ServerConfig      `yaml:"server"`
+	Database    DatabaseConfig    `yaml:"database"`
+	Photos      PhotosConfig      `yaml:"photos"`
+	Performance PerformanceConfig `yaml:"performance"`
+	AI          AIConfig          `yaml:"ai"`
+	Display     DisplayConfig     `yaml:"display"`
+	Geocode     GeocodeConfig     `yaml:"geocode"` // 新增：地理编码配置
+	Logging     LoggingConfig     `yaml:"logging"`
+	Security    SecurityConfig    `yaml:"security"`
 }
 
 // ServerConfig 服务器配置
@@ -42,6 +43,15 @@ type PhotosConfig struct {
 	ThumbnailPath    string   `yaml:"thumbnail_path"` // 缩略图存储路径
 	ExcludeDirs      []string `yaml:"exclude_dirs"`
 	SupportedFormats []string `yaml:"supported_formats"`
+}
+
+// PerformanceConfig 性能相关配置
+type PerformanceConfig struct {
+	MaxScanWorkers      int `yaml:"max_scan_workers"`
+	MaxAnalyzeWorkers   int `yaml:"max_analyze_workers"`
+	MaxThumbnailWorkers int `yaml:"max_thumbnail_workers"`
+	MaxGeocodeWorkers   int `yaml:"max_geocode_workers"`
+	CacheSize           int `yaml:"cache_size"`
 }
 
 // AIConfig AI 配置
@@ -102,9 +112,9 @@ type HybridProviderConfig struct {
 
 // DisplayConfig 展示策略配置
 type DisplayConfig struct {
-	Algorithm        string `yaml:"algorithm"`          // on_this_day
-	FallbackDays     []int  `yaml:"fallback_days"`      // [3, 7, 30, 365]
-	AvoidRepeatDays  int    `yaml:"avoid_repeat_days"`  // 避免重复展示的天数
+	Algorithm       string `yaml:"algorithm"`         // on_this_day
+	FallbackDays    []int  `yaml:"fallback_days"`     // [3, 7, 30, 365]
+	AvoidRepeatDays int    `yaml:"avoid_repeat_days"` // 避免重复展示的天数
 }
 
 // LoggingConfig 日志配置
@@ -154,10 +164,10 @@ type HybridNestedConfig struct {
 
 // GeocodeConfig 地理编码配置
 type GeocodeConfig struct {
-	Provider     string `yaml:"provider"      json:"provider"`       // 主要提供商：amap / nominatim / offline / weibo
-	Fallback     string `yaml:"fallback"      json:"fallback"`        // 备用提供商
-	CacheEnabled bool   `yaml:"cache_enabled" json:"cache_enabled"`   // 是否启用缓存
-	CacheTTL     int    `yaml:"cache_ttl"     json:"cache_ttl"`       // 缓存有效期（秒）
+	Provider     string `yaml:"provider"      json:"provider"`      // 主要提供商：amap / nominatim / offline / weibo
+	Fallback     string `yaml:"fallback"      json:"fallback"`      // 备用提供商
+	CacheEnabled bool   `yaml:"cache_enabled" json:"cache_enabled"` // 是否启用缓存
+	CacheTTL     int    `yaml:"cache_ttl"     json:"cache_ttl"`     // 缓存有效期（秒）
 
 	// AMap 高德地图（扁平结构，兼容旧配置）
 	AMapAPIKey  string `yaml:"amap_api_key" json:"amap_api_key"`
@@ -252,7 +262,6 @@ func (g *GeocodeConfig) GetWeiboTimeout() int {
 	}
 	return 10
 }
-
 
 // Load 加载配置文件
 func Load(path string) (*Config, error) {

@@ -102,6 +102,8 @@ security:
 performance:
   max_scan_workers: 10  # 扫描照片的并发数
   max_analyze_workers: 5  # AI 分析的并发数
+  max_thumbnail_workers: 2
+  max_geocode_workers: 1  # 缩略图生成并发数
   cache_size: 1000  # 缓存的照片数量
 
 # 逆地理编码配置（启动默认值，运行时通过管理后台配置后以数据库为准）

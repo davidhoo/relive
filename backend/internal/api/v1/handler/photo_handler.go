@@ -21,17 +21,21 @@ import (
 
 // PhotoHandler 照片处理器
 type PhotoHandler struct {
-	photoService  service.PhotoService
-	configService service.ConfigService
-	cfg           *config.Config
+	photoService       service.PhotoService
+	thumbnailService   service.ThumbnailService
+	geocodeTaskService service.GeocodeTaskService
+	configService      service.ConfigService
+	cfg                *config.Config
 }
 
 // NewPhotoHandler 创建照片处理器
-func NewPhotoHandler(photoService service.PhotoService, configService service.ConfigService, cfg *config.Config) *PhotoHandler {
+func NewPhotoHandler(photoService service.PhotoService, thumbnailService service.ThumbnailService, geocodeTaskService service.GeocodeTaskService, configService service.ConfigService, cfg *config.Config) *PhotoHandler {
 	return &PhotoHandler{
-		photoService:  photoService,
-		configService: configService,
-		cfg:           cfg,
+		photoService:       photoService,
+		thumbnailService:   thumbnailService,
+		geocodeTaskService: geocodeTaskService,
+		configService:      configService,
+		cfg:                cfg,
 	}
 }
 
@@ -375,11 +379,14 @@ func (h *PhotoHandler) GetPhotos(c *gin.Context) {
 		return
 	}
 
-	// 对每张照片进行实时地理编码（如果需要）
-	for _, photo := range photos {
-		if err := h.photoService.GeocodePhotoIfNeeded(photo); err != nil {
-			logger.Warnf("Real-time geocoding failed for photo %d: %v", photo.ID, err)
-			// 不阻止返回，继续显示照片
+	if h.geocodeTaskService != nil {
+		for _, photo := range photos {
+			if photo.GPSLatitude == nil || photo.GPSLongitude == nil || strings.TrimSpace(photo.Location) != "" {
+				continue
+			}
+			if err := h.geocodeTaskService.EnqueuePhoto(photo.ID, "passive", 100); err != nil {
+				logger.Warnf("Passive geocode enqueue failed for photo %d: %v", photo.ID, err)
+			}
 		}
 	}
 
@@ -439,10 +446,10 @@ func (h *PhotoHandler) GetPhotoByID(c *gin.Context) {
 		return
 	}
 
-	// 进行实时地理编码（如果需要）
-	if err := h.photoService.GeocodePhotoIfNeeded(photo); err != nil {
-		logger.Warnf("Real-time geocoding failed for photo %d: %v", photo.ID, err)
-		// 不阻止返回，继续显示照片
+	if h.geocodeTaskService != nil && photo.GPSLatitude != nil && photo.GPSLongitude != nil && strings.TrimSpace(photo.Location) == "" {
+		if err := h.geocodeTaskService.EnqueuePhoto(photo.ID, "passive", 100); err != nil {
+			logger.Warnf("Passive geocode enqueue failed for photo %d: %v", photo.ID, err)
+		}
 	}
 
 	c.JSON(http.StatusOK, model.Response{
@@ -720,18 +727,14 @@ func (h *PhotoHandler) GetPhotoThumbnail(c *gin.Context) {
 				c.File(thumbnailFullPath)
 				return
 			}
-
-			generator := util.NewThumbnailGenerator(1024, 1024, 90, h.cfg.Photos.ThumbnailPath)
-			if _, regenErr := generator.GenerateThumbnail(photo.FilePath); regenErr != nil {
-				logger.Warnf("Failed to regenerate stale thumbnail %s: %v", thumbnailFullPath, regenErr)
-			} else if _, err := os.Stat(thumbnailFullPath); err == nil {
-				c.Header("Content-Type", "image/jpeg")
-				c.File(thumbnailFullPath)
-				return
-			}
 		}
-		// 缩略图文件不存在，记录警告并回退到原图
-		logger.Warnf("Thumbnail file not found: %s, falling back to original", thumbnailFullPath)
+		logger.Warnf("Thumbnail file unavailable or stale: %s, enqueue passive generation", thumbnailFullPath)
+	}
+
+	if h.thumbnailService != nil {
+		if err := h.thumbnailService.EnqueuePhoto(photo.ID, "passive", 100); err != nil {
+			logger.Warnf("Passive thumbnail enqueue failed for photo %d: %v", photo.ID, err)
+		}
 	}
 
 	// 没有缩略图或缩略图不存在，返回原图
@@ -1198,5 +1201,46 @@ func (h *PhotoHandler) GetScanTask(c *gin.Context) {
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
 		Data:    resp,
+	})
+}
+
+// StopScanTask 停止当前扫描/重建任务
+// @Summary 停止当前扫描/重建任务
+// @Description 请求后台任务优雅停止，等待当前文件处理结束
+// @Tags photos
+// @Accept json
+// @Produce json
+// @Param id path string true "任务 ID"
+// @Success 200 {object} model.Response{data=model.StartScanResponse}
+// @Failure 404 {object} model.Response
+// @Failure 409 {object} model.Response
+// @Router /api/v1/photos/tasks/{id}/stop [post]
+func (h *PhotoHandler) StopScanTask(c *gin.Context) {
+	taskID := c.Param("id")
+	if taskID == "" {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "INVALID_TASK_ID", Message: "任务 ID 不能为空"},
+		})
+		return
+	}
+
+	task, err := h.photoService.StopScanTask(taskID)
+	if err != nil {
+		statusCode := http.StatusConflict
+		if strings.Contains(err.Error(), "not found") {
+			statusCode = http.StatusNotFound
+		}
+		c.JSON(statusCode, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "STOP_FAILED", Message: err.Error()},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "扫描任务停止请求已发送",
+		Data:    task,
 	})
 }

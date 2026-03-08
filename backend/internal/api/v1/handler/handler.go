@@ -9,14 +9,16 @@ import (
 
 // Handlers 所有处理器的集合
 type Handlers struct {
-	System   *SystemHandler
-	Photo    *PhotoHandler
-	Display  *DisplayHandler
-	Device   *DeviceHandler
-	AI       *AIHandler
-	Config   *ConfigHandler
-	Auth     *AuthHandler
-	Analyzer *AnalyzerHandler
+	System    *SystemHandler
+	Photo     *PhotoHandler
+	Thumbnail *ThumbnailHandler
+	Geocode   *GeocodeHandler
+	Display   *DisplayHandler
+	Device    *DeviceHandler
+	AI        *AIHandler
+	Config    *ConfigHandler
+	Auth      *AuthHandler
+	Analyzer  *AnalyzerHandler
 }
 
 // NewHandlers 创建所有处理器
@@ -25,13 +27,15 @@ func NewHandlers(db *gorm.DB, services *service.Services, repos *repository.Repo
 	deviceHandler := NewDeviceHandler(services.Device)
 
 	handlers := &Handlers{
-		System:   NewSystemHandler(db, cfg, services),
-		Photo:    NewPhotoHandler(services.Photo, services.Config, cfg),
-		Display:  NewDisplayHandler(services.Display, services.Device, cfg),
-		Device:   deviceHandler,
-		Config:   NewConfigHandler(services.Config, services.AI, services.AnalysisRuntime, services.Photo, services.Prompt, services.Geocode, repos.Photo, cfg, db),
-		Auth:     NewAuthHandler(services.Auth),
-		Analyzer: NewAnalyzerHandler(services.Photo, services.Analysis, services.AnalysisRuntime),
+		System:    NewSystemHandler(db, cfg, services),
+		Photo:     NewPhotoHandler(services.Photo, services.Thumbnail, services.GeocodeTask, services.Config, cfg),
+		Thumbnail: NewThumbnailHandler(services.Thumbnail),
+		Geocode:   NewGeocodeHandler(services.GeocodeTask),
+		Display:   NewDisplayHandler(services.Display, services.Device, cfg),
+		Device:    deviceHandler,
+		Config:    NewConfigHandler(services.Config, services.AI, services.AnalysisRuntime, services.Photo, services.Prompt, services.Geocode, repos.Photo, cfg, db),
+		Auth:      NewAuthHandler(services.Auth),
+		Analyzer:  NewAnalyzerHandler(services.Photo, services.Analysis, services.AnalysisRuntime),
 	}
 
 	// AI Handler - 即使 AI 服务未配置也创建，以便配置变更后动态更新
