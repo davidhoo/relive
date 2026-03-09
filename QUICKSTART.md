@@ -1,291 +1,176 @@
 # Relive 快速启动指南
 
-> 5 分钟让 Relive 运行起来！
+> 目标：用当前仓库的实际部署方式，把 Relive 跑起来并完成首次扫描。
 
-## 📋 前置要求
+## 前置要求
 
-- ✅ Docker 20.10+
-- ✅ Docker Compose 1.29+
-- ✅ 照片目录（可以是任意路径）
-- ✅ （可选）AI 服务（Ollama/Qwen/OpenAI）
+- Docker 20.10+
+- Docker Compose 1.29+
+- 一个可挂载到容器内的照片目录
+- 可选：Ollama / Qwen / OpenAI 等 AI 服务
 
-## 🚀 快速启动（3 步）
-
-### 1. 克隆并进入项目
+## 1. 克隆仓库
 
 ```bash
 git clone https://github.com/davidhoo/relive.git
 cd relive
 ```
 
-### 2. 配置环境变量
+## 2. 复制环境变量模板
 
 ```bash
-# 复制配置文件
 cp .env.example .env
-
-# 编辑 .env 文件
-nano .env  # 或使用你喜欢的编辑器
 ```
 
-**必须配置**：
+至少建议修改：
+
 ```env
-# 修改为你的照片目录
-PHOTOS_PATH=/volume1/photos
+JWT_SECRET=replace-with-a-random-secret
 ```
 
-**可选配置**（如果使用在线 AI）：
+如果你要直接在容器里使用在线 AI，也可以顺手填写：
+
 ```env
-# Qwen API（推荐，便宜）
 QWEN_API_KEY=your-qwen-api-key
-
-# 或 OpenAI API
 OPENAI_API_KEY=your-openai-api-key
 ```
 
-### 3. 启动服务
+> 当前 Docker 部署 **不通过** `.env` 中的 `PHOTOS_PATH` 指定照片目录；照片目录需要在 `docker-compose.yml` 的 `volumes` 里挂载。
+
+## 3. 修改照片目录挂载
+
+编辑 `docker-compose.yml`，把示例路径改成你自己的宿主机目录：
+
+```yaml
+services:
+  relive:
+    volumes:
+      - /your/photo/library:/app/photos:ro
+```
+
+说明：
+- 冒号左边是宿主机真实路径
+- 冒号右边建议保持 `/app/photos`
+- 后续在 Web 界面里配置扫描路径时，填的是容器内路径，例如 `/app/photos`
+
+## 4. 启动服务
 
 ```bash
 make deploy
 ```
 
-启动脚本会自动：
-- ✅ 检查环境
-- ✅ 构建前端
-- ✅ 构建 Docker 镜像
-- ✅ 启动所有服务
+常用访问地址：
+- Web：`http://localhost:8080`
+- 健康检查：`http://localhost:8080/api/v1/system/health`
 
-等待 30 秒后访问：
-- **Web 界面**：http://localhost:8080
-- **API 健康检查**：http://localhost:8080/api/v1/system/health
+## 5. 首次登录与初始化
 
----
+默认账号：
+- 用户名：`admin`
+- 密码：`admin`
 
-## 🎯 首次使用流程
+首次登录后会被强制要求修改密码。
 
-### 1. 访问 Web 界面
+推荐初始化顺序：
+1. 打开“配置管理”页面，添加扫描路径，例如 `/app/photos`
+2. 打开“照片管理”页面，执行扫描或重建
+3. 如需 AI 分析，在“配置管理”中配置 AI Provider
+4. 打开“AI 分析”页面，启动在线分析；或使用下方的 analyzer API 模式
 
-打开浏览器访问 http://localhost:8080
+## 6. 使用 analyzer API 模式（可选，推荐大批量照片）
 
-### 2. 扫描照片
+当前版本的 `relive-analyzer` 使用 **API 模式**，不再使用 `export.db` 导出/导入流程。
 
-在首页点击 **"开始扫描"** 按钮，系统会：
-- 扫描你配置的照片目录
-- 读取 EXIF 信息（拍摄时间、GPS 等）
-- 生成缩略图
-- 保存到数据库
+### 6.1 在 Web 中创建设备
 
-**扫描时间**：约 1000 张/分钟（取决于硬盘速度）
+进入“设备管理”页面：
+- 新建设备
+- 设备类型选择 `offline` 或 `service`
+- 复制创建成功后显示的 `api_key`
 
-### 3. 配置 AI Provider
-
-在 **"配置管理"** 页面设置 AI 提供者：
-
-**选项 A：使用本地 Ollama（免费）**
-```yaml
-provider: ollama
-endpoint: http://host.docker.internal:11434
-model: llava:13b
-```
-
-**选项 B：使用 Qwen API（便宜）**
-```yaml
-provider: qwen
-api_key: your-api-key
-model: qwen-vl-max
-```
-
-**选项 C：使用 OpenAI（高质量）**
-```yaml
-provider: openai
-api_key: your-api-key
-model: gpt-4-vision-preview
-```
-
-### 4. 方式一：在线分析（适合小量照片）
-
-在 **"AI 分析"** 页面：
-- 点击 **"开始分析"**
-- 选择要分析的照片数量
-- 实时查看进度
-
-**适用场景**：
-- ✅ 照片数量 < 1000
-- ✅ AI 服务与 NAS 在同一网络
-- ✅ 想要实时看到结果
-
-### 5. 方式二：离线分析（推荐，适合大量照片）
-
-#### Step 1：导出数据
-
-在 **"导出/导入"** 页面：
-- 点击 **"导出数据"**
-- 下载 `export.db` 文件（包含照片信息和缩略图）
-
-#### Step 2：离线分析
-
-将 `export.db` 复制到任何有 AI 服务的电脑上：
+### 6.2 生成 analyzer 配置
 
 ```bash
-# 编译 relive-analyzer（如果还没有）
-cd backend
-go build -o relive-analyzer ./cmd/relive-analyzer
-
-# 检查数据库
-./relive-analyzer check -db export.db
-
-# 估算成本和时间
-./relive-analyzer estimate -config configs/analyzer.yaml -db export.db
-
-# 开始分析
-./relive-analyzer analyze -config configs/analyzer.yaml -db export.db
+cp analyzer.yaml.example analyzer.yaml
 ```
 
-**优势**：
-- ✅ 可以在任何电脑上运行
-- ✅ 不需要访问 NAS
-- ✅ 支持断点续传
-- ✅ 性能更好（批量处理）
+编辑 `analyzer.yaml`，至少填写：
 
-#### Step 3：导入结果
+```yaml
+server:
+  endpoint: "http://your-relive-host:8080"
+  api_key: "your-device-api-key"
+```
 
-分析完成后，在 **"导出/导入"** 页面：
-- 上传分析后的 `export.db`
-- 系统自动合并结果
-- 完成！
+### 6.3 构建并运行 analyzer
 
-### 6. 查看结果
-
-在 **"照片列表"** 页面：
-- 浏览所有照片
-- 查看 AI 分析结果
-- 按分类、标签筛选
-
----
-
-## 📊 常用命令
-
-### 查看服务状态
 ```bash
+make build-analyzer
+./backend/bin/relive-analyzer check -config analyzer.yaml
+./backend/bin/relive-analyzer analyze -config analyzer.yaml
+```
+
+自定义并发：
+
+```bash
+./backend/bin/relive-analyzer analyze -config analyzer.yaml -workers 8
+```
+
+## 常用命令
+
+```bash
+# 查看服务状态
 docker-compose ps
-```
 
-### 查看日志
-```bash
-# 所有服务
+# 查看日志
 docker-compose logs -f
-
-# 只看 relive
 docker-compose logs -f relive
-```
 
-### 停止服务
-```bash
+# 停止服务
 docker-compose down
-```
 
-### 重启服务
-```bash
+# 重启服务
 docker-compose restart
-```
 
-### 更新代码后重新构建
-```bash
-# 拉取最新代码
+# 更新后重新部署
 git pull
-
-# 重新构建并启动
 make deploy
 ```
 
----
+## 故障排除
 
-## 🔧 故障排除
+### 健康检查
 
-### 前端无法连接后端
-
-检查服务是否正常运行：
 ```bash
 curl http://localhost:8080/api/v1/system/health
 ```
 
-应该返回：
+当前响应结构示例：
+
 ```json
 {
-  "status": "healthy",
-  "version": "dev",
-  "uptime": "5m30s"
+  "success": true,
+  "data": {
+    "status": "healthy",
+    "version": "1.0.0",
+    "uptime": 123,
+    "timestamp": "2026-03-09T12:00:00+08:00"
+  },
+  "message": "System is healthy"
 }
 ```
 
-### 照片扫描失败
+### 照片目录不可见
 
-1. 检查照片目录权限
 ```bash
 docker-compose exec relive ls -la /app/photos
 ```
 
-2. 检查日志
-```bash
-docker-compose logs relive | grep ERROR
-```
+如果目录不存在或为空，优先检查 `docker-compose.yml` 的挂载路径。
 
-### AI 分析失败
+### analyzer 无法连接服务
 
-1. 测试 AI 服务连接
-```bash
-# 如果使用 Ollama
-curl http://localhost:11434/api/version
-
-# 如果使用 Qwen
-curl -H "Authorization: Bearer $QWEN_API_KEY" \
-  https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation
-```
-
-2. 查看详细日志
-```bash
-docker-compose logs relive | grep "AI Provider"
-```
-
-### 容器无法启动
-
-```bash
-# 查看详细错误
-docker-compose logs
-
-# 检查端口占用
-netstat -an | grep 8080
-```
-
----
-
-## 🎨 下一步
-
-- 📱 配置 ESP32 设备展示照片
-- 🔐 配置 Web 认证（生产环境）
-- 🌐 配置反向代理（Nginx/Traefik）
-- 📊 查看分析统计和成本
-
----
-
-## 💡 提示
-
-1. **扫描照片**：第一次扫描可能需要一些时间，取决于照片数量
-2. **AI 分析**：推荐使用离线分析工具（relive-analyzer）处理大量照片
-3. **成本控制**：使用 Ollama（免费）或 Qwen（便宜）可以大幅降低成本
-4. **备份数据**：定期备份 `data/backend/relive.db`
-
----
-
-## 📖 更多文档
-
-- [部署指南](docs/DEPLOYMENT.md) - 详细的部署文档
-- [API 文档](docs/API_DESIGN.md) - 完整的 API 说明
-- [离线工具](docs/ANALYZER.md) - relive-analyzer 使用指南
-- [架构设计](docs/ARCHITECTURE.md) - 系统架构说明
-
----
-
-**遇到问题？**
-- 查看 [故障排查文档](docs/DEPLOYMENT.md#故障排查)
-- 提交 [GitHub Issue](https://github.com/davidhoo/relive/issues)
+先检查配置：
+- `server.endpoint` 是否能从 analyzer 所在机器访问
+- `server.api_key` 是否来自“设备管理”中新创建的设备
+- 设备是否仍处于启用状态

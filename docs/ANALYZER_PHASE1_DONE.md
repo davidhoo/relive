@@ -1,5 +1,11 @@
 # relive-analyzer API 模式 - Phase 1 完成总结
 
+> **阶段里程碑说明**
+>
+> 本文档是 analyzer API 模式 Phase 1 的阶段性完成总结，适合回顾开发过程，不作为当前使用手册。
+>
+> 当前 analyzer 使用方式请参考：`docs/ANALYZER_API_MODE.md`。
+
 > 日期：2026-03-03
 > 状态：✅ 已完成
 

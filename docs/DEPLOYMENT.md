@@ -1,5 +1,11 @@
 # Relive 部署指南
 
+> **混合文档说明**
+>
+> 本文档包含当前部署信息，也保留了一些历史阶段的部署示例。若你只是要部署当前版本，请优先阅读 `QUICKSTART.md` 和 `docs/QUICKSTART.md`。
+>
+> 关于 `relive-analyzer`，请以 `docs/ANALYZER_API_MODE.md` 为准；本文档后文若出现 `export.db`、`--input`、`--output` 等命令，属于旧方案背景。
+
 > 详细的部署步骤和配置说明
 > 最后更新：2026-03-05
 > 版本：v1.1
@@ -474,40 +480,33 @@ logging:
 
 ### 4.4 使用示例
 
-**基本用法**：
+> 注意：本节已按当前 API 模式改写。若你在历史版本或旧部署记录中看到 `--input export.db` / `--output import.db`，请视为旧方案。
+
+**推荐用法**：
 ```bash
-# 分析导出的数据库
-./relive-analyzer --input export.db --output import.db --config analyzer-config.yaml
+# 复制配置模板
+cp analyzer.yaml.example analyzer.yaml
+
+# 编辑 analyzer.yaml，填写 server.endpoint 和 server.api_key
+
+# 构建 analyzer
+make build-analyzer
+
+# 检查服务连通性
+./backend/bin/relive-analyzer check -config analyzer.yaml
+
+# 启动分析
+./backend/bin/relive-analyzer analyze -config analyzer.yaml
 ```
 
-**指定提供者**：
+**指定并发**：
 ```bash
-# 使用 Ollama
-./relive-analyzer --input export.db --output import.db --provider ollama
-
-# 使用 Qwen API
-./relive-analyzer --input export.db --output import.db --provider qwen
-
-# 使用混合模式
-./relive-analyzer --input export.db --output import.db --provider hybrid
+./backend/bin/relive-analyzer analyze -config analyzer.yaml -workers 8
 ```
 
-**查看进度**：
+**生成配置模板**：
 ```bash
-# 实时显示进度
-./relive-analyzer --input export.db --output import.db --verbose
-
-# 输出示例：
-# [1/1000] 分析中... IMG_1234.jpg (10.2s)
-# [2/1000] 分析中... IMG_1235.jpg (9.8s)
-# ...
-# 完成！成功：998，失败：2，耗时：2h 15m
-```
-
-**断点续传**：
-```bash
-# 自动跳过已分析的照片
-./relive-analyzer --input export.db --output import.db --resume
+./backend/bin/relive-analyzer gen-config > analyzer.yaml
 ```
 
 ---

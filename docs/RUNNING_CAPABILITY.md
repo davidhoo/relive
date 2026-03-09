@@ -1,5 +1,11 @@
 # Relive 运行能力完善总结
 
+> **阶段总结说明**
+>
+> 本文档是 2026-03-01 的运行能力阶段总结，包含当时的待办项和旧版 analyzer 用法示例，不应直接作为当前部署手册。
+>
+> 当前运行方式请优先参考：`QUICKSTART.md`、`docs/QUICKSTART.md`、`docs/ANALYZER_API_MODE.md`。
+
 > 📅 完成日期：2026-03-01
 > 🎯 目标：让 Relive 项目能够真正运行起来
 
@@ -164,23 +170,24 @@ api_key: your-api-key
 - 点击 **"开始分析"**
 - 实时查看进度
 
-#### 5B. 离线分析（大量照片，推荐）
+#### 5B. analyzer API 模式（大量照片，推荐）
 
-**Step 1：导出**
+**Step 1：在 Web 后台创建设备**
 ```bash
-# 在 Web 界面导出 export.db
+# 在“设备管理”中创建 offline 或 service 类型设备，并复制 api_key
 ```
 
-**Step 2：分析**
+**Step 2：准备 analyzer 配置**
 ```bash
-cd backend
-./bin/relive-analyzer check -db export.db
-./bin/relive-analyzer analyze -config configs/analyzer.yaml -db export.db
+cp analyzer.yaml.example analyzer.yaml
+# 编辑 analyzer.yaml，填写 server.endpoint 和 server.api_key
 ```
 
-**Step 3：导入**
+**Step 3：分析**
 ```bash
-# 在 Web 界面导入分析结果
+make build-analyzer
+./backend/bin/relive-analyzer check -config analyzer.yaml
+./backend/bin/relive-analyzer analyze -config analyzer.yaml
 ```
 
 #### 6. 查看结果

@@ -1,5 +1,11 @@
 # Relive API 接口设计文档
 
+> **设计稿说明**
+>
+> 本文档描述的是设计阶段接口方案，适合了解演进背景和命名意图，但不保证与当前代码一一对应。
+>
+> 当前已实现接口请优先参考：`docs/BACKEND_API.md` 和 `backend/internal/api/v1/router/router.go`。
+
 > RESTful API 接口规范
 > 版本：v1.0
 > 最后更新：2026-02-28

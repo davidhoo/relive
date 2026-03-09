@@ -1,5 +1,11 @@
 # Relive 开发指南
 
+> **阶段性开发文档说明**
+>
+> 本文档形成于早期开发阶段，部分目录结构、模块数量和 analyzer 工作流示例已不再与当前仓库完全一致。
+>
+> 当前真值请优先参考：`backend/internal/api/v1/router/router.go`、`frontend/src/router/index.ts`、`docs/BACKEND_API.md`、`docs/ANALYZER_API_MODE.md`。
+
 > 开发环境搭建、编码规范、工作流程
 > 最后更新：2026-02-28
 > 版本：v1.0
@@ -164,11 +170,10 @@ mkdir -p dev-data/photos/{2023,2024,2025,2026}
       "type": "go",
       "request": "launch",
       "mode": "debug",
-      "program": "${workspaceFolder}/relive-analyzer/cmd/analyzer",
+      "program": "${workspaceFolder}/backend/cmd/relive-analyzer",
       "args": [
-        "--input", "export.db",
-        "--output", "import.db",
-        "--config", "analyzer-config.yaml"
+        "check",
+        "-config", "${workspaceFolder}/analyzer.yaml"
       ]
     }
   ]

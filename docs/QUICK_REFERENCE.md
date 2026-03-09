@@ -1,117 +1,68 @@
 # Relive 开发速查卡
 
-## 🚀 常用 Skills 快速参考
+> 当前维护版，优先对应仓库现状而不是历史工具链。
 
-### 功能开发
+## 真值文件
+
+- 版本：`VERSION`
+- 后端路由：`backend/internal/api/v1/router/router.go`
+- analyzer CLI：`backend/cmd/relive-analyzer/main.go`
+- 前端路由：`frontend/src/router/index.ts`
+- Docker 部署：`docker-compose.yml`
+- analyzer 模板：`analyzer.yaml.example`
+
+## 常用命令
+
 ```bash
-/feature-dev              # 大功能：7阶段完整流程
-/simplify                 # 优化代码（每次必用）
+# 依赖安装
+make deps
+
+# 后端开发
+make dev-backend
+
+# 前端开发
+make dev-frontend
+
+# 构建与部署
+make build
+make deploy
+
+# 查看日志
+docker-compose logs -f
+
+# 后端测试
+make test
+
+# analyzer
+make build-analyzer
+./backend/bin/relive-analyzer check -config analyzer.yaml
+./backend/bin/relive-analyzer analyze -config analyzer.yaml
 ```
 
-### Git 操作
-```bash
-/commit                   # 智能提交
-/commit-push-pr          # 提交+推送+创建PR
-/clean_gone              # 清理已合并分支
-```
+## 当前前端页面
 
-### 代码审查
-```bash
-/code-review             # PR 自动审查（4 agents）
-```
+- `/dashboard`
+- `/photos`
+- `/analysis`
+- `/thumbnails`
+- `/geocode`
+- `/devices`
+- `/display`
+- `/config`
+- `/system`
+- `/login`
+- `/change-Password`
 
-### 安全规则
-```bash
-/hookify                 # 创建保护规则
-/hookify:list           # 查看规则
-/hookify:configure      # 配置规则
-```
+## 当前 analyzer 说明
 
----
+- 使用 API 模式
+- 不再以 `export.db` 作为默认工作流
+- 认证依赖“设备管理”中创建出来的 `api_key`
 
-## 🛡️ 已启用的保护规则
+## 阅读顺序
 
-| 规则 | 触发条件 | 动作 |
-|------|---------|------|
-| env-protection | 编辑 .env 文件 | ⚠️ 警告 |
-| dangerous-rm | rm -rf 危险路径 | 🛑 阻止 |
-| docker-volume | docker-compose down -v | ⚠️ 警告 |
-| hardcoded-secrets | 代码中硬编码密钥 | ⚠️ 警告 |
-
----
-
-## 📝 Relive 开发流程
-
-### 新功能
-```
-/feature-dev → /simplify → /commit
-```
-
-### 小修改
-```
-(写代码) → /simplify → /commit
-```
-
-### PR 提交
-```
-/code-review → (修复) → /commit-push-pr
-```
-
----
-
-## 🔧 工具验证
-
-### 检查 Go
-```bash
-go version              # Go 1.24.5 ✅
-```
-
-### 检查 gopls
-```bash
-$(go env GOPATH)/bin/gopls version
-# golang.org/x/tools/gopls v0.21.1 ✅
-```
-
-### 检查插件
-```bash
-claude plugin list
-# feature-dev ✅
-# hookify ✅
-# frontend-design ✅
-# code-review ✅
-# commit-commands ✅
-```
-
----
-
-## 💡 Relive 技术栈
-
-- **语言**: Golang
-- **AI**: 阿里通义千问 Qwen-VL
-- **部署**: Docker on 群晖 NAS
-- **前端**: Web 管理界面
-- **硬件**: ESP32 + 墨水屏
-
----
-
-## 📚 文档索引
-
-- `REQUIREMENTS.md` - 需求文档 📋
-- `METHODOLOGY.md` - 开发方法论 📖
-- `SKILLS_CATALOG.md` - Skills 清单 📚
-- `ARCHITECTURE.md` - 架构设计 🏗️
-- `INSTALLATION_SUMMARY.md` - 安装总结 ✅
-
----
-
-## 🎯 当前状态
-
-- ✅ 项目结构已创建
-- ✅ 开发环境已配置
-- ✅ Skills 全部安装
-- ✅ 保护规则已生效
-- 🔄 需求文档完善中（下一步）
-
----
-
-**快速帮助**: 输入 `/hookify:help` 查看规则帮助
+1. `README.md`
+2. `QUICKSTART.md`
+3. `docs/BACKEND_API.md`
+4. `docs/ANALYZER_API_MODE.md`
+5. `docs/ARCHITECTURE.md`

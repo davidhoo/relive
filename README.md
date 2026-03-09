@@ -325,7 +325,7 @@ relive/
 │   ├── REQUIREMENTS.md        # 需求分析 ✅
 │   ├── DATABASE_SCHEMA.md     # 数据库设计 ✅
 │   ├── API_DESIGN.md          # API 设计（29个接口）✅
-│   ├── BACKEND_API.md         # 后端API文档（15个已实现）✅
+│   ├── BACKEND_API.md         # 后端 API 文档（按当前实现维护）✅
 │   ├── ARCHITECTURE.md        # 系统架构 ✅
 │   ├── AI_PROVIDERS.md        # AI 提供者架构 ⭐ ✅
 │   ├── OFFLINE_WORKFLOW.md    # 离线工作流 ⭐ ✅
@@ -337,43 +337,39 @@ relive/
 │   ├── TESTING.md             # 测试策略 ✅
 │   └── INDEX.md               # 文档索引 ✅
 │
-├── backend/                   # Golang 后端服务 🚧
-│   ├── cmd/relive/            # 主程序入口 ✅
+├── backend/                   # Golang 后端服务 ✅
+│   ├── cmd/
+│   │   ├── relive/            # 主程序入口
+│   │   ├── relive-analyzer/   # API 模式离线分析工具
+│   │   └── import-cities/     # 城市数据导入工具
 │   ├── internal/
 │   │   ├── api/v1/            # REST API 接口 ✅
-│   │   │   ├── handler/       # HTTP 处理器（4个）✅
+│   │   │   ├── handler/       # HTTP 处理器
 │   │   │   └── router/        # 路由配置 ✅
-│   │   ├── service/           # 业务逻辑层（3个）✅
-│   │   ├── repository/        # 数据访问层（4个）✅
-│   │   ├── model/             # 数据模型（5个）✅
+│   │   ├── middleware/        # JWT / API Key 认证
+│   │   ├── service/           # 业务逻辑层
+│   │   ├── repository/        # 数据访问层
+│   │   ├── model/             # 数据模型
 │   │   ├── util/              # 工具函数 ✅
-│   │   ├── provider/          # AI 提供者 📋
-│   │   ├── worker/            # 异步任务 📋
-│   │   └── scheduler/         # 定时任务 📋
+│   │   ├── provider/          # AI 提供者
+│   │   └── geocode/           # 地理编码实现
 │   ├── pkg/                   # 公共库
 │   │   ├── config/            # 配置管理 ✅
 │   │   ├── logger/            # 日志系统 ✅
 │   │   └── database/          # 数据库初始化 ✅
-│   ├── config.dev.yaml        # 开发配置 ✅
-│   ├── Makefile               # 构建脚本 ✅
+│   ├── configs/               # analyzer 示例配置
+│   ├── config.dev.yaml.example
+│   ├── config.prod.yaml
 │   └── go.mod                 # 依赖管理 ✅
-│
-├── relive-analyzer/           # 离线分析工具 ⭐ 📋
-│   ├── cmd/                   # 命令行入口
-│   ├── internal/
-│   │   ├── analyzer/          # 分析服务
-│   │   ├── provider/          # AI 提供者（复用）
-│   │   └── database/          # 导出/导入数据库
-│   └── config.yaml            # 配置文件
 │
 ├── frontend/                  # Vue3 前端 ✅
 │   ├── src/
-│   │   ├── views/            # 页面组件（9个）✅
+│   │   ├── views/            # 主页面 + 登录/详情页
 │   │   ├── components/       # 公共组件
 │   │   ├── layouts/          # 布局组件（MainLayout）✅
-│   │   ├── api/              # API 接口（4个模块）✅
+│   │   ├── api/              # Auth/System/Photo/AI/Device/... API 模块
 │   │   ├── stores/           # Pinia 状态管理 ✅
-│   │   ├── types/            # TypeScript 类型（5个）✅
+│   │   ├── types/            # TypeScript 类型定义
 │   │   ├── utils/            # 工具函数（HTTP封装）✅
 │   │   ├── router/           # 路由配置 ✅
 │   │   ├── App.vue           # 根组件 ✅
@@ -406,7 +402,7 @@ relive/
 - [x] **数据库设计**（6张表，11个索引）
 - [x] **API 设计**（29个接口，7个模块）
 - [x] **系统架构设计**（完整）
-- [x] **AI 提供者架构**（统一接口，7种提供者）⭐
+- [x] **AI 提供者架构**（统一接口，支持多提供者）⭐
 - [x] **离线工作流设计**（完整方案）⭐
 - [x] **图片预处理方案**（节省50%成本）
 - [x] **EXIF 处理策略**（GPS转城市）
@@ -617,21 +613,23 @@ cat API_DESIGN.md          # API 设计
 **relive-analyzer** 是专为离线批量分析设计的命令行工具，支持 API 模式直接与 NAS 通信：
 
 ```bash
-# 1. 编译工具
-cd backend
-go build -o relive-analyzer ./cmd/relive-analyzer
+# 1. 复制配置模板
+cp analyzer.yaml.example analyzer.yaml
 
-# 2. 检查数据库状态
-./relive-analyzer check -db http://nas-ip:8080
+# 2. 在 Web 界面创建设备（建议类型选择 offline 或 service），复制生成的 api_key
+# 3. 编辑 analyzer.yaml，填写 server.endpoint 和 server.api_key
 
-# 3. 估算成本和时间
-./relive-analyzer estimate -config configs/analyzer.yaml -db http://nas-ip:8080
+# 4. 构建工具
+make build-analyzer
 
-# 4. 批量分析
-./relive-analyzer analyze -config configs/analyzer.yaml -db http://nas-ip:8080
+# 5. 检查服务连通性
+./backend/bin/relive-analyzer check -config analyzer.yaml
 
-# 5. 自定义并发数
-./relive-analyzer analyze -config configs/analyzer.yaml -db http://nas-ip:8080 -workers 10
+# 6. 启动批量分析
+./backend/bin/relive-analyzer analyze -config analyzer.yaml
+
+# 7. 自定义并发数
+./backend/bin/relive-analyzer analyze -config analyzer.yaml -workers 8
 ```
 
 **核心特性**：
@@ -639,9 +637,8 @@ go build -o relive-analyzer ./cmd/relive-analyzer
 - ✅ API 模式直接通信（无需传输数据库文件）
 - ✅ 高性能并发处理（自动根据 Provider 能力设置）
 - ✅ 断点续传（Ctrl+C 安全中断，重新运行自动续传）
-- ✅ 实时进度显示（进度条 + ETA 估算）
 - ✅ 失败重试机制（可配置重试次数和延迟）
-- ✅ 成本统计（准确跟踪 API 调用成本）
+- ✅ 适合 NAS 与 AI 主机分离部署
 
 **详细文档**：查看 [`docs/ANALYZER.md`](docs/ANALYZER.md) 和 [`docs/ANALYZER_API_MODE.md`](docs/ANALYZER_API_MODE.md)
 
@@ -672,158 +669,37 @@ go build -o relive-analyzer ./cmd/relive-analyzer
 
 ## 📖 文档索引
 
-### 部署文档 🚀
+优先阅读这几份当前文档：
+
+### 当前使用
 
 | 文档 | 说明 | 状态 |
 |------|------|------|
-| [QUICKSTART.md](docs/QUICKSTART.md) | 5分钟快速开始 ⭐ | ✅ |
-| [DEPLOY_FROM_DOCKERHUB.md](docs/DEPLOY_FROM_DOCKERHUB.md) | DockerHub 镜像部署 | ✅ |
-| [MULTIARCH.md](docs/MULTIARCH.md) | 多架构支持说明 | ✅ |
-| [MULTIARCH_BUILD.md](docs/MULTIARCH_BUILD.md) | 多架构构建指南（开发者）| ✅ |
-| [DOCKER_RELEASE.md](docs/DOCKER_RELEASE.md) | Docker 镜像发布流程 | ✅ |
-| [SECURITY.md](SECURITY.md) | 安全指南和审计报告 ⭐ | ✅ |
+| [QUICKSTART.md](QUICKSTART.md) | 当前版本快速启动 | ✅ |
+| [docs/QUICKSTART.md](docs/QUICKSTART.md) | NAS / 服务器部署入口 | ✅ |
+| [docs/BACKEND_API.md](docs/BACKEND_API.md) | 当前后端 API 总览 | ✅ |
+| [docs/ANALYZER_API_MODE.md](docs/ANALYZER_API_MODE.md) | 当前 analyzer API 模式 | ✅ |
+| [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) | 当前项目状态 | ✅ |
+| [docs/INDEX.md](docs/INDEX.md) | 完整文档导航 | ✅ |
 
-### 核心设计文档
-
-| 文档 | 说明 | 状态 |
-|------|------|------|
-| [REQUIREMENTS.md](docs/REQUIREMENTS.md) | 需求分析 | ✅ |
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系统架构 | ✅ |
-| [DATABASE_SCHEMA.md](docs/DATABASE_SCHEMA.md) | 数据库设计 | ✅ |
-| [API_DESIGN.md](docs/API_DESIGN.md) | API 设计（29个接口）| ✅ |
-| [AI_PROVIDERS.md](docs/AI_PROVIDERS.md) | AI 提供者架构 ⭐ | ✅ |
-| [OFFLINE_WORKFLOW.md](docs/OFFLINE_WORKFLOW.md) | 离线工作流 ⭐ | ✅ |
-| [IMAGE_PREPROCESSING.md](docs/IMAGE_PREPROCESSING.md) | 图片预处理 | ✅ |
-| [EXIF_HANDLING.md](docs/EXIF_HANDLING.md) | EXIF 处理策略 | ✅ |
-| [DATABASE_EVALUATION.md](docs/DATABASE_EVALUATION.md) | SQLite 可行性评估 | ✅ |
-| [INTEGRATION_TEST_REPORT.md](docs/INTEGRATION_TEST_REPORT.md) | 集成测试报告 | ✅ |
-| [FIX_CORS_AI_ROUTES.md](docs/FIX_CORS_AI_ROUTES.md) | CORS 和 AI 路由修复 | ✅ |
-
-### 辅助文档
+### 当前开发
 
 | 文档 | 说明 | 状态 |
 |------|------|------|
-| [METHODOLOGY.md](docs/METHODOLOGY.md) | 文档驱动开发方法论 | ✅ |
-| [OFFLINE_WORKFLOW_REVIEW.md](docs/OFFLINE_WORKFLOW_REVIEW.md) | 离线工作流审查报告 | ✅ |
-| [PROJECT_REVIEW_2026-02-28.md](docs/PROJECT_REVIEW_2026-02-28.md) | 项目全面审查报告 | ✅ |
-| [DAILY_SUMMARY_2026-02-28_DESIGN_COMPLETE.md](docs/DAILY_SUMMARY_2026-02-28_DESIGN_COMPLETE.md) | 设计阶段完成总结 | ✅ |
+| [docs/QUICK_REFERENCE.md](docs/QUICK_REFERENCE.md) | 开发速查卡 | ✅ |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 开发说明（含阶段性内容） | ✅ |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系统架构 | ✅ |
+| [docs/DEVICE_PROTOCOL.md](docs/DEVICE_PROTOCOL.md) | 设备协议 | ✅ |
+| [CHANGELOG.md](CHANGELOG.md) | 最近变更记录 | ✅ |
 
-### 部署和运维文档
+### 历史 / 设计背景
 
-| 文档 | 说明 | 优先级 |
-|------|------|--------|
-| ~~DEPLOYMENT.md~~ | ✅ 已完成（见上方部署文档） | - |
-| DEVELOPMENT.md | 开发指南 | 🟢 P2 |
-| TESTING.md | 测试策略 | 🟢 P2 |
-| DEVICE_PROTOCOL.md | 设备通信协议 | 🟡 P1 |
+| 文档 | 说明 | 状态 |
+|------|------|------|
+| [docs/ANALYZER.md](docs/ANALYZER.md) | 旧版文件模式说明（历史） | 📚 |
+| [docs/OFFLINE_WORKFLOW.md](docs/OFFLINE_WORKFLOW.md) | 早期离线工作流设计（历史） | 📚 |
+| [docs/OFFLINE_WORKFLOW_REVIEW.md](docs/OFFLINE_WORKFLOW_REVIEW.md) | 离线方案评审（历史） | 📚 |
+| [docs/API_DESIGN.md](docs/API_DESIGN.md) | 设计阶段 API 方案 | 📚 |
+| [docs/FRONTEND_PLAN.md](docs/FRONTEND_PLAN.md) | 前端规划稿 | 📚 |
 
----
-
-## 🎨 设计参考
-
-### 参考优秀项目
-
-本项目参考了优秀开源项目 [InkTime](https://github.com/dai-hongtao/InkTime)：
-- ✅ 成熟的照片评分体系
-- ✅ 经过验证的展示策略
-- ✅ 墨水屏低功耗方案
-
-### 创新优化
-
-相比参考项目，Relive 的创新点：
-
-| 特性 | InkTime | Relive | 改进 |
-|------|---------|--------|------|
-| **AI 提供者** | 单一 | 多种（7+） | ✅ 提供者无关 |
-| **部署方式** | Python | Golang + Docker | ✅ 更高性能 |
-| **离线支持** | 无 | 完整离线工作流 | ✅ 创新设计 ⭐ |
-| **成本** | 固定 | ¥0-3,300 可选 | ✅ 灵活可控 |
-| **预处理** | 无 | 图片预处理 | ✅ 节省 50% |
-| **性能** | - | 批量处理（9x） | ✅ 高性能 |
-
----
-
-## 🔒 隐私和安全
-
-### 数据保护
-- ✅ **数据本地化**：照片文件保存在 NAS，不上传云端
-- ✅ **临时分析**：仅在分析时临时上传缩略图（1024px）
-- ✅ **提供者选择**：可使用完全本地的 Ollama（不上传任何数据）
-- ✅ **阿里云承诺**：不保存用户上传的图片（如使用 Qwen）
-- ✅ **排除目录**：支持配置敏感目录排除列表
-
-### 访问控制
-- ✅ **JWT 认证**：Web 界面需要 JWT Token 认证
-- ✅ **API Key 认证**：设备和分析器使用独立 API Key
-- ✅ **首次登录强制修改密码**：防止默认密码风险
-- ✅ **密码加密**：使用 bcrypt 加密存储
-
-### 安全部署
-- ✅ **自动生成密钥**：部署脚本自动生成 32 字节随机 JWT 密钥
-- ✅ **HTTPS 支持**：支持反向代理配置 HTTPS
-- ✅ **安全审计**：完整的安全审计文档（[SECURITY.md](SECURITY.md)）
-- ✅ **多架构镜像验证**：Docker 镜像支持签名验证
-
-📚 **详细安全指南**：[SECURITY.md](SECURITY.md)
-
----
-
-## 🤝 贡献指南
-
-欢迎贡献代码、报告问题或提出建议！
-
-### 贡献方式
-
-1. Fork 本仓库
-2. 创建特性分支（`git checkout -b feature/AmazingFeature`）
-3. 提交更改（`git commit -m 'Add some AmazingFeature'`）
-4. 推送到分支（`git push origin feature/AmazingFeature`）
-5. 开启 Pull Request
-
-### 开发规范
-
-- 遵循文档驱动开发（DDD）
-- 代码提交前运行测试
-- 使用规范的 commit message
-
----
-
-## 📝 License
-
-本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
-
-### 第三方许可
-
-- **GeoNames 城市数据**：CC BY 4.0
-- **参考项目 InkTime**：MIT
-
----
-
-## 🙏 致谢
-
-- [InkTime](https://github.com/dai-hongtao/InkTime) - 优秀的墨水屏相框项目，提供了宝贵的设计参考
-- [阿里云百炼平台](https://www.aliyun.com/product/bailian) - 提供 Qwen-VL API 服务
-- [Ollama](https://ollama.ai/) - 提供本地 AI 模型运行方案
-- [GeoNames](https://www.geonames.org/) - 提供城市地理数据
-
----
-
-## 📞 联系方式
-
-- **GitHub**: [@davidhoo](https://github.com/davidhoo)
-- **项目地址**: https://github.com/davidhoo/relive
-- **问题反馈**: [Issues](https://github.com/davidhoo/relive/issues)
-
----
-
-## ⭐ Star History
-
-如果这个项目对你有帮助，请给它一个 Star ⭐！
-
----
-
-<p align="center">
-  <strong>让每一张照片都重新"活"起来</strong><br>
-  <em>Relive - 重温珍贵时刻</em><br><br>
-  🚀 生产就绪 | 🐳 Docker 多架构 | 🔒 安全审计完成 | 📚 15,000+ 行文档 | 💻 ~12,000 行代码 | ✅ 一键部署
-</p>
+更细的导航请看 [docs/INDEX.md](docs/INDEX.md)。

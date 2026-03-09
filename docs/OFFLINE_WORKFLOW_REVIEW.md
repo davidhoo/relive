@@ -1,5 +1,11 @@
 # OFFLINE_WORKFLOW.md 设计审查报告
 
+> **历史评审文档说明**
+>
+> 本文档审查的是早期离线文件模式设计，不代表当前默认实现。保留它是为了说明为什么仓库里仍存在 `export.db`、ExportService 等历史术语。
+>
+> 当前实现请优先参考：`docs/ANALYZER_API_MODE.md`、`docs/BACKEND_API.md`。
+
 > 审查日期：2026-02-28
 > 审查目标：技术可行性、逻辑完整性、实用性、与现有设计的兼容性
 
