@@ -31,6 +31,7 @@ build-analyzer:
 run:
 	@echo "Running $(APP_NAME)..."
 	@mkdir -p data/logs data/photos
+	test -f config.dev.yaml || cp config.dev.yaml.example config.dev.yaml
 	go run cmd/relive/main.go --config config.dev.yaml
 
 # 运行离线分析工具（显示帮助）

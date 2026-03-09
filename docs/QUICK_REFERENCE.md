@@ -11,6 +11,7 @@
 - Docker 部署：`docker-compose.yml`
 - analyzer 模板：`analyzer.yaml.example`
 - 配置职责：`docs/CONFIGURATION.md`
+- 生成配置：`backend/config.dev.yaml.example` / `backend/config.prod.yaml.example`
 
 ## 常用命令
 

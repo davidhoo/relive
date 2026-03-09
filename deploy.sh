@@ -90,6 +90,18 @@ EOF
     fi
 fi
 
+# 确保生产配置文件存在
+if [ ! -f "backend/config.prod.yaml" ]; then
+    echo -e "${YELLOW}  未找到 backend/config.prod.yaml，从示例创建...${NC}"
+    if [ -f "backend/config.prod.yaml.example" ]; then
+        cp backend/config.prod.yaml.example backend/config.prod.yaml
+        echo -e "${GREEN}  ✓${NC} 已创建 backend/config.prod.yaml"
+    else
+        echo -e "${RED}❌ 未找到 backend/config.prod.yaml.example${NC}"
+        exit 1
+    fi
+fi
+
 # 生成 JWT 密钥
 if command -v openssl &> /dev/null; then
     JWT_SECRET=$(openssl rand -base64 32)

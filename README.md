@@ -63,10 +63,11 @@ git clone https://github.com/davidhoo/relive.git
 cd relive
 ```
 
-### 2. 准备环境变量
+### 2. 准备环境变量和生产配置
 
 ```bash
 cp .env.example .env
+cp backend/config.prod.yaml.example backend/config.prod.yaml
 ```
 
 建议至少修改：

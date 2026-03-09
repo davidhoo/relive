@@ -10,6 +10,8 @@
 - `analyzer.yaml`
 - Web 后台配置页
 
+如果脚本提示缺少 `backend/config.dev.yaml` 或 `backend/config.prod.yaml`，应从对应的 `.example` 文件复制生成。
+
 一句话原则：
 - **部署改文件**
 - **业务改后台**
@@ -44,10 +46,10 @@ Relive 的配置分为三层：
 这层是后端启动时读取的默认值和路径约定，主要面向维护者和开发者。
 
 **当前文件：**
-- `backend/config.dev.yaml`
 - `backend/config.dev.yaml.example`
-- `backend/config.prod.yaml`
+- `backend/config.dev.yaml`（本地生成）
 - `backend/config.prod.yaml.example`
+- `backend/config.prod.yaml`（本地生成）
 - `backend/config.base.yaml`（启动默认值基线）
 - `backend/config.default.yaml`（历史文件，已退役）
 

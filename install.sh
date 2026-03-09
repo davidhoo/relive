@@ -75,8 +75,9 @@ echo "  下载 docker-compose.yml..."
 curl -fsSL "$GITHUB_RAW/docker-compose.prod.yml" -o docker-compose.yml
 
 # 下载后端配置
-echo "  下载 config.prod.yaml..."
-curl -fsSL "$GITHUB_RAW/backend/config.prod.yaml" -o backend/config.prod.yaml
+echo "  下载 config.prod.yaml.example..."
+curl -fsSL "$GITHUB_RAW/backend/config.prod.yaml.example" -o backend/config.prod.yaml.example
+cp backend/config.prod.yaml.example backend/config.prod.yaml
 
 echo -e "${GREEN}  ✓${NC} 配置文件下载完成"
 

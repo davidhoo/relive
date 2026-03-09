@@ -76,6 +76,8 @@ analyzer.yaml
 !analyzer.yaml.example
 backend/config.dev.yaml
 !backend/config.dev.yaml.example
+backend/config.prod.yaml
+!backend/config.prod.yaml.example
 
 # Docker Compose personal configurations (use .example templates)
 docker-compose.yml

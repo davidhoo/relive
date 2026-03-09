@@ -86,7 +86,12 @@ yarn install
 
 ### 1.4 配置开发环境
 
-**创建配置文件** `config.dev.yaml`：
+**从示例创建配置文件** `backend/config.dev.yaml`：
+```bash
+cp backend/config.dev.yaml.example backend/config.dev.yaml
+```
+
+然后按需编辑：
 ```yaml
 # 开发环境配置
 server:
@@ -161,7 +166,7 @@ mkdir -p dev-data/photos/{2023,2024,2025,2026}
       "mode": "debug",
       "program": "${workspaceFolder}/backend/cmd/relive",
       "args": [
-        "--config", "${workspaceFolder}/config.dev.yaml"
+        "--config", "${workspaceFolder}/backend/config.dev.yaml"
       ],
       "env": {
         "GIN_MODE": "debug"
@@ -199,7 +204,7 @@ make dev
 **方法 2：手动启动**
 ```bash
 # 启动后端
-go run backend/cmd/relive/main.go --config config.dev.yaml
+go run backend/cmd/relive/main.go --config backend/config.dev.yaml
 
 # 启动前端（新终端）
 cd frontend && npm run dev
@@ -1027,7 +1032,7 @@ build:
 
 # 运行
 run:
-	go run backend/cmd/relive/main.go --config config.dev.yaml
+	go run backend/cmd/relive/main.go --config backend/config.dev.yaml
 
 # 测试
 test:
