@@ -1,0 +1,54 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(lsof -i :8080 | head -20)",
+      "Bash(curl -s http://localhost:8080/system/health | head -20)",
+      "Bash(curl -s -o /dev/null -w \"HTTP Status: %{http_code}\\\\n\" http://localhost:5173/)",
+      "Bash(curl -s http://localhost:8080/api/v1/system/health | jq -r '.data.version' 2>/dev/null || echo \"无法获取\")",
+      "Bash(cd backend && go build -o bin/relive cmd/relive/main.go)",
+      "Bash(go build -o bin/relive cmd/relive/main.go)",
+      "Bash(cd frontend && npm run build)",
+      "Bash(npm run build --prefix frontend)"
+    ]
+  },
+  "permissionMode": "auto",
+  "autoApprove": {
+    "Bash": [
+      "*"
+    ],
+    "Read": [
+      "*"
+    ],
+    "Write": [
+      "*"
+    ],
+    "Edit": [
+      "*"
+    ],
+    "Glob": [
+      "*"
+    ],
+    "Grep": [
+      "*"
+    ],
+    "Agent": [
+      "*"
+    ],
+    "TaskCreate": [
+      "*"
+    ],
+    "TaskUpdate": [
+      "*"
+    ],
+    "TaskList": [
+      "*"
+    ],
+    "WebSearch": [
+      "*"
+    ],
+    "WebFetch": [
+      "*"
+    ]
+  },
+  "alwaysApprove": true
+}
