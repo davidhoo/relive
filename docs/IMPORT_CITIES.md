@@ -31,7 +31,8 @@ unzip cities500.zip
 
 # 2. 导入数据库
 cd backend
-go run cmd/import-cities/main.go --file cities500.txt
+cp config.dev.yaml.example config.dev.yaml
+go run cmd/import-cities/main.go --file cities500.txt --config config.dev.yaml
 ```
 
 ## 数据集选择
@@ -56,7 +57,7 @@ go run cmd/import-cities/main.go \
 
 参数说明：
 - `--file`: GeoNames 数据文件路径（必需）
-- `--config`: 配置文件路径（默认: config.dev.yaml）
+- `--config`: 配置文件路径（推荐先由 `config.dev.yaml.example` 复制生成 `config.dev.yaml`）
 - `--batch`: 批量插入大小（默认: 1000）
 
 ## 验证导入

@@ -22,7 +22,7 @@ docker run -d \
   -p 18080:8080 \
   -e JWT_SECRET=test-jwt-secret-for-local-testing \
   -v $(pwd)/test-data:/app/data \
-  -v $(pwd)/backend/config.prod.yaml:/app/config.yaml:ro \
+  -v $(pwd)/backend/config.prod.yaml.example:/app/config.yaml:ro \
   davidhu/relive:v0.3.0
 
 # 查看日志
@@ -105,7 +105,7 @@ docker run -d \
   -p 18080:8080 \
   -e JWT_SECRET=test-jwt-secret \
   -v $(pwd)/test-data:/app/data \
-  -v $(pwd)/backend/config.prod.yaml:/app/config.yaml:ro \
+  -v $(pwd)/backend/config.prod.yaml.example:/app/config.yaml:ro \
   -v /你的照片目录:/app/photos:ro \
   davidhu/relive:v0.3.0
 ```
@@ -175,7 +175,7 @@ docker logs relive-test-local
 lsof -i :18080
 
 # 检查配置文件
-cat backend/config.prod.yaml
+cat backend/config.prod.yaml.example
 ```
 
 ### 前端无法访问
