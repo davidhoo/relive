@@ -2,8 +2,11 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
@@ -147,6 +150,8 @@ func (h *AnalyzerHandler) GetTasks(c *gin.Context) {
 		return
 	}
 
+	rewriteTaskDownloadURLs(c, tasks)
+
 	// 如果没有任务了
 	if len(tasks) == 0 {
 		c.JSON(http.StatusServiceUnavailable, model.Response{
@@ -177,6 +182,66 @@ func (h *AnalyzerHandler) GetTasks(c *gin.Context) {
 			DeviceID:       deviceID.(uint),
 		},
 	})
+}
+
+func rewriteTaskDownloadURLs(c *gin.Context, tasks []model.AnalysisTask) {
+	baseURL := requestBaseURL(c)
+	if baseURL == "" {
+		return
+	}
+
+	for i := range tasks {
+		tasks[i].DownloadURL = rewriteTaskDownloadURL(tasks[i].DownloadURL, baseURL, tasks[i].PhotoID)
+	}
+}
+
+func requestBaseURL(c *gin.Context) string {
+	host := firstForwardedValue(c.GetHeader("X-Forwarded-Host"))
+	if host == "" {
+		host = c.Request.Host
+	}
+	if host == "" {
+		return ""
+	}
+
+	scheme := "http"
+	if c.Request.TLS != nil {
+		scheme = "https"
+	}
+	if forwardedProto := firstForwardedValue(c.GetHeader("X-Forwarded-Proto")); forwardedProto != "" {
+		scheme = forwardedProto
+	}
+
+	return fmt.Sprintf("%s://%s", scheme, host)
+}
+
+func firstForwardedValue(value string) string {
+	if value == "" {
+		return ""
+	}
+	parts := strings.Split(value, ",")
+	return strings.TrimSpace(parts[0])
+}
+
+func rewriteTaskDownloadURL(downloadURL, baseURL string, photoID uint) string {
+	base, err := url.Parse(baseURL)
+	if err != nil || base.Scheme == "" || base.Host == "" {
+		return downloadURL
+	}
+
+	path := fmt.Sprintf("/api/v1/photos/%d/image", photoID)
+	query := ""
+
+	if parsed, err := url.Parse(downloadURL); err == nil {
+		if parsed.Path != "" {
+			path = parsed.Path
+		}
+		query = parsed.RawQuery
+	}
+
+	base.Path = path
+	base.RawQuery = query
+	return base.String()
 }
 
 // Heartbeat 任务心跳续期
