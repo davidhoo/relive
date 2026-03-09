@@ -9,11 +9,11 @@ set -e
 
 # 配置文件路径
 CONFIG_FILE="${CONFIG_FILE:-/app/config.yaml}"
-DEFAULT_CONFIG="/app/config.default.yaml"
+DEFAULT_CONFIG="/app/config.base.yaml"
 
 # 如果没有外部配置文件，使用默认配置
 if [ ! -f "$CONFIG_FILE" ]; then
-    echo "No external config found, using default config"
+    echo "No external config found, using base config"
     CONFIG_FILE="$DEFAULT_CONFIG"
 fi
 

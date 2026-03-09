@@ -14,6 +14,7 @@
 
 ### 当前开发
 - `docs/QUICK_REFERENCE.md`：开发速查卡
+- `docs/CONFIGURATION.md`：配置职责与优先级
 - `docs/DEVELOPMENT.md`：开发说明（含阶段性内容，遇冲突请以源码为准）
 - `docs/ARCHITECTURE.md`：系统架构
 - `docs/DEVICE_PROTOCOL.md`：设备协议设计

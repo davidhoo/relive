@@ -82,6 +82,9 @@ JWT_SECRET=
 # 服务端口
 RELIVE_PORT=8080
 
+# 外部访问地址（可选，analyzer / 反向代理场景推荐设置）
+RELIVE_EXTERNAL_URL=
+
 # 注意：AI Provider 的 API Key 通过管理页面配置，存储在数据库中
 EOF
     fi

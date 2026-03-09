@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"gopkg.in/yaml.v3"
@@ -266,14 +267,24 @@ func (g *GeocodeConfig) GetWeiboTimeout() int {
 
 // Load 加载配置文件
 func Load(path string) (*Config, error) {
-	// 读取配置文件
+	var cfg Config
+
+	basePath := filepath.Join(filepath.Dir(path), "config.base.yaml")
+	if filepath.Base(path) != "config.base.yaml" {
+		if baseData, baseErr := os.ReadFile(basePath); baseErr == nil {
+			if err := yaml.Unmarshal(baseData, &cfg); err != nil {
+				return nil, fmt.Errorf("parse base config file: %w", err)
+			}
+		} else if !os.IsNotExist(baseErr) {
+			return nil, fmt.Errorf("read base config file: %w", baseErr)
+		}
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config file: %w", err)
 	}
 
-	// 解析 YAML
-	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config file: %w", err)
 	}
@@ -281,6 +292,9 @@ func Load(path string) (*Config, error) {
 	// 从环境变量覆盖敏感配置
 	if secret := os.Getenv("JWT_SECRET"); secret != "" {
 		cfg.Security.JWTSecret = secret
+	}
+	if value := os.Getenv("RELIVE_EXTERNAL_URL"); value != "" {
+		cfg.Server.ExternalURL = value
 	}
 	if apiKey := os.Getenv("QWEN_API_KEY"); apiKey != "" {
 		cfg.AI.Qwen.APIKey = apiKey
