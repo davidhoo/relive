@@ -20,6 +20,7 @@ cd relive
 
 ```bash
 cp .env.example .env
+cp backend/config.prod.yaml.example backend/config.prod.yaml
 ```
 
 至少建议修改：

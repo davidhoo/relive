@@ -20,7 +20,8 @@ help:
 	@echo "首次使用 Docker 部署:"
 	@echo "  cp docker-compose.yml.example docker-compose.yml"
 	@echo "  cp docker-compose.prod.yml.example docker-compose.prod.yml"
-	@echo "  # 编辑配置文件，设置你的照片路径等"
+	@echo "  cp backend/config.prod.yaml.example backend/config.prod.yaml"
+	@echo "  # 编辑 docker-compose.yml / .env / backend/config.prod.yaml"
 	@echo ""
 	@echo "开发环境:"
 	@echo "  make dev              - 启动开发环境（交互式菜单）"
@@ -53,6 +54,7 @@ dev:
 	./dev.sh
 
 dev-backend: sync-version
+	test -f backend/config.dev.yaml || cp backend/config.dev.yaml.example backend/config.dev.yaml
 	cd backend && go run cmd/relive/main.go --config config.dev.yaml
 
 dev-frontend:

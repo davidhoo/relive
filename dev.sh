@@ -16,8 +16,14 @@ NC='\033[0m' # No Color
 
 # 检查配置文件
 if [ ! -f "backend/config.dev.yaml" ]; then
-    echo "❌ 未找到 backend/config.dev.yaml"
-    exit 1
+    if [ -f "backend/config.dev.yaml.example" ]; then
+        echo "⚠️  未找到 backend/config.dev.yaml，正在从示例创建..."
+        cp backend/config.dev.yaml.example backend/config.dev.yaml
+        echo -e "${GREEN}✓${NC} 已创建 backend/config.dev.yaml，请按需修改后继续使用"
+    else
+        echo "❌ 未找到 backend/config.dev.yaml.example"
+        exit 1
+    fi
 fi
 
 # 创建数据目录
