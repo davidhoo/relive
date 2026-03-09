@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 2026-03-09 - 文档治理与索引重构 📝
+
+#### Changed
+- ✅ **入口文档同步** - 更新 `README.md`、`QUICKSTART.md`、`docs/QUICKSTART.md`，统一当前部署、初始化与 analyzer API 模式说明
+- ✅ **API 文档重写** - 以当前路由实现为准重写 `docs/BACKEND_API.md`，明确鉴权模型、异步扫描/重建与 analyzer API
+- ✅ **Analyzer 文档分层** - 将 `docs/ANALYZER_API_MODE.md` 作为当前使用说明，`docs/ANALYZER.md` 调整为历史文件模式说明
+- ✅ **状态文档校正** - 更新 `docs/PROJECT_STATUS.md`、`docs/BACKEND_COMPLETE.md`、`docs/FRONTEND_COMPLETE.md`，移除旧的导出/导入 UI 与 API 结论
+- ✅ **历史文档标记** - 为旧方案、阶段总结、规划稿和评审稿补充“历史参考/阶段快照”说明，降低误读风险
+- ✅ **文档导航重构** - 重写 `docs/INDEX.md` 与 `README.md` 文档入口，明确“当前使用 / 当前开发 / 历史文档”三层边界
+
 ### 2026-03-06 - 展示策略合并与文档同步 ✨
 
 #### Changed
