@@ -44,7 +44,8 @@ cd ~/relive
 curl -fsSL https://raw.githubusercontent.com/davidhoo/relive/main/docker-compose.prod.yml -o docker-compose.yml
 
 # 后端配置
-curl -fsSL https://raw.githubusercontent.com/davidhoo/relive/main/backend/config.prod.yaml -o config.prod.yaml
+curl -fsSL https://raw.githubusercontent.com/davidhoo/relive/main/backend/config.prod.yaml.example -o config.prod.yaml.example
+cp config.prod.yaml.example config.prod.yaml
 ```
 
 #### 步骤 3：创建 .env 文件
@@ -127,7 +128,8 @@ services:
    - 值：使用生成的随机密钥（32字节 base64）
 
 5. **上传配置文件**
-   - 将 `config.prod.yaml` 上传到 `/docker/relive/`
+   - 将 `config.prod.yaml.example` 上传到 `/docker/relive/`
+   - 然后复制为 `config.prod.yaml` 并按需修改
 
 6. **构建并启动**
 
@@ -184,7 +186,8 @@ head -c 32 /dev/urandom | base64
 ```
 ~/relive/                          # 安装目录
 ├── docker-compose.yml             # Docker Compose 配置
-├── config.prod.yaml               # 后端配置
+├── config.prod.yaml.example       # 后端配置模板
+├── config.prod.yaml               # 本地生成的后端配置
 ├── .env                           # 环境变量（包含密钥）
 └── data/                          # 数据目录
     └── backend/

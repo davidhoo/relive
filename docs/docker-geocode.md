@@ -165,7 +165,7 @@ volumes:
 
 ### 离线模式配置
 
-在 `config.prod.yaml` 中启用离线地理编码：
+如果你使用文件模板初始化部署，可先复制 `backend/config.prod.yaml.example -> backend/config.prod.yaml`，再在其中设置启动默认值：
 
 ```yaml
 geocode:

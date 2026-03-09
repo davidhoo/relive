@@ -381,7 +381,8 @@ curl -fsSL https://raw.githubusercontent.com/davidhoo/relive/main/install.sh | b
 ```bash
 mkdir ~/relive && cd ~/relive
 curl -fsSL https://raw.githubusercontent.com/davidhoo/relive/main/docker-compose.prod.yml -o docker-compose.yml
-curl -fsSL https://raw.githubusercontent.com/davidhoo/relive/main/backend/config.prod.yaml -o config.prod.yaml
+curl -fsSL https://raw.githubusercontent.com/davidhoo/relive/main/backend/config.prod.yaml.example -o config.prod.yaml.example
+cp config.prod.yaml.example config.prod.yaml
 ```
 
 2. 生成密钥并启动：
