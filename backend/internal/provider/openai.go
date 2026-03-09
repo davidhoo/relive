@@ -255,7 +255,7 @@ func (p *OpenAIProvider) buildPrompt(request *AnalyzeRequest) string {
 }
 
 【重要约束】
-- main_category 必须从以下选项中选择（只能是这12个之一）：人物、孩子、猫咪、家庭、旅行、风景、美食、宠物、日常、文档、杂物、其他
+- main_category 必须从以下选项中选择（只能是这13个之一）：人物、孩子、猫咪、家庭、旅行、风景、美食、宠物、日常、文档、杂物、截屏、其他
 - 禁止使用英文分类如 "event", "people", "landscape" 等
 - 不要输出任何多余文字，不要加注释。`
 
@@ -394,7 +394,7 @@ func (p *OpenAIProvider) parseResponse(response string) (*AnalyzeResult, error) 
 // mapCategoryToChineseOpenAI 将英文分类映射到中文
 func mapCategoryToChineseOpenAI(category string) string {
 	// 如果已经是中文，直接返回
-	validCategories := []string{"人物", "孩子", "猫咪", "家庭", "旅行", "风景", "美食", "宠物", "日常", "文档", "杂物", "其他"}
+	validCategories := []string{"人物", "孩子", "猫咪", "家庭", "旅行", "风景", "美食", "宠物", "日常", "文档", "杂物", "截屏", "其他"}
 	for _, valid := range validCategories {
 		if category == valid {
 			return category
@@ -426,7 +426,7 @@ func mapCategoryToChineseOpenAI(category string) string {
 		"document":    "文档",
 		"receipt":     "文档",
 		"bill":        "文档",
-		"screenshot":  "文档",
+		"screenshot":  "截屏",
 		"trash":       "杂物",
 		"junk":        "杂物",
 		"clutter":     "杂物",
