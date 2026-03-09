@@ -45,6 +45,7 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - JWT_SECRET=${JWT_SECRET}
+      - RELIVE_EXTERNAL_URL=${RELIVE_EXTERNAL_URL:-}
       # 4 核 NAS 推荐值：
       # - GOMAXPROCS=2：Go 最多并行使用 2 个 CPU 核心
       # - MAX_SCAN_WORKERS=2：扫描同时处理 2 张照片

@@ -14,7 +14,7 @@
 源码真值：
 - 服务端路由：`backend/internal/api/v1/router/router.go`
 - analyzer CLI：`backend/cmd/relive-analyzer/main.go`
-- 配置模板：`analyzer.yaml.example`
+- 配置模板：`analyzer.yaml.example`（仓库根目录唯一 analyzer 模板）
 
 ---
 
@@ -31,6 +31,8 @@
 ```bash
 cp analyzer.yaml.example analyzer.yaml
 ```
+
+> 当前不再使用 `backend/configs/analyzer.yaml`；根目录 `analyzer.yaml.example` 是唯一推荐模板。
 
 最小配置示例：
 

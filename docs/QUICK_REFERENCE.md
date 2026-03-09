@@ -10,6 +10,7 @@
 - 前端路由：`frontend/src/router/index.ts`
 - Docker 部署：`docker-compose.yml`
 - analyzer 模板：`analyzer.yaml.example`
+- 配置职责：`docs/CONFIGURATION.md`
 
 ## 常用命令
 
@@ -63,6 +64,7 @@ make build-analyzer
 
 1. `README.md`
 2. `QUICKSTART.md`
-3. `docs/BACKEND_API.md`
-4. `docs/ANALYZER_API_MODE.md`
-5. `docs/ARCHITECTURE.md`
+3. `docs/CONFIGURATION.md`
+4. `docs/BACKEND_API.md`
+5. `docs/ANALYZER_API_MODE.md`
+6. `docs/ARCHITECTURE.md`

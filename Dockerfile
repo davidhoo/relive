@@ -90,7 +90,7 @@ COPY --from=frontend-builder /frontend/dist /app/frontend/dist
 # 复制脚本和默认配置
 COPY backend/scripts/init-cities.sh /app/init-cities.sh
 COPY backend/scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
-COPY backend/config.default.yaml /app/config.default.yaml
+COPY backend/config.base.yaml /app/config.base.yaml
 RUN chmod +x /app/init-cities.sh /app/docker-entrypoint.sh
 
 # 创建必要的目录

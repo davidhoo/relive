@@ -72,7 +72,7 @@ go build -o relive-analyzer ./cmd/relive-analyzer
 ./relive-analyzer analyze -config analyzer.yaml -verbose                # Verbose logging
 ./relive-analyzer version                                               # Show version info
 
-# Config file location: backend/configs/analyzer.yaml (sample)
+# Config file location: analyzer.yaml.example (repository root sample)
 ```
 
 ## Architecture

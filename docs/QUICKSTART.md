@@ -43,6 +43,8 @@ services:
 
 后续在 Web 中添加扫描路径时，请使用容器内路径：`/app/photos`。
 
+如果你不确定哪些配置属于部署层、哪些属于后台运行时配置，请先看：`docs/CONFIGURATION.md`。
+
 ### 4. 启动服务
 
 ```bash
@@ -86,6 +88,8 @@ make build-analyzer
 ```
 
 > 旧版 `export.db` 导出/导入流程已不再是当前默认工作流。
+>
+> 配置职责说明见：`docs/CONFIGURATION.md`。
 
 ## 常用命令
 

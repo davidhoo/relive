@@ -1,8 +1,12 @@
-# 默认配置（适用于 Docker Desktop 直接运行）
+# 后端基础默认配置
+# 角色：启动默认值与路径约定，不作为运行时业务配置真值。
+# 说明：AI / geocode / display / scan paths 等业务配置在运行时应以数据库为准。
+
 server:
   host: "0.0.0.0"
   port: 8080
   mode: "release"
+  external_url: ""   # 建议通过部署层环境变量 RELIVE_EXTERNAL_URL 注入
   static_path: "/app/frontend/dist"
 
 database:
@@ -20,35 +24,61 @@ photos:
     - "#recycle"
     - ".DS_Store"
     - "Thumbs.db"
+    - ".Trashes"
   supported_formats:
     - ".jpg"
     - ".jpeg"
     - ".png"
     - ".heic"
     - ".HEIC"
+    - ".JPG"
+    - ".JPEG"
+    - ".PNG"
 
 ai:
   provider: ""
   timeout: 120
+  temperature: 0.7
   ollama:
     endpoint: "http://host.docker.internal:11434"
-    model: "llava"
+    model: "llava:13b"
+    temperature: 0.7
+    timeout: 120
   qwen:
+    api_key: ""
     endpoint: "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
     model: "qwen-vl-max"
+    temperature: 0.7
+    timeout: 60
   openai:
+    api_key: ""
     endpoint: "https://api.openai.com/v1/chat/completions"
     model: "gpt-4-vision-preview"
+    temperature: 0.7
+    max_tokens: 1000
+    timeout: 60
+  vllm:
+    endpoint: "http://host.docker.internal:8000"
+    model: "llava-v1.6-vicuna-13b"
+    temperature: 0.7
+    max_tokens: 800
+    timeout: 120
+  hybrid:
+    primary: "ollama"
+    fallback: "qwen"
 
+# 启动默认值；运行时应以数据库中的 display.strategy 为准
 display:
   algorithm: "on_this_day"
   fallback_days: [3, 7, 30, 365]
+  avoid_repeat_days: 7
 
 logging:
   level: "info"
   file: "/app/data/logs/relive.log"
   max_size: 100
-  max_backups: 5
+  max_backups: 10
+  max_age: 30
   console: true
 
 security:
@@ -60,8 +90,17 @@ performance:
   max_analyze_workers: 5
   max_thumbnail_workers: 2
   max_geocode_workers: 1
+  cache_size: 1000
 
+# 启动默认值；运行时应以数据库中的 geocode 配置为准
 geocode:
   provider: "offline"
+  fallback: "nominatim"
+  cache_enabled: true
+  cache_ttl: 86400
+  offline_max_distance: 100
+  nominatim_endpoint: "https://nominatim.openstreetmap.org/reverse"
   offline:
     max_distance: 100
+  nominatim:
+    endpoint: "https://nominatim.openstreetmap.org/reverse"

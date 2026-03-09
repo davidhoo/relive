@@ -36,6 +36,8 @@ OPENAI_API_KEY=your-openai-api-key
 ```
 
 > 当前 Docker 部署 **不通过** `.env` 中的 `PHOTOS_PATH` 指定照片目录；照片目录需要在 `docker-compose.yml` 的 `volumes` 里挂载。
+>
+> 如果你不确定某项配置该改 `.env`、`docker-compose.yml`、`analyzer.yaml` 还是后台配置页，请先阅读 `docs/CONFIGURATION.md`。
 
 ## 3. 修改照片目录挂载
 
@@ -167,6 +169,8 @@ docker-compose exec relive ls -la /app/photos
 ```
 
 如果目录不存在或为空，优先检查 `docker-compose.yml` 的挂载路径。
+
+更多配置分层说明见：`docs/CONFIGURATION.md`。
 
 ### analyzer 无法连接服务
 

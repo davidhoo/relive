@@ -1,22 +1,20 @@
-# 服务配置
+# 开发环境覆盖配置示例
+# 复制为 backend/config.dev.yaml 使用。
+# 角色：覆盖 backend/config.base.yaml 中与本地开发相关的环境差异。
+# 说明：AI / geocode / display / scan paths 等业务配置在运行时应以数据库为准。
+
 server:
-  host: "0.0.0.0"
-  port: 8080
-  mode: "debug"  # debug / release
-  external_url: "http://localhost:8080"  # 外部访问地址，用于生成照片下载链接
+  mode: "debug"
+  external_url: "http://localhost:8080"  # 开发环境默认值；生产环境建议由部署层 RELIVE_EXTERNAL_URL 注入
   static_path: ""  # 开发环境不提供静态文件（由 Vite 独立提供）
 
-# 数据库配置
 database:
-  type: "sqlite"
   path: "../data/backend/relive.db"
-  auto_migrate: true
-  log_mode: true  # 开发环境打印 SQL
+  log_mode: true
 
-# 照片目录
 photos:
-  root_path: "/path/to/your/photos"  # 与 docker-compose.yml 中挂载的宿主机路径保持一致
-  thumbnail_path: "../data/backend/thumbnails"  # 缩略图存储路径（HEIC转换等）
+  root_path: "/path/to/your/photos"  # 本地开发机器上的可访问路径
+  thumbnail_path: "../data/backend/thumbnails"
   exclude_dirs:
     - ".sync"
     - "@eaDir"
@@ -28,76 +26,17 @@ photos:
     - ".png"
     - ".heic"
 
-# AI 配置
-ai:
-  provider: ""  # 默认不启用 AI，可选: ollama / qwen / openai / vllm / hybrid
-  timeout: 60
-  temperature: 0.7
-
-  # Ollama 配置（本地/远程开源模型）
-  ollama:
-    endpoint: "http://localhost:11434"
-    model: "llava:13b"
-    temperature: 0.7
-    timeout: 120
-
-  # Qwen 配置（阿里云在线 API）
-  qwen:
-    api_key: ""  # 需要填写真实的 API Key
-    endpoint: "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
-    model: "qwen-vl-max"
-    temperature: 0.7
-    timeout: 60
-
-  # OpenAI 配置（OpenAI 在线 API）
-  openai:
-    api_key: ""  # 需要填写真实的 API Key
-    endpoint: "https://api.openai.com/v1/chat/completions"
-    model: "gpt-4-vision-preview"
-    temperature: 0.7
-    max_tokens: 1000
-    timeout: 60
-
-  # VLLM 配置（自部署推理服务）
-  vllm:
-    endpoint: "http://localhost:8000"
-    model: "llava-v1.6-vicuna-13b"
-    temperature: 0.7
-    max_tokens: 800
-    timeout: 120
-    enable_thinking: false  # 是否启用思考，默认 false
-
-  # Hybrid 混合模式配置
-  hybrid:
-    primary: "ollama"    # 主要 provider
-    fallback: "qwen"     # 备用 provider（当主 provider 失败时使用）
-
-# 地理编码配置（启动默认值，运行时通过管理后台配置后以数据库为准）
-geocode:
-  provider: "offline"       # 启动默认：离线，无需联网。可选: offline / amap / nominatim / weibo
-  fallback: "nominatim"     # 备用提供商（API key 为空时自动降级）
-  cache_enabled: true
-  cache_ttl: 86400          # 缓存有效期（秒），默认 24 小时
-  offline_max_distance: 100 # 离线模式最大搜索半径（km）
-  nominatim_endpoint: "https://nominatim.openstreetmap.org/reverse"  # 自建 Nominatim 可修改此处
-  # API Key 等敏感配置请在管理后台「GPS 逆地理编码配置」中填写
-
-# 展示策略
-display:
-  algorithm: "on_this_day"
-  fallback_days: [3, 7, 30, 365]
-  avoid_repeat_days: 7
-
-# 日志配置
 logging:
   level: "debug"
   file: "../data/backend/logs/relive.log"
-  max_size: 100  # MB
-  max_backups: 10
-  max_age: 30  # days
-  console: true  # 输出到控制台
+  console: true
 
-# 安全配置
 security:
   jwt_secret: "dev-secret-change-in-production"
   api_key_prefix: "sk-relive-"
+
+performance:
+  max_scan_workers: 10
+  max_analyze_workers: 5
+  max_thumbnail_workers: 2
+  max_geocode_workers: 1

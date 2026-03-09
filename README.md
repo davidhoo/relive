@@ -10,6 +10,8 @@
 
 Relive 是一个面向 NAS / 自部署场景的照片分析与展示系统。
 
+如果你想先搞清楚“哪些配置该改文件、哪些该在后台改”，建议先看 `docs/CONFIGURATION.md`。
+
 它由三部分组成：
 - Web 管理后台：扫描、筛选、分析、配置、查看结果
 - 后端服务：管理照片元数据、任务、设备和展示策略
@@ -102,6 +104,7 @@ make deploy
 更详细的部署说明：
 - `QUICKSTART.md`
 - `docs/QUICKSTART.md`
+- `docs/CONFIGURATION.md`（配置职责与优先级）
 
 ---
 
@@ -185,6 +188,7 @@ make build-analyzer
 
 ### 当前开发
 - `docs/QUICK_REFERENCE.md`：开发速查卡
+- `docs/CONFIGURATION.md`：配置职责与优先级
 - `docs/DEVELOPMENT.md`：开发说明
 - `docs/ARCHITECTURE.md`：系统架构
 - `docs/DEVICE_PROTOCOL.md`：设备协议设计
