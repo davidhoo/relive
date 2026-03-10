@@ -1,0 +1,23 @@
+/**
+ * @file config_local.h
+ * @brief 本地配置文件模板
+ *
+ * 复制此文件为 config_local.h 并填入实际配置
+ * config_local.h 已被添加到 .gitignore，不会提交到版本控制
+ */
+
+#ifndef CONFIG_LOCAL_H
+#define CONFIG_LOCAL_H
+
+// ============ WiFi 配置 ============
+#define WIFI_SSID           "your-wifi-ssid"
+#define WIFI_PASSWORD       "your-wifi-password"
+
+// ============ API 配置 ============
+// 服务器地址（可以是 IP 或域名）
+#define API_BASE_URL        "http://192.168.1.100:8080/api/v1"
+
+// 设备 API Key（从 Relive 后端获取）
+#define DEVICE_API_KEY      "sk-relive-your-device-api-key"
+
+#endif // CONFIG_LOCAL_H

@@ -1,175 +1,205 @@
-# Relive Photo Frame for ESP32
+# Relive ESP32 墨水屏相框固件
 
-该目录用于存放 `photo-frame` 设备在 ESP32 平台上的固件实现。
+基于 ESP32-S3 的简化版墨水屏数字相框固件，专为 Relive 照片记忆系统设计。
 
-## 概述
+## 核心特性
 
-ESP32 固件负责驱动墨水屏相框，从 Relive 后端获取照片并展示。
-
-与旧的顶层 `esp32/` 目录相比，这里只描述 **ESP32 平台特有** 的内容；
-设备通用协议已经统一收敛到 `../protocol/` 和 `../../../docs/DEVICE_PROTOCOL.md`。
+- **简化接口设计**：只请求一个接口 `/api/v1/device/display.bin` 直接获取照片 bin 文件
+- **低功耗设计**：深度睡眠模式，定时唤醒刷新
+- **自动重试**：网络错误自动重试机制（最多3次）
+- **校验和验证**：SHA256 校验确保数据传输完整性
+- **硬件抽象**：通过抽象层支持多种墨水屏驱动
 
 ## 硬件要求
 
-- **主控**：ESP32-S3（PSRAM ≥ 384KB）
-- **显示屏**：7.3 寸彩色墨水屏 GDEP073E01
-- **电源**：2×18650 锂电池（可选）或 USB-C 供电
+- **主控**：ESP32-S3（推荐 8MB Flash + 2MB PSRAM）
+- **墨水屏**：支持 480x800 分辨率
+  - 测试通过：GDEP073E01 (7.3寸 彩色)
+  - 兼容：其他 SPI 接口 800x480 墨水屏
+- **网络**：Wi-Fi 2.4GHz
+- **电源**：5V/2A 或锂电池+充电模块
 
-## 开发环境
+## 项目结构
 
-### 使用 PlatformIO
+```
+devices/photo-frame/esp32/
+├── include/
+│   ├── config.h                    # 主配置（从 config_local.h 加载敏感信息）
+│   ├── config_local.h.example      # 本地配置模板
+│   ├── wifi_manager.h              # WiFi 管理
+│   ├── api_client.h                # API 客户端
+│   └── display_driver.h            # 显示驱动抽象层
+├── lib/
+│   ├── wifi_manager.cpp            # WiFi 实现
+│   ├── api_client.cpp              # API 客户端实现
+│   └── display_driver.cpp          # 显示驱动实现
+├── src/
+│   └── main.cpp                    # 主程序
+├── platformio.ini                  # PlatformIO 配置
+└── README.md                       # 本文件
+```
+
+## 快速开始
+
+### 1. 硬件连接
+
+```
+ESP32-S3          墨水屏
+--------          ------
+GPIO10  (CS)  ->  CS
+GPIO11  (SCK) ->  SCK
+GPIO12  (MOSI)->  SDI
+GPIO13  (DC)  ->  DC
+GPIO14  (RST) ->  RST
+GPIO15  (BUSY)->  BUSY
+GPIO2   (LED) ->  状态指示灯（可选）
+GPIO0   (BTN) ->  手动刷新按钮（可选，接地触发）
+3.3V          ->  VCC
+GND           ->  GND
+```
+
+### 2. 配置
+
+```bash
+# 进入项目目录
+cd devices/photo-frame/esp32
+
+# 复制配置文件模板
+cp include/config_local.h.example include/config_local.h
+
+# 编辑配置
+nano include/config_local.h
+```
+
+填入你的配置：
+
+```cpp
+#define WIFI_SSID       "your-wifi-ssid"
+#define WIFI_PASSWORD   "your-wifi-password"
+#define API_BASE_URL    "http://your-server:8080/api/v1"
+#define DEVICE_API_KEY  "sk-relive-your-device-api-key"
+```
+
+### 3. 编译烧录
 
 ```bash
 # 安装 PlatformIO
 pip install platformio
 
-# 初始化项目
-cd devices/photo-frame/esp32
-pio init --board esp32-s3-devkitc-1
-
 # 编译
 pio run
 
-# 上传
+# 烧录并监控
 pio run --target upload
-
-# 串口监控
 pio device monitor
 ```
 
-## 计划中的项目结构
+## API 接口
 
-```text
-devices/photo-frame/esp32/
-├── src/
-│   └── main.cpp              # 主程序入口
-├── lib/
-│   ├── display/              # 墨水屏驱动
-│   ├── network/              # 网络通信
-│   ├── power/                # 电源管理
-│   └── config/               # 配置管理
-├── include/
-│   └── config.h              # 配置头文件
-├── platformio.ini            # PlatformIO 配置
-└── README.md                 # 本文件
+### 获取照片 Bin 文件
+
+```
+GET /api/v1/device/display.bin
+Headers:
+  X-API-Key: <device-api-key>
+
+Response:
+  Content-Type: application/octet-stream
+  X-Asset-ID: <asset-id>
+  X-Checksum: <sha256-hex>
+  X-Photo-ID: <photo-id>
+  X-Render-Profile: <profile-name>
+  X-Batch-Date: <YYYY-MM-DD>
+  X-Sequence: <sequence-number>
+
+  [bin file data]
 ```
 
-## 平台职责
+### Bin 文件格式
 
-### 1. 硬件初始化
-- ESP32-S3 配置
-- PSRAM 初始化
-- WiFi 配置
-- 时间同步（NTP）
-
-### 2. 墨水屏驱动
-- 7.3 寸彩色墨水屏初始化
-- 图片渲染和显示
-- 局部刷新（可选）
-
-### 3. 设备通信接入
-- 设备激活 / 注册
-- 心跳上报
-- 获取照片
-- 记录展示
-
-### 4. 电源管理
-- 深度睡眠模式
-- 定时唤醒（每天 8:00）
-- 低电量保护
-
-### 5. 用户交互
-- 按钮手动刷新
-- LED 状态指示
-
-## 协议与接口
-
-- 通用设备协议：`../../../docs/DEVICE_PROTOCOL.md`
-- 平台目录不再单独维护一份 ESP32 专属协议副本
-
-当前建议优先以以下接口口径对齐：
-
-- 获取展示信息：`GET /api/v1/device/display`
-- 获取展示二进制：`GET /api/v1/device/display.bin`
-- 获取照片信息：`GET /api/v1/display/photo`
-- 记录展示：`POST /api/v1/display/record`
-
-设备通过后台预分配的 `api_key` 接入，不再使用注册、激活、心跳流程。
-
-## 配置
-
-### WiFi 配置
-
-首次使用时，设备会创建 AP（热点）：
-- SSID: `Relive-XXXXXX`
-- Password: `12345678`
-
-连接后访问 `http://192.168.4.1` 配置 WiFi。
-
-### API 配置
-
-在配置页面设置：
-- API 地址：`http://192.168.1.100:8080`
-- API Key：从 Relive 后端获取
-
-## 开发计划
-
-### Phase 1：基础功能（1 周）
-- [ ] PlatformIO 工程初始化
-- [ ] WiFi 连接管理
-- [ ] HTTP 客户端封装
-- [ ] API Key 配置与鉴权请求
-
-### Phase 2：显示功能（3-4 天）
-- [ ] 墨水屏驱动集成
-- [ ] 图片下载和缓存
-- [ ] 图片渲染和显示
-- [ ] 错误处理和状态显示
-
-### Phase 3：电源管理（2-3 天）
-- [ ] 深度睡眠实现
-- [ ] 定时唤醒
-- [ ] 电池电量监控
-- [ ] 低电量保护
-
-### Phase 4：优化和测试（2-3 天）
-- [ ] 性能优化
-- [ ] 稳定性测试
-- [ ] 内存优化
-- [ ] OTA 固件升级（可选）
-
-## 依赖库
-
-```ini
-[env:esp32-s3-devkitc-1]
-platform = espressif32
-board = esp32-s3-devkitc-1
-framework = arduino
-lib_deps =
-    GxEPD2
-    ArduinoJson
-    WiFiManager
+```
+[0-3]   "RLVD"          - 魔数 (4 bytes)
+[4]     version         - 版本 (1 byte, = 1)
+[5]     palette_colors  - 调色板颜色数 (1 byte)
+[6]     dither_mode_len - 抖动模式字符串长度 (1 byte)
+[7]     reserved        - 保留 (1 byte)
+[8-9]   width           - 宽度 (uint16, little-endian)
+[10-11] height          - 高度 (uint16, little-endian)
+[12..]  dither_mode     - 抖动模式字符串
+[...]   pixel_data      - 调色板索引数据 (每个像素 1 byte)
 ```
 
-## 参考资源
+## 工作流程
 
-- `../../../docs/DEVICE_PROTOCOL.md` - 设备通信协议
-- <https://github.com/dai-hongtao/InkTime> - 参考实现
-- <https://github.com/ZinggJM/GxEPD2> - 墨水屏驱动库
+```
+启动
+  |
+  v
+初始化显示
+  |
+  v
+连接 WiFi
+  |
+  v
+GET /device/display.bin
+  |
+  v
+验证校验和
+  |
+  v
+显示照片
+  |
+  v
+进入深度睡眠（1小时）
+  |
+  v
+定时唤醒 -> 重复以上流程
+```
+
+## 状态指示
+
+| LED 状态 | 含义 |
+|---------|------|
+| 单次慢闪 | 连接 WiFi 中 |
+| 双闪 | 下载数据中 |
+| 缓慢闪烁 | 刷新显示中 |
+| 快速闪烁 x5 | 错误发生，即将重启 |
+
+## 调试
+
+```bash
+# 监控串口输出
+pio device monitor
+
+# 调整日志级别（platformio.ini）
+build_flags = -DLOG_LEVEL=4  # DEBUG 级别
+```
+
+## 日志级别
+
+- `0`: 无日志
+- `1`: ERROR
+- `2`: WARN
+- `3`: INFO (默认)
+- `4`: DEBUG
 
 ## 故障排除
 
 ### WiFi 连接失败
-- 检查 WiFi 配置是否正确
-- 确认信号强度
-- 重启设备重新配置
+- 检查 SSID 和密码
+- 确认 WiFi 是 2.4GHz
+- 检查信号强度
 
 ### 显示异常
-- 检查墨水屏连接
-- 确认 PSRAM 足够
+- 检查屏幕连接线
+- 确认屏幕型号和驱动匹配
 - 查看串口日志
 
 ### API 通信失败
-- 检查 API 地址配置
-- 确认网络连接
-- 验证 API Key
+- 检查 API_BASE_URL 格式（需要 http:// 前缀）
+- 确认 DEVICE_API_KEY 正确
+- 检查服务器防火墙设置
+
+## 许可证
+
+MIT License
