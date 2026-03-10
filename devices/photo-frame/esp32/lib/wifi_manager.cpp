@@ -18,6 +18,22 @@ void WiFiManager::begin() {
     // 设置 WiFi 功率（平衡功耗和信号强度）
     WiFi.setTxPower(WIFI_POWER_15dBm);
 
+#if WIFI_USE_CUSTOM_MAC
+    // 设置自定义 MAC 地址
+    uint8_t customMac[6] = WIFI_CUSTOM_MAC;
+    if (esp_wifi_set_mac(WIFI_IF_STA, customMac) == ESP_OK) {
+#if LOG_LEVEL >= 3
+        Serial.printf("[WiFi] Custom MAC set: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                      customMac[0], customMac[1], customMac[2],
+                      customMac[3], customMac[4], customMac[5]);
+#endif
+    } else {
+#if LOG_LEVEL >= 1
+        Serial.println("[WiFi] Failed to set custom MAC!");
+#endif
+    }
+#endif
+
 #if LOG_LEVEL >= 3
     Serial.println("[WiFi] Initialized");
 #endif
