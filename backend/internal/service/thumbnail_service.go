@@ -332,7 +332,7 @@ func (s *thumbnailService) processJob(job *model.ThumbnailJob) error {
 		_ = s.updatePhotoWithRetry(photo.ID, map[string]interface{}{
 			"thumbnail_status": "failed",
 		})
-		_ = s.jobRepo.UpdateFields(job.ID, map[string]interface{}{"status": "failed", "last_error": err.Error(), "completed_at": &now})
+		_ = s.updateJobWithRetry(job.ID, map[string]interface{}{"status": "failed", "last_error": err.Error(), "completed_at": &now})
 		s.updateTaskProgress(func(task *model.ThumbnailTask) {
 			task.ProcessedJobs++
 		})
@@ -347,7 +347,7 @@ func (s *thumbnailService) processJob(job *model.ThumbnailJob) error {
 	}); err != nil {
 		logger.Warnf("update photo %d after thumbnail success failed: %v", photo.ID, err)
 	}
-	if err := s.jobRepo.UpdateFields(job.ID, map[string]interface{}{"status": "completed", "completed_at": &now, "last_error": ""}); err != nil {
+	if err := s.updateJobWithRetry(job.ID, map[string]interface{}{"status": "completed", "completed_at": &now, "last_error": ""}); err != nil {
 		logger.Warnf("update thumbnail job %d status failed: %v", job.ID, err)
 	}
 	s.updateTaskProgress(func(task *model.ThumbnailTask) {
@@ -368,6 +368,24 @@ func (s *thumbnailService) updatePhotoWithRetry(photoID uint, updates map[string
 		// 检查是否是数据库锁定错误
 		if isSQLiteLockError(err) {
 			lastErr = err
+			time.Sleep(time.Duration(i+1) * 50 * time.Millisecond)
+			continue
+		}
+		return err
+	}
+	return lastErr
+}
+
+// updateJobWithRetry 带重试机制的 job 更新
+func (s *thumbnailService) updateJobWithRetry(jobID uint, updates map[string]interface{}) error {
+	var lastErr error
+	for i := 0; i < 3; i++ {
+		err := s.jobRepo.UpdateFields(jobID, updates)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if isSQLiteLockError(err) {
 			time.Sleep(time.Duration(i+1) * 50 * time.Millisecond)
 			continue
 		}

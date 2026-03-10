@@ -249,29 +249,30 @@ func (s *geocodeTaskService) runBackground(active *activeGeocodeTask) {
 			time.Sleep(800 * time.Millisecond)
 			continue
 		}
+		// 提前检查坐标，避免无效请求
+		photo, err := s.photoRepo.GetByID(job.PhotoID)
+		if err != nil {
+			s.appendBackgroundLog(fmt.Sprintf("获取照片 #%d 失败：%v", job.PhotoID, err))
+			continue
+		}
+		if photo.GPSLatitude == nil || photo.GPSLongitude == nil ||
+			(*photo.GPSLatitude == 0 && *photo.GPSLongitude == 0) {
+			now := time.Now()
+			_ = s.updateJobWithRetry(job.ID, map[string]interface{}{"status": "cancelled", "completed_at": &now})
+			s.updateTaskProgress(func(task *model.GeocodeTask) { task.ProcessedJobs++ })
+			continue
+		}
 		s.updateTaskProgress(func(task *model.GeocodeTask) { task.CurrentPhotoID = job.PhotoID })
 		s.appendBackgroundLog(fmt.Sprintf("开始解析照片 #%d 的 GPS 位置", job.PhotoID))
 		_ = workers
-		if err := s.processJob(job); err != nil {
+		if err := s.processJob(job, photo); err != nil {
 			logger.Warnf("process geocode job %d failed: %v", job.ID, err)
 		}
 	}
 }
 
-func (s *geocodeTaskService) processJob(job *model.GeocodeJob) error {
-	photo, err := s.photoRepo.GetByID(job.PhotoID)
-	if err != nil {
-		now := time.Now()
-		_ = s.updateJobWithRetry(job.ID, map[string]interface{}{"status": "failed", "last_error": err.Error(), "completed_at": &now})
-		return err
-	}
-	// 检查 GPS 坐标是否有效（为 nil 或为 0 都视为无效）
-	if photo.GPSLatitude == nil || photo.GPSLongitude == nil ||
-		(*photo.GPSLatitude == 0 && *photo.GPSLongitude == 0) {
-		now := time.Now()
-		_ = s.updateJobWithRetry(job.ID, map[string]interface{}{"status": "cancelled", "completed_at": &now})
-		return nil
-	}
+func (s *geocodeTaskService) processJob(job *model.GeocodeJob, photo *model.Photo) error {
+	// 坐标检查已在外层完成，直接执行 geocode
 	loc, err := s.geocodeService.ReverseGeocode(*photo.GPSLatitude, *photo.GPSLongitude)
 	now := time.Now()
 	if err != nil {
