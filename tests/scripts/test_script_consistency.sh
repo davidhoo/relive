@@ -29,4 +29,9 @@ if rg -n "QWEN_API_KEY|OPENAI_API_KEY" "$ROOT/deploy.sh" "$ROOT/install.sh" >/de
   fail "deploy.sh or install.sh mentions QWEN/OPENAI API keys"
 fi
 
+# 6) import-geonames should accept config path
+if ! rg -q -- "--config" "$ROOT/backend/import-geonames.sh"; then
+  fail "import-geonames.sh does not support --config"
+fi
+
 echo "OK: script consistency checks passed"

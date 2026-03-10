@@ -11,7 +11,31 @@ echo "================================================"
 echo ""
 
 # 检查参数
-DATASET="${1:-cities500}"
+DATASET="cities500"
+CONFIG_PATH="config.dev.yaml"
+
+if [ $# -gt 0 ] && [ "$1" != "--config" ] && [ "$1" != "-c" ]; then
+  DATASET="$1"
+  shift
+fi
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --config|-c)
+      CONFIG_PATH="${2:-}"
+      if [ -z "$CONFIG_PATH" ]; then
+        echo "错误: --config 需要提供路径"
+        exit 1
+      fi
+      shift 2
+      ;;
+    *)
+      echo "错误: 未知参数 '$1'"
+      echo "使用方法: ./import-geonames.sh [dataset] [--config path]"
+      exit 1
+      ;;
+  esac
+done
 DATA_DIR="./data/geonames"
 FILE_NAME="${DATASET}.txt"
 
@@ -30,11 +54,12 @@ case "$DATASET" in
     echo "  cities15000 - ~25,000 城市 (人口>15000)"
     echo ""
     echo "使用方法:"
-    echo "  ./import-geonames.sh [dataset]"
+    echo "  ./import-geonames.sh [dataset] [--config path]"
     echo ""
     echo "示例:"
     echo "  ./import-geonames.sh cities500    # 默认，推荐"
     echo "  ./import-geonames.sh cities1000"
+    echo "  ./import-geonames.sh cities500 --config config.prod.yaml"
     exit 1
     ;;
 esac
@@ -87,12 +112,19 @@ echo "  大小: $FILE_SIZE"
 echo "  行数: $LINE_COUNT"
 echo ""
 
+# 校验配置文件
+if [ ! -f "$CONFIG_PATH" ]; then
+  echo "错误: 配置文件不存在: $CONFIG_PATH"
+  echo "请先复制示例: cp config.dev.yaml.example config.dev.yaml"
+  exit 1
+fi
+
 # 导入数据库
 echo "→ 导入数据库 ..."
 echo "  这可能需要几分钟，请耐心等待..."
 echo ""
 
-go run cmd/import-cities/main.go --file "$TXT_FILE"
+go run cmd/import-cities/main.go --file "$TXT_FILE" --config "$CONFIG_PATH"
 
 if [ $? -eq 0 ]; then
   echo ""

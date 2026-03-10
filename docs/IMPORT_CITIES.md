@@ -14,8 +14,12 @@ cd backend
 
 # 或选择其他数据集
 ./import-geonames.sh cities1000
+
+# 可选指定配置文件
+./import-geonames.sh cities500 --config config.prod.yaml
 ```
 
+默认使用 `config.dev.yaml`（如需请先从 `config.dev.yaml.example` 复制生成）。
 脚本会自动：
 1. 下载 GeoNames 数据
 2. 解压缩
