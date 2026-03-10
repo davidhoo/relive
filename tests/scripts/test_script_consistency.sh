@@ -34,4 +34,11 @@ if ! rg -q -- "--config" "$ROOT/backend/import-geonames.sh"; then
   fail "import-geonames.sh does not support --config"
 fi
 
+# 7) core scripts should use set -e
+for script in dev.sh deploy.sh install.sh test-local.sh; do
+  if ! rg -q "^set -e" "$ROOT/$script"; then
+    fail "$script does not enable 'set -e'"
+  fi
+done
+
 echo "OK: script consistency checks passed"
