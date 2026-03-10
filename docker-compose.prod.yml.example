@@ -12,7 +12,7 @@ services:
     # - 如果后续观察到系统仍然很空闲，可逐步把 MAX_SCAN_WORKERS 提到 3
     cpu_shares: 512
     ports:
-      - "8080:8080"
+      - "${RELIVE_PORT:-8080}:8080"
     volumes:
       # 配置文件
       - ./backend/config.prod.yaml:/app/config.yaml:ro
@@ -39,6 +39,7 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - JWT_SECRET=${JWT_SECRET}
+      - RELIVE_EXTERNAL_URL=${RELIVE_EXTERNAL_URL:-}
       # 4 核 NAS 推荐值：
       # - GOMAXPROCS=2：Go 最多并行使用 2 个 CPU 核心
       # - MAX_SCAN_WORKERS=2：扫描同时处理 2 张照片

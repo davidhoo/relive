@@ -17,7 +17,7 @@ services:
     # - 如果后续观察到系统仍然很空闲，可逐步把 MAX_SCAN_WORKERS 提到 3
     cpu_shares: 512
     ports:
-      - "8080:8080"  # 统一端口（前端 + 后端 API）
+      - "${RELIVE_PORT:-8080}:8080"  # 统一端口（前端 + 后端 API）
     volumes:
       # 配置文件
       - ./backend/config.prod.yaml:/app/config.yaml:ro
