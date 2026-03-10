@@ -151,7 +151,7 @@ void handleConnectWiFi() {
 
     blinkLED(1, 200, 200);
 
-    if (wifiManager.connect(WIFI_SSID, WIFI_password, WIFI_CONNECT_TIMEOUT_MS)) {
+    if (wifiManager.connect(WIFI_SSID, WIFI_PASSWORD, WIFI_CONNECT_TIMEOUT_MS)) {
         errorCount = 0;
         enterState(STATE_FETCH_DISPLAY);
     } else {

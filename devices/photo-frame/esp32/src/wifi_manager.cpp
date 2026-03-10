@@ -7,6 +7,9 @@
 #include "config.h"
 #include <esp_wifi.h>
 
+// 函数前置声明
+static bool parseMacAddress(const char* macStr, uint8_t* macArray);
+
 WiFiManager::WiFiManager() : _connected(false), _lastReconnectAttempt(0) {
 }
 
