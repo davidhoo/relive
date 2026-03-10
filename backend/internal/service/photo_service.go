@@ -663,6 +663,10 @@ func (s *photoService) GeocodePhotoIfNeeded(photo *model.Photo) error {
 	if photo.GPSLatitude == nil || photo.GPSLongitude == nil {
 		return nil // 没有GPS坐标
 	}
+	// 排除无效坐标 0,0
+	if *photo.GPSLatitude == 0 && *photo.GPSLongitude == 0 {
+		return nil
+	}
 
 	if photo.Location != "" {
 		return nil // 已经有位置信息
@@ -1574,6 +1578,10 @@ func (s *photoService) RegeocodeAllPhotos() (int, error) {
 	failed := 0
 	for _, photo := range photos {
 		if photo.GPSLatitude == nil || photo.GPSLongitude == nil {
+			continue
+		}
+		// 排除无效坐标 0,0
+		if *photo.GPSLatitude == 0 && *photo.GPSLongitude == 0 {
 			continue
 		}
 

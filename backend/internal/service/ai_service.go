@@ -474,7 +474,10 @@ func isPhotoReadyForAI(photo *model.Photo) bool {
 	if photo.ThumbnailStatus != "ready" {
 		return false
 	}
-	if photo.GPSLatitude != nil && photo.GPSLongitude != nil && photo.GeocodeStatus != "ready" {
+	// 有有效 GPS 坐标但还没 geocode 完成，等待 geocode
+	if photo.GPSLatitude != nil && photo.GPSLongitude != nil &&
+		(*photo.GPSLatitude != 0 || *photo.GPSLongitude != 0) &&
+		photo.GeocodeStatus != "ready" {
 		return false
 	}
 	return true
@@ -487,7 +490,10 @@ func photoNotReadyReason(photo *model.Photo) string {
 	if photo.ThumbnailStatus != "ready" {
 		return "thumbnail not ready"
 	}
-	if photo.GPSLatitude != nil && photo.GPSLongitude != nil && photo.GeocodeStatus != "ready" {
+	// 有有效 GPS 坐标但还没 geocode 完成
+	if photo.GPSLatitude != nil && photo.GPSLongitude != nil &&
+		(*photo.GPSLatitude != 0 || *photo.GPSLongitude != 0) &&
+		photo.GeocodeStatus != "ready" {
 		return "geocode not ready"
 	}
 	return "photo not ready for ai analysis"

@@ -174,7 +174,11 @@ func (s *geocodeTaskService) enqueuePhotoModel(photo *model.Photo, source string
 	if photo == nil {
 		return fmt.Errorf("photo is nil")
 	}
+	// 排除无效 GPS 坐标（为 nil 或为 0,0）
 	if photo.GPSLatitude == nil || photo.GPSLongitude == nil {
+		return nil
+	}
+	if *photo.GPSLatitude == 0 && *photo.GPSLongitude == 0 {
 		return nil
 	}
 	if source == "" {
@@ -258,19 +262,21 @@ func (s *geocodeTaskService) processJob(job *model.GeocodeJob) error {
 	photo, err := s.photoRepo.GetByID(job.PhotoID)
 	if err != nil {
 		now := time.Now()
-		_ = s.jobRepo.UpdateFields(job.ID, map[string]interface{}{"status": "failed", "last_error": err.Error(), "completed_at": &now})
+		_ = s.updateJobWithRetry(job.ID, map[string]interface{}{"status": "failed", "last_error": err.Error(), "completed_at": &now})
 		return err
 	}
-	if photo.GPSLatitude == nil || photo.GPSLongitude == nil {
+	// 检查 GPS 坐标是否有效（为 nil 或为 0 都视为无效）
+	if photo.GPSLatitude == nil || photo.GPSLongitude == nil ||
+		(*photo.GPSLatitude == 0 && *photo.GPSLongitude == 0) {
 		now := time.Now()
-		_ = s.jobRepo.UpdateFields(job.ID, map[string]interface{}{"status": "cancelled", "completed_at": &now})
+		_ = s.updateJobWithRetry(job.ID, map[string]interface{}{"status": "cancelled", "completed_at": &now})
 		return nil
 	}
 	loc, err := s.geocodeService.ReverseGeocode(*photo.GPSLatitude, *photo.GPSLongitude)
 	now := time.Now()
 	if err != nil {
-		_ = s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{"geocode_status": "failed"}).Error
-		_ = s.jobRepo.UpdateFields(job.ID, map[string]interface{}{"status": "failed", "last_error": err.Error(), "completed_at": &now})
+		_ = s.updatePhotoWithRetry(photo.ID, map[string]interface{}{"geocode_status": "failed"})
+		_ = s.updateJobWithRetry(job.ID, map[string]interface{}{"status": "failed", "last_error": err.Error(), "completed_at": &now})
 		s.updateTaskProgress(func(task *model.GeocodeTask) { task.ProcessedJobs++ })
 		s.appendBackgroundLog(fmt.Sprintf("解析照片 #%d 位置失败：%v", photo.ID, err))
 		return err
@@ -281,32 +287,82 @@ func (s *geocodeTaskService) processJob(job *model.GeocodeJob) error {
 		provider = loc.Provider
 		location = loc.FormatDisplay()
 	}
-	if err := s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+	if err := s.updatePhotoWithRetry(photo.ID, map[string]interface{}{
 		"location":         location,
 		"geocode_status":   "ready",
 		"geocode_provider": provider,
 		"geocoded_at":      &now,
-	}).Error; err != nil {
-		return err
+	}); err != nil {
+		logger.Warnf("update photo %d after geocode success failed: %v", photo.ID, err)
 	}
-	if err := s.jobRepo.UpdateFields(job.ID, map[string]interface{}{"status": "completed", "completed_at": &now, "last_error": ""}); err != nil {
-		return err
+	if err := s.updateJobWithRetry(job.ID, map[string]interface{}{"status": "completed", "completed_at": &now, "last_error": ""}); err != nil {
+		logger.Warnf("update geocode job %d status failed: %v", job.ID, err)
 	}
 	s.updateTaskProgress(func(task *model.GeocodeTask) { task.ProcessedJobs++ })
 	s.appendBackgroundLog(fmt.Sprintf("解析照片 #%d 位置成功（provider=%s）", photo.ID, provider))
 	return nil
 }
 
+// updatePhotoWithRetry 带重试机制的 photo 更新
+func (s *geocodeTaskService) updatePhotoWithRetry(photoID uint, updates map[string]interface{}) error {
+	var lastErr error
+	for i := 0; i < 3; i++ {
+		err := s.db.Model(&model.Photo{}).Where("id = ?", photoID).Updates(updates).Error
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if isSQLiteLockError(err) {
+			time.Sleep(time.Duration(i+1) * 50 * time.Millisecond)
+			continue
+		}
+		return err
+	}
+	return lastErr
+}
+
+// updateJobWithRetry 带重试机制的 job 更新
+func (s *geocodeTaskService) updateJobWithRetry(jobID uint, updates map[string]interface{}) error {
+	var lastErr error
+	for i := 0; i < 3; i++ {
+		err := s.jobRepo.UpdateFields(jobID, updates)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if isSQLiteLockError(err) {
+			time.Sleep(time.Duration(i+1) * 50 * time.Millisecond)
+			continue
+		}
+		return err
+	}
+	return lastErr
+}
+
 func (s *geocodeTaskService) seedPendingJobs() error {
 	var photos []model.Photo
-	return s.db.Model(&model.Photo{}).Where("gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL AND (geocode_status != ? OR geocode_status IS NULL)", "ready").FindInBatches(&photos, 200, func(tx *gorm.DB, batch int) error {
-		for i := range photos {
-			if err := s.enqueuePhotoModel(&photos[i], geocodeSourceManual, geocodePriorityManual); err != nil {
-				logger.Warnf("seed geocode job failed for photo %d: %v", photos[i].ID, err)
+	// 排除 GPS 为 0,0 的无效坐标
+	return s.db.Model(&model.Photo{}).
+		Where("gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL").
+		Where("gps_latitude != 0 OR gps_longitude != 0").
+		Where("(geocode_status != ? OR geocode_status IS NULL)", "ready").
+		FindInBatches(&photos, 100, func(tx *gorm.DB, batch int) error {
+			for i := range photos {
+				if err := s.enqueuePhotoModel(&photos[i], geocodeSourceManual, geocodePriorityManual); err != nil {
+					// 降低日志级别，锁错误不需要每次都警告
+					if !isSQLiteLockError(err) {
+						logger.Warnf("seed geocode job failed for photo %d: %v", photos[i].ID, err)
+					}
+				}
+				// 每处理一个任务小睡一下，减少数据库压力
+				if i%10 == 0 {
+					time.Sleep(5 * time.Millisecond)
+				}
 			}
-		}
-		return nil
-	}).Error
+			// 每批次之间增加延迟
+			time.Sleep(50 * time.Millisecond)
+			return nil
+		}).Error
 }
 
 func (s *geocodeTaskService) updateTaskProgress(fn func(task *model.GeocodeTask)) {
