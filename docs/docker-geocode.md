@@ -83,23 +83,10 @@ wget https://download.geonames.org/export/dump/cities500.zip
 unzip cities500.zip
 ```
 
-### 3. 修改后端入口点脚本
+### 3. 自动导入已内置
 
-在 `backend/scripts/docker-entrypoint.sh` 中添加：
-
-```bash
-#!/bin/sh
-set -e
-
-# 如果启用了自动导入且数据文件存在
-if [ "${AUTO_IMPORT_CITIES}" = "true" ] && [ -f "/app/data/cities500.txt" ]; then
-    echo "Checking city data..."
-    /app/init-cities.sh
-fi
-
-# 启动主应用
-exec "$@"
-```
+当前 `backend/scripts/docker-entrypoint.sh` 会在启动时调用 `/app/init-cities.sh`。
+该脚本会自行判断 `AUTO_IMPORT_CITIES`、数据文件是否存在以及是否已导入，无需手动修改入口点脚本。
 
 ### 4. 启动服务
 
