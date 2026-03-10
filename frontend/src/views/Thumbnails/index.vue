@@ -201,7 +201,7 @@ const handleStop = async () => {
 
 onMounted(async () => {
   await loadData()
-  timer = window.setInterval(loadData, 2000)
+  timer = window.setInterval(loadData, 5000)
 })
 
 onUnmounted(() => {

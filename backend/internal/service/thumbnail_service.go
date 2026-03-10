@@ -183,12 +183,19 @@ func (s *thumbnailService) enqueuePhotoModel(photo *model.Photo, source string, 
 	}
 	fullPath := filepath.Join(s.config.Photos.ThumbnailPath, thumbnailPath)
 	if _, err := os.Stat(fullPath); err == nil {
+		// 文件已存在，更新数据库状态为 ready
 		generatedAt := time.Now()
-		return s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+		updateErr := s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
 			"thumbnail_path":         thumbnailPath,
 			"thumbnail_status":       "ready",
 			"thumbnail_generated_at": &generatedAt,
 		}).Error
+		if updateErr != nil {
+			logger.Warnf("Update photo %d thumbnail status to ready failed: %v", photo.ID, updateErr)
+			return updateErr
+		}
+		logger.Debugf("Photo %d thumbnail already exists, updated status to ready", photo.ID)
+		return nil
 	}
 
 	now := time.Now()
@@ -433,6 +440,20 @@ func (s *thumbnailService) seedPendingJobs() error {
 	if stats.Pending > 0 || stats.Queued > 0 {
 		s.appendBackgroundLog(fmt.Sprintf("已有 %d 个待处理缩略图任务，跳过补齐", stats.Pending+stats.Queued))
 		logger.Info("Skipping seedPendingJobs, tasks already exist")
+		return nil
+	}
+
+	// 检查是否所有照片都已经处理完成
+	var totalPhotos, readyPhotos int64
+	if err := s.db.Model(&model.Photo{}).Count(&totalPhotos).Error; err != nil {
+		logger.Warnf("Failed to count total photos: %v", err)
+	}
+	if err := s.db.Model(&model.Photo{}).Where("thumbnail_status = ?", "ready").Count(&readyPhotos).Error; err != nil {
+		logger.Warnf("Failed to count ready photos: %v", err)
+	}
+	if totalPhotos > 0 && totalPhotos == readyPhotos {
+		s.appendBackgroundLog(fmt.Sprintf("所有 %d 张照片的缩略图已就绪", totalPhotos))
+		logger.Info("All photos have thumbnails ready")
 		return nil
 	}
 

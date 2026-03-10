@@ -102,7 +102,7 @@ const loadData = async () => { const [taskRes, statsRes, logsRes] = await Promis
 const handleStart = async () => { try { starting.value = true; await geocodeApi.startBackground(); ElMessage.success('GPS 逆地理编码后台任务已启动'); await loadData() } catch (error: any) { ElMessage.error(error.message || '启动 GPS 逆地理编码后台任务失败') } finally { starting.value = false } }
 const handleStop = async () => { try { stopping.value = true; await geocodeApi.stopBackground(); ElMessage.info('已请求停止 GPS 逆地理编码后台任务'); await loadData() } catch (error: any) { ElMessage.error(error.message || '停止 GPS 逆地理编码后台任务失败') } finally { stopping.value = false } }
 const handleRepairLegacyStatus = async () => { try { repairing.value = true; const res = await geocodeApi.repairLegacyStatus(); ElMessage.success(`历史 GPS 状态修复完成，共更新 ${res.data?.data?.count || 0} 张照片`); await loadData() } catch (error: any) { ElMessage.error(error.message || '修复历史 GPS 状态失败') } finally { repairing.value = false } }
-onMounted(async () => { await loadData(); timer = window.setInterval(loadData, 2000) })
+onMounted(async () => { await loadData(); timer = window.setInterval(loadData, 5000) })
 onUnmounted(() => { if (timer) clearInterval(timer) })
 watch(backgroundLogs, async () => { await nextTick(); if (logContainerRef.value) logContainerRef.value.scrollTop = logContainerRef.value.scrollHeight })
 </script>
