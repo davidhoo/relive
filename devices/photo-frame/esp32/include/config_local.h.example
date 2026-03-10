@@ -14,9 +14,9 @@
 #define WIFI_PASSWORD       "your-wifi-password"
 
 // 自定义 MAC 地址（可选）
-// 格式: {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF}
+// 格式: "AA:BB:CC:DD:EE:FF" 或 "AA-BB-CC-DD-EE-FF"
 // 取消注释下一行并设置 MAC 地址以启用
-// #define WIFI_CUSTOM_MAC     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+// #define WIFI_CUSTOM_MAC     "00:00:00:00:00:00"
 
 // ============ API 配置 ============
 // 服务器地址（可以是 IP 或域名）

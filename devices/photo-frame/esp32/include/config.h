@@ -40,7 +40,7 @@
 #define WIFI_CONNECT_TIMEOUT_MS     30000
 #define WIFI_RECONNECT_ATTEMPTS     3
 
-// 自定义 MAC 地址（如果 config_local.h 中定义了则使用）
+// 自定义 MAC 地址（如果 config_local.h 中定义了字符串则使用）
 #ifndef WIFI_CUSTOM_MAC
     #define WIFI_USE_CUSTOM_MAC     0
 #else

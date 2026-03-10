@@ -19,17 +19,23 @@ void WiFiManager::begin() {
     WiFi.setTxPower(WIFI_POWER_15dBm);
 
 #if WIFI_USE_CUSTOM_MAC
-    // 设置自定义 MAC 地址
-    uint8_t customMac[6] = WIFI_CUSTOM_MAC;
-    if (esp_wifi_set_mac(WIFI_IF_STA, customMac) == ESP_OK) {
+    // 解析字符串格式的 MAC 地址 (AA:BB:CC:DD:EE:FF 或 AA-BB-CC-DD-EE-FF)
+    uint8_t customMac[6];
+    if (parseMacAddress(WIFI_CUSTOM_MAC, customMac)) {
+        if (esp_wifi_set_mac(WIFI_IF_STA, customMac) == ESP_OK) {
 #if LOG_LEVEL >= 3
-        Serial.printf("[WiFi] Custom MAC set: %02X:%02X:%02X:%02X:%02X:%02X\n",
-                      customMac[0], customMac[1], customMac[2],
-                      customMac[3], customMac[4], customMac[5]);
+            Serial.printf("[WiFi] Custom MAC set: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                          customMac[0], customMac[1], customMac[2],
+                          customMac[3], customMac[4], customMac[5]);
 #endif
+        } else {
+#if LOG_LEVEL >= 1
+            Serial.println("[WiFi] Failed to set custom MAC!");
+#endif
+        }
     } else {
 #if LOG_LEVEL >= 1
-        Serial.println("[WiFi] Failed to set custom MAC!");
+        Serial.println("[WiFi] Invalid MAC address format!");
 #endif
     }
 #endif
@@ -120,4 +126,31 @@ void WiFiManager::setStaticIP(const char* ip, const char* gateway, const char* s
     Serial.print("[WiFi] Static IP configured: ");
     Serial.println(ip);
 #endif
+}
+
+// 解析 MAC 地址字符串 (AA:BB:CC:DD:EE:FF 或 AA-BB-CC-DD-EE-FF)
+static bool parseMacAddress(const char* macStr, uint8_t* macArray) {
+    if (macStr == nullptr || strlen(macStr) < 17) {
+        return false;
+    }
+
+    char temp[18];
+    strncpy(temp, macStr, 17);
+    temp[17] = '\0';
+
+    // 统一替换 '-' 为 ':'
+    for (int i = 0; temp[i]; i++) {
+        if (temp[i] == '-') temp[i] = ':';
+    }
+
+    int values[6];
+    if (sscanf(temp, "%02x:%02x:%02x:%02x:%02x:%02x",
+               &values[0], &values[1], &values[2],
+               &values[3], &values[4], &values[5]) == 6) {
+        for (int i = 0; i < 6; i++) {
+            macArray[i] = (uint8_t)values[i];
+        }
+        return true;
+    }
+    return false;
 }
