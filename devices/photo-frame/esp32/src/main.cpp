@@ -1,317 +1,308 @@
-/**
- * @file main.cpp
- * @brief ESP32 墨水屏相框主程序
- *
- * 简化设计：只请求一个接口获取照片 bin 文件并显示
- */
-
 #include <Arduino.h>
 #include "config.h"
 #include "wifi_manager.h"
 #include "api_client.h"
 #include "display_driver.h"
 
-// 组件实例
+// 全局对象
 WiFiManager wifiManager;
-ApiClient apiClient;
+APIClient apiClient;
 DisplayDriver display;
 
-// 状态机
-enum State {
+// 图像缓冲区
+// 对于 800x480 屏幕: 144000 bytes
+// 但服务器可能返回更大尺寸，分配 400KB 缓冲区
+uint8_t* imageBuffer = nullptr;
+const size_t BUFFER_SIZE = 400000; // 预留更大空间
+
+// 状态变量
+enum SystemState {
     STATE_INIT,
-    STATE_CONNECT_WIFI,
-    STATE_FETCH_DISPLAY,
-    STATE_SHOW_DISPLAY,
-    STATE_SLEEP,
+    STATE_CONNECTING_WIFI,
+    STATE_CONNECTED,
+    STATE_DOWNLOADING,
+    STATE_DISPLAYING,
+    STATE_SLEEPING,
     STATE_ERROR
 };
+SystemState currentState = STATE_INIT;
 
-State currentState = STATE_INIT;
-State lastErrorState = STATE_INIT;
-uint32_t errorCount = 0;
-static const uint32_t MAX_ERROR_RETRY = 3;
+// 统计信息
+struct {
+    int successCount = 0;
+    int errorCount = 0;
+    unsigned long lastRefreshTime = 0;
+} stats;
 
-// 定时器
-uint32_t lastRefreshTime = 0;
-
-// 函数声明
-void enterState(State newState);
-void handleInit();
-void handleConnectWiFi();
-void handleFetchDisplay();
-void handleShowDisplay();
-void handleSleep();
-void handleError();
-void blinkLED(uint32_t count, uint32_t onTime = 100, uint32_t offTime = 100);
-
-void setup() {
-    // 初始化串口
-    Serial.begin(SERIAL_BAUD_RATE);
-    delay(1000); // 等待串口稳定
-
-#if LOG_LEVEL >= 3
-    Serial.println("\n========================================");
-    Serial.println("  Relive Photo Frame - ESP32");
-    Serial.println("  Version: 1.0.0");
-    Serial.println("========================================\n");
-#endif
-
-    // 初始化 LED
-    pinMode(LED_PIN, OUTPUT);
-    digitalWrite(LED_PIN, LOW);
-
-    // 初始化按键
-    pinMode(BUTTON_PIN, INPUT_PULLUP);
-
-    // 初始化组件
-    wifiManager.begin();
-    apiClient.setBaseUrl(API_BASE_URL);
-    apiClient.setApiKey(DEVICE_API_KEY);
-
-    // 初始化显示（根据实际屏幕修改类型）
-    if (!display.init(DISPLAY_GDEP073E01, EPD_PIN_CS, EPD_PIN_DC, EPD_PIN_RST, EPD_PIN_BUSY)) {
+// 日志宏
 #if LOG_LEVEL >= 1
-        Serial.println("[Main] Display init failed!");
+#define LOG_ERROR(msg) DEBUG_SERIAL.println(msg)
+#define LOG_ERROR_F(msg, ...) DEBUG_SERIAL.printf(msg, __VA_ARGS__)
+#else
+#define LOG_ERROR(msg)
+#define LOG_ERROR_F(msg, ...)
 #endif
-        enterState(STATE_ERROR);
-        return;
-    }
 
-    enterState(STATE_INIT);
-}
+#if LOG_LEVEL >= 2
+#define LOG_INFO(msg) DEBUG_SERIAL.println(msg)
+#define LOG_INFO_F(msg, ...) DEBUG_SERIAL.printf(msg, __VA_ARGS__)
+#else
+#define LOG_INFO(msg)
+#define LOG_INFO_F(msg, ...)
+#endif
 
-void loop() {
-    // 检查手动刷新按钮
-    if (digitalRead(BUTTON_PIN) == LOW) {
-        delay(50); // 消抖
-        if (digitalRead(BUTTON_PIN) == LOW) {
 #if LOG_LEVEL >= 3
-            Serial.println("[Main] Button pressed, manual refresh");
+#define LOG_DEBUG(msg) DEBUG_SERIAL.println(msg)
+#define LOG_DEBUG_F(msg, ...) DEBUG_SERIAL.printf(msg, __VA_ARGS__)
+#else
+#define LOG_DEBUG(msg)
+#define LOG_DEBUG_F(msg, ...)
 #endif
-            enterState(STATE_FETCH_DISPLAY);
-            while (digitalRead(BUTTON_PIN) == LOW) {
-                delay(10);
-            }
-        }
-    }
 
-    // 状态机处理
-    switch (currentState) {
-    case STATE_INIT:
-        handleInit();
-        break;
-    case STATE_CONNECT_WIFI:
-        handleConnectWiFi();
-        break;
-    case STATE_FETCH_DISPLAY:
-        handleFetchDisplay();
-        break;
-    case STATE_SHOW_DISPLAY:
-        handleShowDisplay();
-        break;
-    case STATE_SLEEP:
-        handleSleep();
-        break;
-    case STATE_ERROR:
-        handleError();
-        break;
-    }
-
-    delay(100);
+// 显示启动画面
+void showStartupScreen() {
+    DEBUG_SERIAL.println("\n=================================");
+    DEBUG_SERIAL.println("   Relive 智能相框");
+    DEBUG_SERIAL.println("   ESP32-S3 + E Ink Spectra 6");
+    DEBUG_SERIAL.println("=================================\n");
 }
 
-void enterState(State newState) {
-    if (currentState != newState) {
-#if LOG_LEVEL >= 4
-        Serial.print("[State] ");
-        Serial.print(currentState);
-        Serial.print(" -> ");
-        Serial.println(newState);
-#endif
-        currentState = newState;
+// 分配缓冲区
+bool allocateBuffer() {
+    if (imageBuffer != nullptr) {
+        return true; // 已分配
     }
+
+    // 尝试从 PSRAM 分配
+    if (psramFound()) {
+        DEBUG_SERIAL.printf("[System] PSRAM 可用: %d bytes\n", ESP.getPsramSize());
+        imageBuffer = (uint8_t*)ps_malloc(BUFFER_SIZE);
+    }
+
+    // 如果 PSRAM 不可用，尝试从内部 RAM 分配
+    if (imageBuffer == nullptr) {
+        DEBUG_SERIAL.println("[System] 尝试从内部 RAM 分配...");
+        imageBuffer = (uint8_t*)malloc(BUFFER_SIZE);
+    }
+
+    if (imageBuffer == nullptr) {
+        LOG_ERROR("[System] 内存分配失败!");
+        return false;
+    }
+
+    DEBUG_SERIAL.printf("[System] 缓冲区分配成功: %d bytes\n", BUFFER_SIZE);
+    return true;
 }
 
-void handleInit() {
-#if LOG_LEVEL >= 3
-    Serial.println("[State] Initializing...");
-#endif
-
-    // 首次运行时显示启动画面或清空屏幕
-    display.clear(EPD_WHITE);
-    display.waitUntilIdle();
-
-    enterState(STATE_CONNECT_WIFI);
-}
-
-void handleConnectWiFi() {
-#if LOG_LEVEL >= 3
-    Serial.println("[State] Connecting to WiFi...");
-#endif
-
-    blinkLED(1, 200, 200);
-
-    if (wifiManager.connect(WIFI_SSID, WIFI_PASSWORD, WIFI_CONNECT_TIMEOUT_MS)) {
-        errorCount = 0;
-        enterState(STATE_FETCH_DISPLAY);
-    } else {
-        errorCount++;
-#if LOG_LEVEL >= 1
-        Serial.print("[State] WiFi connect failed, retry ");
-        Serial.print(errorCount);
-        Serial.print("/");
-        Serial.println(MAX_ERROR_RETRY);
-#endif
-        if (errorCount >= MAX_ERROR_RETRY) {
-            lastErrorState = STATE_CONNECT_WIFI;
-            enterState(STATE_ERROR);
-        } else {
-            delay(5000); // 5秒后重试
-        }
+// 释放缓冲区
+void freeBuffer() {
+    if (imageBuffer != nullptr) {
+        free(imageBuffer);
+        imageBuffer = nullptr;
     }
 }
 
-void handleFetchDisplay() {
-#if LOG_LEVEL >= 3
-    Serial.println("[State] Fetching display data...");
-#endif
-
-    blinkLED(2, 100, 100);
-
-    BinFileData binData;
-    if (apiClient.getDisplayBin(binData)) {
-        errorCount = 0;
-
-#if LOG_LEVEL >= 3
-        Serial.print("[State] Got bin: AssetID=");
-        Serial.print(binData.header.assetId);
-        Serial.print(", PhotoID=");
-        Serial.print(binData.header.photoId);
-        Serial.print(", Size=");
-        Serial.print(binData.size);
-        Serial.println(" bytes");
-#endif
-
-        // 显示数据
-        if (display.displayBin(binData)) {
-            // 等待刷新开始
-            delay(100);
-        }
-
-        // 释放内存
-        apiClient.freeBinData(binData);
-
-        enterState(STATE_SHOW_DISPLAY);
-    } else {
-        errorCount++;
-#if LOG_LEVEL >= 1
-        Serial.print("[State] Fetch failed: ");
-        Serial.println(apiClient.getLastError());
-        Serial.print("[State] Retry ");
-        Serial.print(errorCount);
-        Serial.print("/");
-        Serial.println(MAX_ERROR_RETRY);
-#endif
-        if (errorCount >= MAX_ERROR_RETRY) {
-            lastErrorState = STATE_FETCH_DISPLAY;
-            enterState(STATE_ERROR);
-        } else {
-            delay(5000);
-        }
-    }
-}
-
-void handleShowDisplay() {
-    // 等待显示刷新完成
-    if (display.isBusy()) {
-        // 刷新中，继续等待
-        blinkLED(1, 50, 1950); // 缓慢闪烁表示刷新中
-        return;
+// 验证校验和
+bool verifyChecksum(const uint8_t* data, size_t len, const String& expectedChecksum) {
+    if (expectedChecksum.length() == 0) {
+        return true; // 没有校验和，跳过验证
     }
 
-#if LOG_LEVEL >= 3
-    Serial.println("[State] Display refresh complete");
-#endif
+    // 简单的 XOR 校验和计算
+    uint8_t checksum = 0;
+    for (size_t i = 0; i < len; i++) {
+        checksum ^= data[i];
+    }
 
-    // 记录刷新时间
-    lastRefreshTime = millis();
+    // 将预期校验和从 hex 字符串转为数值
+    uint8_t expected = 0;
+    for (int i = 0; i < 2 && i < expectedChecksum.length(); i++) {
+        char c = expectedChecksum[i];
+        uint8_t nibble;
+        if (c >= '0' && c <= '9') nibble = c - '0';
+        else if (c >= 'a' && c <= 'f') nibble = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') nibble = c - 'A' + 10;
+        else continue;
+        expected = (expected << 4) | nibble;
+    }
 
-    // 断开 WiFi 省电
-    wifiManager.disconnect();
-
-    enterState(STATE_SLEEP);
+    return checksum == expected;
 }
 
-void handleSleep() {
-#if LOG_LEVEL >= 3
-    Serial.println("[State] Entering sleep mode...");
-#endif
+// 下载并显示照片
+bool downloadAndDisplay() {
+    LOG_INFO("[Main] 开始下载照片...");
 
-    // 关闭显示（进入低功耗）
+    // 检查 WiFi 连接
+    if (!wifiManager.isConnected()) {
+        LOG_ERROR("[Main] WiFi 未连接");
+        return false;
+    }
+
+    // 获取显示信息（可选，用于日志）
+    DisplayInfo info = apiClient.getDisplayInfo();
+    if (info.valid) {
+        LOG_INFO_F("[Main] 照片 ID: %d, Asset ID: %d\n", info.photoID, info.assetID);
+    }
+
+    // 下载 bin 文件
+    String receivedChecksum;
+    int downloaded = apiClient.downloadBinFile(imageBuffer, BUFFER_SIZE, receivedChecksum);
+
+    if (downloaded <= 0) {
+        LOG_ERROR_F("[Main] 下载失败: %s\n", apiClient.getLastError().c_str());
+        stats.errorCount++;
+        return false;
+    }
+
+    LOG_INFO_F("[Main] 下载成功: %d bytes\n", downloaded);
+
+    // 刷新显示（使用旋转显示，适配 480x800 竖屏图片）
+    LOG_INFO("[Main] 刷新屏幕（旋转显示）...");
+    display.displayRotated(imageBuffer);
+
+    stats.successCount++;
+    stats.lastRefreshTime = millis();
+
+    LOG_INFO("[Main] 显示完成");
+    return true;
+}
+
+// 进入睡眠模式
+void enterSleep() {
+    LOG_INFO("[Main] 进入睡眠模式...");
+
+    // 屏幕睡眠
     display.sleep();
 
-#if ENABLE_DEEP_SLEEP
-    // 计算下次唤醒时间
-    uint64_t sleepTimeUs = REFRESH_INTERVAL_DEEP_SLEEP;
+    // 断开 WiFi 以节省电量
+    wifiManager.disconnect();
 
-#if LOG_LEVEL >= 3
-    Serial.print("[State] Deep sleep for ");
-    Serial.print(sleepTimeUs / 1000000);
-    Serial.println(" seconds");
-    Serial.println("[State] Good night!");
-    Serial.flush();
-#endif
+    currentState = STATE_SLEEPING;
 
-    // 进入深度睡眠
-    esp_sleep_enable_timer_wakeup(sleepTimeUs);
+    // 配置唤醒源（定时器）
+    esp_sleep_enable_timer_wakeup((uint64_t)REFRESH_INTERVAL_MS * 1000ULL);
+
+    DEBUG_SERIAL.println("[Main] 进入 deep sleep...");
+    DEBUG_SERIAL.flush();
+
     esp_deep_sleep_start();
-#else
-    // 轻度睡眠模式（用于调试）
-#if LOG_LEVEL >= 3
-    Serial.println("[State] Light sleep mode (debug)");
-#endif
-
-    uint32_t sleepStart = millis();
-    while (millis() - sleepStart < REFRESH_INTERVAL_MS) {
-        // 可以在这里检查按键唤醒
-        if (digitalRead(BUTTON_PIN) == LOW) {
-            enterState(STATE_FETCH_DISPLAY);
-            return;
-        }
-        delay(100);
-    }
-
-    // 唤醒显示
-    display.wakeup();
-    enterState(STATE_CONNECT_WIFI);
-#endif
 }
 
-void handleError() {
-#if LOG_LEVEL >= 1
-    Serial.println("[State] ERROR state");
-    Serial.print("[State] Last error state: ");
-    Serial.println(lastErrorState);
-#endif
+// 错误处理
+void handleError(const char* message) {
+    LOG_ERROR_F("[Error] %s\n", message);
+    currentState = STATE_ERROR;
 
-    // 错误指示：快速闪烁
-    blinkLED(5, 200, 200);
-
-    // 延迟后重启
+    // 等待一段时间后重启
     delay(10000);
-
-#if LOG_LEVEL >= 1
-    Serial.println("[State] Restarting...");
-#endif
-
     ESP.restart();
 }
 
-void blinkLED(uint32_t count, uint32_t onTime, uint32_t offTime) {
-    for (uint32_t i = 0; i < count; i++) {
-        digitalWrite(LED_PIN, HIGH);
-        delay(onTime);
-        digitalWrite(LED_PIN, LOW);
-        delay(offTime);
+void setup() {
+    // 初始化串口
+    DEBUG_SERIAL.begin(DEBUG_BAUDRATE);
+    delay(1000); // 等待串口稳定
+
+    showStartupScreen();
+
+    // 检查唤醒原因
+    esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+    if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) {
+        DEBUG_SERIAL.println("[Main] 从定时器唤醒");
+    } else if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0) {
+        DEBUG_SERIAL.println("[Main] 从外部中断唤醒");
+    } else {
+        DEBUG_SERIAL.println("[Main] 正常启动/复位");
+    }
+
+    // 分配缓冲区
+    if (!allocateBuffer()) {
+        handleError("内存分配失败");
+        return;
+    }
+
+    // 初始化显示
+    if (!display.begin()) {
+        handleError("显示初始化失败");
+        return;
+    }
+
+    // 首次启动清屏
+    if (wakeup_reason != ESP_SLEEP_WAKEUP_TIMER) {
+        DEBUG_SERIAL.println("[Main] 首次启动，清屏...");
+        display.clear();
+    }
+
+    // 初始化 API 客户端
+    apiClient.begin();
+
+    currentState = STATE_CONNECTING_WIFI;
+}
+
+void loop() {
+    switch (currentState) {
+        case STATE_CONNECTING_WIFI: {
+            DEBUG_SERIAL.println("[Main] 连接 WiFi...");
+
+            if (wifiManager.begin()) {
+                currentState = STATE_CONNECTED;
+            } else {
+                // 重试
+                delay(RETRY_DELAY_MS);
+            }
+            break;
+        }
+
+        case STATE_CONNECTED: {
+            // 检查 WiFi 是否仍然连接
+            if (!wifiManager.isConnected()) {
+                LOG_ERROR("[Main] WiFi 断开，尝试重连...");
+                if (!wifiManager.reconnect()) {
+                    delay(RETRY_DELAY_MS);
+                }
+                break;
+            }
+
+            currentState = STATE_DOWNLOADING;
+            break;
+        }
+
+        case STATE_DOWNLOADING: {
+            if (downloadAndDisplay()) {
+                currentState = STATE_DISPLAYING;
+            } else {
+                // 下载失败，稍后重试
+                delay(RETRY_DELAY_MS);
+                // 如果多次失败，进入睡眠等待下次唤醒
+                if (stats.errorCount >= MAX_RETRY_COUNT) {
+                    LOG_ERROR("[Main] 多次失败，进入睡眠");
+                    enterSleep();
+                }
+            }
+            break;
+        }
+
+        case STATE_DISPLAYING: {
+            LOG_INFO_F("[Main] 成功: %d, 失败: %d\n", stats.successCount, stats.errorCount);
+
+            // 进入睡眠等待下次刷新
+            enterSleep();
+            break;
+        }
+
+        case STATE_SLEEPING:
+            // 不应该到达这里，因为 deep sleep 会重启
+            delay(1000);
+            break;
+
+        case STATE_ERROR:
+            delay(5000);
+            ESP.restart();
+            break;
+
+        default:
+            currentState = STATE_INIT;
+            break;
     }
 }

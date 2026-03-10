@@ -1,276 +1,394 @@
-/**
- * @file api_client.cpp
- * @brief Relive API 客户端实现
- */
-
 #include "api_client.h"
-#include "config.h"
-#include <mbedtls/sha256.h>
+#include <ArduinoJson.h>
 
-ApiClient::ApiClient() : _lastHttpCode(0) {
-}
-
-ApiClient::~ApiClient() {
-}
-
-void ApiClient::setBaseUrl(const char* baseUrl) {
-    _baseUrl = baseUrl;
-}
-
-void ApiClient::setApiKey(const char* apiKey) {
-    _apiKey = apiKey;
-}
-
-const char* ApiClient::getLastError() {
-    return _lastError.c_str();
-}
-
-int ApiClient::getLastHttpCode() {
-    return _lastHttpCode;
-}
-
-bool ApiClient::getDisplayBin(BinFileData& outData) {
-    outData.data = nullptr;
-    outData.size = 0;
-    outData.header.valid = false;
-
-    if (_baseUrl.isEmpty() || _apiKey.isEmpty()) {
-        _lastError = "API URL or API Key not configured";
-        return false;
-    }
-
-    HTTPClient http;
-    String url = _baseUrl + API_ENDPOINT_DISPLAY_BIN;
-
-#if LOG_LEVEL >= 3
-    Serial.print("[API] Requesting: ");
-    Serial.println(url);
+#if LOG_LEVEL >= 2
+#define LOG_INFO(msg) DEBUG_SERIAL.println(msg)
+#define LOG_INFO_F(msg, ...) DEBUG_SERIAL.printf(msg, __VA_ARGS__)
+#else
+#define LOG_INFO(msg)
+#define LOG_INFO_F(msg, ...)
 #endif
 
-    http.begin(url);
-    http.addHeader(API_HEADER_API_KEY, _apiKey);
-    http.setTimeout(HTTP_TIMEOUT_MS);
+#if LOG_LEVEL >= 3
+#define LOG_DEBUG(msg) DEBUG_SERIAL.println(msg)
+#define LOG_DEBUG_F(msg, ...) DEBUG_SERIAL.printf(msg, __VA_ARGS__)
+#else
+#define LOG_DEBUG(msg)
+#define LOG_DEBUG_F(msg, ...)
+#endif
+
+#if LOG_LEVEL >= 1
+#define LOG_ERROR(msg) DEBUG_SERIAL.println(msg)
+#define LOG_ERROR_F(msg, ...) DEBUG_SERIAL.printf(msg, __VA_ARGS__)
+#else
+#define LOG_ERROR(msg)
+#define LOG_ERROR_F(msg, ...)
+#endif
+
+APIClient::APIClient() : _lastHttpCode(0), _useHTTPS(false) {}
+
+void APIClient::begin() {
+    setupServer();
+}
+
+void APIClient::setupServer() {
+    String host = SERVER_HOST;
+    host.trim();
+
+    // 检查是否已包含协议前缀
+    if (host.startsWith("http://")) {
+        _useHTTPS = false;
+        _baseUrl = host.substring(7); // 去掉 "http://"
+    } else if (host.startsWith("https://")) {
+        _useHTTPS = true;
+        _baseUrl = host.substring(8); // 去掉 "https://"
+    } else {
+        // 没有协议前缀，默认使用 HTTP
+        _useHTTPS = false;
+        _baseUrl = host;
+    }
+
+    // 去除末尾的斜杠
+    if (_baseUrl.endsWith("/")) {
+        _baseUrl = _baseUrl.substring(0, _baseUrl.length() - 1);
+    }
+
+    LOG_INFO_F("[API] 服务器: %s, 协议: %s\n", _baseUrl.c_str(), _useHTTPS ? "HTTPS" : "HTTP");
+}
+
+String APIClient::buildUrl(const char* endpoint) {
+    String url = _useHTTPS ? "https://" : "http://";
+    url += _baseUrl;
+    url += ":";
+    url += String(SERVER_PORT);
+    url += endpoint;
+    return url;
+}
+
+void APIClient::setHeaders(HTTPClient& http) {
+    http.addHeader("X-API-Key", DEVICE_API_KEY);
+    http.addHeader("Accept", "application/octet-stream, application/json");
+}
+
+DisplayInfo APIClient::getDisplayInfo() {
+    if (_useHTTPS) {
+        return getDisplayInfoHTTPS();
+    } else {
+        return getDisplayInfoHTTP();
+    }
+}
+
+DisplayInfo APIClient::getDisplayInfoHTTP() {
+    DisplayInfo info;
+    info.valid = false;
+
+    HTTPClient http;
+    String url = "http://" + _baseUrl + ":" + String(SERVER_PORT) + "/api/v1/device/display";
+
+    LOG_INFO_F("[API] HTTP 请求: %s\n", url.c_str());
+
+    WiFiClient client;
+    client.setTimeout(HTTP_TIMEOUT_MS / 1000);
+
+    http.begin(client, url);
+    setHeaders(http);
+    http.addHeader("Accept", "application/json");
 
     _lastHttpCode = http.GET();
 
+    if (_lastHttpCode == HTTP_CODE_OK) {
+        String payload = http.getString();
+        LOG_DEBUG_F("[API] 响应: %s\n", payload.c_str());
+        info = parseDisplayInfo(payload);
+    } else {
+        _lastError = "HTTP " + String(_lastHttpCode);
+        LOG_ERROR_F("[API] HTTP 请求失败: %d\n", _lastHttpCode);
+    }
+
+    http.end();
+    return info;
+}
+
+DisplayInfo APIClient::getDisplayInfoHTTPS() {
+    DisplayInfo info;
+    info.valid = false;
+
+    HTTPClient http;
+    String url = "https://" + _baseUrl + ":" + String(SERVER_PORT) + "/api/v1/device/display";
+
+    LOG_INFO_F("[API] HTTPS 请求: %s\n", url.c_str());
+
+    WiFiClientSecure client;
+    client.setInsecure();
+    client.setTimeout(HTTP_TIMEOUT_MS / 1000);
+    client.setHandshakeTimeout(30);
+
+    http.begin(client, url);
+    setHeaders(http);
+    http.addHeader("Accept", "application/json");
+
+    _lastHttpCode = http.GET();
+
+    if (_lastHttpCode == HTTP_CODE_OK) {
+        String payload = http.getString();
+        LOG_DEBUG_F("[API] 响应: %s\n", payload.c_str());
+        info = parseDisplayInfo(payload);
+    } else {
+        LOG_ERROR_F("[API] HTTPS 请求失败: %d\n", _lastHttpCode);
+    }
+
+    http.end();
+    return info;
+}
+
+DisplayInfo APIClient::parseDisplayInfo(const String& json) {
+    DisplayInfo info;
+    info.valid = false;
+
+    StaticJsonDocument<1024> doc;
+    DeserializationError error = deserializeJson(doc, json);
+
+    if (error) {
+        _lastError = "JSON解析失败: " + String(error.c_str());
+        LOG_ERROR_F("[API] JSON解析错误: %s\n", error.c_str());
+        return info;
+    }
+
+    if (!doc["success"]) {
+        _lastError = "API返回失败";
+        const char* msg = doc["error"]["message"];
+        if (msg) {
+            _lastError += ": ";
+            _lastError += msg;
+        }
+        LOG_ERROR_F("[API] 错误: %s\n", _lastError.c_str());
+        return info;
+    }
+
+    JsonObject data = doc["data"];
+    if (data.isNull()) {
+        _lastError = "无数据";
+        return info;
+    }
+
+    info.batchDate = data["batch_date"] | "";
+    info.sequence = data["sequence"] | 0;
+    info.totalCount = data["total_count"] | 0;
+    info.photoID = data["photo_id"] | 0;
+    info.itemID = data["item_id"] | 0;
+    info.assetID = data["asset_id"] | 0;
+    info.renderProfile = data["render_profile"] | "";
+    info.binURL = data["bin_url"] | "";
+    info.checksum = data["checksum"] | "";
+    info.valid = true;
+
+    LOG_INFO_F("[API] 照片 ID: %d, Asset ID: %d\n", info.photoID, info.assetID);
+    LOG_INFO_F("[API] Render Profile: %s\n", info.renderProfile.c_str());
+
+    return info;
+}
+
+int APIClient::downloadBinFile(uint8_t* buffer, size_t bufferSize, String& outChecksum) {
+    if (_useHTTPS) {
+        return downloadBinFileHTTPS(buffer, bufferSize, outChecksum);
+    } else {
+        return downloadBinFileHTTP(buffer, bufferSize, outChecksum);
+    }
+}
+
+int APIClient::downloadBinFileHTTP(uint8_t* buffer, size_t bufferSize, String& outChecksum) {
+    HTTPClient http;
+    String url = "http://" + _baseUrl + ":" + String(SERVER_PORT) + "/api/v1/device/display.bin";
+
+    LOG_INFO_F("[API] HTTP 下载: %s\n", url.c_str());
+
+    WiFiClient client;
+    client.setTimeout(HTTP_TIMEOUT_MS / 1000);
+
+    http.begin(client, url);
+    setHeaders(http);
+
+    _lastHttpCode = http.GET();
+
+    LOG_INFO_F("[API] HTTP 响应码: %d\n", _lastHttpCode);
+
     if (_lastHttpCode != HTTP_CODE_OK) {
-        _lastError = "HTTP error: " + String(_lastHttpCode);
-#if LOG_LEVEL >= 1
-        Serial.print("[API] Error: ");
-        Serial.println(_lastError);
-#endif
+        _lastError = "HTTP " + String(_lastHttpCode);
+        LOG_ERROR_F("[API] HTTP 下载失败: %d\n", _lastHttpCode);
         http.end();
-        return false;
+        return -1;
     }
 
-    // 获取响应头信息
-    outData.header.contentLength = http.getSize();
-    String assetId = http.header("X-Asset-ID");
-    String photoId = http.header("X-Photo-ID");
-    String checksum = http.header("X-Checksum");
-    String renderProfile = http.header("X-Render-Profile");
-    String batchDate = http.header("X-Batch-Date");
-    String sequence = http.header("X-Sequence");
+    // 获取响应头信息 - 尝试不同的大小写格式
+    outChecksum = http.header("x-checksum");
+    if (outChecksum.length() == 0) outChecksum = http.header("X-Checksum");
 
-#if LOG_LEVEL >= 3
-    Serial.print("[API] Content-Length: ");
-    Serial.println(outData.header.contentLength);
-    Serial.print("[API] Asset ID: ");
-    Serial.println(assetId);
-    Serial.print("[API] Checksum: ");
-    Serial.println(checksum);
-#endif
+    String contentLength = http.header("content-length");
+    if (contentLength.length() == 0) contentLength = http.header("Content-Length");
 
-    // 解析头部信息
-    outData.header.assetId = assetId.toInt();
-    outData.header.photoId = photoId.toInt();
-    strncpy(outData.header.checksum, checksum.c_str(), sizeof(outData.header.checksum) - 1);
-    outData.header.checksum[sizeof(outData.header.checksum) - 1] = '\0';
-    strncpy(outData.header.renderProfile, renderProfile.c_str(), sizeof(outData.header.renderProfile) - 1);
-    outData.header.renderProfile[sizeof(outData.header.renderProfile) - 1] = '\0';
-    strncpy(outData.header.batchDate, batchDate.c_str(), sizeof(outData.header.batchDate) - 1);
-    outData.header.batchDate[sizeof(outData.header.batchDate) - 1] = '\0';
-    outData.header.sequence = sequence.toInt();
-    outData.header.valid = true;
+    String assetID = http.header("x-asset-id");
+    if (assetID.length() == 0) assetID = http.header("X-Asset-Id");
+    if (assetID.length() == 0) assetID = http.header("X-Asset-ID");
 
-    // 分配内存并下载数据
-    if (outData.header.contentLength == 0 || outData.header.contentLength > BIN_FILE_MAX_SIZE) {
-        _lastError = "Invalid content size: " + String(outData.header.contentLength);
-#if LOG_LEVEL >= 1
-        Serial.println("[API] " + _lastError);
-#endif
-        http.end();
-        return false;
+    // 调试输出所有响应头
+    LOG_INFO_F("[API] 响应头: X-Checksum=%s\n", outChecksum.c_str());
+    LOG_INFO_F("[API] 响应头: Content-Length=%s\n", contentLength.c_str());
+    LOG_INFO_F("[API] 响应头: X-Asset-ID=%s\n", assetID.c_str());
+
+    // 如果没有 Content-Length，尝试从流传输获取
+    if (contentLength.length() == 0) {
+        int streamLen = http.getSize();
+        if (streamLen > 0) {
+            contentLength = String(streamLen);
+            LOG_INFO_F("[API] 从流获取大小: %d\n", streamLen);
+        }
     }
 
-    outData.data = (uint8_t*)malloc(outData.header.contentLength);
-    if (!outData.data) {
-        _lastError = "Failed to allocate memory";
-#if LOG_LEVEL >= 1
-        Serial.println("[API] " + _lastError);
-#endif
+    LOG_INFO_F("[API] Asset ID: %s\n", assetID.c_str());
+    LOG_INFO_F("[API] Checksum: %s\n", outChecksum.c_str());
+    LOG_INFO_F("[API] Content-Length: %s\n", contentLength.c_str());
+
+    int totalLength = contentLength.toInt();
+    if (totalLength <= 0) {
+        _lastError = "无效的内容长度";
         http.end();
-        return false;
+        return -1;
     }
 
-    // 下载数据
-    size_t downloaded = 0;
+    if ((size_t)totalLength > bufferSize) {
+        _lastError = "缓冲区太小";
+        LOG_ERROR_F("[API] 缓冲区不足: 需要 %d, 只有 %d\n", totalLength, bufferSize);
+        http.end();
+        return -1;
+    }
+
+    // 读取数据
     WiFiClient* stream = http.getStreamPtr();
-    uint32_t lastProgressTime = millis();
+    int downloaded = 0;
+    unsigned long timeout = millis() + HTTP_TIMEOUT_MS;
 
-    while (http.connected() && downloaded < outData.header.contentLength) {
-        size_t available = stream->available();
-        if (available) {
-            size_t toRead = min(available, (size_t)(outData.header.contentLength - downloaded));
-            size_t bytesRead = stream->readBytes(outData.data + downloaded, toRead);
+    while (downloaded < totalLength && millis() < timeout) {
+        int available = stream->available();
+        if (available > 0) {
+            int toRead = min(available, totalLength - downloaded);
+            int bytesRead = stream->readBytes(buffer + downloaded, toRead);
             downloaded += bytesRead;
 
-            // 每 10KB 打印进度
-            if (millis() - lastProgressTime > 1000) {
-#if LOG_LEVEL >= 3
-                Serial.print("[API] Downloaded: ");
-                Serial.print(downloaded / 1024);
-                Serial.println(" KB");
-#endif
-                lastProgressTime = millis();
+            if (downloaded % 1024 == 0 || downloaded == totalLength) {
+                LOG_DEBUG_F("[API] 已下载: %d / %d bytes\n", downloaded, totalLength);
             }
-        } else {
-            delay(10);
         }
+        delay(1);
     }
 
     http.end();
 
-    if (downloaded != outData.header.contentLength) {
-        _lastError = "Download incomplete: " + String(downloaded) + "/" + String(outData.header.contentLength);
-#if LOG_LEVEL >= 1
-        Serial.println("[API] " + _lastError);
-#endif
-        free(outData.data);
-        outData.data = nullptr;
-        return false;
+    if (downloaded != totalLength) {
+        _lastError = "下载不完整";
+        LOG_ERROR_F("[API] 下载不完整: %d / %d\n", downloaded, totalLength);
+        return -1;
     }
 
-    outData.size = downloaded;
-
-#if LOG_LEVEL >= 3
-    Serial.print("[API] Download complete: ");
-    Serial.print(downloaded);
-    Serial.println(" bytes");
-#endif
-
-    // 解析 bin 文件
-    if (!parseBinFile(outData)) {
-        free(outData.data);
-        outData.data = nullptr;
-        return false;
-    }
-
-    // 验证校验和
-    if (!validateChecksum(outData)) {
-        free(outData.data);
-        outData.data = nullptr;
-        return false;
-    }
-
-    return true;
+    LOG_INFO_F("[API] 下载完成: %d bytes\n", downloaded);
+    return downloaded;
 }
 
-bool ApiClient::parseBinFile(BinFileData& data) {
-    if (data.size < 16) {
-        _lastError = "Bin file too small";
-        return false;
+int APIClient::downloadBinFileHTTPS(uint8_t* buffer, size_t bufferSize, String& outChecksum) {
+    HTTPClient http;
+    String url = "https://" + _baseUrl + ":" + String(SERVER_PORT) + "/api/v1/device/display.bin";
+
+    LOG_INFO_F("[API] HTTPS 下载: %s\n", url.c_str());
+
+    WiFiClientSecure client;
+    client.setInsecure();
+    client.setTimeout(HTTP_TIMEOUT_MS / 1000);
+    client.setHandshakeTimeout(30);
+
+    http.begin(client, url);
+    setHeaders(http);
+
+    _lastHttpCode = http.GET();
+
+    if (_lastHttpCode != HTTP_CODE_OK) {
+        _lastError = "HTTP " + String(_lastHttpCode);
+        LOG_ERROR_F("[API] 下载失败: %d\n", _lastHttpCode);
+        http.end();
+        return -1;
     }
 
-    // 检查魔数 "RLVD"
-    if (data.data[0] != 'R' || data.data[1] != 'L' ||
-        data.data[2] != 'V' || data.data[3] != 'D') {
-        _lastError = "Invalid magic number";
-        return false;
+    // 获取响应头信息 - 尝试不同的大小写格式
+    outChecksum = http.header("x-checksum");
+    if (outChecksum.length() == 0) outChecksum = http.header("X-Checksum");
+
+    String contentLength = http.header("content-length");
+    if (contentLength.length() == 0) contentLength = http.header("Content-Length");
+
+    String assetID = http.header("x-asset-id");
+    if (assetID.length() == 0) assetID = http.header("X-Asset-Id");
+    if (assetID.length() == 0) assetID = http.header("X-Asset-ID");
+
+    LOG_INFO_F("[API] Asset ID: %s\n", assetID.c_str());
+    LOG_INFO_F("[API] Checksum: %s\n", outChecksum.c_str());
+    LOG_INFO_F("[API] Content-Length: %s\n", contentLength.c_str());
+
+    // 如果没有 Content-Length，尝试从流传输获取
+    if (contentLength.length() == 0 || contentLength.toInt() <= 0) {
+        int streamLen = http.getSize();
+        if (streamLen > 0) {
+            contentLength = String(streamLen);
+            LOG_INFO_F("[API] 从流获取大小: %d\n", streamLen);
+        }
     }
 
-    // 检查版本
-    uint8_t version = data.data[4];
-    if (version != 1) {
-        _lastError = "Unsupported version: " + String(version);
-        return false;
+    int totalLength = contentLength.toInt();
+    if (totalLength <= 0) {
+        _lastError = "无效的内容长度";
+        http.end();
+        return -1;
     }
 
-    // 解析基本信息
-    data.paletteColors = data.data[5];
-    uint8_t ditherModeLen = data.data[6];
-
-    // 解析宽高 (little-endian)
-    data.width = data.data[8] | (data.data[9] << 8);
-    data.height = data.data[10] | (data.data[11] << 8);
-
-#if LOG_LEVEL >= 3
-    Serial.print("[API] Bin format: ");
-    Serial.print(data.width);
-    Serial.print("x");
-    Serial.print(data.height);
-    Serial.print(", ");
-    Serial.print(data.paletteColors);
-    Serial.println(" colors");
-#endif
-
-    // 计算有效数据起始位置 (跳过 header 和 dither mode string)
-    size_t headerSize = 12 + ditherModeLen;
-    if (data.size < headerSize) {
-        _lastError = "Invalid bin file structure";
-        return false;
+    if ((size_t)totalLength > bufferSize) {
+        _lastError = "缓冲区太小";
+        LOG_ERROR_F("[API] 缓冲区不足: 需要 %d, 只有 %d\n", totalLength, bufferSize);
+        http.end();
+        return -1;
     }
 
-    return true;
+    // 读取数据
+    WiFiClient* stream = http.getStreamPtr();
+    int downloaded = 0;
+    unsigned long timeout = millis() + HTTP_TIMEOUT_MS;
+
+    while (downloaded < totalLength && millis() < timeout) {
+        int available = stream->available();
+        if (available > 0) {
+            int toRead = min(available, totalLength - downloaded);
+            int bytesRead = stream->readBytes(buffer + downloaded, toRead);
+            downloaded += bytesRead;
+
+            if (downloaded % 1024 == 0 || downloaded == totalLength) {
+                LOG_DEBUG_F("[API] 已下载: %d / %d bytes\n", downloaded, totalLength);
+            }
+        }
+        delay(1);
+    }
+
+    http.end();
+
+    if (downloaded != totalLength) {
+        _lastError = "下载不完整";
+        LOG_ERROR_F("[API] 下载不完整: %d / %d\n", downloaded, totalLength);
+        return -1;
+    }
+
+    LOG_INFO_F("[API] 下载完成: %d bytes\n", downloaded);
+    return downloaded;
 }
 
-bool ApiClient::validateChecksum(BinFileData& data) {
-    if (!data.header.valid || strlen(data.header.checksum) != 64) {
-        _lastError = "Invalid checksum header";
-        return false;
-    }
-
-    // 计算 SHA256
-    uint8_t hash[32];
-    mbedtls_sha256_context ctx;
-    mbedtls_sha256_init(&ctx);
-    mbedtls_sha256_starts(&ctx, 0);
-    mbedtls_sha256_update(&ctx, data.data, data.size);
-    mbedtls_sha256_finish(&ctx, hash);
-    mbedtls_sha256_free(&ctx);
-
-    // 转换为 hex string
-    char hashHex[65];
-    for (int i = 0; i < 32; i++) {
-        sprintf(hashHex + (i * 2), "%02x", hash[i]);
-    }
-    hashHex[64] = '\0';
-
-    // 比较
-    if (strcasecmp(hashHex, data.header.checksum) != 0) {
-        _lastError = "Checksum mismatch";
-#if LOG_LEVEL >= 1
-        Serial.println("[API] Checksum mismatch!");
-        Serial.print("[API] Expected: ");
-        Serial.println(data.header.checksum);
-        Serial.print("[API] Actual:   ");
-        Serial.println(hashHex);
-#endif
-        return false;
-    }
-
-#if LOG_LEVEL >= 3
-    Serial.println("[API] Checksum verified");
-#endif
-
-    return true;
+String APIClient::getLastError() {
+    return _lastError;
 }
 
-void ApiClient::freeBinData(BinFileData& data) {
-    if (data.data) {
-        free(data.data);
-        data.data = nullptr;
-    }
-    data.size = 0;
-    data.header.valid = false;
+int APIClient::getLastHttpCode() {
+    return _lastHttpCode;
 }

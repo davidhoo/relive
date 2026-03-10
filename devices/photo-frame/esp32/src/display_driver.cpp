@@ -1,326 +1,322 @@
-/**
- * @file display_driver.cpp
- * @brief 墨水屏驱动抽象层实现
- */
-
 #include "display_driver.h"
-#include "config.h"
 
-// GDEP073E01 命令定义
-#define CMD_PANEL_SETTING       0x00
-#define CMD_POWER_SETTING       0x01
-#define CMD_POWER_OFF           0x02
-#define CMD_POWER_OFF_SEQUENCE  0x03
-#define CMD_POWER_ON            0x04
-#define CMD_POWER_ON_MEASURE    0x05
-#define CMD_BOOSTER_SOFT_START  0x06
-#define CMD_DEEP_SLEEP          0x07
-#define CMD_DISPLAY_START_TRANS 0x10
-#define CMD_DISPLAY_REFRESH     0x12
-#define CMD_IMG_PROCESS         0x13
-#define CMD_LUT_SETTING         0x20
-#define CMD_MULTI_INI           0x21
-#define CMD_MULTI_INI_COLOR     0x22
-#define CMD_PLL_CONTROL         0x30
-#define CMD_TEMP_SENSOR         0x40
-#define CMD_TEMP_CALIB          0x41
-#define CMD_TEMP_WRITE          0x42
-#define CMD_TEMP_READ           0x43
-#define CMD_VCOM_GLITCH         0x50
-#define CMD_RESOLUTION          0x61
-#define CMD_STATUS              0x71
-#define CMD_VCOM_VALUE          0x81
-
-DisplayDriver::DisplayDriver()
-    : _type(DISPLAY_CUSTOM)
-    , _pinCS(EPD_PIN_CS)
-    , _pinDC(EPD_PIN_DC)
-    , _pinRST(EPD_PIN_RST)
-    , _pinBUSY(EPD_PIN_BUSY)
-    , _width(480)
-    , _height(800)
-    , _colors(4)
-{
-}
-
-DisplayDriver::~DisplayDriver()
-{
-}
-
-bool DisplayDriver::init(DisplayType type, uint8_t cs, uint8_t dc, uint8_t rst, uint8_t busy)
-{
-    _type = type;
-    _pinCS = cs;
-    _pinDC = dc;
-    _pinRST = rst;
-    _pinBUSY = busy;
-
-    // 根据类型设置分辨率
-    switch (type) {
-    case DISPLAY_GDEP073E01:
-        _width = 480;
-        _height = 800;
-        _colors = 4;
-        break;
-    case DISPLAY_GDEY075T7:
-        _width = 800;
-        _height = 480;
-        _colors = 2;
-        break;
-    case DISPLAY_GDEW075C64:
-        _width = 640;
-        _height = 384;
-        _colors = 4;
-        break;
-    default:
-        break;
-    }
-
-    // 初始化引脚
-    pinMode(_pinCS, OUTPUT);
-    pinMode(_pinDC, OUTPUT);
-    pinMode(_pinRST, OUTPUT);
-    pinMode(_pinBUSY, INPUT);
-
-    digitalWrite(_pinCS, HIGH);
-    digitalWrite(_pinDC, HIGH);
-    digitalWrite(_pinRST, HIGH);
-
-    // 初始化 SPI
-    SPI.begin(EPD_PIN_SCK, -1, EPD_PIN_MOSI, _pinCS);
-
-#if LOG_LEVEL >= 3
-    Serial.print("[Display] Initializing type ");
-    Serial.print(type);
-    Serial.print(" (");
-    Serial.print(_width);
-    Serial.print("x");
-    Serial.print(_height);
-    Serial.println(")");
+#if LOG_LEVEL >= 2
+#define LOG_INFO(msg) DEBUG_SERIAL.println(msg)
+#define LOG_INFO_F(msg, ...) DEBUG_SERIAL.printf(msg, __VA_ARGS__)
+#else
+#define LOG_INFO(msg)
+#define LOG_INFO_F(msg, ...)
 #endif
 
-    // 硬件复位
-    hardwareReset();
-
-    // 等待屏幕就绪
-    delay(100);
-
-    // 初始化序列（简化版，实际需要根据具体屏幕调整）
-    // 这里只是示例框架，具体实现需要根据屏幕数据手册编写
-
 #if LOG_LEVEL >= 3
-    Serial.println("[Display] Initialized");
+#define LOG_DEBUG(msg) DEBUG_SERIAL.println(msg)
+#define LOG_DEBUG_F(msg, ...) DEBUG_SERIAL.printf(msg, __VA_ARGS__)
+#else
+#define LOG_DEBUG(msg)
+#define LOG_DEBUG_F(msg, ...)
 #endif
 
-    return true;
-}
+#if LOG_LEVEL >= 1
+#define LOG_ERROR(msg) DEBUG_SERIAL.println(msg)
+#define LOG_ERROR_F(msg, ...) DEBUG_SERIAL.printf(msg, __VA_ARGS__)
+#else
+#define LOG_ERROR(msg)
+#define LOG_ERROR_F(msg, ...)
+#endif
 
-void DisplayDriver::hardwareReset()
-{
-    digitalWrite(_pinRST, LOW);
-    delay(10);
-    digitalWrite(_pinRST, HIGH);
-    delay(10);
-    waitBusy();
-}
+// E Ink Spectra 6 命令定义
+#define CMD_PANEL_SETTING 0x00
+#define CMD_POWER_SETTING 0x01
+#define CMD_POWER_OFF 0x02
+#define CMD_POWER_ON 0x04
+#define CMD_BOOSTER_SOFT_START 0x06
+#define CMD_DEEP_SLEEP 0x07
+#define CMD_DISPLAY_START_TRANSMISSION 0x10
+#define CMD_DISPLAY_REFRESH 0x12
+#define CMD_VCOM_AND_DATA_INTERVAL_SETTING 0x50
+#define CMD_RESOLUTION_SETTING 0x61
+#define CMD_GET_STATUS 0x71
 
-void DisplayDriver::waitBusy()
-{
-    while (digitalRead(_pinBUSY) == HIGH) {
-        delay(10);
-    }
-}
+DisplayDriver::DisplayDriver() : _initialized(false) {}
 
-bool DisplayDriver::isBusy() const
-{
-    return digitalRead(_pinBUSY) == HIGH;
-}
-
-bool DisplayDriver::waitUntilIdle(uint32_t timeoutMs)
-{
-    uint32_t start = millis();
-    while (isBusy()) {
-        if (millis() - start > timeoutMs) {
-            return false;
-        }
-        delay(10);
-    }
-    return true;
-}
-
-void DisplayDriver::spiTransfer(uint8_t data)
-{
+void DisplayDriver::spiTransfer(uint8_t data) {
     SPI.transfer(data);
 }
 
-void DisplayDriver::writeCommand(uint8_t cmd)
-{
-    digitalWrite(_pinDC, LOW);
-    digitalWrite(_pinCS, LOW);
+void DisplayDriver::sendCommand(uint8_t cmd) {
+    digitalWrite(EINK_DC, LOW);
+    digitalWrite(EINK_CS, LOW);
     spiTransfer(cmd);
-    digitalWrite(_pinCS, HIGH);
+    digitalWrite(EINK_CS, HIGH);
 }
 
-void DisplayDriver::writeData(uint8_t data)
-{
-    digitalWrite(_pinDC, HIGH);
-    digitalWrite(_pinCS, LOW);
+void DisplayDriver::sendData(uint8_t data) {
+    digitalWrite(EINK_DC, HIGH);
+    digitalWrite(EINK_CS, LOW);
     spiTransfer(data);
-    digitalWrite(_pinCS, HIGH);
+    digitalWrite(EINK_CS, HIGH);
 }
 
-void DisplayDriver::writeData(const uint8_t* data, size_t len)
-{
-    digitalWrite(_pinDC, HIGH);
-    digitalWrite(_pinCS, LOW);
+void DisplayDriver::sendData(const uint8_t* data, size_t len) {
+    digitalWrite(EINK_DC, HIGH);
+    digitalWrite(EINK_CS, LOW);
     for (size_t i = 0; i < len; i++) {
         spiTransfer(data[i]);
     }
-    digitalWrite(_pinCS, HIGH);
+    digitalWrite(EINK_CS, HIGH);
 }
 
-void DisplayDriver::clear(uint8_t color)
-{
-#if LOG_LEVEL >= 3
-    Serial.println("[Display] Clearing...");
-#endif
-
-    // 发送清屏命令
-    writeCommand(CMD_RESOLUTION);
-    writeData(_width >> 8);
-    writeData(_width & 0xFF);
-    writeData(_height >> 8);
-    writeData(_height & 0xFF);
-
-    // 填充颜色（需要根据具体屏幕实现）
-    size_t pixelCount = _width * _height;
-    uint8_t fillValue = (color == EPD_WHITE) ? 0xFF : 0x00;
-
-    writeCommand(CMD_DISPLAY_START_TRANS);
-    for (size_t i = 0; i < pixelCount / 4; i++) {
-        writeData(fillValue);
-    }
-
-    // 刷新显示
-    writeCommand(CMD_DISPLAY_REFRESH);
-    waitBusy();
-
-#if LOG_LEVEL >= 3
-    Serial.println("[Display] Clear done");
-#endif
+void DisplayDriver::reset() {
+    digitalWrite(EINK_RST, HIGH);
+    delay(20);
+    digitalWrite(EINK_RST, LOW);
+    delay(2);
+    digitalWrite(EINK_RST, HIGH);
+    delay(20);
 }
 
-bool DisplayDriver::displayBin(const BinFileData& binData)
-{
-    if (!binData.data || binData.size == 0) {
-        return false;
+bool DisplayDriver::isBusy() {
+    return digitalRead(EINK_BUSY) == LOW;
+}
+
+void DisplayDriver::waitUntilIdle() {
+    // 忙信号低电平有效
+    while (digitalRead(EINK_BUSY) == LOW) {
+        delay(10);
+    }
+    delay(100); // 额外延迟确保稳定
+}
+
+bool DisplayDriver::begin() {
+    DEBUG_SERIAL.println("[Display] 初始化 E Ink Spectra 6...");
+
+    // 配置引脚
+    pinMode(EINK_CS, OUTPUT);
+    pinMode(EINK_DC, OUTPUT);
+    pinMode(EINK_RST, OUTPUT);
+    pinMode(EINK_BUSY, INPUT_PULLUP);
+
+    digitalWrite(EINK_CS, HIGH);
+    digitalWrite(EINK_DC, HIGH);
+
+    // 初始化 SPI
+    SPI.begin(EINK_SCK, -1, EINK_MOSI, EINK_CS);
+    SPI.setFrequency(20000000); // 20MHz
+
+    // 复位屏幕
+    reset();
+
+    // 等待屏幕就绪
+    waitUntilIdle();
+
+    // 软启动
+    sendCommand(CMD_BOOSTER_SOFT_START);
+    sendData(0x17);
+    sendData(0x17);
+    sendData(0x17);
+    delay(10);
+
+    // 电源设置
+    sendCommand(CMD_POWER_SETTING);
+    sendData(0x07);
+    sendData(0x17);
+    sendData(0x3F);
+    sendData(0x3F);
+    sendData(0x0D);
+    delay(10);
+
+    // 面板设置
+    sendCommand(CMD_PANEL_SETTING);
+    sendData(0x0F); // 默认设置
+    delay(10);
+
+    // 设置分辨率 800x480
+    sendCommand(CMD_RESOLUTION_SETTING);
+    sendData(0x03); // 800 >> 8
+    sendData(0x20); // 800 & 0xFF
+    sendData(0x01); // 480 >> 8
+    sendData(0xE0); // 480 & 0xFF
+
+    // VCOM 和数据间隔设置
+    sendCommand(CMD_VCOM_AND_DATA_INTERVAL_SETTING);
+    sendData(0x31);
+    sendData(0x07);
+
+    _initialized = true;
+    DEBUG_SERIAL.println("[Display] 初始化完成");
+    return true;
+}
+
+void DisplayDriver::clear() {
+    if (!_initialized) return;
+
+    DEBUG_SERIAL.println("[Display] 清屏...");
+
+    // 计算每行字节数: 800 * 3bit / 8 = 300 bytes
+    const int bytesPerLine = (SCREEN_WIDTH * 3 + 7) / 8; // 300 bytes
+
+    // 白色像素在 Spectra 6 中通常用 0x01 表示 (3bit: 001)
+    // 每 8 个像素 = 3 bytes，全部为 0x49 (01001001) 表示全白
+    uint8_t whiteLine[300];
+    memset(whiteLine, 0x49, sizeof(whiteLine));
+
+    sendCommand(CMD_DISPLAY_START_TRANSMISSION);
+
+    for (int y = 0; y < SCREEN_HEIGHT; y++) {
+        sendData(whiteLine, bytesPerLine);
     }
 
-    // 检查分辨率是否匹配
-    if (binData.width != _width || binData.height != _height) {
-        if (binData.width != _height || binData.height != _width) {
-            // 尝试旋转90度匹配
-#if LOG_LEVEL >= 2
-            Serial.println("[Display] Warning: Resolution mismatch");
-#endif
-        }
-    }
+    sendCommand(CMD_DISPLAY_REFRESH);
+    waitUntilIdle();
 
-    // 计算数据起始位置（跳过 bin header）
-    uint8_t ditherModeLen = binData.data[6];
-    size_t dataOffset = 12 + ditherModeLen;
-    const uint8_t* pixelData = binData.data + dataOffset;
-    size_t pixelDataSize = binData.size - dataOffset;
+    DEBUG_SERIAL.println("[Display] 清屏完成");
+}
 
-#if LOG_LEVEL >= 3
-    Serial.print("[Display] Displaying bin: ");
-    Serial.print(binData.width);
-    Serial.print("x");
-    Serial.print(binData.height);
-    Serial.print(", ");
-    Serial.print(pixelDataSize);
-    Serial.println(" bytes");
-#endif
+void DisplayDriver::display(const uint8_t* buffer) {
+    if (!_initialized || buffer == nullptr) return;
 
-    // 设置分辨率
-    writeCommand(CMD_RESOLUTION);
-    writeData(binData.width >> 8);
-    writeData(binData.width & 0xFF);
-    writeData(binData.height >> 8);
-    writeData(binData.height & 0xFF);
+    DEBUG_SERIAL.println("[Display] 刷新屏幕...");
+
+    const int bytesPerLine = (SCREEN_WIDTH * 3 + 7) / 8; // 300 bytes
+    const size_t totalBytes = bytesPerLine * SCREEN_HEIGHT;
+
+    // 上电
+    sendCommand(CMD_POWER_ON);
+    waitUntilIdle();
 
     // 发送图像数据
-    if (!sendIndexedData(pixelData, binData.width, binData.height, binData.paletteColors)) {
-        return false;
-    }
+    sendCommand(CMD_DISPLAY_START_TRANSMISSION);
+    sendData(buffer, totalBytes);
 
     // 刷新显示
-    writeCommand(CMD_DISPLAY_REFRESH);
+    sendCommand(CMD_DISPLAY_REFRESH);
+    waitUntilIdle();
 
-#if LOG_LEVEL >= 3
-    Serial.println("[Display] Refresh started");
-#endif
+    // 断电
+    sendCommand(CMD_POWER_OFF);
+    waitUntilIdle();
 
-    return true;
+    DEBUG_SERIAL.println("[Display] 刷新完成");
 }
 
-bool DisplayDriver::sendIndexedData(const uint8_t* indexedData, uint16_t width, uint16_t height, uint8_t colors)
-{
-    // 基类提供默认实现：将调色板索引转换为字节流
-    // 子类可以重写此方法以适应特定屏幕的数据格式
+// 辅助函数：从源缓冲区获取指定坐标的像素值（3bit）
+static inline uint8_t getPixel(const uint8_t* buffer, int x, int y, int srcWidth) {
+    int pixelIndex = y * srcWidth + x;
+    int byteIndex = pixelIndex * 3 / 8;
+    int bitOffset = (pixelIndex * 3) % 8;
 
-    size_t pixelCount = width * height;
+    uint16_t value = buffer[byteIndex] | (buffer[byteIndex + 1] << 8);
+    return (value >> bitOffset) & 0x07;
+}
 
-    // 对于4色屏幕，每4个像素占1字节
-    // 对于2色屏幕，每8个像素占1字节
+// 辅助函数：设置目标缓冲区的像素值（3bit）
+static inline void setPixel(uint8_t* buffer, int x, int y, int dstWidth, uint8_t color) {
+    int pixelIndex = y * dstWidth + x;
+    int byteIndex = pixelIndex * 3 / 8;
+    int bitOffset = (pixelIndex * 3) % 8;
 
-    writeCommand(CMD_DISPLAY_START_TRANS);
+    uint16_t mask = ~(0x07 << bitOffset);
+    uint16_t value = (color & 0x07) << bitOffset;
+    uint16_t current = buffer[byteIndex] | (buffer[byteIndex + 1] << 8);
+    current = (current & mask) | value;
+    buffer[byteIndex] = current & 0xFF;
+    buffer[byteIndex + 1] = (current >> 8) & 0xFF;
+}
 
-    if (colors == 4) {
-        // 4色：每个像素2bit，每字节4个像素
-        // 需要打包数据
-        for (size_t i = 0; i < pixelCount; i += 4) {
-            uint8_t byte = 0;
-            for (int j = 0; j < 4 && (i + j) < pixelCount; j++) {
-                uint8_t pixel = indexedData[i + j] & 0x03;
-                byte |= (pixel << (6 - j * 2));
+void DisplayDriver::displayRotated(const uint8_t* srcBuffer) {
+    if (!_initialized || srcBuffer == nullptr) return;
+
+    DEBUG_SERIAL.println("[Display] 旋转显示竖屏图片...");
+
+    // 源图片：480x800
+    const int SRC_WIDTH = 480;
+    const int SRC_HEIGHT = 800;
+    const int DST_WIDTH = SCREEN_WIDTH;   // 800
+    const int DST_HEIGHT = SCREEN_HEIGHT; // 480
+
+    // 计算每行字节数
+    const int dstBytesPerLine = (DST_WIDTH * 3 + 7) / 8; // 300 bytes
+    const size_t dstTotalBytes = dstBytesPerLine * DST_HEIGHT;
+
+    // 分配临时缓冲区用于旋转后的数据
+    uint8_t* rotatedBuffer = (uint8_t*)ps_malloc(dstTotalBytes);
+    if (rotatedBuffer == nullptr) {
+        rotatedBuffer = (uint8_t*)malloc(dstTotalBytes);
+    }
+    if (rotatedBuffer == nullptr) {
+        DEBUG_SERIAL.println("[Display] 旋转缓冲区分配失败");
+        return;
+    }
+
+    // 清空缓冲区（白色）
+    memset(rotatedBuffer, 0x49, dstTotalBytes);
+
+    DEBUG_SERIAL.println("[Display] 开始旋转...");
+
+    // 旋转 90 度：源(x, y) -> 目标(y, 479-x)
+    // 同时需要缩放/裁剪以适应屏幕
+    // 简单方案：居中显示，保持比例
+
+    // 计算缩放比例和偏移量
+    // 源高 800 映射到目标宽 800（1:1）
+    // 源宽 480 映射到目标高 480（1:1）
+    // 完美匹配！
+
+    for (int dstY = 0; dstY < DST_HEIGHT; dstY++) {
+        for (int dstX = 0; dstX < DST_WIDTH; dstX++) {
+            // 目标(dstX, dstY) 对应 源(479-dstY, dstX)
+            int srcX = 479 - dstY;
+            int srcY = dstX;
+
+            if (srcX >= 0 && srcX < SRC_WIDTH && srcY >= 0 && srcY < SRC_HEIGHT) {
+                uint8_t color = getPixel(srcBuffer, srcX, srcY, SRC_WIDTH);
+                setPixel(rotatedBuffer, dstX, dstY, DST_WIDTH, color);
             }
-            writeData(byte);
-        }
-    } else {
-        // 2色：每个像素1bit，每字节8个像素
-        for (size_t i = 0; i < pixelCount; i += 8) {
-            uint8_t byte = 0;
-            for (int j = 0; j < 8 && (i + j) < pixelCount; j++) {
-                if (indexedData[i + j] == EPD_BLACK) {
-                    byte |= (1 << (7 - j));
-                }
-            }
-            writeData(byte);
         }
     }
 
-    return true;
+    DEBUG_SERIAL.println("[Display] 旋转完成，刷新屏幕...");
+
+    // 上电
+    sendCommand(CMD_POWER_ON);
+    waitUntilIdle();
+
+    // 发送图像数据
+    sendCommand(CMD_DISPLAY_START_TRANSMISSION);
+    sendData(rotatedBuffer, dstTotalBytes);
+
+    // 刷新显示
+    sendCommand(CMD_DISPLAY_REFRESH);
+    waitUntilIdle();
+
+    // 断电
+    sendCommand(CMD_POWER_OFF);
+    waitUntilIdle();
+
+    // 释放缓冲区
+    free(rotatedBuffer);
+
+    DEBUG_SERIAL.println("[Display] 刷新完成");
 }
 
-void DisplayDriver::sleep()
-{
-#if LOG_LEVEL >= 3
-    Serial.println("[Display] Entering sleep mode");
-#endif
+void DisplayDriver::sleep() {
+    if (!_initialized) return;
 
-    writeCommand(CMD_POWER_OFF);
-    waitBusy();
+    DEBUG_SERIAL.println("[Display] 进入深度睡眠...");
 
-    writeCommand(CMD_DEEP_SLEEP);
-    writeData(0xA5);  // 检查码
+    sendCommand(CMD_DEEP_SLEEP);
+    sendData(0xA5); // 需要这个确认码
+
+    delay(100);
 }
 
-void DisplayDriver::wakeup()
-{
-#if LOG_LEVEL >= 3
-    Serial.println("[Display] Waking up");
-#endif
+void DisplayDriver::wakeup() {
+    DEBUG_SERIAL.println("[Display] 唤醒...");
 
-    hardwareReset();
+    // 复位唤醒
+    reset();
+    delay(100);
+
+    // 重新初始化
+    begin();
 }

@@ -1,122 +1,77 @@
-/**
- * @file display_driver.h
- * @brief 墨水屏驱动抽象层
- *
- * 支持多种墨水屏驱动，通过抽象层统一接口
- */
-
 #ifndef DISPLAY_DRIVER_H
 #define DISPLAY_DRIVER_H
 
 #include <Arduino.h>
 #include <SPI.h>
-#include "api_client.h"
+#include "config.h"
 
-// 显示驱动类型
-enum DisplayType {
-    DISPLAY_GDEP073E01,     // 7.3寸 800x480 彩色
-    DISPLAY_GDEY075T7,      // 7.5寸 800x480 黑白
-    DISPLAY_GDEW075C64,     // 7.5寸 640x384 黑白红黄
-    DISPLAY_CUSTOM          // 自定义
+// E Ink Spectra 6 颜色定义 (6色)
+enum EInkColor {
+    EINK_BLACK   = 0x00,
+    EINK_WHITE   = 0x01,
+    EINK_GREEN   = 0x02,
+    EINK_BLUE    = 0x03,
+    EINK_RED     = 0x04,
+    EINK_YELLOW  = 0x05,
+    EINK_ORANGE  = 0x06  // 某些面板支持
 };
 
-// 调色板颜色 (4色墨水屏: BWRY)
-enum EpdColor {
-    EPD_BLACK   = 0,
-    EPD_WHITE   = 1,
-    EPD_RED     = 2,    // 或黄色，取决于屏幕
-    EPD_YELLOW  = 3
-};
-
+// 显示驱动类
 class DisplayDriver {
 public:
     DisplayDriver();
-    virtual ~DisplayDriver();
 
-    /**
-     * @brief 初始化显示驱动
-     * @param type 显示类型
-     * @param cs CS引脚
-     * @param dc DC引脚
-     * @param rst RST引脚
-     * @param busy BUSY引脚
-     * @return 是否成功
-     */
-    virtual bool init(DisplayType type, uint8_t cs, uint8_t dc, uint8_t rst, uint8_t busy);
+    // 初始化屏幕
+    bool begin();
 
-    /**
-     * @brief 清屏
-     * @param color 填充颜色
-     */
-    virtual void clear(uint8_t color = EPD_WHITE);
+    // 清屏（白色）
+    void clear();
 
-    /**
-     * @brief 显示 Bin 文件数据
-     * @param binData bin文件数据
-     * @return 是否成功
-     *
-     * Bin 文件格式:
-     * - 数据是调色板索引（每个像素1字节）
-     * - 需要映射到实际屏幕颜色
-     */
-    virtual bool displayBin(const BinFileData& binData);
+    // 全屏刷新显示缓冲区内容
+    // buffer: 6色压缩格式的图像数据
+    // 对于 800x480 的 Spectra 6，每个像素用 3bit 表示
+    void display(const uint8_t* buffer);
 
-    /**
-     * @brief 进入睡眠模式
-     */
-    virtual void sleep();
+    // 旋转 90 度显示（竖屏图片在横屏上显示）
+    // srcBuffer: 480x800 的源图片
+    // 将 480x800 旋转 90 度显示在 800x480 屏幕上
+    void displayRotated(const uint8_t* srcBuffer);
 
-    /**
-     * @brief 唤醒
-     */
-    virtual void wakeup();
+    // 进入深度睡眠模式
+    void sleep();
 
-    /**
-     * @brief 获取屏幕宽度
-     */
-    uint16_t getWidth() const { return _width; }
+    // 从睡眠中唤醒
+    void wakeup();
 
-    /**
-     * @brief 获取屏幕高度
-     */
-    uint16_t getHeight() const { return _height; }
+    // 检查屏幕是否忙碌
+    bool isBusy();
 
-    /**
-     * @brief 是否正在刷新
-     */
-    bool isBusy() const;
+    // 获取屏幕宽度
+    int width() { return SCREEN_WIDTH; }
 
-    /**
-     * @brief 等待刷新完成
-     * @param timeoutMs 超时时间
-     */
-    bool waitUntilIdle(uint32_t timeoutMs = 30000);
+    // 获取屏幕高度
+    int height() { return SCREEN_HEIGHT; }
 
-protected:
-    DisplayType _type;
-    uint8_t _pinCS;
-    uint8_t _pinDC;
-    uint8_t _pinRST;
-    uint8_t _pinBUSY;
-    uint16_t _width;
-    uint16_t _height;
-    uint8_t _colors;
+    // 获取每行字节数（用于 Spectra 6: 800 * 3bit / 8 = 300 bytes）
+    int bytesPerLine() { return (SCREEN_WIDTH * 3 + 7) / 8; }
 
-    // SPI 通信
+    // 获取缓冲区大小
+    size_t bufferSize() { return bytesPerLine() * SCREEN_HEIGHT; }
+
+private:
+    bool _initialized;
+
+    // 硬件 SPI 通信
     void spiTransfer(uint8_t data);
-    void writeCommand(uint8_t cmd);
-    void writeData(uint8_t data);
-    void writeData(const uint8_t* data, size_t len);
+    void sendCommand(uint8_t cmd);
+    void sendData(uint8_t data);
+    void sendData(const uint8_t* data, size_t len);
 
-    // 硬件复位
-    void hardwareReset();
+    // 复位屏幕
+    void reset();
 
-    // 等待忙信号
-    void waitBusy();
-
-    // 发送调色板索引数据到屏幕
-    // 子类需要实现具体的发送逻辑
-    virtual bool sendIndexedData(const uint8_t* indexedData, uint16_t width, uint16_t height, uint8_t colors);
+    // 等待忙碌信号
+    void waitUntilIdle();
 };
 
 #endif // DISPLAY_DRIVER_H

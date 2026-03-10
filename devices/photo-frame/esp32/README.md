@@ -1,205 +1,131 @@
-# Relive ESP32 墨水屏相框固件
+# Relive ESP32 墨水屏相框
 
-基于 ESP32-S3 的简化版墨水屏数字相框固件，专为 Relive 照片记忆系统设计。
+基于 ESP32-S3 和 7.3寸 E Ink Spectra 6 彩色墨水屏的智能相框。
 
-## 核心特性
+## 硬件规格
 
-- **简化接口设计**：只请求一个接口 `/api/v1/device/display.bin` 直接获取照片 bin 文件
-- **低功耗设计**：深度睡眠模式，定时唤醒刷新
-- **自动重试**：网络错误自动重试机制（最多3次）
-- **校验和验证**：SHA256 校验确保数据传输完整性
-- **硬件抽象**：通过抽象层支持多种墨水屏驱动
+- **主控**: ESP32-S3 (16MB Flash, 8MB PSRAM)
+- **屏幕**: Good Display GDEP073E01 (7.3寸 E Ink Spectra 6)
+  - 分辨率: 800x480
+  - 颜色: 6色 (黑、白、红、黄、蓝、绿)
+  - 接口: SPI
+- **连接**: WiFi
 
-## 硬件要求
+## 功能特性
 
-- **主控**：ESP32-S3（推荐 8MB Flash + 2MB PSRAM）
-- **墨水屏**：支持 480x800 分辨率
-  - 测试通过：GDEP073E01 (7.3寸 彩色)
-  - 兼容：其他 SPI 接口 800x480 墨水屏
-- **网络**：Wi-Fi 2.4GHz
-- **电源**：5V/2A 或锂电池+充电模块
-
-## 项目结构
-
-```
-devices/photo-frame/esp32/
-├── include/
-│   ├── config.h                    # 主配置（从 config_local.h 加载敏感信息）
-│   ├── config_local.h.example      # 本地配置模板
-│   ├── wifi_manager.h              # WiFi 管理
-│   ├── api_client.h                # API 客户端
-│   └── display_driver.h            # 显示驱动抽象层
-├── lib/
-│   ├── wifi_manager.cpp            # WiFi 实现
-│   ├── api_client.cpp              # API 客户端实现
-│   └── display_driver.cpp          # 显示驱动实现
-├── src/
-│   └── main.cpp                    # 主程序
-├── platformio.ini                  # PlatformIO 配置
-└── README.md                       # 本文件
-```
-
-## 快速开始
-
-### 1. 硬件连接
-
-```
-ESP32-S3          墨水屏
---------          ------
-GPIO10  (CS)  ->  CS
-GPIO11  (SCK) ->  SCK
-GPIO12  (MOSI)->  SDI
-GPIO13  (DC)  ->  DC
-GPIO14  (RST) ->  RST
-GPIO15  (BUSY)->  BUSY
-GPIO2   (LED) ->  状态指示灯（可选）
-GPIO0   (BTN) ->  手动刷新按钮（可选，接地触发）
-3.3V          ->  VCC
-GND           ->  GND
-```
-
-### 2. 配置
-
-```bash
-# 进入项目目录
-cd devices/photo-frame/esp32
-
-# 复制配置文件模板
-cp include/config_local.h.example include/config_local.h
-
-# 编辑配置
-nano include/config_local.h
-```
-
-填入你的配置：
-
-```cpp
-#define WIFI_SSID       "your-wifi-ssid"
-#define WIFI_PASSWORD   "your-wifi-password"
-#define API_BASE_URL    "http://your-server:8080/api/v1"
-#define DEVICE_API_KEY  "sk-relive-your-device-api-key"
-```
-
-### 3. 编译烧录
-
-```bash
-# 安装 PlatformIO
-pip install platformio
-
-# 编译
-pio run
-
-# 烧录并监控
-pio run --target upload
-pio device monitor
-```
+- 自动从服务器获取照片并显示
+- 支持 6 种颜色显示 (黑、白、红、黄、蓝、绿)
+- Deep Sleep 低功耗模式
+- 定时刷新 (默认 5 分钟)
 
 ## API 接口
 
-### 获取照片 Bin 文件
+设备通过以下接口与服务器通信：
 
+### 获取显示信息
+```
+GET /api/v1/device/display
+Header: X-API-Key: {device_api_key}
+```
+
+### 获取显示图像 (bin 文件)
 ```
 GET /api/v1/device/display.bin
-Headers:
-  X-API-Key: <device-api-key>
-
-Response:
-  Content-Type: application/octet-stream
-  X-Asset-ID: <asset-id>
-  X-Checksum: <sha256-hex>
-  X-Photo-ID: <photo-id>
-  X-Render-Profile: <profile-name>
-  X-Batch-Date: <YYYY-MM-DD>
-  X-Sequence: <sequence-number>
-
-  [bin file data]
+Header: X-API-Key: {device_api_key}
+Response: 二进制图像数据 (3bit/像素, 6色格式)
 ```
 
-### Bin 文件格式
+## 配置说明
 
-```
-[0-3]   "RLVD"          - 魔数 (4 bytes)
-[4]     version         - 版本 (1 byte, = 1)
-[5]     palette_colors  - 调色板颜色数 (1 byte)
-[6]     dither_mode_len - 抖动模式字符串长度 (1 byte)
-[7]     reserved        - 保留 (1 byte)
-[8-9]   width           - 宽度 (uint16, little-endian)
-[10-11] height          - 高度 (uint16, little-endian)
-[12..]  dither_mode     - 抖动模式字符串
-[...]   pixel_data      - 调色板索引数据 (每个像素 1 byte)
-```
+在 `include/config.h` 中修改以下配置：
 
-## 工作流程
-
-```
-启动
-  |
-  v
-初始化显示
-  |
-  v
-连接 WiFi
-  |
-  v
-GET /device/display.bin
-  |
-  v
-验证校验和
-  |
-  v
-显示照片
-  |
-  v
-进入深度睡眠（1小时）
-  |
-  v
-定时唤醒 -> 重复以上流程
+```cpp
+#define WIFI_SSID "your_wifi_ssid"        // WiFi 名称
+#define WIFI_PASSWORD "your_wifi_password"    // WiFi 密码
+// 服务器地址支持以下格式：
+// - 纯主机名或 IP: "192.168.1.100" 或 "your-server.local"
+// - 带协议: "http://192.168.1.100" 或 "https://your-server.example.com"
+#define SERVER_HOST "192.168.1.100"
+#define SERVER_PORT 8080                    // 服务器端口（HTTPS 用 443）
+#define DEVICE_API_KEY "your_api_key"       // 设备 API Key
 ```
 
-## 状态指示
+### 自定义 MAC 地址（可选）
 
-| LED 状态 | 含义 |
-|---------|------|
-| 单次慢闪 | 连接 WiFi 中 |
-| 双闪 | 下载数据中 |
-| 缓慢闪烁 | 刷新显示中 |
-| 快速闪烁 x5 | 错误发生，即将重启 |
+如果需要使用自定义 MAC 地址连接 WiFi，在 `config_local.h` 中添加：
+
+```cpp
+#define USE_CUSTOM_MAC_ADDRESS
+#define CUSTOM_MAC_ADDRESS_STRING "AA:BB:CC:DD:EE:FF"
+```
+
+- 取消注释 `USE_CUSTOM_MAC_ADDRESS` 启用自定义 MAC 功能
+- 支持格式: `"AA:BB:CC:DD:EE:FF"` 或 `"AA-BB-CC-DD-EE-FF"`
+- 启动时会在串口输出显示当前使用的 MAC 地址（自定义或默认）
+
+或者创建 `include/config_local.h` 文件覆盖默认配置：
+
+```cpp
+#ifndef CONFIG_LOCAL_H
+#define CONFIG_LOCAL_H
+
+#define WIFI_SSID "your_wifi_ssid"
+#define WIFI_PASSWORD "your_wifi_password"
+#define SERVER_HOST "your_server_ip"
+#define DEVICE_API_KEY "your_device_api_key"
+
+#endif
+```
+
+## 硬件连接
+
+| 屏幕引脚 | ESP32-S3 引脚 |
+|---------|--------------|
+| CS      | GPIO 10      |
+| DC      | GPIO 9       |
+| RST     | GPIO 8       |
+| BUSY    | GPIO 7       |
+| MOSI    | GPIO 11      |
+| SCK     | GPIO 12      |
+
+## 编译上传
+
+```bash
+# 使用 PlatformIO
+pio run --target upload
+
+# 或 VS Code + PlatformIO 扩展
+# 点击 Upload 按钮
+```
 
 ## 调试
 
-```bash
-# 监控串口输出
-pio device monitor
+串口参数: 115200 baud
 
-# 调整日志级别（platformio.ini）
-build_flags = -DLOG_LEVEL=4  # DEBUG 级别
-```
+启动后会输出：
+- WiFi 连接状态
+- 服务器通信日志
+- 显示刷新状态
 
-## 日志级别
+## 数据格式
 
-- `0`: 无日志
-- `1`: ERROR
-- `2`: WARN
-- `3`: INFO (默认)
-- `4`: DEBUG
+屏幕使用 3bit/像素格式表示 6 种颜色：
 
-## 故障排除
+| 值 | 颜色  |
+|---|------|
+| 000 | 黑色 |
+| 001 | 白色 |
+| 010 | 绿色 |
+| 011 | 蓝色 |
+| 100 | 红色 |
+| 101 | 黄色 |
 
-### WiFi 连接失败
-- 检查 SSID 和密码
-- 确认 WiFi 是 2.4GHz
-- 检查信号强度
+每行 800 像素 = 300 bytes (800 * 3 / 8 = 300)
+总缓冲区: 300 * 480 = 144,000 bytes
 
-### 显示异常
-- 检查屏幕连接线
-- 确认屏幕型号和驱动匹配
-- 查看串口日志
+## 注意事项
 
-### API 通信失败
-- 检查 API_BASE_URL 格式（需要 http:// 前缀）
-- 确认 DEVICE_API_KEY 正确
-- 检查服务器防火墙设置
-
-## 许可证
-
-MIT License
+1. 首次使用前需要在后端管理界面创建设备并获取 API Key
+2. 确保 ESP32-S3 和服务器在同一网络或网络可达
+3. 屏幕刷新需要约 10-20 秒，期间不要断电
+4. 建议使用稳定的电源供应 (5V/2A)

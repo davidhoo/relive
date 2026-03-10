@@ -1,98 +1,82 @@
-/**
- * @file config.h
- * @brief ESP32 墨水屏相框配置
- *
- * 从 config_local.h 加载本地配置（不在版本控制中）
- */
-
 #ifndef CONFIG_H
 #define CONFIG_H
 
-// 尝试加载本地配置
+#include <Arduino.h>
+
+// 本地配置文件（覆盖默认配置）
 #if __has_include("config_local.h")
-    #include "config_local.h"
-#else
-    // 默认配置（开发环境）
-    #define WIFI_SSID           "your-wifi-ssid"
-    #define WIFI_PASSWORD       "your-wifi-password"
-    #define API_BASE_URL        "http://192.168.1.100:8080/api/v1"
-    #define DEVICE_API_KEY      "your-device-api-key"
+#include "config_local.h"
 #endif
 
-// ============ 硬件配置 ============
-
-// 墨水屏引脚定义 (ESP32-S3)
-#define EPD_PIN_CS          10
-#define EPD_PIN_SCK         11
-#define EPD_PIN_MOSI        12
-#define EPD_PIN_DC          13
-#define EPD_PIN_RST         14
-#define EPD_PIN_BUSY        15
-
-// LED 指示灯
-#define LED_PIN             2
-
-// 按键（用于手动刷新）
-#define BUTTON_PIN          0
-
-// ============ 网络配置 ============
-
-#define WIFI_CONNECT_TIMEOUT_MS     30000
-#define WIFI_RECONNECT_ATTEMPTS     3
-
-// 自定义 MAC 地址（如果 config_local.h 中定义了字符串则使用）
-#ifndef WIFI_CUSTOM_MAC
-    #define WIFI_USE_CUSTOM_MAC     0
-#else
-    #define WIFI_USE_CUSTOM_MAC     1
+// ===================== WiFi 配置 =====================
+// 请在 config_local.h 中定义实际的 WiFi 密码
+#ifndef WIFI_SSID
+#define WIFI_SSID "your_wifi_ssid"
 #endif
 
-// HTTP 配置
-#define HTTP_TIMEOUT_MS             60000
-#define HTTP_BUFFER_SIZE            4096
+#ifndef WIFI_PASSWORD
+#define WIFI_PASSWORD "your_wifi_password"
+#endif
 
-// ============ API 配置 ============
+// 自定义 MAC 地址（可选）
+// 支持两种格式：
+// 1. 字符串格式（推荐）: "AA:BB:CC:DD:EE:FF"
+// 2. 数组格式: {0x14, 0x2B, 0x2F, 0xEC, 0x0B, 0x04}
+// 取消下面两行注释并设置后，将使用自定义 MAC 地址连接 WiFi
+// #define USE_CUSTOM_MAC_ADDRESS
+// #define CUSTOM_MAC_ADDRESS_STRING "AA:BB:CC:DD:EE:FF"
 
-#define API_ENDPOINT_DISPLAY_BIN    "/device/display.bin"
-#define API_HEADER_API_KEY          "X-API-Key"
+// ===================== 服务器配置 =====================
+// 后端服务器地址
+// 支持格式：
+// - 纯主机名/IP: "192.168.1.100" 或 "your-server.local"
+// - 带协议: "http://192.168.1.100" 或 "https://your-server.example.com"
+#ifndef SERVER_HOST
+#define SERVER_HOST "192.168.1.100"
+#endif
 
-// ============ 显示配置 ============
+#ifndef SERVER_PORT
+#define SERVER_PORT 8080
+#endif
 
-// 默认渲染规格
-#define DISPLAY_WIDTH               480
-#define DISPLAY_HEIGHT              800
-#define DISPLAY_COLOR_DEPTH         4
+// 设备 API Key（在管理后台创建设备时获得）
+#ifndef DEVICE_API_KEY
+#define DEVICE_API_KEY "your_device_api_key_here"
+#endif
 
-// 刷新间隔（毫秒）
-#define REFRESH_INTERVAL_MS         60000       // 1分钟
-#define REFRESH_INTERVAL_DEEP_SLEEP 3600000000ULL // 1小时（微秒，用于深度睡眠）
+// ===================== 屏幕配置 =====================
+// 7.3寸 E Ink Spectra 6 分辨率
+#define SCREEN_WIDTH 800
+#define SCREEN_HEIGHT 480
 
-// ============ 电源管理 ============
+// SPI 引脚配置 (根据 ESP32-S3 实际连接修改)
+#define EINK_CS     10
+#define EINK_DC     9
+#define EINK_RST    8
+#define EINK_BUSY   7
+#define EINK_MOSI   11
+#define EINK_SCK    12
 
-// 启用深度睡眠
-#define ENABLE_DEEP_SLEEP           1
+// ===================== 功能配置 =====================
+// 刷新间隔（毫秒）- 默认5分钟
+#define REFRESH_INTERVAL_MS 300000
 
-// 电池电量检测（ADC）
-#define BATTERY_ADC_PIN             4
-#define BATTERY_ADC_DIVIDER         2.0f
+// HTTP 请求超时（毫秒）
+#define HTTP_TIMEOUT_MS 30000
 
-// 低电量阈值（百分比）
-#define BATTERY_LOW_THRESHOLD       20
+// 最大重试次数
+#define MAX_RETRY_COUNT 3
 
-// ============ 调试配置 ============
+// 重试延迟（毫秒）
+#define RETRY_DELAY_MS 5000
 
-// 日志级别: 0=NONE, 1=ERROR, 2=WARN, 3=INFO, 4=DEBUG
-#define LOG_LEVEL                   3
+// ===================== 调试配置 =====================
+#define DEBUG_SERIAL Serial
+#define DEBUG_BAUDRATE 115200
 
-// 串口波特率
-#define SERIAL_BAUD_RATE            115200
-
-// ============ 缓冲区配置 ============
-
-// Bin 文件最大大小（800 * 480 * 2 约 768KB，留有余量）
-#define BIN_FILE_MAX_SIZE           (1024 * 1024)
-
-// 分块下载缓冲区大小
-#define DOWNLOAD_CHUNK_SIZE         4096
+// 日志级别: 0=ERROR, 1=WARN, 2=INFO, 3=DEBUG
+#ifndef LOG_LEVEL
+#define LOG_LEVEL 3
+#endif
 
 #endif // CONFIG_H

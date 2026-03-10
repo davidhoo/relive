@@ -1,83 +1,75 @@
-/**
- * @file api_client.h
- * @brief Relive API 客户端（简化版）
- *
- * 只请求一个接口获取照片 bin 文件
- */
-
 #ifndef API_CLIENT_H
 #define API_CLIENT_H
 
 #include <Arduino.h>
 #include <HTTPClient.h>
+#include <WiFiClient.h>
+#include <WiFiClientSecure.h>
+#include "config.h"
 
-// Bin 文件头部信息（从 HTTP Headers 获取）
-struct BinHeaderInfo {
-    uint32_t assetId;
-    uint32_t photoId;
-    char checksum[65];      // SHA256 hex string
-    char renderProfile[32];
-    char batchDate[11];     // YYYY-MM-DD
-    uint16_t sequence;
-    size_t contentLength;
+// 显示信息结构体
+struct DisplayInfo {
+    String batchDate;
+    int sequence;
+    int totalCount;
+    uint32_t photoID;
+    uint32_t itemID;
+    uint32_t assetID;
+    String renderProfile;
+    String binURL;
+    String checksum;
     bool valid;
 };
 
-// Bin 文件数据结构
-struct BinFileData {
-    uint8_t* data;
-    size_t size;
-    BinHeaderInfo header;
-    uint16_t width;
-    uint16_t height;
-    uint8_t paletteColors;
-};
-
-class ApiClient {
+class APIClient {
 public:
-    ApiClient();
-    ~ApiClient();
+    APIClient();
 
-    /**
-     * @brief 设置 API 基础 URL
-     */
-    void setBaseUrl(const char* baseUrl);
+    // 初始化
+    void begin();
 
-    /**
-     * @brief 设置 API Key
-     */
-    void setApiKey(const char* apiKey);
+    // 获取显示信息（JSON 元数据）
+    DisplayInfo getDisplayInfo();
 
-    /**
-     * @brief 获取显示 bin 文件
-     * @param outData 输出数据（内部 malloc，使用后需调用 freeBinData）
-     * @return 是否成功
-     */
-    bool getDisplayBin(BinFileData& outData);
+    // 下载 bin 文件到缓冲区
+    // 返回：下载的字节数，-1 表示失败
+    int downloadBinFile(uint8_t* buffer, size_t bufferSize, String& outChecksum);
 
-    /**
-     * @brief 释放 bin 数据内存
-     */
-    void freeBinData(BinFileData& data);
+    // HTTP 下载 bin 文件
+    int downloadBinFileHTTP(uint8_t* buffer, size_t bufferSize, String& outChecksum);
 
-    /**
-     * @brief 获取最后一次错误信息
-     */
-    const char* getLastError();
+    // HTTPS 下载 bin 文件
+    int downloadBinFileHTTPS(uint8_t* buffer, size_t bufferSize, String& outChecksum);
 
-    /**
-     * @brief 获取 HTTP 状态码
-     */
+    // 获取最后一次错误信息
+    String getLastError();
+
+    // 获取 HTTP 响应码
     int getLastHttpCode();
 
 private:
-    String _baseUrl;
-    String _apiKey;
     String _lastError;
     int _lastHttpCode;
+    bool _useHTTPS;
+    String _baseUrl;
 
-    bool parseBinFile(BinFileData& data);
-    bool validateChecksum(BinFileData& data);
+    // 解析服务器配置，初始化客户端
+    void setupServer();
+
+    // 构建完整的 API URL
+    String buildUrl(const char* endpoint);
+
+    // 设置 HTTP 请求头
+    void setHeaders(HTTPClient& http);
+
+    // 解析显示信息 JSON
+    DisplayInfo parseDisplayInfo(const String& json);
+
+    // HTTP 获取显示信息
+    DisplayInfo getDisplayInfoHTTP();
+
+    // HTTPS 获取显示信息
+    DisplayInfo getDisplayInfoHTTPS();
 };
 
 #endif // API_CLIENT_H

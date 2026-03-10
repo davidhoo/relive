@@ -6,9 +6,3 @@
 
 # 本地配置文件（包含敏感信息）
 include/config_local.h
-
-# 构建输出
-build/
-*.bin
-*.elf
-*.map
