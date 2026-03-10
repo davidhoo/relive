@@ -292,6 +292,35 @@ func (c *Checkpoint) ResetFailed(photoID uint) error {
 	return nil
 }
 
+// ShouldRetry 检查照片是否应该重试
+// 返回 true 如果状态是 failed 且尝试次数未超过 maxAttempts
+func (c *Checkpoint) ShouldRetry(photoID uint, maxAttempts int) (bool, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	var status string
+	var attempts int
+	err := c.db.QueryRow(
+		"SELECT status, attempts FROM checkpoint WHERE photo_id = ?",
+		photoID,
+	).Scan(&status, &attempts)
+
+	if err == sql.ErrNoRows {
+		return true, nil // 未记录，可以重试
+	}
+	if err != nil {
+		return false, fmt.Errorf("check retry: %w", err)
+	}
+
+	// failed 状态且尝试次数未超过限制，可以重试
+	if status == string(StatusFailed) && attempts < maxAttempts {
+		return true, nil
+	}
+
+	// 其他状态（analyzed, submitted）或尝试次数过多，不重试
+	return false, nil
+}
+
 // CleanupOldRecords 清理旧记录（保留最近 N 天的记录）
 func (c *Checkpoint) CleanupOldRecords(days int) (int64, error) {
 	c.mu.Lock()

@@ -403,15 +403,25 @@ func (a *APIAnalyzer) processLoop() {
 			continue
 		}
 
-		// 检查是否已经处理过
+		// 检查是否已经处理过（但如果是服务端新分配的任务，重置状态）
 		processed, err := a.checkpoint.IsProcessed(task.PhotoID)
 		if err != nil {
 			logger.Errorf("Failed to check checkpoint: %v", err)
 		}
 		if processed {
-			logger.Debugf("Photo %d already processed, skipping", task.PhotoID)
-			a.taskManager.StopHeartbeat(task.ID)
-			continue
+			// 如果是 failed 状态，允许重试；其他状态跳过
+			shouldRetry, err := a.checkpoint.ShouldRetry(task.PhotoID, 3)
+			if err != nil {
+				logger.Warnf("Failed to check retry status for photo %d: %v", task.PhotoID, err)
+			}
+			if !shouldRetry {
+				logger.Debugf("Photo %d already processed, skipping", task.PhotoID)
+				a.taskManager.StopHeartbeat(task.ID)
+				continue
+			}
+			// 重置状态，允许重试
+			logger.Infof("Photo %d will be retried, resetting checkpoint status", task.PhotoID)
+			a.checkpoint.ResetFailed(task.PhotoID)
 		}
 
 		// 提交到工作池
