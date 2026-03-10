@@ -382,26 +382,31 @@ func containsSubstr(s, substr string) bool {
 }
 
 func (s *thumbnailService) seedPendingJobs() error {
+	// 先检查是否已有足够的待处理任务
+	stats, err := s.jobRepo.GetStats()
+	if err != nil {
+		return fmt.Errorf("get thumbnail job stats: %w", err)
+	}
+	// 如果已有待处理任务，跳过补齐
+	if stats.Pending > 0 || stats.Queued > 0 {
+		s.appendBackgroundLog(fmt.Sprintf("已有 %d 个待处理缩略图任务，跳过补齐", stats.Pending+stats.Queued))
+		return nil
+	}
+
 	var photos []model.Photo
-	return s.db.Model(&model.Photo{}).
+	err = s.db.Model(&model.Photo{}).
 		Where("thumbnail_status != ? OR thumbnail_status IS NULL OR thumbnail_path = ''", "ready").
-		FindInBatches(&photos, 100, func(tx *gorm.DB, batch int) error {
+		FindInBatches(&photos, 200, func(tx *gorm.DB, batch int) error {
 			for i := range photos {
 				if err := s.enqueuePhotoModel(&photos[i], thumbnailSourceManual, thumbnailPriorityManual); err != nil {
-					// 降低日志级别，锁错误不需要每次都警告
 					if !isSQLiteLockError(err) {
 						logger.Warnf("seed thumbnail job failed for photo %d: %v", photos[i].ID, err)
 					}
 				}
-				// 每处理一个任务小睡一下，减少数据库压力
-				if i%10 == 0 {
-					time.Sleep(5 * time.Millisecond)
-				}
 			}
-			// 每批次之间增加延迟，让其他操作有机会执行
-			time.Sleep(50 * time.Millisecond)
 			return nil
 		}).Error
+	return err
 }
 
 func (s *thumbnailService) updateTaskProgress(fn func(task *model.ThumbnailTask)) {

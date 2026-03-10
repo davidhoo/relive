@@ -340,29 +340,34 @@ func (s *geocodeTaskService) updateJobWithRetry(jobID uint, updates map[string]i
 }
 
 func (s *geocodeTaskService) seedPendingJobs() error {
+	// 先检查是否已有足够的待处理任务
+	stats, err := s.jobRepo.GetStats()
+	if err != nil {
+		return fmt.Errorf("get geocode job stats: %w", err)
+	}
+	// 如果已有待处理任务，跳过补齐
+	if stats.Pending > 0 || stats.Queued > 0 {
+		s.appendBackgroundLog(fmt.Sprintf("已有 %d 个待处理 geocode 任务，跳过补齐", stats.Pending+stats.Queued))
+		return nil
+	}
+
 	var photos []model.Photo
 	// 排除 GPS 为 0,0 的无效坐标
-	return s.db.Model(&model.Photo{}).
+	err = s.db.Model(&model.Photo{}).
 		Where("gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL").
 		Where("gps_latitude != 0 OR gps_longitude != 0").
 		Where("(geocode_status != ? OR geocode_status IS NULL)", "ready").
-		FindInBatches(&photos, 100, func(tx *gorm.DB, batch int) error {
+		FindInBatches(&photos, 200, func(tx *gorm.DB, batch int) error {
 			for i := range photos {
 				if err := s.enqueuePhotoModel(&photos[i], geocodeSourceManual, geocodePriorityManual); err != nil {
-					// 降低日志级别，锁错误不需要每次都警告
 					if !isSQLiteLockError(err) {
 						logger.Warnf("seed geocode job failed for photo %d: %v", photos[i].ID, err)
 					}
 				}
-				// 每处理一个任务小睡一下，减少数据库压力
-				if i%10 == 0 {
-					time.Sleep(5 * time.Millisecond)
-				}
 			}
-			// 每批次之间增加延迟
-			time.Sleep(50 * time.Millisecond)
 			return nil
 		}).Error
+	return err
 }
 
 func (s *geocodeTaskService) updateTaskProgress(fn func(task *model.GeocodeTask)) {
