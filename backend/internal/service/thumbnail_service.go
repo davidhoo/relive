@@ -229,7 +229,14 @@ func (s *thumbnailService) enqueuePhotoModel(photo *model.Photo, source string, 
 }
 
 func (s *thumbnailService) runBackground(active *activeThumbnailTask) {
+	logger.Info("Thumbnail background task starting...")
+	s.appendBackgroundLog("缩略图后台生成任务启动中...")
+
 	defer func() {
+		if r := recover(); r != nil {
+			logger.Errorf("Thumbnail background task panic: %v", r)
+			s.appendBackgroundLog(fmt.Sprintf("后台任务异常：%v", r))
+		}
 		now := time.Now()
 		s.taskMutex.Lock()
 		if s.task != nil && (s.task.Status == "running" || s.task.Status == "stopping") {
@@ -240,14 +247,17 @@ func (s *thumbnailService) runBackground(active *activeThumbnailTask) {
 		s.active = nil
 		s.taskMutex.Unlock()
 		close(active.done)
+		logger.Info("Thumbnail background task stopped")
 	}()
 
+	s.appendBackgroundLog("正在检查待处理任务...")
 	if err := s.seedPendingJobs(); err != nil {
 		logger.Warnf("seed thumbnail jobs failed: %v", err)
 		s.appendBackgroundLog(fmt.Sprintf("补齐历史待生成任务失败：%v", err))
 	} else {
 		s.appendBackgroundLog("已扫描历史照片并补齐缩略图待处理队列")
 	}
+	logger.Info("Thumbnail seedPendingJobs completed")
 
 	workers := s.config.Performance.MaxThumbnailWorkers
 	if workers <= 0 {
@@ -267,12 +277,21 @@ func (s *thumbnailService) runBackground(active *activeThumbnailTask) {
 		}()
 	}
 
+	s.appendBackgroundLog("开始处理缩略图任务队列...")
+	logger.Info("Starting thumbnail job processing loop")
+	claimAttempt := 0
 	for {
 		active.mu.Lock()
 		stopRequested := active.stop
 		active.mu.Unlock()
 		if stopRequested {
+			logger.Info("Stop requested, exiting processing loop")
 			break
+		}
+
+		claimAttempt++
+		if claimAttempt%100 == 1 {
+			logger.Debugf("Attempting to claim job (attempt %d)", claimAttempt)
 		}
 
 		job, err := s.jobRepo.ClaimNextJob()
@@ -382,21 +401,30 @@ func containsSubstr(s, substr string) bool {
 }
 
 func (s *thumbnailService) seedPendingJobs() error {
+	logger.Info("Checking thumbnail job stats...")
 	// 先检查是否已有足够的待处理任务
 	stats, err := s.jobRepo.GetStats()
 	if err != nil {
+		logger.Errorf("Failed to get thumbnail job stats: %v", err)
 		return fmt.Errorf("get thumbnail job stats: %w", err)
 	}
+	logger.Infof("Thumbnail job stats: pending=%d, queued=%d, processing=%d, completed=%d",
+		stats.Pending, stats.Queued, stats.Processing, stats.Completed)
+
 	// 如果已有待处理任务，跳过补齐
 	if stats.Pending > 0 || stats.Queued > 0 {
 		s.appendBackgroundLog(fmt.Sprintf("已有 %d 个待处理缩略图任务，跳过补齐", stats.Pending+stats.Queued))
+		logger.Info("Skipping seedPendingJobs, tasks already exist")
 		return nil
 	}
 
+	s.appendBackgroundLog("正在扫描历史照片...")
+	logger.Info("Scanning photos for thumbnail jobs...")
 	var photos []model.Photo
 	err = s.db.Model(&model.Photo{}).
 		Where("thumbnail_status != ? OR thumbnail_status IS NULL OR thumbnail_path = ''", "ready").
 		FindInBatches(&photos, 200, func(tx *gorm.DB, batch int) error {
+			logger.Debugf("Processing batch %d, photos in batch: %d", batch, len(photos))
 			for i := range photos {
 				if err := s.enqueuePhotoModel(&photos[i], thumbnailSourceManual, thumbnailPriorityManual); err != nil {
 					if !isSQLiteLockError(err) {
@@ -406,7 +434,12 @@ func (s *thumbnailService) seedPendingJobs() error {
 			}
 			return nil
 		}).Error
-	return err
+	if err != nil {
+		logger.Errorf("FindInBatches failed: %v", err)
+		return err
+	}
+	logger.Info("Finished scanning photos for thumbnail jobs")
+	return nil
 }
 
 func (s *thumbnailService) updateTaskProgress(fn func(task *model.ThumbnailTask)) {
