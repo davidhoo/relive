@@ -711,7 +711,7 @@ ai:
 
   # Qwen 配置（在线，付费）
   qwen:
-    api_key: sk-xxxxx
+    api_key: "sk-xxxxx"
     endpoint: https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation
     model: qwen-vl-max  # 可选: qwen-vl-max, qwen-vl-plus, qwen3.5-plus
     temperature: 0.7
@@ -726,7 +726,7 @@ ai:
 
   # OpenAI 配置（在线，付费）
   openai:
-    api_key: sk-xxxxx
+    api_key: "sk-xxxxx"
     model: gpt-4-vision-preview
     temperature: 0.7
     max_tokens: 1000
@@ -746,13 +746,7 @@ image_preprocessing:
 
 ### 5.2 环境变量支持
 
-```bash
-# .env 文件
-AI_PROVIDER=ollama
-QWEN_API_KEY=sk-xxxxx
-OLLAMA_ENDPOINT=http://localhost:11434
-OLLAMA_MODEL=llava:13b
-```
+当前版本不支持通过环境变量配置 AI Provider 的 API Key，需在 Web 管理后台配置。
 
 ---
 

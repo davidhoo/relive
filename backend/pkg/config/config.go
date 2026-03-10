@@ -296,12 +296,6 @@ func Load(path string) (*Config, error) {
 	if value := os.Getenv("RELIVE_EXTERNAL_URL"); value != "" {
 		cfg.Server.ExternalURL = value
 	}
-	if apiKey := os.Getenv("QWEN_API_KEY"); apiKey != "" {
-		cfg.AI.Qwen.APIKey = apiKey
-	}
-	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
-		cfg.AI.OpenAI.APIKey = apiKey
-	}
 	if value := os.Getenv("MAX_SCAN_WORKERS"); value != "" {
 		workers, convErr := strconv.Atoi(value)
 		if convErr != nil {

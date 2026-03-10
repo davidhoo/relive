@@ -110,9 +110,7 @@ RELIVE_PORT=8080
 # 自动导入城市数据
 AUTO_IMPORT_CITIES=true
 
-# AI Provider API Keys（可选，可在 Web 界面配置）
-# QWEN_API_KEY=
-# OPENAI_API_KEY=
+# AI Provider API Key 仅通过 Web 管理后台配置
 EOF
 
     echo -e "${GREEN}  ✓${NC} JWT 密钥已生成"

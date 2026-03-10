@@ -304,7 +304,7 @@ claude plugin install commit-commands  # 提交规范化
 
 #### 2. 保护配置文件
 ```bash
-/hookify 编辑包含 API_KEY 或 QWEN_API_KEY 的文件时警告
+/hookify 编辑包含 API_KEY 的文件时警告
 ```
 
 #### 3. Docker 安全

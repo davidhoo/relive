@@ -17,7 +17,7 @@ analyzer:
   checkpoint_file: "./data/analyzer-checkpoint.db"  # 断点续传文件路径（项目内独立文件，避免不同目录共享）
 
 ai:
-  provider: "ollama"                    # AI Provider: ollama, vllm, qwen, openai
+  provider: "ollama"                    # AI Provider: ollama, vllm
   ollama:
     endpoint: "http://localhost:11434"
     model: "llava:13b"

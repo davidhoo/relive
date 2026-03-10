@@ -562,7 +562,7 @@ docker exec -it relive sh -c "sqlite3 /app/data/relive.db 'SELECT COUNT(*) FROM 
 |---------|------|------|
 | **主配置** | `/volume1/docker/relive/config.yaml` | 后端服务配置 |
 | **分析器配置** | `analyzer-config.yaml` | relive-analyzer 配置 |
-| **环境变量** | `.env` | 敏感配置（API Key 等）|
+| **环境变量** | `.env` | 敏感配置（如 JWT secret）|
 
 ### 6.2 环境变量
 
@@ -570,10 +570,6 @@ docker exec -it relive sh -c "sqlite3 /app/data/relive.db 'SELECT COUNT(*) FROM 
 ```bash
 # JWT 密钥
 JWT_SECRET=your-random-secret-key-change-this
-
-# AI 提供者 API Keys
-QWEN_API_KEY=sk-xxxxx
-OPENAI_API_KEY=sk-xxxxx
 
 # 数据库密码（如果使用 PostgreSQL）
 DB_password=your-db-password
@@ -717,7 +713,7 @@ ai:
 ai:
   provider: "qwen"
   qwen:
-    api_key: "${QWEN_API_KEY}"  # 从环境变量读取
+    api_key: "sk-xxxxx"
     model: "qwen-vl-max"
 ```
 
@@ -733,7 +729,7 @@ ai:
 ai:
   provider: "openai"
   openai:
-    api_key: "${OPENAI_API_KEY}"
+    api_key: "sk-xxxxx"
     model: "gpt-4-vision-preview"
 ```
 
@@ -754,7 +750,7 @@ ai:
     model: "llava:13b"
 
   qwen:
-    api_key: "${QWEN_API_KEY}"
+    api_key: "sk-xxxxx"
     model: "qwen-vl-max"
 ```
 
@@ -977,12 +973,12 @@ curl http://localhost:8080/api/v1/config
 curl http://localhost:11434/api/tags
 
 # 测试 Qwen API
-curl -H "Authorization: Bearer $QWEN_API_KEY" \
+curl -H "Authorization: Bearer sk-xxxxx" \
      https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation
 ```
 
 **可能原因**：
-- API Key 错误 → 检查环境变量
+- API Key 错误 → 检查后台配置
 - 网络不通 → 测试连接
 - 模型不存在 → 拉取模型
 

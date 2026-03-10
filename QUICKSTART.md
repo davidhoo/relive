@@ -29,13 +29,6 @@ cp backend/config.prod.yaml.example backend/config.prod.yaml
 JWT_SECRET=replace-with-a-random-secret
 ```
 
-如果你要直接在容器里使用在线 AI，也可以顺手填写：
-
-```env
-QWEN_API_KEY=your-qwen-api-key
-OPENAI_API_KEY=your-openai-api-key
-```
-
 > 当前 Docker 部署 **不通过** `.env` 中的 `PHOTOS_PATH` 指定照片目录；照片目录需要在 `docker-compose.yml` 的 `volumes` 里挂载。
 >
 > 如果你不确定某项配置该改 `.env`、`docker-compose.yml`、`analyzer.yaml` 还是后台配置页，请先阅读 `docs/CONFIGURATION.md`。

@@ -56,9 +56,6 @@ services:
       - MAX_SCAN_WORKERS=2
       - MAX_THUMBNAIL_WORKERS=1
       - MAX_GEOCODE_WORKERS=1
-      # AI Provider API Keys（如果使用）
-      - QWEN_API_KEY=${QWEN_API_KEY:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       # 自动导入城市数据（默认开启，首次启动时会自动导入 cities500.txt）
       - AUTO_IMPORT_CITIES=${AUTO_IMPORT_CITIES:-true}
     networks:

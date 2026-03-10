@@ -530,7 +530,7 @@ services:
       - TZ=Asia/Shanghai
       - DATABASE_PATH=/app/database/relive.db
       - PHOTO_PATHS=/data/photos
-      - QWEN_API_KEY=${QWEN_API_KEY}
+      # AI Provider API Key 通过后台配置，不从环境变量注入
     networks:
       - relive-network
 
