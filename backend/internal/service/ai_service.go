@@ -971,10 +971,15 @@ func (s *aiService) resetBackgroundLogs() {
 
 // analyzeOneByOneAsync 逐个分析照片（支持并发）
 func (s *aiService) analyzeOneByOneAsync(task *AnalyzeTask, photos []*model.Photo) (successCount, failedCount int, totalCost float64) {
-	// 获取并发数限制
+	// 获取并发数限制，但限制最大为1以避免SQLite锁竞争
+	// 多服务(扫描/缩略图/分析/GPS)共享同一个SQLite数据库
 	concurrency := s.provider.MaxConcurrency()
 	if concurrency <= 0 {
-		concurrency = 5 // 默认并发数
+		concurrency = 1 // 默认单并发，避免数据库锁竞争
+	}
+	// 强制限制为1，因为SQLite在多进程访问时容易锁竞争
+	if concurrency > 1 {
+		concurrency = 1
 	}
 
 	totalCount := len(photos)

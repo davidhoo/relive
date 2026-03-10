@@ -60,10 +60,10 @@ func Init(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		db.Exec("PRAGMA foreign_keys=ON")
 
 		// 设置连接池（SQLite 写是单线程，连接数不宜过多）
-		// 在 NAS 环境中，减少连接数可以降低锁竞争
-		sqlDB.SetMaxOpenConns(5)
-		sqlDB.SetMaxIdleConns(2)
-		sqlDB.SetConnMaxLifetime(5 * time.Minute)
+		// 在 NAS 环境中，强制单连接可以彻底避免 database is locked
+		sqlDB.SetMaxOpenConns(1)
+		sqlDB.SetMaxIdleConns(1)
+		sqlDB.SetConnMaxLifetime(0) // 单连接模式下不限制生命周期
 
 	case "postgres":
 		// TODO: PostgreSQL 支持（后续添加)

@@ -270,9 +270,15 @@ func (s *thumbnailService) runBackground(active *activeThumbnailTask) {
 	if workers <= 0 {
 		workers = 2
 	}
-	jobCh := make(chan *model.ThumbnailJob, workers*2)
+	// 限制并发数以减少 SQLite 锁竞争
+	// SQLite 在 WAL 模式下支持并发读，但写仍是串行的
+	maxWorkers := 2
+	if workers < maxWorkers {
+		maxWorkers = workers
+	}
+	jobCh := make(chan *model.ThumbnailJob, maxWorkers*2)
 	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
+	for i := 0; i < maxWorkers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -280,6 +286,8 @@ func (s *thumbnailService) runBackground(active *activeThumbnailTask) {
 				if err := s.processJob(job); err != nil {
 					logger.Warnf("process thumbnail job %d failed: %v", job.ID, err)
 				}
+				// 任务完成后短暂暂停，减少数据库写入冲突
+				time.Sleep(50 * time.Millisecond)
 			}
 		}()
 	}
@@ -309,7 +317,7 @@ func (s *thumbnailService) runBackground(active *activeThumbnailTask) {
 			continue
 		}
 		if job == nil {
-			time.Sleep(800 * time.Millisecond)
+			time.Sleep(500 * time.Millisecond)
 			continue
 		}
 
@@ -319,6 +327,8 @@ func (s *thumbnailService) runBackground(active *activeThumbnailTask) {
 		})
 		s.appendBackgroundLog(fmt.Sprintf("开始生成照片 #%d 的缩略图 (%s)", job.PhotoID, filepath.Base(job.FilePath)))
 		jobCh <- job
+		// 领取任务后短暂暂停，避免过快消耗任务导致数据库竞争
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	close(jobCh)
@@ -459,26 +469,83 @@ func (s *thumbnailService) seedPendingJobs() error {
 
 	s.appendBackgroundLog("正在扫描历史照片...")
 	logger.Info("Scanning photos for thumbnail jobs...")
-	var photos []model.Photo
+
+	// 先收集所有需要处理的照片ID，避免在FindInBatches回调中进行写入操作
+	var photoIDs []uint
 	err = s.db.Model(&model.Photo{}).
+		Select("id").
 		Where("thumbnail_status != ? OR thumbnail_status IS NULL OR thumbnail_path = ''", "ready").
-		FindInBatches(&photos, 200, func(tx *gorm.DB, batch int) error {
-			logger.Debugf("Processing batch %d, photos in batch: %d", batch, len(photos))
-			for i := range photos {
-				if err := s.enqueuePhotoModel(&photos[i], thumbnailSourceManual, thumbnailPriorityManual); err != nil {
-					if !isSQLiteLockError(err) {
-						logger.Warnf("seed thumbnail job failed for photo %d: %v", photos[i].ID, err)
-					}
-				}
-			}
+		FindInBatches(&photoIDs, 500, func(tx *gorm.DB, batch int) error {
+			logger.Debugf("Collecting batch %d, IDs in batch: %d", batch, len(photoIDs))
 			return nil
 		}).Error
 	if err != nil {
 		logger.Errorf("FindInBatches failed: %v", err)
 		return err
 	}
-	logger.Info("Finished scanning photos for thumbnail jobs")
+
+	if len(photoIDs) == 0 {
+		s.appendBackgroundLog("没有需要生成缩略图的照片")
+		return nil
+	}
+
+	s.appendBackgroundLog(fmt.Sprintf("找到 %d 张需要生成缩略图的照片，开始入队...", len(photoIDs)))
+	logger.Infof("Found %d photos needing thumbnails, enqueuing...", len(photoIDs))
+
+	// 分批入队，每批处理完后短暂暂停以减少锁竞争
+	batchSize := 50
+	successCount := 0
+	for i := 0; i < len(photoIDs); i += batchSize {
+		end := i + batchSize
+		if end > len(photoIDs) {
+			end = len(photoIDs)
+		}
+		batch := photoIDs[i:end]
+
+		for _, id := range batch {
+			if err := s.enqueuePhotoWithRetry(id); err != nil {
+				if !isSQLiteLockError(err) {
+					logger.Warnf("seed thumbnail job failed for photo %d: %v", id, err)
+				}
+			} else {
+				successCount++
+			}
+		}
+
+		// 每批处理完后短暂暂停，让出时间片并减少锁竞争
+		if end < len(photoIDs) {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	s.appendBackgroundLog(fmt.Sprintf("已扫描历史照片并补齐 %d 个缩略图待处理队列", successCount))
+	logger.Infof("Finished seeding %d thumbnail jobs", successCount)
 	return nil
+}
+
+// enqueuePhotoWithRetry 带重试的照片入队
+func (s *thumbnailService) enqueuePhotoWithRetry(photoID uint) error {
+	var lastErr error
+	for i := 0; i < 3; i++ {
+		photo, err := s.photoRepo.GetByID(photoID)
+		if err != nil {
+			return err
+		}
+		if photo == nil {
+			return fmt.Errorf("photo %d not found", photoID)
+		}
+		err = s.enqueuePhotoModel(photo, thumbnailSourceManual, thumbnailPriorityManual)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if isSQLiteLockError(err) {
+			time.Sleep(time.Duration(i+1) * 50 * time.Millisecond)
+			continue
+		}
+		return err
+	}
+	return lastErr
 }
 
 func (s *thumbnailService) updateTaskProgress(fn func(task *model.ThumbnailTask)) {
