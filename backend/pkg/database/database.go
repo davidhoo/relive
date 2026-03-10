@@ -37,7 +37,15 @@ func Init(cfg config.DatabaseConfig) (*gorm.DB, error) {
 	// 根据数据库类型初始化
 	switch cfg.Type {
 	case "sqlite":
-		db, err = gorm.Open(sqlite.Open(cfg.Path), gormConfig)
+		// SQLite 连接参数优化
+		// _journal_mode=WAL: 启用 WAL 模式提升并发性能
+		// _busy_timeout=30000: 30秒 busy timeout，自动重试锁定的操作
+		// _synchronous=NORMAL: 在 WAL 模式下提供性能和持久性的平衡
+		// _cache_size=-64000: 64MB 缓存（负值表示以 KB 为单位）
+		// _temp_store=memory: 临时表存储在内存中
+		sqlitePath := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=30000&_synchronous=NORMAL&_cache_size=-64000&_temp_store=memory",
+			cfg.Path)
+		db, err = gorm.Open(sqlite.Open(sqlitePath), gormConfig)
 		if err != nil {
 			return nil, fmt.Errorf("open sqlite database: %w", err)
 		}
@@ -48,18 +56,13 @@ func Init(cfg config.DatabaseConfig) (*gorm.DB, error) {
 			return nil, err
 		}
 
-		// 启用 WAL 模式（提升并发性能)
-		db.Exec("PRAGMA journal_mode=WAL")
-
-		// 设置 busy_timeout（避免 database locked 错误)
-		db.Exec("PRAGMA busy_timeout=30000")
-
-		// 启用外键约束
+		// 启用外键约束（其他参数已在连接字符串中设置）
 		db.Exec("PRAGMA foreign_keys=ON")
 
 		// 设置连接池（SQLite 写是单线程，连接数不宜过多）
-		sqlDB.SetMaxOpenConns(10)
-		sqlDB.SetMaxIdleConns(3)
+		// 在 NAS 环境中，减少连接数可以降低锁竞争
+		sqlDB.SetMaxOpenConns(5)
+		sqlDB.SetMaxIdleConns(2)
 		sqlDB.SetConnMaxLifetime(5 * time.Minute)
 
 	case "postgres":

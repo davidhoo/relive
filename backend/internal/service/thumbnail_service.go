@@ -309,9 +309,10 @@ func (s *thumbnailService) processJob(job *model.ThumbnailJob) error {
 	relPath, err := s.generator.GenerateThumbnail(photo.FilePath)
 	now := time.Now()
 	if err != nil {
-		_ = s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+		// 使用带重试的更新
+		_ = s.updatePhotoWithRetry(photo.ID, map[string]interface{}{
 			"thumbnail_status": "failed",
-		}).Error
+		})
 		_ = s.jobRepo.UpdateFields(job.ID, map[string]interface{}{"status": "failed", "last_error": err.Error(), "completed_at": &now})
 		s.updateTaskProgress(func(task *model.ThumbnailTask) {
 			task.ProcessedJobs++
@@ -319,15 +320,16 @@ func (s *thumbnailService) processJob(job *model.ThumbnailJob) error {
 		s.appendBackgroundLog(fmt.Sprintf("生成照片 #%d 缩略图失败：%v", photo.ID, err))
 		return err
 	}
-	if err := s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+	// 批量更新 photo 和 job，减少数据库操作次数
+	if err := s.updatePhotoWithRetry(photo.ID, map[string]interface{}{
 		"thumbnail_path":         relPath,
 		"thumbnail_status":       "ready",
 		"thumbnail_generated_at": &now,
-	}).Error; err != nil {
-		return err
+	}); err != nil {
+		logger.Warnf("update photo %d after thumbnail success failed: %v", photo.ID, err)
 	}
 	if err := s.jobRepo.UpdateFields(job.ID, map[string]interface{}{"status": "completed", "completed_at": &now, "last_error": ""}); err != nil {
-		return err
+		logger.Warnf("update thumbnail job %d status failed: %v", job.ID, err)
 	}
 	s.updateTaskProgress(func(task *model.ThumbnailTask) {
 		task.ProcessedJobs++
@@ -336,16 +338,68 @@ func (s *thumbnailService) processJob(job *model.ThumbnailJob) error {
 	return nil
 }
 
+// updatePhotoWithRetry 带重试机制的 photo 更新
+func (s *thumbnailService) updatePhotoWithRetry(photoID uint, updates map[string]interface{}) error {
+	var lastErr error
+	for i := 0; i < 3; i++ {
+		err := s.db.Model(&model.Photo{}).Where("id = ?", photoID).Updates(updates).Error
+		if err == nil {
+			return nil
+		}
+		// 检查是否是数据库锁定错误
+		if isSQLiteLockError(err) {
+			lastErr = err
+			time.Sleep(time.Duration(i+1) * 50 * time.Millisecond)
+			continue
+		}
+		return err
+	}
+	return lastErr
+}
+
+// isSQLiteLockError 检查错误是否是 SQLite 锁定错误
+func isSQLiteLockError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return containsStr(errStr, "database is locked") ||
+		containsStr(errStr, "database table is locked") ||
+		containsStr(errStr, "busy")
+}
+
+func containsStr(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstr(s, substr))
+}
+
+func containsSubstr(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *thumbnailService) seedPendingJobs() error {
 	var photos []model.Photo
 	return s.db.Model(&model.Photo{}).
 		Where("thumbnail_status != ? OR thumbnail_status IS NULL OR thumbnail_path = ''", "ready").
-		FindInBatches(&photos, 200, func(tx *gorm.DB, batch int) error {
+		FindInBatches(&photos, 100, func(tx *gorm.DB, batch int) error {
 			for i := range photos {
 				if err := s.enqueuePhotoModel(&photos[i], thumbnailSourceManual, thumbnailPriorityManual); err != nil {
-					logger.Warnf("seed thumbnail job failed for photo %d: %v", photos[i].ID, err)
+					// 降低日志级别，锁错误不需要每次都警告
+					if !isSQLiteLockError(err) {
+						logger.Warnf("seed thumbnail job failed for photo %d: %v", photos[i].ID, err)
+					}
+				}
+				// 每处理一个任务小睡一下，减少数据库压力
+				if i%10 == 0 {
+					time.Sleep(5 * time.Millisecond)
 				}
 			}
+			// 每批次之间增加延迟，让其他操作有机会执行
+			time.Sleep(50 * time.Millisecond)
 			return nil
 		}).Error
 }

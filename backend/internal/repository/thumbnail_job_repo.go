@@ -74,42 +74,39 @@ func (r *thumbnailJobRepository) GetActiveByPhotoID(photoID uint) (*model.Thumbn
 }
 
 func (r *thumbnailJobRepository) ClaimNextJob() (*model.ThumbnailJob, error) {
-	tx := r.db.Begin()
-	if tx.Error != nil {
-		return nil, tx.Error
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-			panic(r)
-		}
-	}()
-
+	// 使用原子更新避免事务锁竞争
+	// 先找到下一个可执行的任务（不使用事务，减少锁持有时间）
 	var job model.ThumbnailJob
-	err := tx.Where("status IN ?", []string{"pending", "queued"}).
+	result := r.db.Where("status IN ?", []string{"pending", "queued"}).
 		Order("priority DESC").Order("COALESCE(last_requested_at, queued_at) DESC").Order("queued_at ASC").
-		First(&job).Error
-	if err != nil {
-		tx.Rollback()
-		if err == gorm.ErrRecordNotFound {
-			return nil, nil
-		}
-		return nil, err
+		Limit(1).Find(&job)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, nil
 	}
 
+	// 使用乐观锁方式原子更新状态
 	now := time.Now()
 	updates := map[string]interface{}{
 		"status":        "processing",
 		"started_at":    &now,
-		"attempt_count": job.AttemptCount + 1,
+		"attempt_count": gorm.Expr("attempt_count + 1"),
 	}
-	if err := tx.Model(&model.ThumbnailJob{}).Where("id = ?", job.ID).Updates(updates).Error; err != nil {
-		tx.Rollback()
-		return nil, err
+
+	result = r.db.Model(&model.ThumbnailJob{}).
+		Where("id = ? AND status IN ?", job.ID, []string{"pending", "queued"}).
+		Updates(updates)
+
+	if result.Error != nil {
+		return nil, result.Error
 	}
-	if err := tx.Commit().Error; err != nil {
-		return nil, err
+	if result.RowsAffected == 0 {
+		// 其他进程已经认领了这个任务
+		return nil, nil
 	}
+
 	job.Status = "processing"
 	job.StartedAt = &now
 	job.AttemptCount++
