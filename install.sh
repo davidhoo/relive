@@ -99,18 +99,33 @@ if [ ! -f ".env" ]; then
     fi
 
     cat > .env << EOF
-# Relive 环境变量配置（自动生成）
+# Relive 环境变量配置
 
-# JWT 密钥（请勿泄露）
+# JWT 密钥（生产环境必须修改）
 JWT_SECRET=$JWT_SECRET
 
-# 服务端口（单容器，包含前端+后端）
+# 服务端口（单镜像架构，统一端口）
 RELIVE_PORT=8080
 
-# 自动导入城市数据
-AUTO_IMPORT_CITIES=true
+# 外部访问地址（可选，但推荐在需要 analyzer / 反向代理 / 域名访问时设置）
+# RELIVE_EXTERNAL_URL=https://photos.example.com
 
-# AI Provider API Key 仅通过 Web 管理后台配置
+# =============================================================================
+# 关于照片路径配置
+# =============================================================================
+#
+# 直接运行 Go 程序时：
+#   不需要配置照片路径，系统启动后在 Web 界面添加扫描路径即可
+#
+# Docker 部署时：
+#   照片路径配置在 docker-compose.yml 的 volumes 部分
+#   修改方法：
+#   1. 编辑 docker-compose.yml
+#   2. 找到 volumes 下的照片目录挂载配置
+#   3. 修改冒号左边的宿主机路径为你实际的照片目录
+#   4. 例如：- /Users/david/Pictures:/app/photos:ro
+#
+# =============================================================================
 EOF
 
     echo -e "${GREEN}  ✓${NC} JWT 密钥已生成"
