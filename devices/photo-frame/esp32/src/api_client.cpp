@@ -87,10 +87,18 @@ DisplayInfo APIClient::getDisplayInfoHTTP() {
 
     LOG_INFO_F("[API] HTTP 请求: %s\n", url.c_str());
 
-    WiFiClient client;
-    client.setTimeout(HTTP_TIMEOUT_MS / 1000);
+    // 确保客户端处于干净状态
+    _wifiClient.stop();
+    delay(10);
+    
+    _wifiClient.setTimeout(HTTP_TIMEOUT_MS / 1000);
 
-    http.begin(client, url);
+    if (!http.begin(_wifiClient, url)) {
+        _lastError = "HTTP 连接初始化失败";
+        LOG_ERROR("[API] HTTP begin() 失败\n");
+        return info;
+    }
+
     setHeaders(http);
     http.addHeader("Accept", "application/json");
 
@@ -106,6 +114,10 @@ DisplayInfo APIClient::getDisplayInfoHTTP() {
     }
 
     http.end();
+    delay(10);
+    _wifiClient.stop();
+    delay(10);
+    
     return info;
 }
 
@@ -210,21 +222,31 @@ int APIClient::downloadBinFile(uint8_t* buffer, size_t bufferSize, String& outCh
 }
 
 int APIClient::downloadBinFileHTTP(uint8_t* buffer, size_t bufferSize, String& outChecksum) {
-    HTTPClient http;
     String url = "http://" + _baseUrl + ":" + String(SERVER_PORT) + "/api/v1/device/display.bin";
 
     LOG_INFO_F("[API] HTTP 下载: %s\n", url.c_str());
 
-    WiFiClient client;
-    client.setTimeout(HTTP_TIMEOUT_MS / 1000);
+    // 确保客户端处于干净状态
+    _wifiClient.stop();
+    delay(50);
+    
+    _wifiClient.setTimeout(HTTP_TIMEOUT_MS / 1000);
 
-    http.begin(client, url);
+    HTTPClient http;
+    
+    if (!http.begin(_wifiClient, url)) {
+        _lastError = "HTTP 连接初始化失败";
+        LOG_ERROR("[API] HTTP begin() 失败\n");
+        return -1;
+    }
+
     setHeaders(http);
 
     // 重要：必须在 GET 之前声明需要收集的响应头
     const char* headerKeys[] = {"X-Checksum", "x-checksum", "Content-Length", "content-length", "X-Asset-ID", "x-asset-id"};
     http.collectHeaders(headerKeys, sizeof(headerKeys) / sizeof(headerKeys[0]));
 
+    LOG_INFO("[API] 发送 GET 请求...\n");
     _lastHttpCode = http.GET();
 
     LOG_INFO_F("[API] HTTP 响应码: %d\n", _lastHttpCode);
@@ -233,6 +255,7 @@ int APIClient::downloadBinFileHTTP(uint8_t* buffer, size_t bufferSize, String& o
         _lastError = "HTTP " + String(_lastHttpCode);
         LOG_ERROR_F("[API] HTTP 下载失败: %d\n", _lastHttpCode);
         http.end();
+        _wifiClient.stop();
         return -1;
     }
 
@@ -255,6 +278,7 @@ int APIClient::downloadBinFileHTTP(uint8_t* buffer, size_t bufferSize, String& o
         _lastError = "无效的内容长度";
         LOG_ERROR("[API] 无法获取内容长度\n");
         http.end();
+        _wifiClient.stop();
         return -1;
     }
 
@@ -262,29 +286,78 @@ int APIClient::downloadBinFileHTTP(uint8_t* buffer, size_t bufferSize, String& o
         _lastError = "缓冲区太小";
         LOG_ERROR_F("[API] 缓冲区不足: 需要 %d, 只有 %d\n", totalLength, bufferSize);
         http.end();
+        _wifiClient.stop();
         return -1;
     }
 
-    // 读取数据
-    WiFiClient* stream = http.getStreamPtr();
+    // 使用 writeToStream 方法一次性读取所有数据
+    LOG_INFO("[API] 开始读取数据...\n");
+    
     int downloaded = 0;
-    unsigned long timeout = millis() + HTTP_TIMEOUT_MS;
-
-    while (downloaded < totalLength && millis() < timeout) {
-        int available = stream->available();
-        if (available > 0) {
-            int toRead = min(available, totalLength - downloaded);
-            int bytesRead = stream->readBytes(buffer + downloaded, toRead);
-            downloaded += bytesRead;
-
-            if (downloaded % 4096 == 0 || downloaded == totalLength) {
-                LOG_DEBUG_F("[API] 已下载: %d / %d bytes\n", downloaded, totalLength);
-            }
-        }
-        delay(1);
+    uint8_t* writePtr = buffer;
+    int remaining = totalLength;
+    
+    // 获取流指针
+    WiFiClient* stream = http.getStreamPtr();
+    if (!stream) {
+        _lastError = "无法获取数据流";
+        LOG_ERROR("[API] getStreamPtr() 返回 NULL\n");
+        http.end();
+        _wifiClient.stop();
+        return -1;
     }
 
+    // 分块读取数据
+    const int CHUNK_SIZE = 512;
+    unsigned long lastProgress = millis();
+    unsigned long timeout = millis() + HTTP_TIMEOUT_MS;
+    
+    while (remaining > 0 && millis() < timeout) {
+        // 等待数据可用
+        int retries = 0;
+        while (!stream->available() && retries < 100) {
+            delay(10);
+            retries++;
+            if (millis() >= timeout) break;
+        }
+        
+        if (!stream->available()) {
+            LOG_ERROR("[API] 数据流超时\n");
+            break;
+        }
+        
+        // 读取可用数据
+        int toRead = min(stream->available(), remaining);
+        toRead = min(toRead, CHUNK_SIZE);
+        
+        int bytesRead = stream->readBytes(writePtr, toRead);
+        
+        if (bytesRead > 0) {
+            downloaded += bytesRead;
+            writePtr += bytesRead;
+            remaining -= bytesRead;
+            
+            // 每秒或完成时显示进度
+            if (millis() - lastProgress >= 1000 || remaining == 0) {
+                LOG_INFO_F("[API] 进度: %d / %d bytes (%.1f%%)\n",
+                          downloaded, totalLength, (downloaded * 100.0) / totalLength);
+                lastProgress = millis();
+            }
+        } else if (bytesRead == 0) {
+            // 没有读取到数据，但流仍然连接
+            delay(10);
+        } else {
+            // 读取错误
+            LOG_ERROR_F("[API] 读取错误: %d\n", bytesRead);
+            break;
+        }
+    }
+
+    // 清理
     http.end();
+    delay(50);
+    _wifiClient.stop();
+    delay(50);
 
     if (downloaded != totalLength) {
         _lastError = "下载不完整";
