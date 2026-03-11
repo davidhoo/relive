@@ -248,10 +248,10 @@ void setup() {
     }
 
     // 首次启动清屏
-    if (wakeup_reason != ESP_SLEEP_WAKEUP_TIMER) {
-        DEBUG_SERIAL.println("[Main] 首次启动，清屏...");
-        display.clear();
-    }
+    // if (wakeup_reason != ESP_SLEEP_WAKEUP_TIMER) {
+    //     DEBUG_SERIAL.println("[Main] 首次启动，清屏...");
+    //     display.clear();
+    // }
 
     // 初始化 API 客户端
     apiClient.begin();
