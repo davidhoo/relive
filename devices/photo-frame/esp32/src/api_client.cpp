@@ -119,21 +119,34 @@ DisplayInfo APIClient::getDisplayInfoHTTPS() {
     LOG_INFO_F("[API] HTTPS 请求: %s\n", url.c_str());
 
     WiFiClientSecure client;
-    client.setInsecure();
+    client.setInsecure();  // 跳过证书验证
     client.setTimeout(HTTP_TIMEOUT_MS / 1000);
     client.setHandshakeTimeout(30);
 
-    http.begin(client, url);
+    // 尝试连接并检查结果
+    if (!http.begin(client, url)) {
+        _lastError = "HTTPS 连接初始化失败";
+        LOG_ERROR("[API] HTTPS begin() 失败\n");
+        return info;
+    }
+
     setHeaders(http);
     http.addHeader("Accept", "application/json");
 
+    LOG_DEBUG("[API] 开始 HTTPS GET 请求...\n");
     _lastHttpCode = http.GET();
+    LOG_INFO_F("[API] HTTPS 响应码: %d\n", _lastHttpCode);
 
     if (_lastHttpCode == HTTP_CODE_OK) {
         String payload = http.getString();
         LOG_DEBUG_F("[API] 响应: %s\n", payload.c_str());
         info = parseDisplayInfo(payload);
+    } else if (_lastHttpCode < 0) {
+        // 负数表示连接错误
+        _lastError = "HTTPS 连接错误: " + String(_lastHttpCode);
+        LOG_ERROR_F("[API] HTTPS 连接错误: %d (可能是 TLS 握手失败)\n", _lastHttpCode);
     } else {
+        _lastError = "HTTPS " + String(_lastHttpCode);
         LOG_ERROR_F("[API] HTTPS 请求失败: %d\n", _lastHttpCode);
     }
 
@@ -145,7 +158,7 @@ DisplayInfo APIClient::parseDisplayInfo(const String& json) {
     DisplayInfo info;
     info.valid = false;
 
-    StaticJsonDocument<1024> doc;
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, json);
 
     if (error) {
@@ -208,6 +221,10 @@ int APIClient::downloadBinFileHTTP(uint8_t* buffer, size_t bufferSize, String& o
     http.begin(client, url);
     setHeaders(http);
 
+    // 重要：必须在 GET 之前声明需要收集的响应头
+    const char* headerKeys[] = {"X-Checksum", "x-checksum", "Content-Length", "content-length", "X-Asset-ID", "x-asset-id"};
+    http.collectHeaders(headerKeys, sizeof(headerKeys) / sizeof(headerKeys[0]));
+
     _lastHttpCode = http.GET();
 
     LOG_INFO_F("[API] HTTP 响应码: %d\n", _lastHttpCode);
@@ -219,38 +236,24 @@ int APIClient::downloadBinFileHTTP(uint8_t* buffer, size_t bufferSize, String& o
         return -1;
     }
 
-    // 获取响应头信息 - 尝试不同的大小写格式
-    outChecksum = http.header("x-checksum");
-    if (outChecksum.length() == 0) outChecksum = http.header("X-Checksum");
+    // 获取响应头信息
+    outChecksum = http.header("X-Checksum");
+    if (outChecksum.length() == 0) outChecksum = http.header("x-checksum");
 
-    String contentLength = http.header("content-length");
-    if (contentLength.length() == 0) contentLength = http.header("Content-Length");
+    String assetID = http.header("X-Asset-ID");
+    if (assetID.length() == 0) assetID = http.header("x-asset-id");
 
-    String assetID = http.header("x-asset-id");
-    if (assetID.length() == 0) assetID = http.header("X-Asset-Id");
-    if (assetID.length() == 0) assetID = http.header("X-Asset-ID");
-
-    // 调试输出所有响应头
+    // 调试输出响应头
     LOG_INFO_F("[API] 响应头: X-Checksum=%s\n", outChecksum.c_str());
-    LOG_INFO_F("[API] 响应头: Content-Length=%s\n", contentLength.c_str());
     LOG_INFO_F("[API] 响应头: X-Asset-ID=%s\n", assetID.c_str());
 
-    // 如果没有 Content-Length，尝试从流传输获取
-    if (contentLength.length() == 0) {
-        int streamLen = http.getSize();
-        if (streamLen > 0) {
-            contentLength = String(streamLen);
-            LOG_INFO_F("[API] 从流获取大小: %d\n", streamLen);
-        }
-    }
+    // 使用 http.getSize() 获取内容长度（更可靠）
+    int totalLength = http.getSize();
+    LOG_INFO_F("[API] Content-Length: %d\n", totalLength);
 
-    LOG_INFO_F("[API] Asset ID: %s\n", assetID.c_str());
-    LOG_INFO_F("[API] Checksum: %s\n", outChecksum.c_str());
-    LOG_INFO_F("[API] Content-Length: %s\n", contentLength.c_str());
-
-    int totalLength = contentLength.toInt();
     if (totalLength <= 0) {
         _lastError = "无效的内容长度";
+        LOG_ERROR("[API] 无法获取内容长度\n");
         http.end();
         return -1;
     }
@@ -274,7 +277,7 @@ int APIClient::downloadBinFileHTTP(uint8_t* buffer, size_t bufferSize, String& o
             int bytesRead = stream->readBytes(buffer + downloaded, toRead);
             downloaded += bytesRead;
 
-            if (downloaded % 1024 == 0 || downloaded == totalLength) {
+            if (downloaded % 4096 == 0 || downloaded == totalLength) {
                 LOG_DEBUG_F("[API] 已下载: %d / %d bytes\n", downloaded, totalLength);
             }
         }
@@ -300,49 +303,59 @@ int APIClient::downloadBinFileHTTPS(uint8_t* buffer, size_t bufferSize, String& 
     LOG_INFO_F("[API] HTTPS 下载: %s\n", url.c_str());
 
     WiFiClientSecure client;
-    client.setInsecure();
+    client.setInsecure();  // 跳过证书验证
     client.setTimeout(HTTP_TIMEOUT_MS / 1000);
     client.setHandshakeTimeout(30);
 
-    http.begin(client, url);
+    // 尝试连接
+    if (!http.begin(client, url)) {
+        _lastError = "HTTPS 连接初始化失败";
+        LOG_ERROR("[API] HTTPS begin() 失败\n");
+        return -1;
+    }
+
     setHeaders(http);
 
-    _lastHttpCode = http.GET();
+    // 重要：必须在 GET 之前声明需要收集的响应头
+    const char* headerKeys[] = {"X-Checksum", "x-checksum", "Content-Length", "content-length", "X-Asset-ID", "x-asset-id"};
+    http.collectHeaders(headerKeys, sizeof(headerKeys) / sizeof(headerKeys[0]));
 
-    if (_lastHttpCode != HTTP_CODE_OK) {
-        _lastError = "HTTP " + String(_lastHttpCode);
-        LOG_ERROR_F("[API] 下载失败: %d\n", _lastHttpCode);
+    LOG_DEBUG("[API] 开始 HTTPS GET 请求...\n");
+    _lastHttpCode = http.GET();
+    LOG_INFO_F("[API] HTTPS 响应码: %d\n", _lastHttpCode);
+
+    if (_lastHttpCode < 0) {
+        // 负数表示连接错误
+        _lastError = "HTTPS 连接错误: " + String(_lastHttpCode);
+        LOG_ERROR_F("[API] HTTPS 连接错误: %d (可能是 TLS 握手失败)\n", _lastHttpCode);
         http.end();
         return -1;
     }
 
-    // 获取响应头信息 - 尝试不同的大小写格式
-    outChecksum = http.header("x-checksum");
-    if (outChecksum.length() == 0) outChecksum = http.header("X-Checksum");
-
-    String contentLength = http.header("content-length");
-    if (contentLength.length() == 0) contentLength = http.header("Content-Length");
-
-    String assetID = http.header("x-asset-id");
-    if (assetID.length() == 0) assetID = http.header("X-Asset-Id");
-    if (assetID.length() == 0) assetID = http.header("X-Asset-ID");
-
-    LOG_INFO_F("[API] Asset ID: %s\n", assetID.c_str());
-    LOG_INFO_F("[API] Checksum: %s\n", outChecksum.c_str());
-    LOG_INFO_F("[API] Content-Length: %s\n", contentLength.c_str());
-
-    // 如果没有 Content-Length，尝试从流传输获取
-    if (contentLength.length() == 0 || contentLength.toInt() <= 0) {
-        int streamLen = http.getSize();
-        if (streamLen > 0) {
-            contentLength = String(streamLen);
-            LOG_INFO_F("[API] 从流获取大小: %d\n", streamLen);
-        }
+    if (_lastHttpCode != HTTP_CODE_OK) {
+        _lastError = "HTTPS " + String(_lastHttpCode);
+        LOG_ERROR_F("[API] HTTPS 下载失败: %d\n", _lastHttpCode);
+        http.end();
+        return -1;
     }
 
-    int totalLength = contentLength.toInt();
+    // 获取响应头信息
+    outChecksum = http.header("X-Checksum");
+    if (outChecksum.length() == 0) outChecksum = http.header("x-checksum");
+
+    String assetID = http.header("X-Asset-ID");
+    if (assetID.length() == 0) assetID = http.header("x-asset-id");
+
+    LOG_INFO_F("[API] 响应头: X-Checksum=%s\n", outChecksum.c_str());
+    LOG_INFO_F("[API] 响应头: X-Asset-ID=%s\n", assetID.c_str());
+
+    // 使用 http.getSize() 获取内容长度
+    int totalLength = http.getSize();
+    LOG_INFO_F("[API] Content-Length: %d\n", totalLength);
+
     if (totalLength <= 0) {
         _lastError = "无效的内容长度";
+        LOG_ERROR("[API] 无法获取内容长度\n");
         http.end();
         return -1;
     }
@@ -366,7 +379,7 @@ int APIClient::downloadBinFileHTTPS(uint8_t* buffer, size_t bufferSize, String& 
             int bytesRead = stream->readBytes(buffer + downloaded, toRead);
             downloaded += bytesRead;
 
-            if (downloaded % 1024 == 0 || downloaded == totalLength) {
+            if (downloaded % 4096 == 0 || downloaded == totalLength) {
                 LOG_DEBUG_F("[API] 已下载: %d / %d bytes\n", downloaded, totalLength);
             }
         }

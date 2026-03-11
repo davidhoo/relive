@@ -33,11 +33,18 @@ public:
 private:
     bool _connected;
     bool _usingCustomMAC;
+    uint8_t _customMAC[6];
     unsigned long _lastReconnectAttempt;
     static const unsigned long RECONNECT_INTERVAL = 30000; // 30秒重连间隔
 
-    // 设置自定义 MAC 地址
-    bool setupCustomMAC();
+    // 解析自定义 MAC 配置
+    bool parseCustomMAC();
+
+    // 设置系统级 base MAC（WiFi 初始化之前调用）
+    bool applyBaseMAC();
+
+    // 验证实际 MAC 地址
+    void verifyMAC();
 };
 
 #endif // WIFI_MANAGER_H
