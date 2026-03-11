@@ -9,7 +9,7 @@ import (
 func TestQuantizeToPalettePreservesInfoAreaWithoutDithering(t *testing.T) {
 	profile := RenderProfile{
 		Width:      10,
-		Height:     4,
+		Height:     10,
 		DitherMode: "ordered",
 		Palette: []color.NRGBA{
 			{R: 255, G: 255, B: 255, A: 255},
@@ -19,15 +19,12 @@ func TestQuantizeToPalettePreservesInfoAreaWithoutDithering(t *testing.T) {
 		},
 	}
 
+	// photoHeight = round(10 * 640/800) = 8，info 区域为第 8-9 行
 	img := image.NewNRGBA(image.Rect(0, 0, profile.Width, profile.Height))
-	photoWidth := displayPhotoWidthForProfile(profile.Width)
+	photoHeight := displayPhotoHeightForProfile(profile.Height)
 	for y := 0; y < profile.Height; y++ {
 		for x := 0; x < profile.Width; x++ {
-			if x < photoWidth {
-				img.SetNRGBA(x, y, color.NRGBA{R: 128, G: 128, B: 128, A: 255})
-			} else {
-				img.SetNRGBA(x, y, color.NRGBA{R: 120, G: 120, B: 120, A: 255})
-			}
+			img.SetNRGBA(x, y, color.NRGBA{R: 128, G: 128, B: 128, A: 255})
 		}
 	}
 
@@ -35,10 +32,10 @@ func TestQuantizeToPalettePreservesInfoAreaWithoutDithering(t *testing.T) {
 	whiteIndex := uint8(nearestPaletteIndex(color.NRGBA{R: 255, G: 255, B: 255, A: 255}, profile.Palette))
 	blackIndex := uint8(nearestPaletteIndex(color.NRGBA{R: 0, G: 0, B: 0, A: 255}, profile.Palette))
 
-	// 检查信息区域（右侧）是否避免了抖动
-	for y := 0; y < profile.Height; y++ {
-		first := indexed[y*profile.Width+photoWidth]
-		for x := photoWidth + 1; x < profile.Width; x++ {
+	// 检查信息区域（下方各行）是否避免了抖动，仅含黑/白
+	for y := photoHeight; y < profile.Height; y++ {
+		first := indexed[y*profile.Width]
+		for x := 1; x < profile.Width; x++ {
 			if indexed[y*profile.Width+x] != first {
 				t.Fatalf("expected info area row %d to avoid dithering, got mixed indexes", y)
 			}
@@ -52,7 +49,7 @@ func TestQuantizeToPalettePreservesInfoAreaWithoutDithering(t *testing.T) {
 func TestQuantizeInfoRegionBlackWhiteMapsGrayTextToBlack(t *testing.T) {
 	profile := RenderProfile{
 		Width:      10,
-		Height:     2,
+		Height:     10,
 		DitherMode: "floyd_steinberg",
 		Palette: []color.NRGBA{
 			{R: 255, G: 255, B: 255, A: 255},
@@ -62,17 +59,20 @@ func TestQuantizeInfoRegionBlackWhiteMapsGrayTextToBlack(t *testing.T) {
 		},
 	}
 
+	// photoHeight = round(10 * 640/800) = 8，info 区域为第 8-9 行
 	img := image.NewNRGBA(image.Rect(0, 0, profile.Width, profile.Height))
-	photoWidth := displayPhotoWidthForProfile(profile.Width)
+	photoHeight := displayPhotoHeightForProfile(profile.Height)
 	for y := 0; y < profile.Height; y++ {
 		for x := 0; x < profile.Width; x++ {
-			if x < photoWidth {
+			if y < photoHeight {
 				img.SetNRGBA(x, y, color.NRGBA{R: 128, G: 128, B: 128, A: 255})
 				continue
 			}
-			if y == 0 {
+			if y == photoHeight {
+				// info 区域第一行：白色背景
 				img.SetNRGBA(x, y, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
 			} else {
+				// info 区域其余行：中灰色（模拟文字），期望量化为黑色
 				img.SetNRGBA(x, y, color.NRGBA{R: 120, G: 120, B: 120, A: 255})
 			}
 		}
@@ -82,13 +82,16 @@ func TestQuantizeInfoRegionBlackWhiteMapsGrayTextToBlack(t *testing.T) {
 	whiteIndex := uint8(nearestPaletteIndex(color.NRGBA{R: 255, G: 255, B: 255, A: 255}, profile.Palette))
 	blackIndex := uint8(nearestPaletteIndex(color.NRGBA{R: 0, G: 0, B: 0, A: 255}, profile.Palette))
 
-	// 检查信息区域（右侧）
-	for x := photoWidth; x < profile.Width; x++ {
-		if indexed[0*profile.Width+x] != whiteIndex {
-			t.Fatalf("expected white background at column %d, got index %d", x, indexed[0*profile.Width+x])
+	// info 区域第一行应为白色背景
+	for x := 0; x < profile.Width; x++ {
+		if indexed[photoHeight*profile.Width+x] != whiteIndex {
+			t.Fatalf("expected white background at info row 0, col %d, got index %d", x, indexed[photoHeight*profile.Width+x])
 		}
-		if indexed[1*profile.Width+x] != blackIndex {
-			t.Fatalf("expected gray text to map to black at column %d, got index %d", x, indexed[1*profile.Width+x])
+	}
+	// info 区域第二行灰色文字应量化为黑色
+	for x := 0; x < profile.Width; x++ {
+		if indexed[(photoHeight+1)*profile.Width+x] != blackIndex {
+			t.Fatalf("expected gray text to map to black at info row 1, col %d, got index %d", x, indexed[(photoHeight+1)*profile.Width+x])
 		}
 	}
 }

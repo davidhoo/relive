@@ -33,26 +33,23 @@ type RenderProfile struct {
 	DefaultForDevice bool
 }
 
-const DefaultCanvasTemplate = "canvas_landscape_800x480_v1"
+const DefaultCanvasTemplate = "canvas_portrait_480x800_v1"
 
 const (
-	displayCanvasWidth   = 800
-	displayCanvasHeight  = 480
-	displayPhotoWidth    = 640
-	displayPhotoHeight   = 480
-	displayInfoWidth     = 160
-	displayInfoHeight    = 480
-	infoBinaryThreshold  = 235
-	infoVerticalPadding  = 24
-	infoHorizontalMargin = 12
-	titleFontSize        = 22
-	subtitleFontSize     = 18
-	titleSingleBaselineY = 240
-	titleFirstBaselineY  = 220
-	titleLineGap         = 30
-	subtitleBaselineY    = 300
-	defaultTextColor     = 0x22
-	defaultSubtitleColor = 0x66
+	displayCanvasWidth    = 480
+	displayCanvasHeight   = 800
+	displayPhotoHeight    = 640
+	displayInfoHeight     = 160
+	infoBinaryThreshold   = 235
+	infoHorizontalPadding = 24
+	titleFontSize         = 22
+	subtitleFontSize      = 18
+	titleSingleBaselineY  = 704
+	titleFirstBaselineY   = 690
+	titleLineGap          = 30
+	subtitleBaselineY     = 764
+	defaultTextColor      = 0x22
+	defaultSubtitleColor  = 0x66
 )
 
 var (
@@ -81,22 +78,22 @@ var (
 func BuiltinRenderProfiles() []RenderProfile {
 	return []RenderProfile{
 		{
-			Name:             "gdem075f52_800x480_4color",
-			DisplayName:      "GDEM075F52 800x480 四色",
+			Name:             "gdem075f52_480x800_4color",
+			DisplayName:      "GDEM075F52 480x800 四色",
 			CanvasTemplate:   DefaultCanvasTemplate,
-			Width:            800,
-			Height:           480,
+			Width:            480,
+			Height:           800,
 			PaletteName:      "bwry4",
 			DitherMode:       "ordered",
 			Palette:          paletteGDEM075F52,
 			DefaultForDevice: true,
 		},
 		{
-			Name:           "spectra6_800x480",
-			DisplayName:    "Spectra 6 800x480",
+			Name:           "spectra6_480x800",
+			DisplayName:    "Spectra 6 480x800",
 			CanvasTemplate: DefaultCanvasTemplate,
-			Width:          800,
-			Height:         480,
+			Width:          480,
+			Height:         800,
 			PaletteName:    "spectra6",
 			DitherMode:     "floyd_steinberg",
 			Palette:        paletteSpectra6,
@@ -139,14 +136,14 @@ func DefaultRenderProfile() string {
 			return profile.Name
 		}
 	}
-	return "gdem075f52_800x480_4color"
+	return "gdem075f52_480x800_4color"
 }
 
 func ActiveEmbeddedRenderProfiles() []RenderProfile {
 	profiles := BuiltinRenderProfiles()
 	active := make([]RenderProfile, 0, 2)
 	for _, profile := range profiles {
-		if profile.Width == 800 && profile.Height == 480 {
+		if profile.Width == 480 && profile.Height == 800 {
 			active = append(active, profile)
 		}
 	}
@@ -176,35 +173,25 @@ func GenerateDisplayPreview(filePath, outPath string, width, height int, title, 
 func buildDisplayCanvas(img image.Image, width, height int, title, subtitle string) image.Image {
 	canvas := imaging.New(width, height, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
 
-	// 左侧：照片区域 (640x480)
-	photo := GenerateFramePreview(img, displayPhotoWidth, displayPhotoHeight)
-	draw.Draw(canvas, image.Rect(0, 0, displayPhotoWidth, displayPhotoHeight), photo, image.Point{}, draw.Src)
+	// 上方：照片区域 (480×640)，抖动处理
+	photo := GenerateFramePreview(img, width, displayPhotoHeight)
+	draw.Draw(canvas, image.Rect(0, 0, width, displayPhotoHeight), photo, image.Point{}, draw.Src)
 
-	// 右侧：信息区域 (160x480)
+	// 下方：信息区域 (480×160)，纯白底黑字，不抖动
 	title = strings.TrimSpace(title)
 	subtitle = strings.TrimSpace(subtitle)
-	renderInfoArea(canvas, title, subtitle)
+	renderCenteredTitle(canvas, title, color.NRGBA{R: defaultTextColor, G: defaultTextColor, B: defaultTextColor, A: 255})
+	renderCenteredText(canvas, subtitle, subtitleFontSize, subtitleBaselineY, color.NRGBA{R: defaultSubtitleColor, G: defaultSubtitleColor, B: defaultSubtitleColor, A: 255})
 
 	return canvas
 }
 
-func renderInfoArea(canvas *image.NRGBA, title, subtitle string) {
-	// 在右侧160像素宽的区域渲染文字，垂直居中
-	infoX := displayPhotoWidth
-
-	titleColor := color.NRGBA{R: defaultTextColor, G: defaultTextColor, B: defaultTextColor, A: 255}
-	subtitleColor := color.NRGBA{R: defaultSubtitleColor, G: defaultSubtitleColor, B: defaultSubtitleColor, A: 255}
-
-	renderVerticalCenteredTitle(canvas, title, infoX, titleColor)
-	renderVerticalCenteredText(canvas, subtitle, subtitleFontSize, infoX, subtitleBaselineY, subtitleColor)
-}
-
-func renderVerticalCenteredTitle(img *image.NRGBA, text string, infoX int, textColor color.NRGBA) {
+func renderCenteredTitle(img *image.NRGBA, text string, textColor color.NRGBA) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
 
-	maxWidth := displayInfoWidth - infoHorizontalMargin*2
+	maxWidth := img.Bounds().Dx() - infoHorizontalPadding*2
 	face := loadFontFace(titleFontSize)
 	defer closeFontFace(face)
 
@@ -212,23 +199,21 @@ func renderVerticalCenteredTitle(img *image.NRGBA, text string, infoX int, textC
 	if len(lines) == 0 {
 		return
 	}
-
 	baselineY := titleSingleBaselineY
 	if len(lines) > 1 {
 		baselineY = titleFirstBaselineY
 	}
-
 	for idx, line := range lines {
-		renderTextLineInInfoArea(img, face, line, infoX, baselineY+idx*titleLineGap, textColor)
+		renderTextLine(img, face, line, baselineY+idx*titleLineGap, textColor)
 	}
 }
 
-func renderVerticalCenteredText(img *image.NRGBA, text string, size float64, infoX, baselineY int, textColor color.NRGBA) {
+func renderCenteredText(img *image.NRGBA, text string, size float64, baselineY int, textColor color.NRGBA) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
 
-	maxWidth := displayInfoWidth - infoHorizontalMargin*2
+	maxWidth := img.Bounds().Dx() - infoHorizontalPadding*2
 	face := loadFontFace(size)
 	defer closeFontFace(face)
 
@@ -236,21 +221,18 @@ func renderVerticalCenteredText(img *image.NRGBA, text string, size float64, inf
 	if truncated == "" {
 		return
 	}
-	renderTextLineInInfoArea(img, face, truncated, infoX, baselineY, textColor)
+	renderTextLine(img, face, truncated, baselineY, textColor)
 }
 
-func renderTextLineInInfoArea(img *image.NRGBA, face font.Face, text string, infoX, baselineY int, textColor color.NRGBA) {
+func renderTextLine(img *image.NRGBA, face font.Face, text string, baselineY int, textColor color.NRGBA) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
-
 	width := font.MeasureString(face, text).Round()
-	// 在信息区域内水平居中
-	x := infoX + (displayInfoWidth-width)/2
-	if x < infoX+infoHorizontalMargin {
-		x = infoX + infoHorizontalMargin
+	x := (img.Bounds().Dx() - width) / 2
+	if x < infoHorizontalPadding {
+		x = infoHorizontalPadding
 	}
-
 	drawer := &font.Drawer{
 		Dst:  img,
 		Src:  image.NewUniform(textColor),
@@ -552,11 +534,11 @@ func quantizeToPalette(img image.Image, profile RenderProfile) []uint8 {
 		return nil
 	}
 
-	photoWidth := displayPhotoWidthForProfile(width)
-	if photoWidth <= 0 {
+	photoHeight := displayPhotoHeightForProfile(height)
+	if photoHeight <= 0 {
 		return quantizeDirect(img, profile.Palette)
 	}
-	if photoWidth >= width {
+	if photoHeight >= height {
 		switch profile.DitherMode {
 		case "floyd_steinberg":
 			return quantizeFloydSteinberg(img, profile.Palette)
@@ -567,9 +549,9 @@ func quantizeToPalette(img image.Image, profile RenderProfile) []uint8 {
 		}
 	}
 
-	// 横屏布局：左侧照片区域，右侧信息区域
-	photoRect := image.Rect(bounds.Min.X, bounds.Min.Y, bounds.Min.X+photoWidth, bounds.Min.Y+height)
-	infoRect := image.Rect(bounds.Min.X+photoWidth, bounds.Min.Y, bounds.Min.X+width, bounds.Min.Y+height)
+	// 竖屏布局：上方照片区域（抖动），下方信息区域（纯黑白）
+	photoRect := image.Rect(bounds.Min.X, bounds.Min.Y, bounds.Min.X+width, bounds.Min.Y+photoHeight)
+	infoRect := image.Rect(bounds.Min.X, bounds.Min.Y+photoHeight, bounds.Min.X+width, bounds.Min.Y+height)
 
 	var photoIndexed []uint8
 	switch profile.DitherMode {
@@ -581,41 +563,21 @@ func quantizeToPalette(img image.Image, profile RenderProfile) []uint8 {
 		photoIndexed = quantizeOrderedRegion(img, profile.Palette, photoRect)
 	}
 	infoIndexed := quantizeInfoRegionBlackWhite(img, profile.Palette, infoRect)
-
-	// 横屏布局需要交错合并左右两个区域
-	return mergeHorizontalRegions(photoIndexed, infoIndexed, photoWidth, width-photoWidth, height)
+	return append(photoIndexed, infoIndexed...)
 }
 
-func mergeHorizontalRegions(leftRegion, rightRegion []uint8, leftWidth, rightWidth, height int) []uint8 {
-	totalWidth := leftWidth + rightWidth
-	result := make([]uint8, totalWidth*height)
-
-	for y := 0; y < height; y++ {
-		// 复制左侧区域
-		for x := 0; x < leftWidth; x++ {
-			result[y*totalWidth+x] = leftRegion[y*leftWidth+x]
-		}
-		// 复制右侧区域
-		for x := 0; x < rightWidth; x++ {
-			result[y*totalWidth+leftWidth+x] = rightRegion[y*rightWidth+x]
-		}
-	}
-
-	return result
-}
-
-func displayPhotoWidthForProfile(totalWidth int) int {
-	if totalWidth <= 0 {
+func displayPhotoHeightForProfile(totalHeight int) int {
+	if totalHeight <= 0 {
 		return 0
 	}
-	photoWidth := int(math.Round(float64(totalWidth) * float64(displayPhotoWidth) / float64(displayCanvasWidth)))
-	if photoWidth < 0 {
+	photoHeight := int(math.Round(float64(totalHeight) * float64(displayPhotoHeight) / float64(displayCanvasHeight)))
+	if photoHeight < 0 {
 		return 0
 	}
-	if photoWidth > totalWidth {
-		return totalWidth
+	if photoHeight > totalHeight {
+		return totalHeight
 	}
-	return photoWidth
+	return photoHeight
 }
 
 var bayer4 = [4][4]float64{
