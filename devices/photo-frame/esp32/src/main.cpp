@@ -14,9 +14,9 @@ DisplayDriver display;
 // 图像缓冲区
 // 对于 800x480 屏幕: 144000 bytes (800*480/2 + 一些余量)
 // 实际服务器返回的是 480x800 竖屏图片: 192000 bytes
-// 如果没有 PSRAM，使用较小的缓冲区
+// 实测服务器返回约 384KB，需要更大的缓冲区
 uint8_t* imageBuffer = nullptr;
-const size_t BUFFER_SIZE_WITH_PSRAM = 400000;  // PSRAM 可用时的大缓冲区
+const size_t BUFFER_SIZE_WITH_PSRAM = 512000;  // PSRAM 可用时的大缓冲区 (500KB)
 const size_t BUFFER_SIZE_NO_PSRAM = 200000;    // 无 PSRAM 时的缓冲区（需要至少192000）
 size_t actualBufferSize = 0;  // 实际分配的缓冲区大小
 
