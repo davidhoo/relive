@@ -716,20 +716,61 @@ func spreadError(r, g, b [][]float64, x, y, width, height int, errR, errG, errB,
 	b[y][x] = clampFloat(b[y][x] + errB*factor)
 }
 
+// nearestPaletteIndex 使用 CIE Lab 色彩空间计算感知距离，避免中性灰被错误量化为彩色。
+// RGB 欧氏距离会将灰色(128,128,128)错误地映射到 Yellow/Red，因为它们在 RGB 空间更近；
+// Lab 空间中灰色与 Black/White 的色相距离为 0，与彩色条目距离大，量化结果更符合感知。
 func nearestPaletteIndex(current color.NRGBA, palette []color.NRGBA) int {
+	L1, a1, b1 := rgbToLab(current)
 	bestIndex := 0
 	bestDistance := math.MaxFloat64
 	for idx, candidate := range palette {
-		dr := float64(current.R) - float64(candidate.R)
-		dg := float64(current.G) - float64(candidate.G)
-		db := float64(current.B) - float64(candidate.B)
-		distance := dr*dr + dg*dg + db*db
+		L2, a2, b2 := rgbToLab(candidate)
+		dL := L1 - L2
+		da := a1 - a2
+		db := b1 - b2
+		distance := dL*dL + da*da + db*db
 		if distance < bestDistance {
 			bestDistance = distance
 			bestIndex = idx
 		}
 	}
 	return bestIndex
+}
+
+// rgbToLab 将 sRGB 颜色转换为 CIE Lab（D65 白点）。
+func rgbToLab(c color.NRGBA) (L, a, b float64) {
+	r := srgbLinearize(float64(c.R) / 255.0)
+	g := srgbLinearize(float64(c.G) / 255.0)
+	bl := srgbLinearize(float64(c.B) / 255.0)
+	// Linear sRGB → XYZ (D65)
+	x := 0.4124*r + 0.3576*g + 0.1805*bl
+	y := 0.2126*r + 0.7152*g + 0.0722*bl
+	z := 0.0193*r + 0.1192*g + 0.9505*bl
+	// XYZ → Lab (D65 参考白点)
+	x /= 0.95047
+	y /= 1.00000
+	z /= 1.08883
+	fx := labF(x)
+	fy := labF(y)
+	fz := labF(z)
+	L = 116*fy - 16
+	a = 500 * (fx - fy)
+	b = 200 * (fy - fz)
+	return
+}
+
+func srgbLinearize(v float64) float64 {
+	if v <= 0.04045 {
+		return v / 12.92
+	}
+	return math.Pow((v+0.055)/1.055, 2.4)
+}
+
+func labF(t float64) float64 {
+	if t > 0.008856 {
+		return math.Cbrt(t)
+	}
+	return 7.787*t + 16.0/116.0
 }
 
 func clampByte(value float64) uint8 {
