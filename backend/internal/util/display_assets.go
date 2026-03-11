@@ -503,17 +503,40 @@ func saveDitherPreview(indexed []uint8, profile RenderProfile, outPath string) e
 	return imaging.Save(img, outPath, imaging.JPEGQuality(92))
 }
 
+// rotateIndexed90CCW 将像素索引数组逆时针旋转 90°
+// 源尺寸 srcWidth×srcHeight（竖屏），目标尺寸 srcHeight×srcWidth（横屏）
+// 旋转逻辑与 ESP32 display_driver.cpp displayRotated() 保持一致：
+//
+//	dst_x = srcHeight - 1 - src_y
+//	dst_y = src_x
+func rotateIndexed90CCW(indexed []uint8, srcWidth, srcHeight int) []uint8 {
+	dstWidth := srcHeight
+	dstHeight := srcWidth
+	rotated := make([]uint8, dstWidth*dstHeight)
+	for srcY := 0; srcY < srcHeight; srcY++ {
+		for srcX := 0; srcX < srcWidth; srcX++ {
+			dstX := srcHeight - 1 - srcY
+			dstY := srcX
+			rotated[dstY*dstWidth+dstX] = indexed[srcY*srcWidth+srcX]
+		}
+	}
+	return rotated
+}
+
 func encodeIndexedBinary(indexed []uint8, profile RenderProfile) []byte {
-	// 直接返回 4bit 格式：每2个像素打包成1个字节
-	// 适用于 E Ink 显示屏（如 Spectra 6）
-	totalPixels := len(indexed)
+	// 旋转 90°（逆时针）后打包为 4bit 格式：每2个像素1字节
+	// 输入：profile.Width × profile.Height（竖屏，如 480×800）
+	// 输出：profile.Height × profile.Width（横屏，如 800×480），供 ESP32 直接 display()
+	rotated := rotateIndexed90CCW(indexed, profile.Width, profile.Height)
+
+	totalPixels := len(rotated)
 	output := make([]byte, (totalPixels+1)/2)
 
 	for i := 0; i < totalPixels; i += 2 {
-		pixel1 := indexed[i] & 0x0F // 第一个像素（低4位）
+		pixel1 := rotated[i] & 0x0F
 		pixel2 := uint8(0)
 		if i+1 < totalPixels {
-			pixel2 = indexed[i+1] & 0x0F // 第二个像素（高4位）
+			pixel2 = rotated[i+1] & 0x0F
 		}
 		output[i/2] = (pixel2 << 4) | pixel1
 	}
