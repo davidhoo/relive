@@ -13,7 +13,7 @@ DisplayDriver display;
 
 // 图像缓冲区
 // 服务器返回 4bit 格式：每2个像素1字节
-// 480x800 屏幕需要: 480 * 800 / 2 = 192000 bytes
+// 800x480 屏幕需要: 800 * 480 / 2 = 192000 bytes
 uint8_t* imageBuffer = nullptr;
 const size_t BUFFER_SIZE_WITH_PSRAM = 200000;  // PSRAM 可用时的缓冲区 (195KB)
 const size_t BUFFER_SIZE_NO_PSRAM = 200000;    // 无 PSRAM 时的缓冲区（192000 + 余量）
