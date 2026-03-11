@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
@@ -33,6 +34,7 @@ type DisplayService interface {
 
 	// 每日展示批次
 	GenerateDailyBatch(date time.Time, force bool) (*model.DailyDisplayBatch, error)
+	StartGenerateDailyBatch(date time.Time, force bool) (*model.DailyDisplayBatch, error)
 	GetDailyBatch(date time.Time) (*model.DailyDisplayBatch, error)
 	ListDailyBatches(limit int) ([]*model.DailyDisplayBatch, error)
 	GetDeviceDisplay(deviceID uint, renderProfile string) (*model.DeviceDisplaySelection, error)
@@ -49,6 +51,9 @@ type displayService struct {
 	deviceRepo        repository.DeviceRepository
 	configService     ConfigService
 	config            *config.Config
+
+	batchGenMu      sync.Mutex
+	batchGenRunning bool
 }
 
 // NewDisplayService 创建展示服务

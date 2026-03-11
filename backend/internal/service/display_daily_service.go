@@ -18,8 +18,13 @@ import (
 func (s *displayService) GenerateDailyBatch(date time.Time, force bool) (*model.DailyDisplayBatch, error) {
 	batchDate := normalizeBatchDate(date)
 	existing, err := s.findDailyBatchByDate(batchDate)
-	if err == nil && existing != nil && existing.Status == model.DailyDisplayBatchStatusReady && !force {
-		return existing, nil
+	if err == nil && existing != nil {
+		if existing.Status == model.DailyDisplayBatchStatusRunning && !force {
+			return nil, fmt.Errorf("daily batch for %s is currently being generated", batchDate)
+		}
+		if existing.Status == model.DailyDisplayBatchStatusReady && !force {
+			return existing, nil
+		}
 	}
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
@@ -172,6 +177,70 @@ func (s *displayService) GenerateDailyBatch(date time.Time, force bool) (*model.
 
 	logger.Infof("Generated daily display batch for %s with %d items", batchDate, len(items))
 	return saved, nil
+}
+
+func (s *displayService) StartGenerateDailyBatch(date time.Time, force bool) (*model.DailyDisplayBatch, error) {
+	s.batchGenMu.Lock()
+	if s.batchGenRunning {
+		s.batchGenMu.Unlock()
+		return nil, fmt.Errorf("batch generation already running")
+	}
+	s.batchGenRunning = true
+	s.batchGenMu.Unlock()
+
+	batchDate := normalizeBatchDate(date)
+
+	// upsert a running placeholder so the frontend can poll status
+	var batch model.DailyDisplayBatch
+	err := s.db.Where("date(batch_date) = date(?)", batchDate).First(&batch).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		s.batchGenMu.Lock()
+		s.batchGenRunning = false
+		s.batchGenMu.Unlock()
+		return nil, err
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		batch = model.DailyDisplayBatch{
+			BatchDate: batchDate,
+			Status:    model.DailyDisplayBatchStatusRunning,
+		}
+		if err := s.db.Create(&batch).Error; err != nil {
+			s.batchGenMu.Lock()
+			s.batchGenRunning = false
+			s.batchGenMu.Unlock()
+			return nil, err
+		}
+	} else {
+		if err := s.db.Model(&batch).Updates(map[string]interface{}{
+			"status":        model.DailyDisplayBatchStatusRunning,
+			"error_message": "",
+			"item_count":    0,
+		}).Error; err != nil {
+			s.batchGenMu.Lock()
+			s.batchGenRunning = false
+			s.batchGenMu.Unlock()
+			return nil, err
+		}
+	}
+
+	go func() {
+		defer func() {
+			s.batchGenMu.Lock()
+			s.batchGenRunning = false
+			s.batchGenMu.Unlock()
+		}()
+		if _, err := s.GenerateDailyBatch(date, true); err != nil {
+			logger.Errorf("Async batch generation failed for %s: %v", batchDate, err)
+			s.db.Model(&model.DailyDisplayBatch{}).
+				Where("date(batch_date) = date(?) AND status = ?", batchDate, model.DailyDisplayBatchStatusRunning).
+				Updates(map[string]interface{}{
+					"status":        model.DailyDisplayBatchStatusFailed,
+					"error_message": err.Error(),
+				})
+		}
+	}()
+
+	return &batch, nil
 }
 
 func (s *displayService) GetDailyBatch(date time.Time) (*model.DailyDisplayBatch, error) {
@@ -332,8 +401,13 @@ func (s *displayService) GetRenderProfiles() []model.RenderProfileResponse {
 
 func (s *displayService) ensureDailyBatch(date time.Time) (*model.DailyDisplayBatch, error) {
 	batch, err := s.GetDailyBatch(date)
-	if err == nil && batch != nil && batch.Status == model.DailyDisplayBatchStatusReady {
-		return batch, nil
+	if err == nil && batch != nil {
+		if batch.Status == model.DailyDisplayBatchStatusReady {
+			return batch, nil
+		}
+		if batch.Status == model.DailyDisplayBatchStatusRunning {
+			return nil, fmt.Errorf("daily batch for %s is currently being generated, please retry later", normalizeBatchDate(date))
+		}
 	}
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err

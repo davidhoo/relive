@@ -566,10 +566,22 @@ const loadBatchHistory = async () => {
 const generateDailyBatch = async (force: boolean) => {
   batchGenerating.value = true
   try {
-    await dailyDisplayApi.generateBatch({ force })
-    ElMessage.success(force ? '今日批次已重新生成' : '今日批次生成成功')
-    await loadDailyBatch()
-    await loadBatchHistory()
+    await dailyDisplayApi.startGenerateBatch({ force })
+    // poll until ready or failed (max 4 minutes)
+    for (let i = 0; i < 120; i++) {
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      const batch = await dailyDisplayApi.getTodayBatch()
+      if (batch?.status === 'ready') {
+        ElMessage.success(force ? '今日批次已重新生成' : '今日批次生成成功')
+        await loadDailyBatch()
+        await loadBatchHistory()
+        return
+      }
+      if (batch?.status === 'failed') {
+        throw new Error(batch.error_message || '批次生成失败')
+      }
+    }
+    throw new Error('批次生成超时，请检查服务器日志')
   } catch (error: any) {
     ElMessage.error(error.message || '生成今日批次失败')
   } finally {

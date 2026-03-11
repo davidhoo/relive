@@ -148,6 +148,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 			authorized.GET("/display/batch", handlers.Display.GetDailyBatch)
 			authorized.GET("/display/history", handlers.Display.ListDailyBatches)
 			authorized.POST("/display/batch/generate", handlers.Display.GenerateDailyBatch)
+			authorized.POST("/display/batch/generate/async", handlers.Display.GenerateDailyBatchAsync)
 			authorized.GET("/display/render-profiles", handlers.Display.GetRenderProfiles)
 
 			// 照片相关
