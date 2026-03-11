@@ -1,4 +1,6 @@
 #include <Arduino.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include "config.h"
 #include "wifi_manager.h"
 #include "api_client.h"
@@ -10,10 +12,13 @@ APIClient apiClient;
 DisplayDriver display;
 
 // 图像缓冲区
-// 对于 800x480 屏幕: 144000 bytes
-// 但服务器可能返回更大尺寸，分配 400KB 缓冲区
+// 对于 800x480 屏幕: 144000 bytes (800*480/2 + 一些余量)
+// 实际服务器返回的是 480x800 竖屏图片: 192000 bytes
+// 如果没有 PSRAM，使用较小的缓冲区
 uint8_t* imageBuffer = nullptr;
-const size_t BUFFER_SIZE = 400000; // 预留更大空间
+const size_t BUFFER_SIZE_WITH_PSRAM = 400000;  // PSRAM 可用时的大缓冲区
+const size_t BUFFER_SIZE_NO_PSRAM = 200000;    // 无 PSRAM 时的缓冲区（需要至少192000）
+size_t actualBufferSize = 0;  // 实际分配的缓冲区大小
 
 // 状态变量
 enum SystemState {
@@ -73,24 +78,62 @@ bool allocateBuffer() {
         return true; // 已分配
     }
 
-    // 尝试从 PSRAM 分配
-    if (psramFound()) {
+    DEBUG_SERIAL.println("\n[System] ===== 内存分配诊断 =====");
+    
+    // 显示当前内存状态
+    DEBUG_SERIAL.printf("[System] 总堆内存: %d bytes\n", ESP.getHeapSize());
+    DEBUG_SERIAL.printf("[System] 可用堆内存: %d bytes\n", ESP.getFreeHeap());
+    DEBUG_SERIAL.printf("[System] 最大可分配块: %d bytes\n", ESP.getMaxAllocHeap());
+    
+    // 检查 PSRAM
+    bool hasPsram = psramFound();
+    if (hasPsram) {
         DEBUG_SERIAL.printf("[System] PSRAM 可用: %d bytes\n", ESP.getPsramSize());
-        imageBuffer = (uint8_t*)ps_malloc(BUFFER_SIZE);
+        DEBUG_SERIAL.printf("[System] PSRAM 空闲: %d bytes\n", ESP.getFreePsram());
+        actualBufferSize = BUFFER_SIZE_WITH_PSRAM;
+        imageBuffer = (uint8_t*)ps_malloc(actualBufferSize);
+        if (imageBuffer != nullptr) {
+            DEBUG_SERIAL.printf("[System] ✓ 从 PSRAM 分配成功: %d bytes\n", actualBufferSize);
+            return true;
+        }
+        DEBUG_SERIAL.println("[System] ✗ PSRAM 分配失败");
+    } else {
+        DEBUG_SERIAL.println("[System] ⚠ PSRAM 未检测到");
     }
 
-    // 如果 PSRAM 不可用，尝试从内部 RAM 分配
-    if (imageBuffer == nullptr) {
-        DEBUG_SERIAL.println("[System] 尝试从内部 RAM 分配...");
-        imageBuffer = (uint8_t*)malloc(BUFFER_SIZE);
+    // 尝试从内部 RAM 分配较小的缓冲区
+    actualBufferSize = BUFFER_SIZE_NO_PSRAM;
+    DEBUG_SERIAL.printf("[System] 尝试从内部 RAM 分配较小缓冲区: %d bytes\n", actualBufferSize);
+    
+    // 检查是否有足够的内存
+    size_t freeHeap = ESP.getFreeHeap();
+    size_t maxAlloc = ESP.getMaxAllocHeap();
+    
+    if (maxAlloc < actualBufferSize) {
+        DEBUG_SERIAL.printf("[System] ✗ 最大可分配块 (%d bytes) 小于所需 (%d bytes)\n",
+                          maxAlloc, actualBufferSize);
+        DEBUG_SERIAL.println("[System] 建议:");
+        DEBUG_SERIAL.println("  1. 启用 PSRAM (在 platformio.ini 中添加 board_build.arduino.memory_type = qio_opi)");
+        DEBUG_SERIAL.println("  2. 或减小 BUFFER_SIZE_NO_PSRAM 的值");
+        return false;
     }
+    
+    imageBuffer = (uint8_t*)malloc(actualBufferSize);
 
     if (imageBuffer == nullptr) {
-        LOG_ERROR("[System] 内存分配失败!");
+        DEBUG_SERIAL.println("[System] ✗ 内存分配失败!");
+        DEBUG_SERIAL.printf("[System] 请求: %d bytes, 可用: %d bytes, 最大块: %d bytes\n",
+                          actualBufferSize, freeHeap, maxAlloc);
+        DEBUG_SERIAL.println("[System] 可能原因:");
+        DEBUG_SERIAL.println("  - 内存碎片化");
+        DEBUG_SERIAL.println("  - 其他组件占用过多内存");
+        DEBUG_SERIAL.println("  - 需要启用 PSRAM");
         return false;
     }
 
-    DEBUG_SERIAL.printf("[System] 缓冲区分配成功: %d bytes\n", BUFFER_SIZE);
+    DEBUG_SERIAL.printf("[System] ✓ 从内部 RAM 分配成功: %d bytes\n", actualBufferSize);
+    DEBUG_SERIAL.printf("[System] 分配后可用堆内存: %d bytes\n", ESP.getFreeHeap());
+    DEBUG_SERIAL.println("[System] ===========================\n");
     return true;
 }
 
@@ -147,7 +190,7 @@ bool downloadAndDisplay() {
 
     // 下载 bin 文件
     String receivedChecksum;
-    int downloaded = apiClient.downloadBinFile(imageBuffer, BUFFER_SIZE, receivedChecksum);
+    int downloaded = apiClient.downloadBinFile(imageBuffer, actualBufferSize, receivedChecksum);
 
     if (downloaded <= 0) {
         LOG_ERROR_F("[Main] 下载失败: %s\n", apiClient.getLastError().c_str());
@@ -157,9 +200,12 @@ bool downloadAndDisplay() {
 
     LOG_INFO_F("[Main] 下载成功: %d bytes\n", downloaded);
 
-    // 刷新显示（使用旋转显示，适配 480x800 竖屏图片）
-    LOG_INFO("[Main] 刷新屏幕（旋转显示）...");
-    display.displayRotated(imageBuffer);
+    // 刷新显示（测试：先不旋转，直接显示）
+    LOG_INFO("[Main] 刷新屏幕（直接显示，不旋转）...");
+    display.display(imageBuffer, downloaded);
+    
+    // 如果需要旋转显示，使用下面这行：
+    // display.displayRotated(imageBuffer, downloaded);
 
     stats.successCount++;
     stats.lastRefreshTime = millis();

@@ -52,6 +52,7 @@ private:
     int _lastHttpCode;
     bool _useHTTPS;
     String _baseUrl;
+    WiFiClient _wifiClient;  // 持久化的WiFi客户端
 
     // 解析服务器配置，初始化客户端
     void setupServer();
