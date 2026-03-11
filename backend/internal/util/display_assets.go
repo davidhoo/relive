@@ -59,19 +59,26 @@ var (
 )
 
 var (
+	// paletteGDEM075F52 调色板顺序必须与硬件 nibble 值一一对应：
+	// EINK_BLACK=0x0, EINK_WHITE=0x1, EINK_YELLOW=0x2, EINK_RED=0x3
 	paletteGDEM075F52 = []color.NRGBA{
-		{R: 0, G: 0, B: 0, A: 255},        // index 0 = Black  (硬件 nibble 0x0 = Black)
-		{R: 255, G: 255, B: 255, A: 255},   // index 1 = White  (硬件 nibble 0x1 = White)
-		{R: 196, G: 44, B: 29, A: 255},     // index 2 = Red
-		{R: 233, G: 188, B: 41, A: 255},    // index 3 = Yellow
+		{R: 0, G: 0, B: 0, A: 255},        // index 0 → nibble 0x0 = Black
+		{R: 255, G: 255, B: 255, A: 255},   // index 1 → nibble 0x1 = White
+		{R: 233, G: 188, B: 41, A: 255},    // index 2 → nibble 0x2 = Yellow
+		{R: 196, G: 44, B: 29, A: 255},     // index 3 → nibble 0x3 = Red
 	}
+	// paletteSpectra6 调色板顺序必须与硬件 nibble 值一一对应：
+	// EINK_BLACK=0x0, EINK_WHITE=0x1, EINK_YELLOW=0x2, EINK_RED=0x3,
+	// (0x4 保留/无效), EINK_BLUE=0x5, EINK_GREEN=0x6
+	// 由于 0x4 无效，填入接近黑色的占位色，量化时不会选中
 	paletteSpectra6 = []color.NRGBA{
-		{R: 0, G: 0, B: 0, A: 255},        // index 0 = Black  (硬件 nibble 0x0 = Black)
-		{R: 255, G: 255, B: 255, A: 255},   // index 1 = White  (硬件 nibble 0x1 = White)
-		{R: 196, G: 44, B: 29, A: 255},     // index 2 = Red
-		{R: 233, G: 188, B: 41, A: 255},    // index 3 = Yellow
-		{R: 44, G: 92, B: 180, A: 255},     // index 4 = Blue
-		{R: 68, G: 146, B: 68, A: 255},     // index 5 = Green
+		{R: 0, G: 0, B: 0, A: 255},        // index 0 → nibble 0x0 = Black
+		{R: 255, G: 255, B: 255, A: 255},   // index 1 → nibble 0x1 = White
+		{R: 233, G: 188, B: 41, A: 255},    // index 2 → nibble 0x2 = Yellow
+		{R: 196, G: 44, B: 29, A: 255},     // index 3 → nibble 0x3 = Red
+		{R: 1, G: 1, B: 1, A: 255},         // index 4 → nibble 0x4 = 无效（占位，量化时极少被选中）
+		{R: 44, G: 92, B: 180, A: 255},     // index 5 → nibble 0x5 = Blue
+		{R: 68, G: 146, B: 68, A: 255},     // index 6 → nibble 0x6 = Green
 	}
 )
 
