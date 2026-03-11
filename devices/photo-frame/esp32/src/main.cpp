@@ -155,12 +155,6 @@ bool downloadAndDisplay() {
         return false;
     }
 
-    // 获取显示信息（可选，用于日志）
-    DisplayInfo info = apiClient.getDisplayInfo();
-    if (info.valid) {
-        LOG_INFO_F("[Main] 照片 ID: %d, Asset ID: %d\n", info.photoID, info.assetID);
-    }
-
     // 下载 bin 文件
     String receivedChecksum;
     int downloaded = apiClient.downloadBinFile(imageBuffer, actualBufferSize, receivedChecksum);
