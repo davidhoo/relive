@@ -835,7 +835,11 @@ func (h *PhotoHandler) generateDevicePreviewFile(photo *model.Photo, profileName
 		return "", fmt.Errorf("generate display preview: %w", err)
 	}
 
-	if _, _, err := util.BuildRenderArtifacts(previewPath, profile, ditherPreviewPath, binPath, headerPath); err != nil {
+	canvas, err := util.BuildDisplayCanvas(photo.FilePath, profile.Width, profile.Height, title, subtitle)
+	if err != nil {
+		return "", fmt.Errorf("build display canvas: %w", err)
+	}
+	if _, _, err := util.BuildRenderArtifacts(canvas, profile, ditherPreviewPath, binPath, headerPath); err != nil {
 		return "", fmt.Errorf("build render artifacts: %w", err)
 	}
 	return ditherPreviewPath, nil

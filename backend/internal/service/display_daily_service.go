@@ -59,8 +59,15 @@ func (s *displayService) GenerateDailyBatch(date time.Time, force bool) (*model.
 		previewRelPath := filepath.Join(batchDate, "preview", fmt.Sprintf("%03d.jpg", sequence))
 		previewAbsPath := filepath.Join(tempRoot, "preview", fmt.Sprintf("%03d.jpg", sequence))
 		title, subtitle := buildDisplayText(photo)
-		if err := util.GenerateDisplayPreview(photo.FilePath, previewAbsPath, 480, 800, title, subtitle); err != nil {
-			return nil, fmt.Errorf("generate preview for photo %d: %w", photo.ID, err)
+
+		// 在内存中构建 canvas，避免 JPEG 有损压缩影响 bin 生成质量
+		canvas, err := util.BuildDisplayCanvas(photo.FilePath, 480, 800, title, subtitle)
+		if err != nil {
+			return nil, fmt.Errorf("build display canvas for photo %d: %w", photo.ID, err)
+		}
+		// 仅用于网页预览，JPEG 有损压缩不影响 bin 生成
+		if err := util.SaveDisplayPreview(canvas, previewAbsPath); err != nil {
+			return nil, fmt.Errorf("save preview for photo %d: %w", photo.ID, err)
 		}
 
 		item := &model.DailyDisplayItem{
@@ -81,7 +88,7 @@ func (s *displayService) GenerateDailyBatch(date time.Time, force bool) (*model.
 			ditherPreviewAbsPath := filepath.Join(tempRoot, profile.Name, fmt.Sprintf("%03d-preview.jpg", sequence))
 			binAbsPath := filepath.Join(tempRoot, profile.Name, fmt.Sprintf("%03d.bin", sequence))
 			headerAbsPath := filepath.Join(tempRoot, profile.Name, fmt.Sprintf("%03d.h", sequence))
-			checksum, fileSize, err := util.BuildRenderArtifacts(previewAbsPath, profile, ditherPreviewAbsPath, binAbsPath, headerAbsPath)
+			checksum, fileSize, err := util.BuildRenderArtifacts(canvas, profile, ditherPreviewAbsPath, binAbsPath, headerAbsPath)
 			if err != nil {
 				return nil, fmt.Errorf("generate render asset %s for photo %d: %w", profile.Name, photo.ID, err)
 			}

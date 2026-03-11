@@ -158,16 +158,29 @@ func DisplayBatchRoot(thumbnailRoot string) string {
 	return filepath.Join(base, "display-batches")
 }
 
-func GenerateDisplayPreview(filePath, outPath string, width, height int, title, subtitle string) error {
+// BuildDisplayCanvas 从原始照片构建竖屏 canvas（480×800），在内存中返回，不经过 JPEG 中转
+func BuildDisplayCanvas(filePath string, width, height int, title, subtitle string) (image.Image, error) {
 	img, err := OpenImage(filePath)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	preview := buildDisplayCanvas(img, width, height, title, subtitle)
+	return buildDisplayCanvas(img, width, height, title, subtitle), nil
+}
+
+// SaveDisplayPreview 将 canvas 保存为 JPEG，仅用于网页预览
+func SaveDisplayPreview(canvas image.Image, outPath string) error {
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 		return err
 	}
-	return imaging.Save(preview, outPath, imaging.JPEGQuality(88))
+	return imaging.Save(canvas, outPath, imaging.JPEGQuality(88))
+}
+
+func GenerateDisplayPreview(filePath, outPath string, width, height int, title, subtitle string) error {
+	canvas, err := BuildDisplayCanvas(filePath, width, height, title, subtitle)
+	if err != nil {
+		return err
+	}
+	return SaveDisplayPreview(canvas, outPath)
 }
 
 func buildDisplayCanvas(img image.Image, width, height int, title, subtitle string) image.Image {
@@ -395,11 +408,8 @@ func loadFontFile(path string) (*sfnt.Font, error) {
 	return collection.Font(0)
 }
 
-func BuildRenderArtifacts(previewPath string, profile RenderProfile, ditherPreviewPath, binPath, headerPath string) (string, int64, error) {
-	img, err := imaging.Open(previewPath)
-	if err != nil {
-		return "", 0, err
-	}
+func BuildRenderArtifacts(canvas image.Image, profile RenderProfile, ditherPreviewPath, binPath, headerPath string) (string, int64, error) {
+	img := canvas
 	if img.Bounds().Dx() != profile.Width || img.Bounds().Dy() != profile.Height {
 		img = imaging.Fill(img, profile.Width, profile.Height, imaging.Center, imaging.Lanczos)
 	}
