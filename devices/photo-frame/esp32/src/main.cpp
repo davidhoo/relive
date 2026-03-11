@@ -144,32 +144,6 @@ void freeBuffer() {
     }
 }
 
-// 解析 RLVD 格式并转换为 4bit 格式
-// 验证校验和
-    if (expectedChecksum.length() == 0) {
-        return true; // 没有校验和，跳过验证
-    }
-
-    // 简单的 XOR 校验和计算
-    uint8_t checksum = 0;
-    for (size_t i = 0; i < len; i++) {
-        checksum ^= data[i];
-    }
-
-    // 将预期校验和从 hex 字符串转为数值
-    uint8_t expected = 0;
-    for (int i = 0; i < 2 && i < expectedChecksum.length(); i++) {
-        char c = expectedChecksum[i];
-        uint8_t nibble;
-        if (c >= '0' && c <= '9') nibble = c - '0';
-        else if (c >= 'a' && c <= 'f') nibble = c - 'a' + 10;
-        else if (c >= 'A' && c <= 'F') nibble = c - 'A' + 10;
-        else continue;
-        expected = (expected << 4) | nibble;
-    }
-
-    return checksum == expected;
-}
 
 // 下载并显示照片
 bool downloadAndDisplay() {
