@@ -41,17 +41,8 @@ func main() {
 	filePath := flag.String("file", "", "GeoNames cities500.txt 文件路径")
 	configPath := flag.String("config", "config.dev.yaml", "配置文件路径")
 	batchSize := flag.Int("batch", 1000, "批量插入大小")
+	checkOnly := flag.Bool("check", false, "仅检查数据库中的城市数量")
 	flag.Parse()
-
-	if *filePath == "" {
-		fmt.Println("使用说明:")
-		fmt.Println("  go run cmd/import-cities/main.go --file cities500.txt")
-		fmt.Println("")
-		fmt.Println("下载数据:")
-		fmt.Println("  wget https://download.geonames.org/export/dump/cities500.zip")
-		fmt.Println("  unzip cities500.zip")
-		os.Exit(1)
-	}
 
 	// 加载配置
 	cfg, err := config.Load(*configPath)
@@ -69,6 +60,28 @@ func main() {
 	db, err := database.Init(cfg.Database)
 	if err != nil {
 		logger.Fatalf("Failed to initialize database: %v", err)
+	}
+
+	// 如果是检查模式，只返回数量
+	if *checkOnly {
+		var count int64
+		if err := db.Model(&model.City{}).Count(&count).Error; err != nil {
+			fmt.Println("0")
+			os.Exit(1)
+		}
+		fmt.Println(count)
+		os.Exit(0)
+	}
+
+	if *filePath == "" {
+		fmt.Println("使用说明:")
+		fmt.Println("  go run cmd/import-cities/main.go --file cities500.txt")
+		fmt.Println("  go run cmd/import-cities/main.go --check  # 检查已导入数量")
+		fmt.Println("")
+		fmt.Println("下载数据:")
+		fmt.Println("  wget https://download.geonames.org/export/dump/cities500.zip")
+		fmt.Println("  unzip cities500.zip")
+		os.Exit(1)
 	}
 
 	// 确保 cities 表存在
@@ -181,9 +194,9 @@ func parseLine(line string) (*model.City, error) {
 
 	city := &model.City{
 		GeonameID: geonameID,
-		Name:      fields[1],      // name
-		AdminName: adminName,      // admin1 code (可以后续改进)
-		Country:   fields[8],      // country code
+		Name:      fields[1], // name
+		AdminName: adminName, // admin1 code (可以后续改进)
+		Country:   fields[8], // country code
 		Latitude:  latitude,
 		Longitude: longitude,
 	}

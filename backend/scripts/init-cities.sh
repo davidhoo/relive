@@ -19,12 +19,27 @@ if [ ! -f "$CITIES_FILE" ]; then
 fi
 
 # 检查是否已有城市数据
+# 方法1: 如果数据库文件存在，使用 SQLite 查询
 if [ -f "$DB_PATH" ]; then
+    # 检查 cities 表是否存在且有数据
     CITY_COUNT=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM cities WHERE deleted_at IS NULL;" 2>/dev/null || echo "0")
-    if [ "$CITY_COUNT" -gt "0" ]; then
+    if [ "$CITY_COUNT" != "0" ] && [ "$CITY_COUNT" -gt "100000" ]; then
+        echo "======================================"
         echo "City data already exists: $CITY_COUNT cities"
+        echo "Skipping import to avoid duplicate data"
+        echo "======================================"
         exit 0
     fi
+fi
+
+# 方法2: 使用导入程序检查（更可靠，支持所有数据库类型）
+CHECK_RESULT=$(/app/import-cities --check --config "$CONFIG_FILE" 2>/dev/null || echo "0")
+if [ "$CHECK_RESULT" != "0" ] && [ "$CHECK_RESULT" -gt "100000" ]; then
+    echo "======================================"
+    echo "City data already exists: $CHECK_RESULT cities"
+    echo "Skipping import to avoid duplicate data"
+    echo "======================================"
+    exit 0
 fi
 
 echo "======================================"
