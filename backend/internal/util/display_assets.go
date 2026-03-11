@@ -60,18 +60,18 @@ var (
 
 var (
 	paletteGDEM075F52 = []color.NRGBA{
-		{R: 255, G: 255, B: 255, A: 255},
-		{R: 0, G: 0, B: 0, A: 255},
-		{R: 196, G: 44, B: 29, A: 255},
-		{R: 233, G: 188, B: 41, A: 255},
+		{R: 0, G: 0, B: 0, A: 255},        // index 0 = Black  (硬件 nibble 0x0 = Black)
+		{R: 255, G: 255, B: 255, A: 255},   // index 1 = White  (硬件 nibble 0x1 = White)
+		{R: 196, G: 44, B: 29, A: 255},     // index 2 = Red
+		{R: 233, G: 188, B: 41, A: 255},    // index 3 = Yellow
 	}
 	paletteSpectra6 = []color.NRGBA{
-		{R: 255, G: 255, B: 255, A: 255},
-		{R: 0, G: 0, B: 0, A: 255},
-		{R: 196, G: 44, B: 29, A: 255},
-		{R: 233, G: 188, B: 41, A: 255},
-		{R: 44, G: 92, B: 180, A: 255},
-		{R: 68, G: 146, B: 68, A: 255},
+		{R: 0, G: 0, B: 0, A: 255},        // index 0 = Black  (硬件 nibble 0x0 = Black)
+		{R: 255, G: 255, B: 255, A: 255},   // index 1 = White  (硬件 nibble 0x1 = White)
+		{R: 196, G: 44, B: 29, A: 255},     // index 2 = Red
+		{R: 233, G: 188, B: 41, A: 255},    // index 3 = Yellow
+		{R: 44, G: 92, B: 180, A: 255},     // index 4 = Blue
+		{R: 68, G: 146, B: 68, A: 255},     // index 5 = Green
 	}
 )
 
