@@ -12,12 +12,11 @@ APIClient apiClient;
 DisplayDriver display;
 
 // 图像缓冲区
-// 对于 800x480 屏幕: 144000 bytes (800*480/2 + 一些余量)
-// 实际服务器返回的是 480x800 竖屏图片: 192000 bytes
-// 实测服务器返回约 384KB，需要更大的缓冲区
+// 服务器返回 4bit 格式：每2个像素1字节
+// 480x800 屏幕需要: 480 * 800 / 2 = 192000 bytes
 uint8_t* imageBuffer = nullptr;
-const size_t BUFFER_SIZE_WITH_PSRAM = 512000;  // PSRAM 可用时的大缓冲区 (500KB)
-const size_t BUFFER_SIZE_NO_PSRAM = 200000;    // 无 PSRAM 时的缓冲区（需要至少192000）
+const size_t BUFFER_SIZE_WITH_PSRAM = 200000;  // PSRAM 可用时的缓冲区 (195KB)
+const size_t BUFFER_SIZE_NO_PSRAM = 200000;    // 无 PSRAM 时的缓冲区（192000 + 余量）
 size_t actualBufferSize = 0;  // 实际分配的缓冲区大小
 
 // 状态变量
@@ -145,8 +144,8 @@ void freeBuffer() {
     }
 }
 
+// 解析 RLVD 格式并转换为 4bit 格式
 // 验证校验和
-bool verifyChecksum(const uint8_t* data, size_t len, const String& expectedChecksum) {
     if (expectedChecksum.length() == 0) {
         return true; // 没有校验和，跳过验证
     }

@@ -1,9 +1,7 @@
 package util
 
 import (
-	"bytes"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"image"
@@ -485,17 +483,21 @@ func saveDitherPreview(indexed []uint8, profile RenderProfile, outPath string) e
 }
 
 func encodeIndexedBinary(indexed []uint8, profile RenderProfile) []byte {
-	buf := bytes.NewBuffer(nil)
-	buf.Write([]byte{'R', 'L', 'V', 'D'})
-	buf.WriteByte(1)
-	buf.WriteByte(uint8(len(profile.Palette)))
-	buf.WriteByte(uint8(len(profile.DitherMode)))
-	buf.WriteByte(0)
-	_ = binary.Write(buf, binary.LittleEndian, uint16(profile.Width))
-	_ = binary.Write(buf, binary.LittleEndian, uint16(profile.Height))
-	buf.WriteString(profile.DitherMode)
-	buf.Write(indexed)
-	return buf.Bytes()
+	// 直接返回 4bit 格式：每2个像素打包成1个字节
+	// 适用于 E Ink 显示屏（如 Spectra 6）
+	totalPixels := len(indexed)
+	output := make([]byte, (totalPixels+1)/2)
+
+	for i := 0; i < totalPixels; i += 2 {
+		pixel1 := indexed[i] & 0x0F // 第一个像素（低4位）
+		pixel2 := uint8(0)
+		if i+1 < totalPixels {
+			pixel2 = indexed[i+1] & 0x0F // 第二个像素（高4位）
+		}
+		output[i/2] = (pixel2 << 4) | pixel1
+	}
+
+	return output
 }
 
 func quantizeToPalette(img image.Image, profile RenderProfile) []uint8 {
