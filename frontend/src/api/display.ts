@@ -77,6 +77,14 @@ export const dailyDisplayApi = {
     return response.data.data
   },
 
+  startGenerateBatch: async (payload: GenerateDailyBatchRequest): Promise<DailyDisplayBatch> => {
+    const response = await http.post<ApiResponse<DailyDisplayBatch>>('/display/batch/generate/async', payload)
+    if (!response.data?.data) {
+      throw new Error('批次生成启动失败')
+    }
+    return response.data.data
+  },
+
   getRenderProfiles: async (): Promise<RenderProfileOption[]> => {
     const response = await http.get<ApiResponse<RenderProfileOption[]>>('/display/render-profiles')
     return response.data?.data || []

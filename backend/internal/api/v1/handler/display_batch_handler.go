@@ -130,6 +130,36 @@ func (h *DisplayHandler) resolveDeviceDisplaySelection(c *gin.Context) (*model.D
 	return selection, true
 }
 
+func (h *DisplayHandler) GenerateDailyBatchAsync(c *gin.Context) {
+	var req model.GenerateDailyDisplayBatchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: "Invalid request"}})
+		return
+	}
+
+	targetDate := time.Now()
+	if req.Date != "" {
+		parsedDate, err := time.ParseInLocation("2006-01-02", req.Date, time.Local)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: "date format must be YYYY-MM-DD"}})
+			return
+		}
+		targetDate = parsedDate
+	}
+
+	batch, err := h.displayService.StartGenerateDailyBatch(targetDate, req.Force)
+	if err != nil {
+		if err.Error() == "batch generation already running" {
+			c.JSON(http.StatusConflict, model.Response{Success: false, Error: &model.ErrorInfo{Code: "TASK_RUNNING", Message: "批次生成任务正在运行中"}})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, model.Response{Success: false, Error: &model.ErrorInfo{Code: "GENERATE_FAILED", Message: err.Error()}})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "批次生成已启动", Data: h.toDailyBatchResponse(batch)})
+}
+
 func (h *DisplayHandler) GenerateDailyBatch(c *gin.Context) {
 	var req model.GenerateDailyDisplayBatchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
