@@ -530,7 +530,7 @@ func encodeIndexedBinary(indexed []uint8, profile RenderProfile) []byte {
 		if i+1 < totalPixels {
 			pixel2 = rotated[i+1] & 0x0F
 		}
-		output[i/2] = (pixel2 << 4) | pixel1
+		output[i/2] = (pixel1 << 4) | pixel2
 	}
 
 	return output
