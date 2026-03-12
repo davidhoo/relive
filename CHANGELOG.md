@@ -7,46 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [1.0.0] - 2026-03-12
 
-### 2026-03-09 - 文档治理与索引重构 📝
+首个正式发布版本。包含完整的后端服务、前端管理后台、relive-analyzer CLI 工具和 ESP32 墨水屏相框固件。
 
-#### Changed
-- ✅ **入口文档同步** - 更新 `README.md`、`QUICKSTART.md`、`docs/QUICKSTART.md`，统一当前部署、初始化与 analyzer API 模式说明
-- ✅ **API 文档重写** - 以当前路由实现为准重写 `docs/BACKEND_API.md`，明确鉴权模型、异步扫描/重建与 analyzer API
-- ✅ **Analyzer 文档分层** - 将 `docs/ANALYZER_API_MODE.md` 作为当前使用说明，`docs/ANALYZER.md` 调整为历史文件模式说明
-- ✅ **状态文档校正** - 更新 `docs/PROJECT_STATUS.md`、`docs/BACKEND_COMPLETE.md`、`docs/FRONTEND_COMPLETE.md`，移除旧的导出/导入 UI 与 API 结论
-- ✅ **历史文档标记** - 为旧方案、阶段总结、规划稿和评审稿补充“历史参考/阶段快照”说明，降低误读风险
-- ✅ **文档导航重构** - 重写 `docs/INDEX.md` 与 `README.md` 文档入口，明确“当前使用 / 当前开发 / 历史文档”三层边界
+### Added
+- **ESP32 墨水屏相框固件** - 基于 ESP32-S3 + 7.3 寸 Spectra 6 六色墨水屏的智能相框
+  - 从服务器获取预渲染 4-bit 二进制图像并显示
+  - 双配置源：Office 模式（编译时配置）与 NVS 模式（AP 配网）
+  - AP 配网门户（SSID: relive, Web 配置页面）
+  - 定时睡眠调度（HHMM 格式，深度睡眠到下一时间点）
+  - NTP + 服务器时间校准（X-Server-Time 响应头）
+  - AP 超时退避深度睡眠（30min → 60min → 180min）
+  - 自定义 MAC 地址支持
+- **异步批次生成** - 展示批次生成改为异步任务，解决 NAS 大量照片时超时问题
+- **Spectra 6 六色图像量化** - 优化 E Ink 六色墨水屏显示效果
+  - CIE Lab 色彩空间距离计算
+  - 量化前锐化和对比度增强预处理
+  - 4-bit/pixel 二进制格式，修正 nibble 顺序匹配硬件标准
+- **后端测试覆盖** - 新增 ~200 个测试函数，覆盖 handler/service/repository/provider 各层
 
-### 2026-03-06 - 展示策略合并与文档同步 ✨
+### Changed
+- **文档全面更新** - 归档 4 个设计阶段文档到 `docs/archive/`，重写 ESP32 README，修正 DEVICE_PROTOCOL 中错误路径和示例代码
+- **展示策略合并** - `smart` 合并为 `on_this_day` 内部兜底链路，统一选图流程
+- **配置层级重构** - 统一 dev/prod 配置使用方式，标准化环境变量模板
+- **CI 升级** - GitHub Actions 全部升级到最新版本（checkout v4, docker actions v3/v6, upload-artifact v4）
 
-#### Changed
-- ✅ **展示策略合并** - 将 `smart` 合并为 `on_this_day` 的内部兜底链路
-  - 统一选图流程：严格往年今日 → 智能日期回溯 → 全局高分兜底
-  - `on_this_day` 统一应用回忆分与美学分阈值
-  - 兼容旧配置中的 `smart`，运行时自动归一为 `on_this_day`
-- ✅ **展示策略页面简化** - 前端只保留 `随机选择` 和 `往年今日` 两个选项
-  - 更新预览提示文案
-  - 同步前端预览逻辑到新的统一策略
-- ✅ **文档同步** - 更新 README、API 文档、需求文档与前端说明
-  - 配置键示例统一为 `display.strategy`
-  - 移除“智能推荐”作为独立策略的旧描述
+### Fixed
+- **SQLite 并发问题** - 连接池从单连接改为 4 连接，解决异步批次生成和后台任务 database locked 问题
+- **AIHandler 数据竞争** - 添加 `sync.RWMutex` 保护 AI 服务热重载
+- **调试日志清理** - 移除 exif.go 中的 `fmt.Printf` 和 geocode 中的强制 INFO 调试日志
+- **ScanPathConfig 统一** - 合并重复定义，移除 API key query string 支持
+- **GPS 零坐标处理** - 正确过滤 0,0 坐标，改善地理编码错误处理
+- **Analyzer 重试** - 允许失败照片在服务端重新分配时重试
+- **缩略图任务卡死** - 修复后台任务启动冻结和 job 更新重试
 
-### 2026-03-05 - 代码审查问题修复 🐛
-
-#### Fixed
-- ✅ **修复 AIHandler Data Race** - 添加互斥锁保护，确保线程安全的 AI 服务访问
-  - `SetAIService()` 使用 `sync.RWMutex` 保护服务更新
-  - 新增 `getAIService()` 方法统一获取服务实例
-  - 所有 handler 方法改为通过线程安全方式访问服务
-- ✅ **清理调试日志** - 将 `fmt.Printf` 替换为结构化日志
-  - `backend/internal/util/exif.go` - exiftool 调试输出改为 `logger.Debugf`
-  - `backend/internal/geocode/offline.go` - 移除强制 INFO 级别的 geocode 调试日志
-
----
-
-### 2026-03-05 - 文档同步与代码一致性修复 📝
+### 2026-03-09 - 文档治理与索引重构
 
 #### Changed - 文档更新
 - ✅ **CLAUDE.md 文档修正**
