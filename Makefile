@@ -2,6 +2,9 @@
 # 禁用隐式规则，避免 deploy.sh 被自动转换为 deploy
 MAKEFLAGS += --no-builtin-rules
 
+# 自动检测 docker compose v2 或 v1
+DOCKER_COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
+
 .PHONY: help dev build deploy prod stop restart logs clean test deps sync-version build-analyzer analyzer
 
 # 版本管理
@@ -67,7 +70,7 @@ check-compose:
 # 生产部署
 build: sync-version check-compose
 	@echo "构建 Docker 镜像..."
-	docker-compose build
+	$(DOCKER_COMPOSE) build
 
 deploy: check-compose
 	@echo "本地构建并部署..."
@@ -76,18 +79,18 @@ deploy: check-compose
 prod:
 	@test -f docker-compose.prod.yml || (echo "错误: docker-compose.prod.yml 不存在"; echo "请运行: cp docker-compose.prod.yml.example docker-compose.prod.yml"; exit 1)
 	@echo "使用 DockerHub 镜像部署..."
-	docker-compose -f docker-compose.prod.yml up -d
+	$(DOCKER_COMPOSE) -f docker-compose.prod.yml up -d
 
 stop: check-compose
 	@echo "停止服务..."
-	docker-compose down
+	$(DOCKER_COMPOSE) down
 
 restart: check-compose
 	@echo "重启服务..."
-	docker-compose restart
+	$(DOCKER_COMPOSE) restart
 
 logs: check-compose
-	docker-compose logs -f
+	$(DOCKER_COMPOSE) logs -f
 
 # 测试
 test:
