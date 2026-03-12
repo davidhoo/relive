@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.1] - 2026-03-13
+
+### Fixed
+- **Dockerfile 健康检查路径** - 从 `/system/health` 修正为 `/api/v1/system/health`，修复容器健康检查始终失败的问题
+- **HEIC/JPEG 缩略图生成** - 非标准 HEIC 和 JPEG 文件解码失败时 fallback 到外部工具（sips/vips）
+- **Analyzer checkpoint 过期** - 修复 checkpoint 状态过期导致任务被跳过的问题
+- **SQL 批量更新注入风险** - 用参数化逐条更新替代手工拼接 SQL 的批量更新
+- **init-cities.sh 缺少 set -e** - 添加错误立即退出，防止静默失败
+
+### Added
+- **照片列表筛选按钮** - 新增缩略图状态和位置信息筛选
+- **照片详情同步操作** - 支持在详情页直接触发缩略图生成和 GPS 解析
+- **ESP32 多板支持** - 新增 ESP32-S3-Zero 编译环境
+
+### Changed
+- **ResultQueueItem 模型** - 移至 model 包并纳入主 AutoMigrate，确保表自动创建
+- **城市导入事务化** - 配置导入和 CLI 导入均使用数据库事务
+- **扫描路径列表优化** - 用 SQL 聚合替代全量加载，提升性能
+- **Daily batch 查询优化** - 单次 Find + Preload 替代 N+1 查询
+- **Makefile 兼容 docker compose v2** - 自动检测并优先使用 `docker compose`
+
+### Removed
+- **install.sh** - 删除不可用的一键安装脚本（下载路径 404，且无法真正一键安装）
+- **backend/.env.example** - 删除旧 Python 时代遗留配置模板
+- **脚本死代码清理** - deploy.sh 的 `--quick` 参数、build-multiarch.sh 步骤编号修正、冗余 `$?` 检查
+
+---
+
 ## [1.0.0] - 2026-03-12
 
 首个正式发布版本。包含完整的后端服务、前端管理后台、relive-analyzer CLI 工具和 ESP32 墨水屏相框固件。
