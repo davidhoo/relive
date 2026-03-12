@@ -48,7 +48,38 @@ Relive 是一个面向 NAS / 自部署场景的照片分析与展示系统。
 - ✅ 当前推荐批量分析工作流是 **API 模式**
 - ✅ ESP32 墨水屏相框固件（AP 配网、定时睡眠、双配置源）
 
-如果你只关心“现在能不能用”，答案是：**可以先从 Web + Docker 跑起来，再按需要接入 analyzer 或设备端。**
+如果你只关心”现在能不能用”，答案是：**可以先从 Web + Docker 跑起来，再按需要接入 analyzer 或设备端。**
+
+## 系统截图
+
+<details>
+<summary>点击展开截图</summary>
+
+### ESP32 墨水屏相框实物
+<img src="docs/images/photo-frame.png" width="400" alt="ESP32 E-Ink Photo Frame">
+
+### 仪表盘
+![Dashboard](docs/images/dashboard.png)
+
+### 展示策略 - 往年今日选图
+![Display Strategy](docs/images/display-strategy.png)
+
+### 照片管理
+![Photos](docs/images/photos.png)
+
+### AI 分析
+![AI Analysis](docs/images/ai-analysis.png)
+
+### 设备管理
+![Devices](docs/images/devices.png)
+
+### 缩略图生成
+![Thumbnails](docs/images/thumbnails.png)
+
+### GPS 位置解析
+![Geocoding](docs/images/geocoding.png)
+
+</details>
 
 ---
 
