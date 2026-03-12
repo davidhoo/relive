@@ -108,6 +108,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.AppConfig{},
 		&model.City{},
 		&model.User{},
+		&model.ResultQueueItem{},
 	}
 
 	if err := migrateDeviceLastSeenColumn(db); err != nil {

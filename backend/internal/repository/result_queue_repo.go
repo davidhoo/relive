@@ -33,25 +33,6 @@ type ResultStorage interface {
 	PendingCount() (int, error)
 }
 
-// ResultQueueItem 队列项数据库模型
-type ResultQueueItem struct {
-	ID         uint           `gorm:"primarykey" json:"id"`
-	CreatedAt  time.Time      `json:"created_at"`
-	UpdatedAt  time.Time      `json:"updated_at"`
-	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
-
-	// 数据
-	Data       string `gorm:"type:text;not null" json:"data"`       // JSON 序列化的 QueuedResult
-	Priority   int    `gorm:"default:0" json:"priority"`            // 优先级
-	RetryCount int    `gorm:"default:0" json:"retry_count"`         // 重试次数
-	Processed  bool   `gorm:"default:false;index" json:"processed"` // 是否已处理
-}
-
-// TableName 指定表名
-func (ResultQueueItem) TableName() string {
-	return "result_queue"
-}
-
 // DBResultStorage 数据库存储实现
 type DBResultStorage struct {
 	db *gorm.DB
@@ -72,7 +53,7 @@ func (s *DBResultStorage) Save(results []*QueuedResult) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	items := make([]ResultQueueItem, 0, len(results))
+	items := make([]model.ResultQueueItem, 0, len(results))
 	for _, r := range results {
 		data, err := json.Marshal(r)
 		if err != nil {
@@ -80,7 +61,7 @@ func (s *DBResultStorage) Save(results []*QueuedResult) error {
 			continue
 		}
 
-		items = append(items, ResultQueueItem{
+		items = append(items, model.ResultQueueItem{
 			Data:       string(data),
 			Priority:   r.RetryCount, // 重试次数越多优先级越高
 			RetryCount: r.RetryCount,
@@ -100,7 +81,7 @@ func (s *DBResultStorage) Load() ([]*QueuedResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var items []ResultQueueItem
+	var items []model.ResultQueueItem
 	if err := s.db.Where("processed = ?", false).
 		Order("priority DESC, created_at ASC").
 		Limit(10000).
@@ -125,7 +106,7 @@ func (s *DBResultStorage) Load() ([]*QueuedResult, error) {
 
 	// 删除已加载的记录
 	if len(idsToDelete) > 0 {
-		if err := s.db.Delete(&ResultQueueItem{}, idsToDelete).Error; err != nil {
+		if err := s.db.Delete(&model.ResultQueueItem{}, idsToDelete).Error; err != nil {
 			logger.Errorf("Failed to delete loaded items: %v", err)
 		}
 	}
@@ -142,13 +123,8 @@ func (s *DBResultStorage) Delete(count int) error {
 // PendingCount 获取待处理数量
 func (s *DBResultStorage) PendingCount() (int, error) {
 	var count int64
-	err := s.db.Model(&ResultQueueItem{}).Where("processed = ?", false).Count(&count).Error
+	err := s.db.Model(&model.ResultQueueItem{}).Where("processed = ?", false).Count(&count).Error
 	return int(count), err
-}
-
-// MigrateResultQueue 迁移队列表
-func MigrateResultQueue(db *gorm.DB) error {
-	return db.AutoMigrate(&ResultQueueItem{})
 }
 
 // FileResultStorage 文件存储实现（备用方案）

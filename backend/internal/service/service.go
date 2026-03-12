@@ -72,12 +72,8 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	// 创建结果队列存储
 	var resultStorage repository.ResultStorage
 	if cfg.Database.Type == "sqlite" {
-		// 使用数据库存储
+		// 使用数据库存储（表由主 AutoMigrate 统一迁移）
 		resultStorage = repository.NewDBResultStorage(db)
-		// 迁移队列表
-		if err := repository.MigrateResultQueue(db); err != nil {
-			logger.Warnf("Failed to migrate result queue table: %v", err)
-		}
 	} else {
 		// 使用文件存储（备用）
 		resultStorage = repository.NewFileResultStorage(cfg.Database.Path)

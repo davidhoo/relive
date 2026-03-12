@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/davidhoo/relive/internal/model"
-	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/logger"
 	"github.com/stretchr/testify/assert"
@@ -79,7 +78,7 @@ func TestSystemHandlerResetDatabaseState(t *testing.T) {
 		&model.AppConfig{},
 		&model.City{},
 		&model.User{},
-		&repository.ResultQueueItem{},
+		&model.ResultQueueItem{},
 	); err != nil {
 		t.Fatalf("migrate test db: %v", err)
 	}
@@ -123,7 +122,7 @@ func TestSystemHandlerResetDatabaseState(t *testing.T) {
 	if err := db.Create(&model.User{Username: "old", PasswordHash: "hash", IsFirstLogin: false}).Error; err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	if err := db.Create(&repository.ResultQueueItem{Data: "{}"}).Error; err != nil {
+	if err := db.Create(&model.ResultQueueItem{Data: "{}"}).Error; err != nil {
 		t.Fatalf("create result queue item: %v", err)
 	}
 

@@ -30,10 +30,10 @@ func newAutoScanTestService(t *testing.T, rootPath string) (*photoService, Confi
 		t.Fatalf("db handle: %v", sqlErr)
 	}
 	sqlDB.SetMaxOpenConns(1)
-	if err := db.AutoMigrate(&repository.ResultQueueItem{}); err != nil {
+	if err := db.AutoMigrate(&model.ResultQueueItem{}); err != nil {
 		// ignore queue migration unrelated; keep compile parity
 	}
-	if err := db.AutoMigrate(&repository.ResultQueueItem{}, &model.AppConfig{}, &model.Photo{}, &model.ScanJob{}); err != nil {
+	if err := db.AutoMigrate(&model.ResultQueueItem{}, &model.AppConfig{}, &model.Photo{}, &model.ScanJob{}); err != nil {
 		t.Fatalf("migrate test db: %v", err)
 	}
 	configRepo := repository.NewConfigRepository(db)

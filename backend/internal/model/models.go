@@ -106,3 +106,21 @@ type City struct {
 func (City) TableName() string {
 	return "cities"
 }
+
+// ResultQueueItem 分析结果队列项
+type ResultQueueItem struct {
+	ID         uint           `gorm:"primarykey" json:"id"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
+
+	Data       string `gorm:"type:text;not null" json:"data"`       // JSON 序列化的 QueuedResult
+	Priority   int    `gorm:"default:0" json:"priority"`            // 优先级
+	RetryCount int    `gorm:"default:0" json:"retry_count"`         // 重试次数
+	Processed  bool   `gorm:"default:false;index" json:"processed"` // 是否已处理
+}
+
+// TableName 指定表名
+func (ResultQueueItem) TableName() string {
+	return "result_queue"
+}
