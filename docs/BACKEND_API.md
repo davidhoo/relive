@@ -149,6 +149,7 @@ Authorization: Bearer <api_key>
 | GET | `/api/v1/display/batch` | 获取每日展示批次 |
 | GET | `/api/v1/display/history` | 展示批次历史 |
 | POST | `/api/v1/display/batch/generate` | 生成每日展示批次 |
+| POST | `/api/v1/display/batch/generate/async` | 异步生成每日展示批次 |
 | GET | `/api/v1/display/render-profiles` | 渲染规格列表 |
 
 ### 4.3 照片

@@ -131,8 +131,15 @@ Providers implement the `provider.AIProvider` interface:
 ```go
 type AIProvider interface {
     Analyze(request *AnalyzeRequest) (*AnalyzeResult, error)
+    AnalyzeBatch(requests []*AnalyzeRequest) ([]*AnalyzeResult, error)
+    GenerateCaption(request *AnalyzeRequest) (string, error)
     Name() string
+    Cost() float64
+    BatchCost() float64
     IsAvailable() bool
+    MaxConcurrency() int
+    SupportsBatch() bool
+    MaxBatchSize() int
 }
 ```
 
@@ -288,6 +295,13 @@ Docker 构建时通过 build-args 注入额外信息：
 
 ## Recent Features
 
+### ESP32 Firmware v2 (2026-03-12)
+- 双配置源：Office 模式（编译时配置）与 NVS 模式（AP 配网）
+- AP 配网门户（SSID: relive, Web 配置页面）
+- 定时睡眠调度（HHMM 格式，深度睡眠到下一时间点）
+- NTP + 服务器时间校准
+- AP 超时退避深度睡眠（30min → 60min → 180min）
+
 ### Unified Version Management (2026-03-05)
 - 单一 VERSION 文件管理所有组件版本号
 - Go 使用 `//go:embed` 读取，前端使用 Vite 注入
@@ -314,7 +328,7 @@ Docker 构建时通过 build-args 注入额外信息：
 - Docker container auto-imports city data on first startup
 - Place `cities500.txt` in `./data/backend/` directory
 - Configure via `config.prod.yaml` geocode section
-- Supports offline, amap, nominatim, and hybrid modes
+- Supports offline, amap, nominatim, weibo, and hybrid modes
 
 ### Async Photo Scanning (2025-03-03)
 - Photo scanning uses async task system to prevent timeouts

@@ -29,7 +29,7 @@ unzip cities500.zip
 mkdir -p data
 cd data
 wget https://download.geonames.org/export/dump/cities500.zip
-unzip cities500.txt
+unzip cities500.zip
 
 # 2. 修改 docker-compose.yml，取消挂载注释
 # - ./data/cities500.txt:/app/data/cities500.txt:ro
@@ -77,43 +77,18 @@ environment:
 
 如需手动控制导入时机：
 
-### 进入容器执行导入
+```bash
+# 1. 下载城市数据
 cd data
 wget https://download.geonames.org/export/dump/cities500.zip
 unzip cities500.zip
-```
 
-### 3. 自动导入已内置
-
-当前 `backend/scripts/docker-entrypoint.sh` 会在启动时调用 `/app/init-cities.sh`。
-该脚本会自行判断 `AUTO_IMPORT_CITIES`、数据文件是否存在以及是否已导入，无需手动修改入口点脚本。
-
-### 4. 启动服务
-
-```bash
-docker-compose up -d
-
-# 查看导入日志
-docker-compose logs -f relive | grep -E "city|City|导入"
-```
-
-首次启动时会自动检测并导入城市数据，后续启动会跳过。
-
-## 方案二：手动导入
-
-### 进入容器执行导入
-
-```bash
-# 1. 复制数据文件到容器
+# 2. 复制数据文件到容器
 docker cp cities500.txt relive:/app/data/
 
-# 2. 进入容器
+# 3. 进入容器执行导入
 docker exec -it relive sh
-
-# 3. 执行导入
 /app/import-cities --file /app/data/cities500.txt --config /app/config.yaml
-
-# 4. 退出容器
 exit
 ```
 
@@ -156,7 +131,7 @@ volumes:
 
 ```yaml
 geocode:
-  provider: "offline"  # 可选: offline, amap, nominatim
+  provider: "offline"  # 可选: offline, amap, nominatim, weibo
   offline:
     max_distance: 100  # 最大搜索距离（公里）
 ```

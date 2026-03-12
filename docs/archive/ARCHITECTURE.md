@@ -1,3 +1,7 @@
+> **⚠️ 历史设计文档** — 本文档写于项目设计阶段 (2026-02-28)，内容与当前实现存在大量差异，仅作为开发历史参考。
+> 当前文档请参考：[BACKEND_API.md](../BACKEND_API.md)、[ANALYZER_API_MODE.md](../ANALYZER_API_MODE.md)、[CONFIGURATION.md](../CONFIGURATION.md)、[QUICKSTART.md](../../QUICKSTART.md)
+
+
 # Relive 系统架构设计文档
 
 > 完整的系统架构设计

@@ -213,7 +213,7 @@ Authorization: Bearer sk-relive-xxxxxxxxxxxxxxxx
 
 **请求**：
 ```http
-GET /api/v1/esp32/display/photo?device_id=ESP32-ABCD1234 HTTP/1.1
+GET /api/v1/display/photo HTTP/1.1
 Host: 192.168.1.100:8080
 Authorization: Bearer sk-relive-xxxxxxxxxxxxxxxx
 ```
@@ -231,7 +231,7 @@ Authorization: Bearer sk-relive-xxxxxxxxxxxxxxxx
     "memory_score": 95,
     "beauty_score": 88,
     "location": "杭州·西湖",
-    "image_url": "/api/v1/esp32/image/12345",
+    "image_url": "/api/v1/photos/12345/image",
     "image_width": 800,
     "image_height": 480,
     "image_size": 45678
@@ -244,7 +244,7 @@ Authorization: Bearer sk-relive-xxxxxxxxxxxxxxxx
 
 **请求**：
 ```http
-GET /api/v1/esp32/image/12345 HTTP/1.1
+GET /api/v1/photos/12345/image HTTP/1.1
 Host: 192.168.1.100:8080
 Authorization: Bearer sk-relive-xxxxxxxxxxxxxxxx
 ```
@@ -253,16 +253,11 @@ Authorization: Bearer sk-relive-xxxxxxxxxxxxxxxx
 - Content-Type: `image/jpeg`
 - 图片数据（二进制）
 
-**特殊处理**：
-- 后端自动调整图片到墨水屏尺寸（800×480）
-- 自动应用抖动算法（7色或16色）
-- 图片大小 < 100KB
-
 ### 3.6 上报展示记录
 
 **请求**：
 ```http
-POST /api/v1/esp32/display/record HTTP/1.1
+POST /api/v1/display/record HTTP/1.1
 Host: 192.168.1.100:8080
 Authorization: Bearer sk-relive-xxxxxxxxxxxxxxxx
 Content-Type: application/json
@@ -341,27 +336,25 @@ enum TriggerType {
    ↓
 2. 调整到墨水屏尺寸（800×480）
    ↓
-3. 应用抖动算法（7色或16色）
+3. 应用抖动算法（6色）
    ↓
-4. JPEG 压缩（质量 85%）
+4. 量化为 4-bit/像素二进制格式
    ↓
-5. 返回给 ESP32
+5. 存储为展示资源（display asset）
 
 ESP32 处理：
-1. 下载图片（HTTP）
+1. 下载二进制数据（GET /api/v1/device/display.bin）
    ↓
-2. 解码 JPEG
+2. 直接写入屏幕缓冲区（无需解码）
    ↓
-3. 转换为墨水屏格式
-   ↓
-4. 显示到屏幕
+3. 刷新墨水屏显示
 ```
 
 ### 5.2 图片尺寸
 
 **墨水屏规格**（GDEP073E01）：
 - 分辨率：800×480 像素
-- 颜色：7色（黑、白、红、黄、蓝、绿、橙）
+- 颜色：6色（黑、白、黄、红、蓝、绿）
 
 **后端返回图片**：
 - 尺寸：800×480（精确匹配）
@@ -395,25 +388,36 @@ void displayCachedPhoto() {
 
 ### 6.1 设备接入流程
 
+v2 固件支持两种接入模式：
+
+**模式一：Office 模式（编译时配置）**
 ```
-1. ESP32 首次启动
-   ↓
-2. 进入 WiFi 配置模式（AP 模式）
-   ↓
-3. 用户手机连接 ESP32 热点
-   ↓
-4. 配置 WiFi SSID 和密码
-   ↓
-5. 配置后端服务地址
-   ↓
-6. ESP32 连接 WiFi
-   ↓
-7. 在后台创建设备并获取 API Key
-   ↓
-8. 将 API Key 保存到设备配置/NVS
-   ↓
-9. 直接请求展示接口
+1. 编译时在 config_local.h 配置 WiFi / 服务器 / API Key
+2. 开机扫描到 OFFICE_SSID → 直接使用编译时配置
+3. 连接 WiFi → 获取照片 → 显示 → 深度睡眠
 ```
+
+**模式二：AP 配网模式**
+```
+1. ESP32 首次启动（或 WiFi 连接失败）
+   ↓
+2. 进入 AP 模式（SSID: relive, 无密码）
+   ↓
+3. 用户手机连接 relive 热点
+   ↓
+4. 浏览器访问 http://192.168.4.1
+   ↓
+5. Web 页面配置 WiFi、服务器地址、API Key、刷新时间
+   ↓
+6. 配置保存到 NVS（非易失存储）
+   ↓
+7. ESP32 连接 WiFi → NTP 同步 → 重启进入正常工作
+```
+
+**AP 超时退避**：
+- AP 模式下 3 分钟无客户端连接则超时
+- 超时后尝试已有 NVS 配置，仍失败则深度睡眠
+- 睡眠时长递增：30min → 60min → 180min（NVS 记录失败计数）
 
 ### 6.2 设备标识
 
@@ -558,7 +562,7 @@ api_key = "sk-relive-" + random(32字符)
 
 **使用方式**：
 ```http
-GET /api/v1/esp32/display/photo HTTP/1.1
+GET /api/v1/device/display.bin HTTP/1.1
 Authorization: Bearer sk-relive-xxxxxxxxxxxxxxxx
 ```
 
@@ -682,16 +686,9 @@ void optimizeWiFi() {
 
 ---
 
-## 十、OTA 升级
+## 十、OTA 升级（计划中）
 
-### 10.1 检查更新
-
-**请求**：
-```http
-GET /api/v1/esp32/ota/check?device_id=ESP32-ABCD1234&version=1.0.0 HTTP/1.1
-Host: 192.168.1.100:8080
-Authorization: Bearer sk-relive-xxxxxxxxxxxxxxxx
-```
+> **注意**：OTA 升级功能尚未实现，以下为设计方案，供后续开发参考。
 
 **响应**：
 ```json
@@ -825,24 +822,24 @@ void displayPhoto() {
 
   http.begin(url);
   http.addHeader("Authorization", "Bearer " + apiKey);
-  http.addHeader("Authorization", "Bearer " + apiKey);
 
   int httpCode = http.GET();
   if (httpCode == 200) {
-    String response = http.getString();
+    // display.bin 返回二进制数据，直接写入屏幕缓冲区
+    int len = http.getSize();
+    WiFiClient* stream = http.getStreamPtr();
 
-    StaticJsonDocument<2048> doc;
-    deserializeJson(doc, response);
+    uint8_t* buffer = (uint8_t*)ps_malloc(len);
+    if (buffer) {
+      stream->readBytes(buffer, len);
+      // 显示到墨水屏
+      displayToEPaper(buffer, len);
+      free(buffer);
+    }
 
-    int photoID = doc["data"]["photo_id"];
-    String imageURL = doc["data"]["image_url"];
-    String caption = doc["data"]["caption"];
-
-    // 2. 下载并显示图片
-    downloadAndDisplay(photoID, imageURL, caption);
-
-    // 3. 上报展示记录
-    reportDisplayRecord(photoID);
+    // 上报展示记录（可选）
+    String assetID = http.header("X-Asset-ID");
+    reportDisplayRecord(assetID);
   }
 
   http.end();

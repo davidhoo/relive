@@ -46,7 +46,7 @@ Relive 是一个面向 NAS / 自部署场景的照片分析与展示系统。
 - ✅ 后端 API 与任务系统可用
 - ✅ `relive-analyzer` API 模式可用
 - ✅ 当前推荐批量分析工作流是 **API 模式**
-- 📋 设备固件 / 更多硬件平台仍在后续阶段
+- ✅ ESP32 墨水屏相框固件（v2：AP 配网、定时睡眠、双配置源）
 
 如果你只关心“现在能不能用”，答案是：**可以先从 Web + Docker 跑起来，再按需要接入 analyzer 或设备端。**
 
@@ -190,8 +190,6 @@ make build-analyzer
 ### 当前开发
 - `docs/QUICK_REFERENCE.md`：开发速查卡
 - `docs/CONFIGURATION.md`：配置职责与优先级
-- `docs/DEVELOPMENT.md`：开发说明
-- `docs/ARCHITECTURE.md`：系统架构
 - `docs/DEVICE_PROTOCOL.md`：设备协议设计
 - `CHANGELOG.md`：最近变更记录
 
@@ -200,14 +198,20 @@ make build-analyzer
 - `docs/ANALYZER.md`：旧版文件模式说明（历史）
 - `docs/OFFLINE_WORKFLOW.md`：早期离线工作流设计（历史）
 - `docs/API_DESIGN.md`：设计阶段 API 方案
+- `docs/archive/ARCHITECTURE.md`：系统架构（设计阶段）
+- `docs/archive/DEVELOPMENT.md`：开发说明（设计阶段）
+- `docs/archive/DEPLOYMENT.md`：部署指南（设计阶段）
+- `docs/archive/AI_PROVIDERS.md`：AI Provider 架构（设计阶段）
+- `docs/archive/ANALYZER_PHASE1_DONE.md`：Analyzer Phase 1 完成总结
+- `docs/archive/ANALYZER_TEST_REPORT.md`：Analyzer 测试报告
 
 ---
 
 ## Roadmap
 
-- 继续完善设备固件 / 设备端接入体验
 - 支持更多展示硬件平台
 - 优化照片筛选、分析与展示体验
+- 照片过滤与排除系统
 - 持续收紧文档与实现的一致性
 
 ## License
