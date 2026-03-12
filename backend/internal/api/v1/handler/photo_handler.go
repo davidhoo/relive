@@ -142,11 +142,11 @@ func (h *PhotoHandler) updateLastScannedAt(c *gin.Context, pathID string) error 
 	}
 
 	// Find and update path
-	now := time.Now()
+	now := time.Now().Format(time.RFC3339)
 	found := false
 	for i := range pathsConfig.Paths {
 		if pathsConfig.Paths[i].ID == pathID {
-			pathsConfig.Paths[i].LastScannedAt = &now
+			pathsConfig.Paths[i].LastScannedAt = now
 			found = true
 			break
 		}

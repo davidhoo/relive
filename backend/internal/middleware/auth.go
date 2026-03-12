@@ -213,11 +213,6 @@ func APIKeyAuth(deviceService service.DeviceService) gin.HandlerFunc {
 			apiKey = c.GetHeader("X-API-Key")
 		}
 
-		// 3. 尝试从查询参数获取（某些设备可能更方便）
-		if apiKey == "" {
-			apiKey = c.Query("api_key")
-		}
-
 		if apiKey == "" {
 			c.JSON(http.StatusUnauthorized, model.Response{
 				Success: false,

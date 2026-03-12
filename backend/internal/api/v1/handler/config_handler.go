@@ -430,22 +430,7 @@ func (h *ConfigHandler) SetBatchConfigs(c *gin.Context) {
 	})
 }
 
-// ScanPathConfig 扫描路径配置（用于解析）
-type ScanPathConfig struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	Path            string `json:"path"`
-	IsDefault       bool   `json:"is_default"`
-	Enabled         bool   `json:"enabled"`
-	AutoScanEnabled bool   `json:"auto_scan_enabled"`
-	CreatedAt       string `json:"created_at"`
-	LastScannedAt   string `json:"last_scanned_at,omitempty"`
-}
-
-// ScanPathsConfig 扫描路径配置集合
-type ScanPathsConfig struct {
-	Paths []ScanPathConfig `json:"paths"`
-}
+// 使用 model.ScanPathConfig 和 model.ScanPathsConfig
 
 // DeleteScanPath 删除扫描路径及其关联数据
 // @Summary 删除扫描路径及其关联数据
@@ -485,7 +470,7 @@ func (h *ConfigHandler) DeleteScanPath(c *gin.Context) {
 		return
 	}
 
-	var scanPathsConfig ScanPathsConfig
+	var scanPathsConfig model.ScanPathsConfig
 	if err := json.Unmarshal([]byte(configValue), &scanPathsConfig); err != nil {
 		logger.Errorf("Failed to parse scan paths config: %v", err)
 		c.JSON(http.StatusInternalServerError, model.Response{
@@ -500,7 +485,7 @@ func (h *ConfigHandler) DeleteScanPath(c *gin.Context) {
 
 	// 查找要删除的路径
 	var targetPath string
-	var newPaths []ScanPathConfig
+	var newPaths []model.ScanPathConfig
 	found := false
 	for _, path := range scanPathsConfig.Paths {
 		if path.ID == pathID {

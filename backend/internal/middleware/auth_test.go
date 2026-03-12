@@ -454,21 +454,3 @@ func TestAPIKeyAuth_XAPIKey_Success(t *testing.T) {
 	did, _ := res.ctx.Get("device_id_str")
 	assert.Equal(t, "D6", did)
 }
-
-func TestAPIKeyAuth_QueryParam_Success(t *testing.T) {
-	deviceSvc := &testutil.StubDeviceService{
-		GetByAPIKeyFunc: func(apiKey string) (*model.Device, error) {
-			if apiKey == "query-key" {
-				return &model.Device{ID: 7, DeviceID: "D7", Name: "Mobile", IsEnabled: true}, nil
-			}
-			return nil, testutil.ErrStubNotFound
-		},
-		UpdateLastSeenFunc: func(deviceID uint, ip string) {},
-	}
-	req := newGetReq("/api/v1/analyzer/tasks?api_key=query-key")
-
-	res := runMW(t, req, APIKeyAuth(deviceSvc))
-
-	require.True(t, res.passed)
-	assert.Equal(t, http.StatusOK, res.recorder.Code)
-}

@@ -233,18 +233,19 @@ type SystemEnvironmentResponse struct {
 	WorkDir     string `json:"work_dir"`     // 当前工作目录
 }
 
-// ScanPathConfig represents a single scan path configuration
+// ScanPathConfig 扫描路径配置
 type ScanPathConfig struct {
-	ID            string     `json:"id"`         // UUID
-	Name          string     `json:"name"`       // User-friendly name
-	Path          string     `json:"path"`       // Absolute file path
-	IsDefault     bool       `json:"is_default"` // Only one can be true
-	Enabled       bool       `json:"enabled"`    // Can be scanned
-	CreatedAt     time.Time  `json:"created_at"`
-	LastScannedAt *time.Time `json:"last_scanned_at,omitempty"` // Updated after each scan
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Path            string `json:"path"`
+	IsDefault       bool   `json:"is_default"`
+	Enabled         bool   `json:"enabled"`
+	AutoScanEnabled bool   `json:"auto_scan_enabled"`
+	CreatedAt       string `json:"created_at"`
+	LastScannedAt   string `json:"last_scanned_at,omitempty"`
 }
 
-// ScanPathsConfig represents the complete scan paths configuration
+// ScanPathsConfig 扫描路径配置集合
 type ScanPathsConfig struct {
 	Paths []ScanPathConfig `json:"paths"`
 }
