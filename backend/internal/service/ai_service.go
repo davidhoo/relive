@@ -603,7 +603,7 @@ func (s *aiService) analyzePhotoInternal(photoID uint, force bool) error {
 	photo.AnalyzedAt = &now
 
 	// 计算综合评分
-	photo.OverallScore = int(float64(photo.MemoryScore)*0.7 + float64(photo.BeautyScore)*0.3)
+	photo.OverallScore = model.CalcOverallScore(photo.MemoryScore, photo.BeautyScore)
 
 	if err := s.photoRepo.Update(photo); err != nil {
 		return fmt.Errorf("update photo: %w", err)
@@ -1197,7 +1197,7 @@ func (s *aiService) analyzeInBatchesAsync(task *AnalyzeTask, photos []*model.Pho
 				photo.BeautyScore = int(result.BeautyScore)
 				photo.ScoreReason = result.Reason
 				photo.AnalyzedAt = &now
-				photo.OverallScore = int(float64(photo.MemoryScore)*0.7 + float64(photo.BeautyScore)*0.3)
+				photo.OverallScore = model.CalcOverallScore(photo.MemoryScore, photo.BeautyScore)
 
 				if err := s.photoRepo.Update(photo); err != nil {
 					logger.Errorf("[Task %s] Failed to update photo %d: %v", task.ID, photo.ID, err)

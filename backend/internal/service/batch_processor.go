@@ -186,7 +186,7 @@ func (p *BatchProcessor) batchWrite(items []*QueuedResult) error {
 
 	for _, item := range items {
 		result := item.Result
-		overallScore := int(float64(result.MemoryScore)*0.7 + float64(result.BeautyScore)*0.3)
+		overallScore := model.CalcOverallScore(result.MemoryScore, result.BeautyScore)
 		aiProvider := result.AIProvider
 		if aiProvider == "" {
 			aiProvider = "analyzer"

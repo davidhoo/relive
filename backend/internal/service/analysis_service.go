@@ -264,7 +264,7 @@ func (s *analysisService) SubmitResultsDirectly(results []model.AnalysisResult, 
 			continue
 		}
 
-		overallScore := int(float64(result.MemoryScore)*0.7 + float64(result.BeautyScore)*0.3)
+		overallScore := model.CalcOverallScore(result.MemoryScore, result.BeautyScore)
 		aiProvider := result.AIProvider
 		if aiProvider == "" {
 			aiProvider = "analyzer"

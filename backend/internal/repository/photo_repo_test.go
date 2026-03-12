@@ -166,7 +166,7 @@ func TestPhotoRepository_MarkAsAnalyzed(t *testing.T) {
 	assert.Equal(t, mainCategory, updated.MainCategory)
 	assert.Equal(t, tags, updated.Tags)
 	// 验证综合评分计算：70% memory + 30% beauty
-	expectedOverallScore := int(float64(memoryScore)*0.7 + float64(beautyScore)*0.3)
+	expectedOverallScore := model.CalcOverallScore(memoryScore, beautyScore)
 	assert.Equal(t, expectedOverallScore, updated.OverallScore)
 }
 

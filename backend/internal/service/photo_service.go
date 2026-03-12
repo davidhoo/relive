@@ -766,36 +766,9 @@ func (s *photoService) CountPhotosByPathPrefix(pathPrefix string) (int64, error)
 }
 
 func (s *photoService) GetPathDerivedStatus(pathPrefix string) (*model.PathDerivedStatus, error) {
-	photos, err := s.repo.ListByPathPrefix(pathPrefix)
+	status, err := s.repo.GetDerivedStatusByPathPrefix(pathPrefix)
 	if err != nil {
-		return nil, fmt.Errorf("list photos by path prefix: %w", err)
-	}
-	status := &model.PathDerivedStatus{}
-	status.PhotoTotal = int64(len(photos))
-	status.ThumbnailTotal = status.PhotoTotal
-	for _, photo := range photos {
-		if photo.AIAnalyzed {
-			status.AnalyzedTotal++
-		}
-		switch photo.ThumbnailStatus {
-		case "ready":
-			status.ThumbnailReady++
-		case "failed":
-			status.ThumbnailFailed++
-		default:
-			status.ThumbnailPending++
-		}
-		if photo.GPSLatitude != nil && photo.GPSLongitude != nil {
-			status.GeocodeTotal++
-			switch {
-			case photo.GeocodeStatus == "ready", strings.TrimSpace(photo.Location) != "":
-				status.GeocodeReady++
-			case photo.GeocodeStatus == "failed":
-				status.GeocodeFailed++
-			default:
-				status.GeocodePending++
-			}
-		}
+		return nil, fmt.Errorf("get derived status by path prefix: %w", err)
 	}
 	return status, nil
 }

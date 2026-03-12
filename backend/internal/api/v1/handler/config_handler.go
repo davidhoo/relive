@@ -895,54 +895,54 @@ func (h *ConfigHandler) importCitiesFromFile(filePath string) (int, error) {
 	}
 	defer file.Close()
 
-	// 清空现有数据
-	logger.Info("Clearing existing city data...")
-	if err := db.Exec("DELETE FROM cities").Error; err != nil {
-		return 0, fmt.Errorf("failed to clear cities table: %w", err)
-	}
-
-	logger.Info("Parsing and importing cities...")
+	// 先解析全部数据，再在事务中执行导入
+	logger.Info("Parsing cities data...")
 	scanner := bufio.NewScanner(file)
-	var cities []model.City
+	var allCities []model.City
 	totalCount := 0
-	insertedCount := 0
-	batchSize := 1000
 
-	// 逐行读取
 	for scanner.Scan() {
 		line := scanner.Text()
 		totalCount++
 
-		// 解析行
 		city, err := parseCityLine(line)
 		if err != nil {
 			continue // 跳过无效行
 		}
 
-		cities = append(cities, *city)
-
-		// 批量插入
-		if len(cities) >= batchSize {
-			if err := db.Create(&cities).Error; err != nil {
-				logger.Errorf("Failed to insert batch: %v", err)
-			} else {
-				insertedCount += len(cities)
-			}
-			cities = cities[:0] // 清空切片
-		}
-	}
-
-	// 插入剩余的
-	if len(cities) > 0 {
-		if err := db.Create(&cities).Error; err != nil {
-			logger.Errorf("Failed to insert final batch: %v", err)
-		} else {
-			insertedCount += len(cities)
-		}
+		allCities = append(allCities, *city)
 	}
 
 	if err := scanner.Err(); err != nil {
 		return 0, fmt.Errorf("error reading file: %w", err)
+	}
+
+	logger.Infof("Parsed %d cities from %d lines, importing...", len(allCities), totalCount)
+
+	// 在事务中执行清空和批量插入，确保原子性
+	insertedCount := 0
+	batchSize := 1000
+	err = db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("DELETE FROM cities").Error; err != nil {
+			return fmt.Errorf("failed to clear cities table: %w", err)
+		}
+
+		for i := 0; i < len(allCities); i += batchSize {
+			end := i + batchSize
+			if end > len(allCities) {
+				end = len(allCities)
+			}
+			batch := allCities[i:end]
+			if err := tx.Create(&batch).Error; err != nil {
+				return fmt.Errorf("failed to insert batch at offset %d: %w", i, err)
+			}
+			insertedCount += len(batch)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
 
 	logger.Infof("Import completed: %d cities imported", insertedCount)

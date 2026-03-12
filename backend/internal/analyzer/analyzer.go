@@ -391,7 +391,7 @@ func (a *Analyzer) saveResult(photoID uint, result *provider.AnalyzeResult) erro
 	// Calculate overall score (70% memory + 30% beauty)
 	memoryScore := int(result.MemoryScore)
 	beautyScore := int(result.BeautyScore)
-	overallScore := int(float64(memoryScore)*0.7 + float64(beautyScore)*0.3)
+	overallScore := model.CalcOverallScore(memoryScore, beautyScore)
 
 	now := time.Now()
 

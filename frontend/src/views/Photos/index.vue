@@ -712,8 +712,14 @@ const loadScanPaths = async () => {
   try {
     const config = await configApi.getScanPaths()
     scanPaths.value = config.paths || []
-    // 加载每个路径的照片数量
-    await Promise.all([loadPathPhotoCounts(), loadPathDerivedStatus()])
+    // 加载每个路径的派生状态（包含照片数量）
+    await loadPathDerivedStatus()
+    // 从 derived status 中提取照片数量
+    const counts: Record<string, number> = {}
+    for (const [path, status] of Object.entries(pathDerivedStatus.value)) {
+      counts[path] = (status as any).photo_total || 0
+    }
+    pathPhotoCounts.value = counts
   } catch (error: any) {
     console.error('Failed to load scan paths:', error)
     ElMessage.error('加载扫描路径失败')

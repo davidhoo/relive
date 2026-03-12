@@ -61,6 +61,7 @@ type PhotoRepository interface {
 
 	// 路径统计
 	CountByPathPrefix(prefix string) (int64, error)
+	GetDerivedStatusByPathPrefix(prefix string) (*model.PathDerivedStatus, error)
 }
 
 // photoRepository 照片仓库实现
@@ -278,7 +279,7 @@ func (r *photoRepository) GetUnanalyzed(limit int) ([]*model.Photo, error) {
 // MarkAsAnalyzed 标记为已分析
 func (r *photoRepository) MarkAsAnalyzed(id uint, description, caption, mainCategory, tags string, memoryScore, beautyScore int) error {
 	now := time.Now()
-	overallScore := int(float64(memoryScore)*0.7 + float64(beautyScore)*0.3)
+	overallScore := model.CalcOverallScore(memoryScore, beautyScore)
 	return r.db.Model(&model.Photo{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"ai_analyzed":   true,
 		"analyzed_at":   now,
@@ -466,6 +467,33 @@ func (r *photoRepository) CountByPathPrefix(prefix string) (int64, error) {
 
 	err := r.db.Model(&model.Photo{}).Where(condition, values...).Count(&count).Error
 	return count, err
+}
+
+// GetDerivedStatusByPathPrefix 使用 SQL 聚合统计路径下照片的派生状态
+func (r *photoRepository) GetDerivedStatusByPathPrefix(prefix string) (*model.PathDerivedStatus, error) {
+	condition, values := buildPathPrefixCondition(prefix)
+	if condition == "" {
+		return &model.PathDerivedStatus{}, nil
+	}
+
+	var result model.PathDerivedStatus
+	err := r.db.Model(&model.Photo{}).
+		Where(condition, values...).
+		Select(`
+			COUNT(*) as photo_total,
+			COUNT(*) as thumbnail_total,
+			SUM(CASE WHEN ai_analyzed = 1 THEN 1 ELSE 0 END) as analyzed_total,
+			SUM(CASE WHEN thumbnail_status = 'ready' THEN 1 ELSE 0 END) as thumbnail_ready,
+			SUM(CASE WHEN thumbnail_status = 'failed' THEN 1 ELSE 0 END) as thumbnail_failed,
+			SUM(CASE WHEN thumbnail_status NOT IN ('ready', 'failed') OR thumbnail_status IS NULL THEN 1 ELSE 0 END) as thumbnail_pending,
+			SUM(CASE WHEN gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL THEN 1 ELSE 0 END) as geocode_total,
+			SUM(CASE WHEN (gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL) AND (geocode_status = 'ready' OR (COALESCE(TRIM(location), '') != '')) THEN 1 ELSE 0 END) as geocode_ready,
+			SUM(CASE WHEN (gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL) AND geocode_status = 'failed' THEN 1 ELSE 0 END) as geocode_failed,
+			SUM(CASE WHEN (gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL) AND geocode_status != 'ready' AND geocode_status != 'failed' AND (COALESCE(TRIM(location), '') = '') THEN 1 ELSE 0 END) as geocode_pending
+		`).
+		Scan(&result).Error
+
+	return &result, err
 }
 
 // GetCategories 获取所有分类

@@ -86,9 +86,14 @@ func (p *Photo) BeforeUpdate(tx *gorm.DB) error {
 	return nil
 }
 
+// CalcOverallScore 计算综合评分（70% 回忆 + 30% 美观）
+func CalcOverallScore(memoryScore, beautyScore int) int {
+	return int(float64(memoryScore)*0.7 + float64(beautyScore)*0.3)
+}
+
 // CalculateOverallScore 计算综合评分（70% 回忆 + 30% 美观）
 func (p *Photo) CalculateOverallScore() {
-	p.OverallScore = int(float64(p.MemoryScore)*0.7 + float64(p.BeautyScore)*0.3)
+	p.OverallScore = CalcOverallScore(p.MemoryScore, p.BeautyScore)
 }
 
 // IsAnalyzed 是否已分析
