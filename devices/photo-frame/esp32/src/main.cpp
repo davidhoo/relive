@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
+#include <driver/gpio.h>
+#include <esp_sleep.h>
 #include "config.h"
 #include "log.h"
 #include "wifi_manager.h"
@@ -30,6 +32,33 @@ struct {
 } stats;
 
 // ===================== 辅助函数 =====================
+
+// 深睡前统一关闭外围设备，最小化待机电流
+void prepareSleep() {
+    // 1. 墨水屏进入深睡（DSLP）+ 关闭 SPI
+    display.sleep();
+
+    // 2. 彻底关闭 WiFi radio
+    wifiManager.disconnect();
+
+    // 3. 关闭 NVS
+    // NVS Preferences 在 begin() 时打开，睡前关闭释放 flash 控制器
+    // (NVSConfig::end() 不存在，直接用底层 API 无影响，深睡会断电)
+
+    // 4. 隔离 GPIO 引脚，防止 SPI 引脚悬浮漏电到墨水屏控制器
+    gpio_hold_en((gpio_num_t)EINK_RST);
+    gpio_hold_en((gpio_num_t)EINK_DC);
+    gpio_hold_en((gpio_num_t)EINK_CS);
+    gpio_hold_en((gpio_num_t)EINK_MOSI);
+    gpio_hold_en((gpio_num_t)EINK_SCK);
+    gpio_deep_sleep_hold_en();
+
+    // 5. 关闭不需要的 RTC 电源域
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RC_FAST, ESP_PD_OPTION_OFF);
+
+    // 6. 刷新串口缓冲
+    DEBUG_SERIAL.flush();
+}
 
 void showStartupScreen() {
     DEBUG_SERIAL.println("\n=================================");
@@ -146,10 +175,9 @@ void runAPPortal() {
 
     LOG_INFO_F("[Main] 退避睡眠 %d 分钟 (fail count: %d)\n", sleepMinutes, failCount + 1);
 
-    display.sleep();
+    prepareSleep();
     uint64_t sleepUs = (uint64_t)sleepMinutes * 60ULL * 1000000ULL;
     esp_sleep_enable_timer_wakeup(sleepUs);
-    DEBUG_SERIAL.flush();
     esp_deep_sleep_start();
 }
 
@@ -192,14 +220,12 @@ void enterSmartSleep() {
 
     uint64_t sleepMs = scheduleManager.calculateSleepDurationMs();
 
-    display.sleep();
-    wifiManager.disconnect();
+    prepareSleep();
 
     uint64_t sleepUs = sleepMs * 1000ULL;
     esp_sleep_enable_timer_wakeup(sleepUs);
 
     LOG_INFO_F("[Main] 深度睡眠 %llu 秒\n", sleepMs / 1000);
-    DEBUG_SERIAL.flush();
     esp_deep_sleep_start();
 }
 
@@ -215,6 +241,13 @@ void setup() {
     esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
     if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) {
         LOG_INFO("[Main] 从定时器唤醒");
+        // 释放深睡期间的 GPIO hold，让引脚可以重新配置
+        gpio_hold_dis((gpio_num_t)EINK_RST);
+        gpio_hold_dis((gpio_num_t)EINK_DC);
+        gpio_hold_dis((gpio_num_t)EINK_CS);
+        gpio_hold_dis((gpio_num_t)EINK_MOSI);
+        gpio_hold_dis((gpio_num_t)EINK_SCK);
+        gpio_deep_sleep_hold_dis();
     } else {
         LOG_INFO("[Main] 正常启动/复位");
     }

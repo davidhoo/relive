@@ -233,9 +233,10 @@ String WiFiManager::getMACAddress() {
 }
 
 void WiFiManager::disconnect() {
-    WiFi.disconnect();
+    WiFi.disconnect(true);  // true = 同时关闭 WiFi radio
+    WiFi.mode(WIFI_OFF);
     _connected = false;
-    LOG_DEBUG("[WiFi] 已断开连接");
+    LOG_DEBUG("[WiFi] 已断开连接并关闭 radio");
 }
 
 bool WiFiManager::reconnect() {

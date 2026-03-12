@@ -437,11 +437,15 @@ void DisplayDriver::sleep() {
     sendData(0x00);
     waitUntilIdle();
 
-    // 可选：进入深度睡眠模式
-    // sendCommand(0x07);  // DSLP
-    // sendData(0xA5);
+    // 墨水屏控制器进入深度睡眠，降低待机电流至接近 0
+    sendCommand(0x07);  // DSLP
+    sendData(0xA5);
 
     delay(100);
+
+    // 关闭 SPI 总线，避免引脚驱动漏电
+    SPI.endTransaction();
+    SPI.end();
 }
 
 void DisplayDriver::wakeup() {
