@@ -295,7 +295,7 @@ Docker 构建时通过 build-args 注入额外信息：
 
 ## Recent Features
 
-### ESP32 Firmware v2 (2026-03-12)
+### ESP32 Firmware v1.0.0 (2026-03-12)
 - 双配置源：Office 模式（编译时配置）与 NVS 模式（AP 配网）
 - AP 配网门户（SSID: relive, Web 配置页面）
 - 定时睡眠调度（HHMM 格式，深度睡眠到下一时间点）
