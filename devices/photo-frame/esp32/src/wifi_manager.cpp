@@ -1,34 +1,16 @@
 #include "wifi_manager.h"
+#include "log.h"
 #include <esp_wifi.h>
 #include <esp_mac.h>
 
-#if LOG_LEVEL >= 2
-#define LOG_INFO(msg) DEBUG_SERIAL.println(msg)
-#define LOG_INFO_F(msg, ...) DEBUG_SERIAL.printf(msg, __VA_ARGS__)
-#else
-#define LOG_INFO(msg)
-#define LOG_INFO_F(msg, ...)
-#endif
-
-#if LOG_LEVEL >= 3
-#define LOG_DEBUG(msg) DEBUG_SERIAL.println(msg)
-#define LOG_DEBUG_F(msg, ...) DEBUG_SERIAL.printf(msg, __VA_ARGS__)
-#else
-#define LOG_DEBUG(msg)
-#define LOG_DEBUG_F(msg, ...)
-#endif
-
-WiFiManager::WiFiManager() : _connected(false), _usingCustomMAC(false), _lastReconnectAttempt(0) {}
-
 // 将字符串 MAC 地址解析为字节数组
-// 支持格式: "AA:BB:CC:DD:EE:FF" 或 "AA-BB-CC-DD-EE-FF"
-bool parseMACString(const char* macStr, uint8_t* macBytes) {
+static bool parseMACString(const char* macStr, uint8_t* macBytes) {
     if (macStr == nullptr || strlen(macStr) < 17) {
         return false;
     }
 
     unsigned int values[6];
-    char separator = macStr[2]; // 获取分隔符 (: 或 -)
+    char separator = macStr[2];
 
     if (separator == ':') {
         int matched = sscanf(macStr, "%02x:%02x:%02x:%02x:%02x:%02x",
@@ -50,63 +32,53 @@ bool parseMACString(const char* macStr, uint8_t* macBytes) {
     return true;
 }
 
-// 解析自定义 MAC 配置到 _customMAC，返回是否有效
+WiFiManager::WiFiManager()
+    : _connected(false), _usingCustomMAC(false), _officeMode(false),
+      _lastReconnectAttempt(0), _scannedCount(0) {}
+
 bool WiFiManager::parseCustomMAC() {
 #ifdef USE_CUSTOM_MAC_ADDRESS
 #ifdef CUSTOM_MAC_ADDRESS_STRING
-    // 字符串格式: "AA:BB:CC:DD:EE:FF"
     if (!parseMACString(CUSTOM_MAC_ADDRESS_STRING, _customMAC)) {
         DEBUG_SERIAL.println("[WiFi] 自定义 MAC 地址格式无效，使用默认 MAC");
         return false;
     }
 #elif defined(CUSTOM_MAC_ADDRESS)
-    // 数组格式: {0x14, 0x2B, 0x2F, 0xEC, 0x0B, 0x04}
     uint8_t macArray[] = CUSTOM_MAC_ADDRESS;
     memcpy(_customMAC, macArray, 6);
 #else
-    DEBUG_SERIAL.println("[WiFi] 未定义 CUSTOM_MAC_ADDRESS_STRING 或 CUSTOM_MAC_ADDRESS，使用默认 MAC");
+    DEBUG_SERIAL.println("[WiFi] 未定义自定义 MAC 地址，使用默认 MAC");
     return false;
 #endif
 
-    // 检查是否是有效的 MAC 地址（非全零）
     bool isNonZero = false;
     for (int i = 0; i < 6; i++) {
-        if (_customMAC[i] != 0x00) {
-            isNonZero = true;
-            break;
-        }
+        if (_customMAC[i] != 0x00) { isNonZero = true; break; }
     }
     if (!isNonZero) {
         DEBUG_SERIAL.println("[WiFi] 自定义 MAC 地址无效（全零），使用默认 MAC");
         return false;
     }
-
     return true;
 #else
     return false;
 #endif
 }
 
-// 在 WiFi 初始化之前设置系统级 base MAC
-// ESP32 的 STA MAC = base MAC，所以直接设置 base MAC 即可
 bool WiFiManager::applyBaseMAC() {
     DEBUG_SERIAL.printf("[WiFi] 设置系统 base MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
                        _customMAC[0], _customMAC[1], _customMAC[2],
                        _customMAC[3], _customMAC[4], _customMAC[5]);
 
-    // esp_base_mac_addr_set 必须在 esp_wifi_init (即 WiFi.mode) 之前调用
-    // STA MAC = base MAC，无需额外偏移
     esp_err_t result = esp_base_mac_addr_set(_customMAC);
     if (result != ESP_OK) {
         DEBUG_SERIAL.printf("[WiFi] 设置 base MAC 失败，错误码: %d\n", result);
         return false;
     }
-
     DEBUG_SERIAL.println("[WiFi] 系统 base MAC 设置成功");
     return true;
 }
 
-// 验证当前 WiFi 接口实际使用的 MAC 地址
 void WiFiManager::verifyMAC() {
     uint8_t actualMAC[6] = {0};
     esp_wifi_get_mac(WIFI_IF_STA, actualMAC);
@@ -117,12 +89,7 @@ void WiFiManager::verifyMAC() {
 
     if (_usingCustomMAC) {
         bool match = (memcmp(actualMAC, _customMAC, 6) == 0);
-        DEBUG_SERIAL.printf("[WiFi] MAC 验证: %s\n", match ? "一致 ✓" : "不一致 ✗");
-        if (!match) {
-            DEBUG_SERIAL.printf("[WiFi] 期望 MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
-                               _customMAC[0], _customMAC[1], _customMAC[2],
-                               _customMAC[3], _customMAC[4], _customMAC[5]);
-        }
+        DEBUG_SERIAL.printf("[WiFi] MAC 验证: %s\n", match ? "一致" : "不一致");
     }
 }
 
@@ -130,53 +97,123 @@ bool WiFiManager::isUsingCustomMAC() {
     return _usingCustomMAC;
 }
 
-bool WiFiManager::begin() {
-    DEBUG_SERIAL.println("[WiFi] 初始化...");
+bool WiFiManager::isOfficeMode() {
+    return _officeMode;
+}
 
-    // 解析自定义 MAC 配置
-    _usingCustomMAC = parseCustomMAC();
+bool WiFiManager::scanForOfficeSSID() {
+    LOG_INFO("[WiFi] 开始 WiFi 扫描...");
+    _scannedCount = 0;
+    _officeMode = false;
 
-    // 在 WiFi.mode() 之前设置 base MAC（关键！）
-    // esp_base_mac_addr_set 必须在 WiFi 子系统初始化之前调用
-    if (_usingCustomMAC) {
-        if (!applyBaseMAC()) {
-            _usingCustomMAC = false;
+    int n = WiFi.scanNetworks(false, false, false, 300);
+    LOG_INFO_F("[WiFi] 扫描到 %d 个网络\n", n);
+
+    bool officeFound = false;
+    String officeSSID = OFFICE_SSID;
+
+    for (int i = 0; i < n && _scannedCount < 20; i++) {
+        String ssid = WiFi.SSID(i);
+        if (ssid.length() == 0) continue;
+
+        // 去重
+        bool dup = false;
+        for (int j = 0; j < _scannedCount; j++) {
+            if (_scannedSSIDs[j] == ssid) { dup = true; break; }
+        }
+        if (!dup) {
+            _scannedSSIDs[_scannedCount++] = ssid;
+        }
+
+        if (officeSSID.length() > 0 && ssid == officeSSID) {
+            officeFound = true;
         }
     }
 
-    // 初始化 WiFi 为 STA 模式（此时会使用已设置的 base MAC）
-    WiFi.mode(WIFI_STA);
-    delay(100);
+    WiFi.scanDelete();
 
-    // 连接 WiFi
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    if (officeFound) {
+        LOG_INFO("[WiFi] 发现办公室 SSID，进入办公室模式");
+        _officeMode = true;
+    }
+    return officeFound;
+}
 
-    DEBUG_SERIAL.printf("[WiFi] 连接到: %s\n", WIFI_SSID);
+String* WiFiManager::getScannedSSIDs(int& count) {
+    count = _scannedCount;
+    return _scannedSSIDs;
+}
 
-    // 等待连接，最多 30 秒
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 60) {
+bool WiFiManager::waitForConnection(int timeoutMs) {
+    int elapsed = 0;
+    while (WiFi.status() != WL_CONNECTED && elapsed < timeoutMs) {
         delay(500);
         DEBUG_SERIAL.print(".");
-        attempts++;
+        elapsed += 500;
     }
     DEBUG_SERIAL.println();
+    return WiFi.status() == WL_CONNECTED;
+}
 
-    if (WiFi.status() == WL_CONNECTED) {
-        _connected = true;
-        DEBUG_SERIAL.println("[WiFi] 连接成功!");
-        DEBUG_SERIAL.printf("[WiFi] IP 地址: %s\n", WiFi.localIP().toString().c_str());
+bool WiFiManager::begin() {
+    DEBUG_SERIAL.println("[WiFi] 初始化...");
 
-        // 用底层 API 验证实际 MAC
-        verifyMAC();
+    // 如果定义了自定义 MAC，必须在第一次 WiFi.mode() 之前设置
+    // esp_base_mac_addr_set 必须在 esp_wifi_init 之前调用
+    _usingCustomMAC = parseCustomMAC();
+    if (_usingCustomMAC) {
+        applyBaseMAC();
+    }
 
-        DEBUG_SERIAL.printf("[WiFi] 信号强度: %d dBm\n", WiFi.RSSI());
-        return true;
-    } else {
+    // 扫描网络
+    WiFi.mode(WIFI_STA);
+    delay(100);
+    scanForOfficeSSID();
+
+    if (_officeMode) {
+        // 办公室模式：使用编译时凭据连接（自定义 MAC 已在上面设置）
+        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+        LOG_INFO_F("[WiFi] 办公室模式，连接到: %s\n", WIFI_SSID);
+
+        if (waitForConnection(30000)) {
+            _connected = true;
+            LOG_INFO("[WiFi] 连接成功!");
+            LOG_INFO_F("[WiFi] IP: %s\n", WiFi.localIP().toString().c_str());
+            verifyMAC();
+            LOG_INFO_F("[WiFi] RSSI: %d dBm\n", WiFi.RSSI());
+            return true;
+        }
+
         _connected = false;
-        DEBUG_SERIAL.println("[WiFi] 连接失败!");
+        LOG_ERROR("[WiFi] 办公室模式连接失败");
         return false;
     }
+
+    // 非办公室模式：返回 false，由 main 决定使用 NVS 凭据或 AP 配网
+    LOG_INFO("[WiFi] 非办公室模式");
+    return false;
+}
+
+bool WiFiManager::connectWithCredentials(const String& ssid, const String& pass) {
+    LOG_INFO_F("[WiFi] 连接到: %s\n", ssid.c_str());
+
+    WiFi.disconnect(true);
+    delay(100);
+    WiFi.mode(WIFI_STA);
+    delay(100);
+    WiFi.begin(ssid.c_str(), pass.c_str());
+
+    if (waitForConnection(30000)) {
+        _connected = true;
+        LOG_INFO("[WiFi] 连接成功!");
+        LOG_INFO_F("[WiFi] IP: %s\n", WiFi.localIP().toString().c_str());
+        LOG_INFO_F("[WiFi] RSSI: %d dBm\n", WiFi.RSSI());
+        return true;
+    }
+
+    _connected = false;
+    LOG_ERROR("[WiFi] 连接失败");
+    return false;
 }
 
 bool WiFiManager::isConnected() {
@@ -198,45 +235,53 @@ String WiFiManager::getMACAddress() {
 void WiFiManager::disconnect() {
     WiFi.disconnect();
     _connected = false;
-    DEBUG_SERIAL.println("[WiFi] 已断开连接");
+    LOG_DEBUG("[WiFi] 已断开连接");
 }
 
 bool WiFiManager::reconnect() {
     unsigned long currentMillis = millis();
-
-    // 检查是否到了重连间隔
     if (currentMillis - _lastReconnectAttempt < RECONNECT_INTERVAL) {
         return false;
     }
-
     _lastReconnectAttempt = currentMillis;
 
-    DEBUG_SERIAL.println("[WiFi] 尝试重新连接...");
-
+    LOG_INFO("[WiFi] 尝试重新连接...");
     WiFi.disconnect();
     delay(1000);
 
-    // base MAC 已在 begin() 中设置，无需重复设置
-    // 它在系统级生效，直到下次重启
-
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 30) {
-        delay(500);
-        DEBUG_SERIAL.print(".");
-        attempts++;
-    }
-    DEBUG_SERIAL.println();
-
-    if (WiFi.status() == WL_CONNECTED) {
+    if (waitForConnection(15000)) {
         _connected = true;
-        DEBUG_SERIAL.println("[WiFi] 重连成功!");
-        DEBUG_SERIAL.printf("[WiFi] IP 地址: %s\n", WiFi.localIP().toString().c_str());
+        LOG_INFO("[WiFi] 重连成功!");
+        LOG_INFO_F("[WiFi] IP: %s\n", WiFi.localIP().toString().c_str());
         verifyMAC();
         return true;
-    } else {
-        DEBUG_SERIAL.println("[WiFi] 重连失败!");
-        return false;
     }
+
+    LOG_ERROR("[WiFi] 重连失败");
+    return false;
+}
+
+bool WiFiManager::startAP() {
+    LOG_INFO_F("[WiFi] 启动 AP 热点: %s\n", AP_SSID);
+
+    WiFi.disconnect(true);
+    delay(100);
+    WiFi.mode(WIFI_AP);
+    delay(100);
+
+    bool result = WiFi.softAP(AP_SSID);
+    if (result) {
+        LOG_INFO_F("[WiFi] AP 已启动, IP: %s\n", WiFi.softAPIP().toString().c_str());
+    } else {
+        LOG_ERROR("[WiFi] AP 启动失败");
+    }
+    return result;
+}
+
+void WiFiManager::stopAP() {
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_STA);
+    LOG_INFO("[WiFi] AP 已停止");
 }

@@ -7,21 +7,19 @@
 #define WIFI_SSID "your_wifi_ssid"
 #define WIFI_PASSWORD "your_wifi_password"
 
+// 办公室 SSID（扫描到此 SSID 时自动使用编译时凭据连接）
+// #define OFFICE_SSID "Your_Office_WiFi"
+
+// 默认刷新计划（HH:MM 格式，逗号分隔，24小时制）
+// 仅在办公室模式或 NVS 无计划时生效
+// #define DEFAULT_SCHEDULES "0800,1200,1800,2200"
+
 // 服务器配置
 // 支持以下格式：
 // - 纯主机名/IP: "192.168.1.100" 或 "your-server.local"
 // - 带协议: "http://192.168.1.100" 或 "https://your-server.example.com"
-//
-// 注意: 如果使用非标准端口（如 8888），请确保协议与端口匹配
-// - HTTP 端口: 80 或自定义端口（如 8080, 8888）
-// - HTTPS 端口: 443 或自定义端口（需要有效证书或自签名证书）
 #define SERVER_HOST "192.168.1.100"
 #define SERVER_PORT 8080
-
-// HTTPS 配置（可选）
-// 如果使用自签名证书，请在 config.h 中保持默认设置
-// 如果使用有效证书，可以启用验证
-// #define HTTPS_VERIFY_CERTIFICATE false
 
 // 设备 API Key（在后端管理界面创建设备时获得）
 #define DEVICE_API_KEY "your_device_api_key_here"

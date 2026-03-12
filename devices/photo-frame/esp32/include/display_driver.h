@@ -38,14 +38,9 @@ public:
     void clear();
 
     // 全屏刷新显示缓冲区内容
-    // buffer: 7色格式的图像数据
-    // 对于 800x480 的 Spectra 6，每个像素用 4bit 表示，每字节2个像素
-    // 总大小：800 * 480 / 2 = 192000 bytes
     void display(const uint8_t* buffer, size_t size);
 
-    // 旋转 90 度显示（竖屏图片在横屏上显示）
-    // srcBuffer: 480x800 的源图片（4bit格式）
-    // 将 480x800 旋转 90 度显示在 800x480 屏幕上
+    // 旋转 90 度显示
     void displayRotated(const uint8_t* srcBuffer, size_t size);
 
     // 进入深度睡眠模式
@@ -57,38 +52,34 @@ public:
     // 检查屏幕是否忙碌
     bool isBusy();
 
-    // 获取屏幕宽度
+    // 全屏居中显示文字（黑底白字或白底黑字）
+    void showText(const char* text);
+
+    // AP 配网引导屏
+    void showAPGuide(const char* ssid, const char* url);
+
+    // 退避睡眠提示
+    void showSleepMessage(const char* message);
+
     int width() { return SCREEN_WIDTH; }
-
-    // 获取屏幕高度
     int height() { return SCREEN_HEIGHT; }
-
-    // 获取每行字节数（4bit格式: 800 / 2 = 400 bytes）
     int bytesPerLine() { return SCREEN_WIDTH / 2; }
-
-    // 获取缓冲区大小（800 * 480 / 2 = 192000 bytes）
     size_t bufferSize() { return (SCREEN_WIDTH * SCREEN_HEIGHT) / 2; }
 
 private:
     bool _initialized;
 
-    // 硬件 SPI 通信
     void spiTransfer(uint8_t data);
     void sendCommand(uint8_t cmd);
     void sendData(uint8_t data);
     void sendData(const uint8_t* data, size_t len);
-
-    // 硬件复位
     void reset();
-
-    // 等待忙碌信号（BUSY引脚变为高电平）
     void waitUntilIdle();
-    
-    // 初始化序列（快速模式）
     void initFast();
-    
-    // 初始化序列（标准模式）
     void initNormal();
+
+    // 文字渲染辅助：将 GFXcanvas1 的 1-bit 像素写入 4-bit framebuffer 并刷新
+    void renderCanvasToDisplay(uint8_t* canvas1Buffer, int canvasW, int canvasH);
 };
 
 #endif // DISPLAY_DRIVER_H

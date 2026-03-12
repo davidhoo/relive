@@ -26,6 +26,20 @@
 // #define USE_CUSTOM_MAC_ADDRESS
 // #define CUSTOM_MAC_ADDRESS_STRING "AA:BB:CC:DD:EE:FF"
 
+// 办公室 SSID（config_local.h 覆盖，不入 Git）
+// 扫描到此 SSID 时使用编译时凭据连接（办公室模式）
+#ifndef OFFICE_SSID
+#define OFFICE_SSID ""
+#endif
+
+// 调试模式（取消注释启用，启用后使用固定间隔而非计划调度）
+// #define DEBUG_MODE
+
+// 默认刷新计划（办公室模式 & NVS 无计划时的兜底）
+#ifndef DEFAULT_SCHEDULES
+#define DEFAULT_SCHEDULES "0800,2000"
+#endif
+
 // ===================== 服务器配置 =====================
 // 后端服务器地址
 // 支持格式：
@@ -58,8 +72,10 @@
 #define EINK_SCK    15
 
 // ===================== 功能配置 =====================
-// 刷新间隔（毫秒）- 默认5分钟
+// 刷新间隔（毫秒）- 默认5分钟，DEBUG_MODE 和时间无效时使用
+#ifndef REFRESH_INTERVAL_MS
 #define REFRESH_INTERVAL_MS 300000
+#endif
 
 // HTTP 请求超时（毫秒）
 #define HTTP_TIMEOUT_MS 30000
@@ -70,11 +86,33 @@
 // 重试延迟（毫秒）
 #define RETRY_DELAY_MS 5000
 
+// ===================== AP 配网配置 =====================
+// AP 热点 SSID（无密码）
+#define AP_SSID            "relive"
+
+// AP 超时时间（毫秒）- 3 分钟无设备连接则超时
+#define AP_TIMEOUT_MS      180000
+
+// AP 退避睡眠时间（分钟）
+#define AP_BACKOFF_MINUTES {30, 60, 180}
+#define AP_BACKOFF_STEPS   3
+
+// WiFi 连续失败次数阈值（触发 AP 配网）
+#define MAX_WIFI_RETRIES   10
+
+// ===================== NTP 配置 =====================
+#define NTP_SERVER         "pool.ntp.org"
+#define GMT_OFFSET_SEC     28800    // GMT+8
+#define DST_OFFSET_SEC     0
+
+// 最小睡眠保护（秒）- 小于此值则跳到下一个计划点
+#define MIN_SLEEP_SEC      60
+
 // ===================== 调试配置 =====================
 #define DEBUG_SERIAL Serial
 #define DEBUG_BAUDRATE 115200
 
-// 日志级别: 0=ERROR, 1=WARN, 2=INFO, 3=DEBUG
+// 日志级别: 0=OFF, 1=ERROR, 2=INFO, 3=DEBUG
 #ifndef LOG_LEVEL
 #define LOG_LEVEL 3
 #endif

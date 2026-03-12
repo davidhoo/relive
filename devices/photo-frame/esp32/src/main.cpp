@@ -2,160 +2,167 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include "config.h"
+#include "log.h"
 #include "wifi_manager.h"
 #include "api_client.h"
 #include "display_driver.h"
+#include "nvs_config.h"
+#include "schedule_manager.h"
+#include "web_portal.h"
 
 // 全局对象
 WiFiManager wifiManager;
 APIClient apiClient;
 DisplayDriver display;
+NVSConfig nvsConfig;
+ScheduleManager scheduleManager;
+WebPortal webPortal;
 
 // 图像缓冲区
-// 服务器返回 4bit 格式：每2个像素1字节
-// 800x480 屏幕需要: 800 * 480 / 2 = 192000 bytes
 uint8_t* imageBuffer = nullptr;
-const size_t BUFFER_SIZE_WITH_PSRAM = 200000;  // PSRAM 可用时的缓冲区 (195KB)
-const size_t BUFFER_SIZE_NO_PSRAM = 200000;    // 无 PSRAM 时的缓冲区（192000 + 余量）
-size_t actualBufferSize = 0;  // 实际分配的缓冲区大小
-
-// 状态变量
-enum SystemState {
-    STATE_INIT,
-    STATE_CONNECTING_WIFI,
-    STATE_CONNECTED,
-    STATE_DOWNLOADING,
-    STATE_DISPLAYING,
-    STATE_SLEEPING,
-    STATE_ERROR
-};
-SystemState currentState = STATE_INIT;
+const size_t BUFFER_SIZE = 200000;  // 192000 + 余量
+size_t actualBufferSize = 0;
 
 // 统计信息
 struct {
     int successCount = 0;
     int errorCount = 0;
-    unsigned long lastRefreshTime = 0;
 } stats;
 
-// 日志宏
-#if LOG_LEVEL >= 1
-#define LOG_ERROR(msg) DEBUG_SERIAL.println(msg)
-#define LOG_ERROR_F(msg, ...) DEBUG_SERIAL.printf(msg, __VA_ARGS__)
-#else
-#define LOG_ERROR(msg)
-#define LOG_ERROR_F(msg, ...)
-#endif
+// ===================== 辅助函数 =====================
 
-#if LOG_LEVEL >= 2
-#define LOG_INFO(msg) DEBUG_SERIAL.println(msg)
-#define LOG_INFO_F(msg, ...) DEBUG_SERIAL.printf(msg, __VA_ARGS__)
-#else
-#define LOG_INFO(msg)
-#define LOG_INFO_F(msg, ...)
-#endif
-
-#if LOG_LEVEL >= 3
-#define LOG_DEBUG(msg) DEBUG_SERIAL.println(msg)
-#define LOG_DEBUG_F(msg, ...) DEBUG_SERIAL.printf(msg, __VA_ARGS__)
-#else
-#define LOG_DEBUG(msg)
-#define LOG_DEBUG_F(msg, ...)
-#endif
-
-// 显示启动画面
 void showStartupScreen() {
     DEBUG_SERIAL.println("\n=================================");
-    DEBUG_SERIAL.println("   Relive 智能相框");
+    DEBUG_SERIAL.println("   Relive 智能相框 v2");
     DEBUG_SERIAL.println("   ESP32-S3 + E Ink Spectra 6");
     DEBUG_SERIAL.println("=================================\n");
 }
 
-// 分配缓冲区
 bool allocateBuffer() {
-    if (imageBuffer != nullptr) {
-        return true; // 已分配
-    }
+    if (imageBuffer != nullptr) return true;
 
-    DEBUG_SERIAL.println("\n[System] ===== 内存分配诊断 =====");
-    
-    // 显示当前内存状态
-    DEBUG_SERIAL.printf("[System] 总堆内存: %d bytes\n", ESP.getHeapSize());
-    DEBUG_SERIAL.printf("[System] 可用堆内存: %d bytes\n", ESP.getFreeHeap());
-    DEBUG_SERIAL.printf("[System] 最大可分配块: %d bytes\n", ESP.getMaxAllocHeap());
-    
-    // 检查 PSRAM
-    bool hasPsram = psramFound();
-    if (hasPsram) {
-        DEBUG_SERIAL.printf("[System] PSRAM 可用: %d bytes\n", ESP.getPsramSize());
-        DEBUG_SERIAL.printf("[System] PSRAM 空闲: %d bytes\n", ESP.getFreePsram());
-        actualBufferSize = BUFFER_SIZE_WITH_PSRAM;
+    LOG_DEBUG("[System] 内存分配...");
+    LOG_DEBUG_F("[System] 堆: %d, 空闲: %d, 最大块: %d\n",
+                ESP.getHeapSize(), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+
+    if (psramFound()) {
+        LOG_DEBUG_F("[System] PSRAM: %d / %d\n", ESP.getFreePsram(), ESP.getPsramSize());
+        actualBufferSize = BUFFER_SIZE;
         imageBuffer = (uint8_t*)ps_malloc(actualBufferSize);
-        if (imageBuffer != nullptr) {
-            DEBUG_SERIAL.printf("[System] ✓ 从 PSRAM 分配成功: %d bytes\n", actualBufferSize);
+        if (imageBuffer) {
+            LOG_INFO_F("[System] PSRAM 分配成功: %d bytes\n", actualBufferSize);
             return true;
         }
-        DEBUG_SERIAL.println("[System] ✗ PSRAM 分配失败");
-    } else {
-        DEBUG_SERIAL.println("[System] ⚠ PSRAM 未检测到");
     }
 
-    // 尝试从内部 RAM 分配较小的缓冲区
-    actualBufferSize = BUFFER_SIZE_NO_PSRAM;
-    DEBUG_SERIAL.printf("[System] 尝试从内部 RAM 分配较小缓冲区: %d bytes\n", actualBufferSize);
-    
-    // 检查是否有足够的内存
-    size_t freeHeap = ESP.getFreeHeap();
-    size_t maxAlloc = ESP.getMaxAllocHeap();
-    
-    if (maxAlloc < actualBufferSize) {
-        DEBUG_SERIAL.printf("[System] ✗ 最大可分配块 (%d bytes) 小于所需 (%d bytes)\n",
-                          maxAlloc, actualBufferSize);
-        DEBUG_SERIAL.println("[System] 建议:");
-        DEBUG_SERIAL.println("  1. 启用 PSRAM (在 platformio.ini 中添加 board_build.arduino.memory_type = qio_opi)");
-        DEBUG_SERIAL.println("  2. 或减小 BUFFER_SIZE_NO_PSRAM 的值");
+    actualBufferSize = BUFFER_SIZE;
+    if (ESP.getMaxAllocHeap() < actualBufferSize) {
+        LOG_ERROR("[System] 内存不足，需要 PSRAM");
         return false;
     }
-    
+
     imageBuffer = (uint8_t*)malloc(actualBufferSize);
-
-    if (imageBuffer == nullptr) {
-        DEBUG_SERIAL.println("[System] ✗ 内存分配失败!");
-        DEBUG_SERIAL.printf("[System] 请求: %d bytes, 可用: %d bytes, 最大块: %d bytes\n",
-                          actualBufferSize, freeHeap, maxAlloc);
-        DEBUG_SERIAL.println("[System] 可能原因:");
-        DEBUG_SERIAL.println("  - 内存碎片化");
-        DEBUG_SERIAL.println("  - 其他组件占用过多内存");
-        DEBUG_SERIAL.println("  - 需要启用 PSRAM");
-        return false;
+    if (imageBuffer) {
+        LOG_INFO_F("[System] 堆内存分配成功: %d bytes\n", actualBufferSize);
+        return true;
     }
 
-    DEBUG_SERIAL.printf("[System] ✓ 从内部 RAM 分配成功: %d bytes\n", actualBufferSize);
-    DEBUG_SERIAL.printf("[System] 分配后可用堆内存: %d bytes\n", ESP.getFreeHeap());
-    DEBUG_SERIAL.println("[System] ===========================\n");
-    return true;
+    LOG_ERROR("[System] 内存分配失败");
+    return false;
 }
 
-// 释放缓冲区
-void freeBuffer() {
-    if (imageBuffer != nullptr) {
-        free(imageBuffer);
-        imageBuffer = nullptr;
+// ===================== AP 配网流程 =====================
+
+void runAPPortal() {
+    LOG_INFO("[Main] 进入 AP 配网模式");
+
+    wifiManager.startAP();
+
+    // 显示配网引导
+    display.showAPGuide(AP_SSID, "http://192.168.4.1");
+
+    // 启动 Web 配置页面
+    webPortal.begin(&wifiManager, &nvsConfig);
+
+    unsigned long startTime = millis();
+    bool clientConnected = false;
+
+    while (millis() - startTime < AP_TIMEOUT_MS) {
+        webPortal.handleClient();
+
+        // 检查是否有设备连接到 AP
+        if (WiFi.softAPgetStationNum() > 0) {
+            clientConnected = true;
+            startTime = millis(); // 有设备连接则重置超时
+        }
+
+        // 用户已提交配置
+        if (webPortal.isConfigured()) {
+            LOG_INFO("[Main] 配置已保存，执行 NTP 同步后重启");
+            // NTP 同步（AP 配网保存时的唯一主动 NTP 时机）
+            // 需要先连接到用户配置的 WiFi
+            wifiManager.stopAP();
+            String ssid = nvsConfig.getWiFiSSID();
+            String pass = nvsConfig.getWiFiPass();
+            if (wifiManager.connectWithCredentials(ssid, pass)) {
+                scheduleManager.syncNTP();
+            }
+            delay(1000);
+            ESP.restart();
+            return;
+        }
+
+        delay(10);
     }
+
+    // AP 超时
+    webPortal.stop();
+    wifiManager.stopAP();
+
+    // 如果 NVS 有配置，尝试已有配置连接（容错路由器临时掉电）
+    if (nvsConfig.isConfigured()) {
+        LOG_INFO("[Main] AP 超时，尝试已有 NVS 配置连接...");
+        String ssid = nvsConfig.getWiFiSSID();
+        String pass = nvsConfig.getWiFiPass();
+        if (wifiManager.connectWithCredentials(ssid, pass)) {
+            LOG_INFO("[Main] NVS 配置连接成功，继续正常流程");
+            nvsConfig.resetAPFailCount();
+            return; // 返回到正常流程
+        }
+    }
+
+    // 退避睡眠
+    uint8_t failCount = nvsConfig.getAPFailCount();
+    const int backoffMinutes[] = AP_BACKOFF_MINUTES;
+    int sleepMinutes = backoffMinutes[min((int)failCount, AP_BACKOFF_STEPS - 1)];
+
+    nvsConfig.setAPFailCount(failCount + 1);
+
+    char msg[128];
+    snprintf(msg, sizeof(msg),
+             "WiFi not configured / connection failed.\n"
+             "Retrying in %d minutes...", sleepMinutes);
+    display.showSleepMessage(msg);
+
+    LOG_INFO_F("[Main] 退避睡眠 %d 分钟 (fail count: %d)\n", sleepMinutes, failCount + 1);
+
+    display.sleep();
+    uint64_t sleepUs = (uint64_t)sleepMinutes * 60ULL * 1000000ULL;
+    esp_sleep_enable_timer_wakeup(sleepUs);
+    DEBUG_SERIAL.flush();
+    esp_deep_sleep_start();
 }
 
+// ===================== 正常工作流程 =====================
 
-// 下载并显示照片
 bool downloadAndDisplay() {
     LOG_INFO("[Main] 开始下载照片...");
 
-    // 检查 WiFi 连接
     if (!wifiManager.isConnected()) {
         LOG_ERROR("[Main] WiFi 未连接");
         return false;
     }
 
-    // 下载 bin 文件
     String receivedChecksum;
     int downloaded = apiClient.downloadBinFile(imageBuffer, actualBufferSize, receivedChecksum);
 
@@ -165,157 +172,179 @@ bool downloadAndDisplay() {
         return false;
     }
 
+    // 校准 RTC（如果收到 X-Server-Time）
+    long serverTime = apiClient.getLastServerTime();
+    if (serverTime > 0) {
+        scheduleManager.syncTimeFromServer(serverTime);
+    }
+
     LOG_INFO_F("[Main] 下载成功: %d bytes\n", downloaded);
 
-    // 刷新显示（测试：先不旋转，直接显示）
-    LOG_INFO("[Main] 刷新屏幕（直接显示，不旋转）...");
     display.display(imageBuffer, downloaded);
-    
-    // 如果需要旋转显示，使用下面这行：
-    // display.displayRotated(imageBuffer, downloaded);
 
     stats.successCount++;
-    stats.lastRefreshTime = millis();
-
     LOG_INFO("[Main] 显示完成");
     return true;
 }
 
-// 进入睡眠模式
-void enterSleep() {
-    LOG_INFO("[Main] 进入睡眠模式...");
+void enterSmartSleep() {
+    LOG_INFO("[Main] 准备睡眠...");
 
-    // 屏幕睡眠
+    uint64_t sleepMs = scheduleManager.calculateSleepDurationMs();
+
     display.sleep();
-
-    // 断开 WiFi 以节省电量
     wifiManager.disconnect();
 
-    currentState = STATE_SLEEPING;
+    uint64_t sleepUs = sleepMs * 1000ULL;
+    esp_sleep_enable_timer_wakeup(sleepUs);
 
-    // 配置唤醒源（定时器）
-    esp_sleep_enable_timer_wakeup((uint64_t)REFRESH_INTERVAL_MS * 1000ULL);
-
-    DEBUG_SERIAL.println("[Main] 进入 deep sleep...");
+    LOG_INFO_F("[Main] 深度睡眠 %llu 秒\n", sleepMs / 1000);
     DEBUG_SERIAL.flush();
-
     esp_deep_sleep_start();
 }
 
-// 错误处理
-void handleError(const char* message) {
-    LOG_ERROR_F("[Error] %s\n", message);
-    currentState = STATE_ERROR;
-
-    // 等待一段时间后重启
-    delay(10000);
-    ESP.restart();
-}
+// ===================== 主状态机 =====================
 
 void setup() {
-    // 初始化串口
     DEBUG_SERIAL.begin(DEBUG_BAUDRATE);
-    delay(1000); // 等待串口稳定
+    delay(1000);
 
     showStartupScreen();
 
     // 检查唤醒原因
     esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
     if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) {
-        DEBUG_SERIAL.println("[Main] 从定时器唤醒");
-    } else if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0) {
-        DEBUG_SERIAL.println("[Main] 从外部中断唤醒");
+        LOG_INFO("[Main] 从定时器唤醒");
     } else {
-        DEBUG_SERIAL.println("[Main] 正常启动/复位");
+        LOG_INFO("[Main] 正常启动/复位");
     }
+
+    // 初始化 NVS 配置
+    nvsConfig.begin();
 
     // 分配缓冲区
     if (!allocateBuffer()) {
-        handleError("内存分配失败");
+        LOG_ERROR("[Main] 内存分配失败，重启");
+        delay(5000);
+        ESP.restart();
         return;
     }
 
     // 初始化显示
     if (!display.begin()) {
-        handleError("显示初始化失败");
+        LOG_ERROR("[Main] 显示初始化失败，重启");
+        delay(5000);
+        ESP.restart();
         return;
     }
 
-    // 首次启动清屏
-    // if (wakeup_reason != ESP_SLEEP_WAKEUP_TIMER) {
-    //     DEBUG_SERIAL.println("[Main] 首次启动，清屏...");
-    //     display.clear();
-    // }
+    // ===== WiFi 扫描 + 模式判断 =====
 
-    // 初始化 API 客户端
-    apiClient.begin();
+    if (wifiManager.begin()) {
+        // 办公室模式：编译时凭据连接成功
+        LOG_INFO("[Main] 办公室模式，使用编译时配置");
+        apiClient.begin();
 
-    currentState = STATE_CONNECTING_WIFI;
+        // 加载刷新计划
+        String schedules = DEFAULT_SCHEDULES;
+        scheduleManager.parseSchedules(schedules);
+
+        // 重置 AP 失败计数
+        nvsConfig.resetAPFailCount();
+    } else {
+        // 非办公室模式
+        if (!nvsConfig.isConfigured()) {
+            // NVS 未配置 → AP 配网
+            LOG_INFO("[Main] NVS 未配置，进入 AP 配网");
+            runAPPortal();
+            // 如果 runAPPortal 返回（NVS 已连接成功），继续下面的流程
+            if (!wifiManager.isConnected()) {
+                return; // 已进入深度睡眠，不会到这里
+            }
+            // 连接成功后设置 API 客户端
+            apiClient.beginWithConfig(
+                nvsConfig.getServerHost(),
+                nvsConfig.getServerPort(),
+                nvsConfig.getAPIKey()
+            );
+            String schedules = nvsConfig.getSchedules();
+            if (schedules.length() == 0) schedules = DEFAULT_SCHEDULES;
+            scheduleManager.parseSchedules(schedules);
+        } else {
+            // NVS 已配置 → 尝试连接
+            LOG_INFO("[Main] 使用 NVS 配置连接");
+            String ssid = nvsConfig.getWiFiSSID();
+            String pass = nvsConfig.getWiFiPass();
+
+            int retries = 0;
+            bool connected = false;
+            while (retries < MAX_WIFI_RETRIES) {
+                if (wifiManager.connectWithCredentials(ssid, pass)) {
+                    connected = true;
+                    break;
+                }
+                retries++;
+                LOG_INFO_F("[Main] WiFi 重试 %d/%d\n", retries, MAX_WIFI_RETRIES);
+                delay(RETRY_DELAY_MS);
+            }
+
+            if (!connected) {
+                // 连续失败 N 次 → AP 配网
+                LOG_ERROR("[Main] WiFi 连续失败，进入 AP 配网");
+                runAPPortal();
+                if (!wifiManager.isConnected()) {
+                    return;
+                }
+            }
+
+            // 成功连接
+            nvsConfig.resetAPFailCount();
+            apiClient.beginWithConfig(
+                nvsConfig.getServerHost(),
+                nvsConfig.getServerPort(),
+                nvsConfig.getAPIKey()
+            );
+            String schedules = nvsConfig.getSchedules();
+            if (schedules.length() == 0) schedules = DEFAULT_SCHEDULES;
+            scheduleManager.parseSchedules(schedules);
+        }
+    }
+
+    // ===== 正常工作流程 =====
+
+    // 时间无效时尝试 NTP 同步
+    if (!scheduleManager.isTimeValid()) {
+        LOG_INFO("[Main] 时间无效，尝试 NTP 同步...");
+        scheduleManager.syncNTP();
+    }
+
+    // 下载并显示照片
+    int retryCount = 0;
+    bool success = false;
+    while (retryCount < MAX_RETRY_COUNT) {
+        if (downloadAndDisplay()) {
+            success = true;
+            break;
+        }
+        retryCount++;
+        LOG_INFO_F("[Main] 下载重试 %d/%d\n", retryCount, MAX_RETRY_COUNT);
+        delay(RETRY_DELAY_MS);
+    }
+
+    if (!success) {
+        LOG_ERROR("[Main] 下载失败，进入睡眠等待下次重试");
+    }
+
+    LOG_INFO_F("[Main] 成功: %d, 失败: %d\n", stats.successCount, stats.errorCount);
+
+    // 智能睡眠
+    enterSmartSleep();
 }
 
 void loop() {
-    switch (currentState) {
-        case STATE_CONNECTING_WIFI: {
-            DEBUG_SERIAL.println("[Main] 连接 WiFi...");
-
-            if (wifiManager.begin()) {
-                currentState = STATE_CONNECTED;
-            } else {
-                // 重试
-                delay(RETRY_DELAY_MS);
-            }
-            break;
-        }
-
-        case STATE_CONNECTED: {
-            // 检查 WiFi 是否仍然连接
-            if (!wifiManager.isConnected()) {
-                LOG_ERROR("[Main] WiFi 断开，尝试重连...");
-                if (!wifiManager.reconnect()) {
-                    delay(RETRY_DELAY_MS);
-                }
-                break;
-            }
-
-            currentState = STATE_DOWNLOADING;
-            break;
-        }
-
-        case STATE_DOWNLOADING: {
-            if (downloadAndDisplay()) {
-                currentState = STATE_DISPLAYING;
-            } else {
-                // 下载失败，稍后重试
-                delay(RETRY_DELAY_MS);
-                // 如果多次失败，进入睡眠等待下次唤醒
-                if (stats.errorCount >= MAX_RETRY_COUNT) {
-                    LOG_ERROR("[Main] 多次失败，进入睡眠");
-                    enterSleep();
-                }
-            }
-            break;
-        }
-
-        case STATE_DISPLAYING: {
-            LOG_INFO_F("[Main] 成功: %d, 失败: %d\n", stats.successCount, stats.errorCount);
-
-            // 进入睡眠等待下次刷新
-            enterSleep();
-            break;
-        }
-
-        case STATE_SLEEPING:
-            // 不应该到达这里，因为 deep sleep 会重启
-            delay(1000);
-            break;
-
-        case STATE_ERROR:
-            delay(5000);
-            ESP.restart();
-            break;
-
-        default:
-            currentState = STATE_INIT;
-            break;
-    }
+    // 正常情况下不会执行到这里（setup 结束后进入深度睡眠）
+    // 仅作为安全兜底
+    delay(1000);
+    LOG_ERROR("[Main] 意外进入 loop，重启");
+    ESP.restart();
 }

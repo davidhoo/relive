@@ -82,6 +82,7 @@ func (h *DisplayHandler) prepareDeviceDisplayBinResponse(c *gin.Context, selecti
 	c.Header("X-Render-Profile", asset.RenderProfile)
 	c.Header("X-Batch-Date", selection.BatchDate)
 	c.Header("X-Sequence", strconv.Itoa(selection.Sequence))
+	c.Header("X-Server-Time", fmt.Sprintf("%d", time.Now().Unix()))
 
 	return fullPath, true
 }

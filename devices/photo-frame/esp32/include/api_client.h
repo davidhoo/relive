@@ -7,39 +7,22 @@
 #include <WiFiClientSecure.h>
 #include "config.h"
 
-// 显示信息结构体
-struct DisplayInfo {
-    String batchDate;
-    int sequence;
-    int totalCount;
-    uint32_t photoID;
-    uint32_t itemID;
-    uint32_t assetID;
-    String renderProfile;
-    String binURL;
-    String checksum;
-    bool valid;
-};
-
 class APIClient {
 public:
     APIClient();
 
-    // 初始化
+    // 初始化（使用编译时配置）
     void begin();
 
-    // 获取显示信息（JSON 元数据）
-    DisplayInfo getDisplayInfo();
+    // 使用动态配置初始化（NVS 模式）
+    void beginWithConfig(const String& host, uint16_t port, const String& apiKey);
 
     // 下载 bin 文件到缓冲区
     // 返回：下载的字节数，-1 表示失败
     int downloadBinFile(uint8_t* buffer, size_t bufferSize, String& outChecksum);
 
-    // HTTP 下载 bin 文件
-    int downloadBinFileHTTP(uint8_t* buffer, size_t bufferSize, String& outChecksum);
-
-    // HTTPS 下载 bin 文件
-    int downloadBinFileHTTPS(uint8_t* buffer, size_t bufferSize, String& outChecksum);
+    // 获取最后一次下载响应中的 X-Server-Time（Unix timestamp，0=未收到）
+    long getLastServerTime();
 
     // 获取最后一次错误信息
     String getLastError();
@@ -52,10 +35,13 @@ private:
     int _lastHttpCode;
     bool _useHTTPS;
     String _baseUrl;
-    WiFiClient _wifiClient;  // 持久化的WiFi客户端
+    uint16_t _port;
+    String _apiKey;
+    long _lastServerTime;
+    WiFiClient _wifiClient;
 
-    // 解析服务器配置，初始化客户端
-    void setupServer();
+    // 解析 host 字符串，提取协议和 baseUrl
+    void parseHost(const String& host);
 
     // 构建完整的 API URL
     String buildUrl(const char* endpoint);
@@ -63,14 +49,14 @@ private:
     // 设置 HTTP 请求头
     void setHeaders(HTTPClient& http);
 
-    // 解析显示信息 JSON
-    DisplayInfo parseDisplayInfo(const String& json);
+    // 解析响应头中的 X-Server-Time
+    void parseServerTime(HTTPClient& http);
 
-    // HTTP 获取显示信息
-    DisplayInfo getDisplayInfoHTTP();
+    // HTTP 下载 bin 文件
+    int downloadBinFileHTTP(uint8_t* buffer, size_t bufferSize, String& outChecksum);
 
-    // HTTPS 获取显示信息
-    DisplayInfo getDisplayInfoHTTPS();
+    // HTTPS 下载 bin 文件
+    int downloadBinFileHTTPS(uint8_t* buffer, size_t bufferSize, String& outChecksum);
 };
 
 #endif // API_CLIENT_H

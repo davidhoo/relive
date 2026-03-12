@@ -1,28 +1,6 @@
 #include "display_driver.h"
-
-#if LOG_LEVEL >= 2
-#define LOG_INFO(msg) DEBUG_SERIAL.println(msg)
-#define LOG_INFO_F(msg, ...) DEBUG_SERIAL.printf(msg, __VA_ARGS__)
-#else
-#define LOG_INFO(msg)
-#define LOG_INFO_F(msg, ...)
-#endif
-
-#if LOG_LEVEL >= 3
-#define LOG_DEBUG(msg) DEBUG_SERIAL.println(msg)
-#define LOG_DEBUG_F(msg, ...) DEBUG_SERIAL.printf(msg, __VA_ARGS__)
-#else
-#define LOG_DEBUG(msg)
-#define LOG_DEBUG_F(msg, ...)
-#endif
-
-#if LOG_LEVEL >= 1
-#define LOG_ERROR(msg) DEBUG_SERIAL.println(msg)
-#define LOG_ERROR_F(msg, ...) DEBUG_SERIAL.printf(msg, __VA_ARGS__)
-#else
-#define LOG_ERROR(msg)
-#define LOG_ERROR_F(msg, ...)
-#endif
+#include "log.h"
+#include <Adafruit_GFX.h>
 
 // E Ink 命令定义（基于官方示例）
 #define PSR         0x00
@@ -341,19 +319,6 @@ void DisplayDriver::clear() {
     DEBUG_SERIAL.println("[Display] 清屏完成");
 }
 
-// 颜色映射函数（从RGB转换为E Ink颜色）
-static uint8_t colorGet(uint8_t color) {
-    switch(color) {
-        case 0x00: return 0x00; // Black
-        case 0xFF: return 0x01; // White
-        case 0xFC: return 0x02; // Yellow
-        case 0xE0: return 0x03; // Red
-        case 0x03: return 0x05; // Blue
-        case 0x1C: return 0x06; // Green
-        default:   return 0x00; // 默认黑色
-    }
-}
-
 void DisplayDriver::display(const uint8_t* buffer, size_t size) {
     if (!_initialized || buffer == nullptr) return;
 
@@ -488,4 +453,169 @@ void DisplayDriver::wakeup() {
 
     // 重新初始化
     begin();
+}
+
+// 将竖屏 GFXcanvas1 (480x800, 1-bit) 旋转 90° 顺时针映射到物理屏幕 (800x480, 4-bit) 并刷新
+// 白底黑字：GFX color 1 (text) → EINK_BLACK, GFX color 0 (background) → EINK_WHITE
+// 旋转映射：canvas(srcX, srcY) → screen(799-srcY, srcX)
+void DisplayDriver::renderCanvasToDisplay(uint8_t* canvas1Buf, int canvasW, int canvasH) {
+    // canvasW=480 (竖屏宽), canvasH=800 (竖屏高)
+    // 屏幕: SCREEN_WIDTH=800, SCREEN_HEIGHT=480
+    const int rowStride = (canvasW + 7) / 8; // canvas 每行字节数
+
+    sendCommand(0x10); // DTM
+    for (int screenY = 0; screenY < SCREEN_HEIGHT; screenY++) {
+        for (int screenX = 0; screenX < SCREEN_WIDTH; screenX += 2) {
+            uint8_t p0 = EINK_WHITE; // 默认白色背景
+            uint8_t p1 = EINK_WHITE;
+
+            // 反向映射: screen(screenX, screenY) ← canvas(srcX=screenY, srcY=799-screenX)
+            {
+                int srcX = screenY;
+                int srcY = (canvasH - 1) - screenX;
+                if (srcX >= 0 && srcX < canvasW && srcY >= 0 && srcY < canvasH) {
+                    int byteIdx = srcY * rowStride + srcX / 8;
+                    int bitIdx = 7 - (srcX % 8);
+                    if (canvas1Buf[byteIdx] & (1 << bitIdx)) {
+                        p0 = EINK_BLACK; // GFX color 1 = 黑色文字
+                    }
+                }
+            }
+
+            {
+                int srcX = screenY;
+                int srcY = (canvasH - 1) - (screenX + 1);
+                if (srcX >= 0 && srcX < canvasW && srcY >= 0 && srcY < canvasH) {
+                    int byteIdx = srcY * rowStride + srcX / 8;
+                    int bitIdx = 7 - (srcX % 8);
+                    if (canvas1Buf[byteIdx] & (1 << bitIdx)) {
+                        p1 = EINK_BLACK;
+                    }
+                }
+            }
+
+            // 4-bit format: high nibble = pixel 0, low nibble = pixel 1
+            sendData((p0 << 4) | p1);
+        }
+    }
+
+    sendCommand(0x12); // DRF
+    sendData(0x00);
+    delay(1);
+    waitUntilIdle();
+}
+
+// 竖屏画布尺寸常量
+static const int PORTRAIT_W = 480;
+static const int PORTRAIT_H = 800;
+
+void DisplayDriver::showText(const char* text) {
+    if (!_initialized) return;
+    LOG_INFO_F("[Display] 显示文字: %s\n", text);
+
+    GFXcanvas1 canvas(PORTRAIT_W, PORTRAIT_H);
+    canvas.fillScreen(0); // 白色背景 (GFX 0 → EINK_WHITE)
+    canvas.setTextColor(1); // 黑色文字 (GFX 1 → EINK_BLACK)
+    canvas.setTextSize(3);
+    canvas.setTextWrap(true);
+
+    // 居中
+    int16_t x1, y1;
+    uint16_t tw, th;
+    canvas.getTextBounds(text, 0, 0, &x1, &y1, &tw, &th);
+    int cx = (PORTRAIT_W - tw) / 2;
+    int cy = (PORTRAIT_H - th) / 2;
+    if (cx < 20) cx = 20;
+    if (cy < 20) cy = 20;
+
+    canvas.setCursor(cx, cy);
+    canvas.print(text);
+
+    renderCanvasToDisplay(canvas.getBuffer(), PORTRAIT_W, PORTRAIT_H);
+    LOG_INFO("[Display] 文字显示完成");
+}
+
+void DisplayDriver::showAPGuide(const char* ssid, const char* url) {
+    if (!_initialized) return;
+    LOG_INFO("[Display] 显示 AP 配网引导");
+
+    GFXcanvas1 canvas(PORTRAIT_W, PORTRAIT_H);
+    canvas.fillScreen(0); // 白色背景
+    canvas.setTextColor(1); // 黑色文字
+
+    // 标题 - 居中
+    canvas.setTextSize(4);
+    int16_t x1, y1;
+    uint16_t tw, th;
+    canvas.getTextBounds("Relive Setup", 0, 0, &x1, &y1, &tw, &th);
+    canvas.setCursor((PORTRAIT_W - tw) / 2, 100);
+    canvas.print("Relive Setup");
+
+    // 分隔线
+    canvas.drawFastHLine(40, 160, PORTRAIT_W - 80, 1);
+
+    // Step 1: WiFi
+    canvas.setTextSize(2);
+    canvas.setCursor(40, 200);
+    canvas.print("1. Connect to WiFi:");
+
+    canvas.setTextSize(3);
+    canvas.getTextBounds(ssid, 0, 0, &x1, &y1, &tw, &th);
+    canvas.setCursor((PORTRAIT_W - tw) / 2, 250);
+    canvas.print(ssid);
+
+    // Step 2: URL
+    canvas.setTextSize(2);
+    canvas.setCursor(40, 340);
+    canvas.print("2. Open in browser:");
+
+    canvas.setTextSize(3);
+    canvas.getTextBounds(url, 0, 0, &x1, &y1, &tw, &th);
+    canvas.setCursor((PORTRAIT_W - tw) / 2, 390);
+    canvas.print(url);
+
+    // Step 3: 配置
+    canvas.setTextSize(2);
+    canvas.setCursor(40, 480);
+    canvas.print("3. Configure WiFi,");
+    canvas.setCursor(40, 510);
+    canvas.print("   server & schedule");
+
+    // 分隔线
+    canvas.drawFastHLine(40, 580, PORTRAIT_W - 80, 1);
+
+    // 底部超时提示
+    canvas.setTextSize(2);
+    canvas.getTextBounds("Auto-sleep after 3 min", 0, 0, &x1, &y1, &tw, &th);
+    canvas.setCursor((PORTRAIT_W - tw) / 2, 620);
+    canvas.print("Auto-sleep after 3 min");
+
+    renderCanvasToDisplay(canvas.getBuffer(), PORTRAIT_W, PORTRAIT_H);
+    LOG_INFO("[Display] AP 引导显示完成");
+}
+
+void DisplayDriver::showSleepMessage(const char* message) {
+    if (!_initialized) return;
+    LOG_INFO_F("[Display] 显示睡眠提示: %s\n", message);
+
+    GFXcanvas1 canvas(PORTRAIT_W, PORTRAIT_H);
+    canvas.fillScreen(0); // 白色背景
+    canvas.setTextColor(1); // 黑色文字
+    canvas.setTextSize(2);
+    canvas.setTextWrap(true);
+
+    // 居中
+    int16_t x1, y1;
+    uint16_t tw, th;
+    canvas.getTextBounds(message, 0, 0, &x1, &y1, &tw, &th);
+    int cx = (PORTRAIT_W - tw) / 2;
+    int cy = (PORTRAIT_H - th) / 2;
+    if (cx < 30) cx = 30;
+    if (cy < 30) cy = 30;
+
+    canvas.setCursor(cx, cy);
+    canvas.print(message);
+
+    renderCanvasToDisplay(canvas.getBuffer(), PORTRAIT_W, PORTRAIT_H);
+    LOG_INFO("[Display] 睡眠提示显示完成");
 }
