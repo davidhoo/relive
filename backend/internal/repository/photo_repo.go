@@ -23,7 +23,7 @@ type PhotoRepository interface {
 	ExistsByFilePath(filePath string) (bool, error)
 
 	// 列表查询
-	List(page, pageSize int, analyzed *bool, location string, search string, sortBy string, sortDesc bool, enabledPaths []string) ([]*model.Photo, int64, error)
+	List(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, sortBy string, sortDesc bool, enabledPaths []string) ([]*model.Photo, int64, error)
 	ListAll() ([]*model.Photo, error)
 	ListByIDs(ids []uint) ([]*model.Photo, error)
 
@@ -133,7 +133,7 @@ func (r *photoRepository) ExistsByFilePath(filePath string) (bool, error) {
 }
 
 // List 分页列表查询
-func (r *photoRepository) List(page, pageSize int, analyzed *bool, location string, search string, sortBy string, sortDesc bool, enabledPaths []string) ([]*model.Photo, int64, error) {
+func (r *photoRepository) List(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, sortBy string, sortDesc bool, enabledPaths []string) ([]*model.Photo, int64, error) {
 	var photos []*model.Photo
 	var total int64
 
@@ -168,6 +168,20 @@ func (r *photoRepository) List(page, pageSize int, analyzed *bool, location stri
 	// 筛选条件
 	if analyzed != nil {
 		query = query.Where("ai_analyzed = ?", *analyzed)
+	}
+	if hasThumbnail != nil {
+		if *hasThumbnail {
+			query = query.Where("thumbnail_status = 'ready'")
+		} else {
+			query = query.Where("thumbnail_status != 'ready' OR thumbnail_status IS NULL")
+		}
+	}
+	if hasGPS != nil {
+		if *hasGPS {
+			query = query.Where("gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL")
+		} else {
+			query = query.Where("gps_latitude IS NULL OR gps_longitude IS NULL")
+		}
 	}
 	if location != "" {
 		query = query.Where("location LIKE ?", "%"+location+"%")

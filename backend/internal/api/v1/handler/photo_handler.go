@@ -349,6 +349,18 @@ func (h *PhotoHandler) GetPhotos(c *gin.Context) {
 		analyzed = &val
 	}
 
+	var hasThumbnail *bool
+	if str := c.Query("has_thumbnail"); str != "" {
+		val := str == "true"
+		hasThumbnail = &val
+	}
+
+	var hasGPS *bool
+	if str := c.Query("has_gps"); str != "" {
+		val := str == "true"
+		hasGPS = &val
+	}
+
 	location := c.Query("location")
 	search := c.Query("search")
 	sortBy := c.DefaultQuery("sort_by", "taken_at")
@@ -356,13 +368,15 @@ func (h *PhotoHandler) GetPhotos(c *gin.Context) {
 
 	// 构建请求
 	req := &model.GetPhotosRequest{
-		Page:     page,
-		PageSize: pageSize,
-		Analyzed: analyzed,
-		Location: location,
-		Search:   search,
-		SortBy:   sortBy,
-		SortDesc: sortDesc,
+		Page:         page,
+		PageSize:     pageSize,
+		Analyzed:     analyzed,
+		HasThumbnail: hasThumbnail,
+		HasGPS:       hasGPS,
+		Location:     location,
+		Search:       search,
+		SortBy:       sortBy,
+		SortDesc:     sortDesc,
 	}
 
 	// 查询照片

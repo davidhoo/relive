@@ -185,6 +185,16 @@
               <el-radio-button label="true">已分析</el-radio-button>
               <el-radio-button label="false">未分析</el-radio-button>
             </el-radio-group>
+            <el-radio-group v-model="filterThumbnail" @change="handleSearch" size="default" class="filter-group">
+              <el-radio-button label="">全部</el-radio-button>
+              <el-radio-button label="true">有缩略</el-radio-button>
+              <el-radio-button label="false">无缩略</el-radio-button>
+            </el-radio-group>
+            <el-radio-group v-model="filterGPS" @change="handleSearch" size="default" class="filter-group">
+              <el-radio-button label="">全部</el-radio-button>
+              <el-radio-button label="true">有位置</el-radio-button>
+              <el-radio-button label="false">无位置</el-radio-button>
+            </el-radio-group>
           </div>
         </template>
       </SectionHeader>
@@ -414,6 +424,8 @@ const total = ref(0)
 const systemTotal = ref(0) // 系统中所有照片的总数（不带筛选）
 const searchQuery = ref('')
 const filterAnalyzed = ref('')
+const filterThumbnail = ref('')
+const filterGPS = ref('')
 const scanPaths = ref<ScanPathConfig[]>([])
 const scanPathLoading = ref(false)
 const scanningPathId = ref<string>('')
@@ -642,6 +654,8 @@ const loadSystemTotal = async () => {
 const resetSearch = () => {
   searchQuery.value = ''
   filterAnalyzed.value = ''
+  filterThumbnail.value = ''
+  filterGPS.value = ''
   currentPage.value = 1
   loadPhotos()
 }
@@ -660,7 +674,15 @@ const loadPhotos = async () => {
     }
 
     if (filterAnalyzed.value) {
-      params.analyzed = filterAnalyzed.value === 'true'
+      params.analyzed = filterAnalyzed.value
+    }
+
+    if (filterThumbnail.value) {
+      params.has_thumbnail = filterThumbnail.value
+    }
+
+    if (filterGPS.value) {
+      params.has_gps = filterGPS.value
     }
 
     const res = await photoApi.getList(params)
@@ -928,6 +950,12 @@ const gotoDetail = (photoId: number) => {
   if (filterAnalyzed.value) {
     query.analyzed = filterAnalyzed.value
   }
+  if (filterThumbnail.value) {
+    query.has_thumbnail = filterThumbnail.value
+  }
+  if (filterGPS.value) {
+    query.has_gps = filterGPS.value
+  }
 
   // 保存搜索关键词
   if (searchQuery.value) {
@@ -1030,6 +1058,12 @@ onMounted(() => {
   // 恢复筛选条件
   if (query.analyzed) {
     filterAnalyzed.value = String(query.analyzed)
+  }
+  if (query.has_thumbnail) {
+    filterThumbnail.value = String(query.has_thumbnail)
+  }
+  if (query.has_gps) {
+    filterGPS.value = String(query.has_gps)
   }
 
   // 恢复搜索关键词

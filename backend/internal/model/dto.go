@@ -39,13 +39,15 @@ type CleanupPhotosResponse struct {
 
 // GetPhotosRequest 获取照片列表请求
 type GetPhotosRequest struct {
-	Page     int    `form:"page" binding:"omitempty,min=1"`
-	PageSize int    `form:"page_size" binding:"omitempty,min=1,max=100"`
-	Analyzed *bool  `form:"analyzed"`  // 是否已分析（可选）
-	Location string `form:"location"`  // 位置筛选（可选）
-	Search   string `form:"search"`    // 搜索关键词（可选，搜索路径、设备ID、标签）
-	SortBy   string `form:"sort_by"`   // 排序字段（taken_at/overall_score）
-	SortDesc bool   `form:"sort_desc"` // 是否降序
+	Page         int    `form:"page" binding:"omitempty,min=1"`
+	PageSize     int    `form:"page_size" binding:"omitempty,min=1,max=100"`
+	Analyzed     *bool  `form:"analyzed"`      // 是否已分析（可选）
+	HasThumbnail *bool  `form:"has_thumbnail"` // 是否有缩略图（可选）
+	HasGPS       *bool  `form:"has_gps"`       // 是否有GPS位置（可选）
+	Location     string `form:"location"`      // 位置筛选（可选）
+	Search       string `form:"search"`        // 搜索关键词（可选，搜索路径、设备ID、标签）
+	SortBy       string `form:"sort_by"`       // 排序字段（taken_at/overall_score）
+	SortDesc     bool   `form:"sort_desc"`     // 是否降序
 }
 
 // GetDisplayPhotoRequest 获取展示照片请求
