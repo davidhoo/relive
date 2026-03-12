@@ -4,7 +4,7 @@
 [![Status](https://img.shields.io/badge/Status-Usable-brightgreen)]()
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go)]()
 [![Vue](https://img.shields.io/badge/Vue-3.5+-4FC08D?logo=vue.js)]()
-[![Version](https://img.shields.io/badge/Version-1.0.0-blue)]()
+[![Version](https://img.shields.io/badge/Version-1.0.1-blue)]()
 
 > 通过 AI 分析 NAS 中的照片，在相框设备上以“往年今日”为核心展示回忆；未命中时自动回溯到最接近当天的历史记忆。
 
@@ -244,6 +244,10 @@ make build-analyzer
 - 优化照片筛选、分析与展示体验
 - 照片过滤与排除系统
 - 持续收紧文档与实现的一致性
+
+## 致谢
+
+- [InkTime](https://github.com/dai-hongtao/InkTime) - 墨水屏相框的灵感来源，我们学习和参照了他的想法
 
 ## License
 
