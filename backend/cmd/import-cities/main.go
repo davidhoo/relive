@@ -13,6 +13,7 @@ import (
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/database"
 	"github.com/davidhoo/relive/pkg/logger"
+	"gorm.io/gorm"
 )
 
 // GeoNames cities500.txt 文件格式
@@ -89,12 +90,6 @@ func main() {
 		logger.Fatalf("Failed to migrate cities table: %v", err)
 	}
 
-	// 清空现有数据
-	logger.Info("Clearing existing city data...")
-	if err := db.Exec("DELETE FROM cities").Error; err != nil {
-		logger.Fatalf("Failed to clear cities table: %v", err)
-	}
-
 	// 打开文件
 	file, err := os.Open(*filePath)
 	if err != nil {
@@ -102,20 +97,18 @@ func main() {
 	}
 	defer file.Close()
 
-	logger.Infof("Importing cities from %s...", *filePath)
+	logger.Infof("Parsing cities from %s...", *filePath)
 
+	// 先解析全部数据
 	scanner := bufio.NewScanner(file)
-	var cities []model.City
+	var allCities []model.City
 	totalCount := 0
-	insertedCount := 0
 	skippedCount := 0
 
-	// 逐行读取
 	for scanner.Scan() {
 		line := scanner.Text()
 		totalCount++
 
-		// 解析行
 		city, err := parseLine(line)
 		if err != nil {
 			skippedCount++
@@ -125,31 +118,39 @@ func main() {
 			continue
 		}
 
-		cities = append(cities, *city)
-
-		// 批量插入
-		if len(cities) >= *batchSize {
-			if err := db.Create(&cities).Error; err != nil {
-				logger.Errorf("Failed to insert batch: %v", err)
-			} else {
-				insertedCount += len(cities)
-				logger.Infof("Imported %d cities (total: %d, skipped: %d)", insertedCount, totalCount, skippedCount)
-			}
-			cities = cities[:0] // 清空切片
-		}
-	}
-
-	// 插入剩余的
-	if len(cities) > 0 {
-		if err := db.Create(&cities).Error; err != nil {
-			logger.Errorf("Failed to insert final batch: %v", err)
-		} else {
-			insertedCount += len(cities)
-		}
+		allCities = append(allCities, *city)
 	}
 
 	if err := scanner.Err(); err != nil {
 		logger.Fatalf("Error reading file: %v", err)
+	}
+
+	logger.Infof("Parsed %d cities from %d lines (skipped: %d), importing...", len(allCities), totalCount, skippedCount)
+
+	// 在事务中执行清空和批量插入，确保原子性
+	insertedCount := 0
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		logger.Info("Clearing existing city data...")
+		if err := tx.Exec("DELETE FROM cities").Error; err != nil {
+			return fmt.Errorf("failed to clear cities table: %w", err)
+		}
+
+		for i := 0; i < len(allCities); i += *batchSize {
+			end := i + *batchSize
+			if end > len(allCities) {
+				end = len(allCities)
+			}
+			batch := allCities[i:end]
+			if err := tx.Create(&batch).Error; err != nil {
+				return fmt.Errorf("failed to insert batch at offset %d: %w", i, err)
+			}
+			insertedCount += len(batch)
+			logger.Infof("Imported %d cities...", insertedCount)
+		}
+
+		return nil
+	}); err != nil {
+		logger.Fatalf("Import failed: %v", err)
 	}
 
 	logger.Infof("Import completed!")

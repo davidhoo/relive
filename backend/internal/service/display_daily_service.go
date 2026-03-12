@@ -253,18 +253,17 @@ func (s *displayService) ListDailyBatches(limit int) ([]*model.DailyDisplayBatch
 	}
 	var batches []*model.DailyDisplayBatch
 	err := s.db.
+		Preload("Items", func(db *gorm.DB) *gorm.DB { return db.Order("sequence ASC") }).
+		Preload("Items.Photo").
+		Preload("Items.Assets", func(db *gorm.DB) *gorm.DB { return db.Order("render_profile ASC") }).
 		Order("batch_date DESC").
 		Limit(limit).
 		Find(&batches).Error
 	if err != nil {
 		return nil, err
 	}
-	for idx, batch := range batches {
-		loaded, err := loadDailyBatchByID(s.db, batch.ID)
-		if err != nil {
-			return nil, err
-		}
-		batches[idx] = loaded
+	for _, batch := range batches {
+		batch.BatchDate = normalizeBatchDateString(batch.BatchDate)
 	}
 	return batches, nil
 }
@@ -429,7 +428,6 @@ func loadDailyBatchByID(tx *gorm.DB, batchID uint) (*model.DailyDisplayBatch, er
 	if err != nil {
 		return nil, err
 	}
-	batch.BatchDate = normalizeBatchDateString(batch.BatchDate)
 	batch.BatchDate = normalizeBatchDateString(batch.BatchDate)
 	return &batch, nil
 }
