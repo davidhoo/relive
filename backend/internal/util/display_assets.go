@@ -561,6 +561,12 @@ func quantizeToPalette(img image.Image, profile RenderProfile) []uint8 {
 		img = applyGammaCorrection(img, gamma)
 	}
 
+	// 流水线第二步：预处理增强（仅对照片区域，在抖动前提升细节保留）
+	// Sharpen: 轻度 Unsharp Mask，补偿量化导致的细节丢失
+	// AdjustSigmoid: S 曲线对比度增强，拉开中间调层次
+	img = imaging.Sharpen(img, 0.5)
+	img = imaging.AdjustSigmoid(img, 0.5, 5.0)
+
 	bounds := img.Bounds()
 	width := bounds.Dx()
 	height := bounds.Dy()
@@ -829,6 +835,10 @@ func nearestPaletteIndex(current color.NRGBA, palette []color.NRGBA) int {
 	bestIndex := 0
 	bestDist := math.MaxFloat64
 	for idx, candidate := range palette {
+		// 跳过 Spectra 6 调色板中硬件保留的无效索引 4（占位色）
+		if idx == 4 && len(palette) > 4 {
+			continue
+		}
 		L2, a2, b2 := rgbToLab(candidate)
 		dL, da, db := L1-L2, a1-a2, b1-b2
 		d := dL*dL + da*da + db*db

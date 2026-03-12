@@ -416,7 +416,10 @@ func (a *APIAnalyzer) processLoop() {
 			}
 			if !shouldRetry {
 				logger.Debugf("Photo %d already processed, skipping", task.PhotoID)
-				a.taskManager.StopHeartbeat(task.ID)
+				// 释放任务，通知服务器清除锁并递增重试计数
+				ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
+				a.taskManager.ReleaseTask(ctx, task.ID, "already_processed", "", false)
+				cancel()
 				continue
 			}
 			// 重置状态，允许重试
