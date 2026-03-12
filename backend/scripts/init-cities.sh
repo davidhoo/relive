@@ -1,5 +1,6 @@
 #!/bin/sh
 # 初始化城市数据脚本（Docker 入口点使用）
+set -e
 
 CONFIG_FILE="${CONFIG_FILE:-/app/config.yaml}"
 DB_PATH="${DB_PATH:-/app/data/relive.db}"
