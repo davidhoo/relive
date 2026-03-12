@@ -76,7 +76,8 @@ RUN apk add --no-cache \
     tzdata \
     libstdc++ \
     perl \
-    exiftool
+    exiftool \
+    vips-tools
 
 # 从构建阶段复制后端二进制文件
 COPY --from=backend-builder /app/relive /app/relive

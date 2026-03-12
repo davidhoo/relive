@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
 	_ "image/png" // 支持 PNG 格式
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/disintegration/imaging"
@@ -167,15 +170,78 @@ func OpenImage(filePath string) (image.Image, error) {
 		// goheif 解码失败（可能是扩展名为 .HEIC 但实际是 JPEG 等格式），
 		// fallback 到 imaging 库尝试按实际格式解码
 		fallbackImg, fallbackErr := imaging.Open(filePath)
-		if fallbackErr != nil {
-			// 两种方式都失败，返回原始 goheif 错误（更有诊断价值）
-			return nil, err
+		if fallbackErr == nil {
+			return fallbackImg, nil
 		}
-		return fallbackImg, nil
+		// Go 解码器也失败，尝试外部工具
+		if extImg, extErr := openImageWithExternalTool(filePath); extErr == nil {
+			return extImg, nil
+		}
+		// 全部失败，返回原始 goheif 错误
+		return nil, err
 	}
 
 	// 其他格式使用 imaging 库
-	return imaging.Open(filePath)
+	img, err := imaging.Open(filePath)
+	if err == nil {
+		return img, nil
+	}
+
+	// Go 标准 JPEG 解码器较严格，对非标准 JPEG 可能失败，
+	// fallback 到外部工具（macOS: sips, Linux: vips）
+	if extImg, extErr := openImageWithExternalTool(filePath); extErr == nil {
+		return extImg, nil
+	}
+
+	return nil, err
+}
+
+// openImageWithExternalTool 使用外部工具转换图片为 JPEG 后读取
+func openImageWithExternalTool(filePath string) (image.Image, error) {
+	tmpFile, err := os.CreateTemp("", "relive-convert-*.jpg")
+	if err != nil {
+		return nil, err
+	}
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
+
+	if err := convertImageWithExternalTool(filePath, tmpPath); err != nil {
+		return nil, err
+	}
+
+	return imaging.Open(tmpPath)
+}
+
+// convertImageWithExternalTool 使用系统可用的外部工具将图片转换为 JPEG
+func convertImageWithExternalTool(srcPath, dstPath string) error {
+	if runtime.GOOS == "darwin" {
+		// macOS: 使用 sips
+		if _, err := exec.LookPath("sips"); err == nil {
+			cmd := exec.Command("sips", "-s", "format", "jpeg", "-s", "formatOptions", "85", srcPath, "--out", dstPath)
+			if err := cmd.Run(); err == nil {
+				return nil
+			}
+		}
+	}
+
+	// Linux/Docker: 使用 vipsthumbnail（如果可用）
+	if _, err := exec.LookPath("vipsthumbnail"); err == nil {
+		cmd := exec.Command("vipsthumbnail", srcPath, "-o", dstPath+"[Q=85]")
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+	}
+
+	// fallback: ImageMagick convert
+	if _, err := exec.LookPath("convert"); err == nil {
+		cmd := exec.Command("convert", srcPath, "-quality", "85", dstPath)
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("no external image conversion tool available (tried sips, vipsthumbnail, convert)")
 }
 
 // openHEIC 使用 goheif 解码 HEIC 文件并应用 HEIF 变换
