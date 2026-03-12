@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/logger"
+	"github.com/stretchr/testify/assert"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -161,4 +163,19 @@ func TestSystemHandlerResetDatabaseState(t *testing.T) {
 	if !user.IsFirstLogin {
 		t.Fatal("expected reset user to require first login")
 	}
+}
+
+func TestSystemHandler_Health_Success(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	sqlDB, _ := db.DB()
+	defer sqlDB.Close()
+
+	h := NewSystemHandler(db, &config.Config{}, nil)
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/system/health", nil, nil, h.Health)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	assert.True(t, resp.Success)
 }

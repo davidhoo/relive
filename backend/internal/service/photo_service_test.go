@@ -11,8 +11,11 @@ import (
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/pkg/config"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 func newAutoScanTestService(t *testing.T, rootPath string) (*photoService, ConfigService) {
@@ -332,4 +335,167 @@ func boolPtr(value bool) *bool {
 
 func ptrTime(value time.Time) *time.Time {
 	return &value
+}
+
+// --- Pure-logic tests (no filesystem) ---
+
+func newPhotoServicePure(t *testing.T) (PhotoService, repository.PhotoRepository) {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: gormlogger.Discard})
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	require.NoError(t, db.AutoMigrate(&model.Photo{}, &model.ScanJob{}, &model.AppConfig{}))
+	t.Cleanup(func() {
+		sqlDB, _ := db.DB()
+		if sqlDB != nil {
+			sqlDB.Close()
+		}
+	})
+	photoRepo := repository.NewPhotoRepository(db)
+	scanJobRepo := repository.NewScanJobRepository(db)
+	cfg := &config.Config{
+		Photos: config.PhotosConfig{ThumbnailPath: t.TempDir()},
+	}
+	svc := NewPhotoService(photoRepo, scanJobRepo, cfg, nil, nil, nil, nil)
+	return svc, photoRepo
+}
+
+func TestPhotoService_CountAll_Empty(t *testing.T) {
+	svc, _ := newPhotoServicePure(t)
+	count, err := svc.CountAll()
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), count)
+}
+
+func TestPhotoService_CountAll_WithPhotos(t *testing.T) {
+	svc, repo := newPhotoServicePure(t)
+	repo.Create(&model.Photo{FilePath: "/a.jpg", FileHash: "h1"})
+	repo.Create(&model.Photo{FilePath: "/b.jpg", FileHash: "h2"})
+
+	count, err := svc.CountAll()
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), count)
+}
+
+func TestPhotoService_CountAnalyzed(t *testing.T) {
+	svc, repo := newPhotoServicePure(t)
+	now := time.Now()
+	repo.Create(&model.Photo{FilePath: "/a.jpg", FileHash: "h1", AIAnalyzed: true, AnalyzedAt: &now})
+	repo.Create(&model.Photo{FilePath: "/b.jpg", FileHash: "h2", AIAnalyzed: false})
+
+	count, err := svc.CountAnalyzed()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), count)
+}
+
+func TestPhotoService_CountUnanalyzed(t *testing.T) {
+	svc, repo := newPhotoServicePure(t)
+	now := time.Now()
+	repo.Create(&model.Photo{FilePath: "/a.jpg", FileHash: "h1", AIAnalyzed: true, AnalyzedAt: &now})
+	repo.Create(&model.Photo{FilePath: "/b.jpg", FileHash: "h2", AIAnalyzed: false})
+
+	count, err := svc.CountUnanalyzed()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), count)
+}
+
+func TestPhotoService_GetPhotoByID_Found(t *testing.T) {
+	svc, repo := newPhotoServicePure(t)
+	repo.Create(&model.Photo{FilePath: "/test.jpg", FileHash: "h1"})
+
+	photo, err := svc.GetPhotoByID(1)
+	require.NoError(t, err)
+	assert.Equal(t, "/test.jpg", photo.FilePath)
+}
+
+func TestPhotoService_GetPhotoByID_NotFound(t *testing.T) {
+	svc, _ := newPhotoServicePure(t)
+	_, err := svc.GetPhotoByID(999)
+	require.Error(t, err)
+}
+
+func TestPhotoService_GetCategories(t *testing.T) {
+	svc, repo := newPhotoServicePure(t)
+	repo.Create(&model.Photo{FilePath: "/a.jpg", FileHash: "h1", MainCategory: "风景"})
+	repo.Create(&model.Photo{FilePath: "/b.jpg", FileHash: "h2", MainCategory: "人物"})
+	repo.Create(&model.Photo{FilePath: "/c.jpg", FileHash: "h3", MainCategory: "风景"})
+
+	categories, err := svc.GetCategories()
+	require.NoError(t, err)
+	assert.Contains(t, categories, "风景")
+	assert.Contains(t, categories, "人物")
+}
+
+func TestPhotoService_GetTags(t *testing.T) {
+	svc, repo := newPhotoServicePure(t)
+	repo.Create(&model.Photo{FilePath: "/a.jpg", FileHash: "h1", Tags: "nature,sky"})
+	repo.Create(&model.Photo{FilePath: "/b.jpg", FileHash: "h2", Tags: "city,night"})
+
+	tags, err := svc.GetTags()
+	require.NoError(t, err)
+	assert.NotEmpty(t, tags)
+}
+
+func TestPhotoService_GetPathDerivedStatus(t *testing.T) {
+	svc, repo := newPhotoServicePure(t)
+	lat, lon := 39.9, 116.4
+	repo.Create(&model.Photo{
+		FilePath: "/photos/a.jpg", FileHash: "h1",
+		AIAnalyzed: true, ThumbnailStatus: "ready",
+		GPSLatitude: &lat, GPSLongitude: &lon, GeocodeStatus: "ready",
+	})
+	repo.Create(&model.Photo{
+		FilePath: "/photos/b.jpg", FileHash: "h2",
+		AIAnalyzed: false, ThumbnailStatus: "pending",
+	})
+
+	status, err := svc.GetPathDerivedStatus("/photos/")
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), status.PhotoTotal)
+	assert.Equal(t, int64(1), status.AnalyzedTotal)
+	assert.Equal(t, int64(1), status.ThumbnailReady)
+	assert.Equal(t, int64(1), status.ThumbnailPending)
+	assert.Equal(t, int64(1), status.GeocodeTotal)
+	assert.Equal(t, int64(1), status.GeocodeReady)
+}
+
+func TestPhotoService_DeletePhotosByPathPrefix(t *testing.T) {
+	svc, repo := newPhotoServicePure(t)
+	repo.Create(&model.Photo{FilePath: "/photos/a.jpg", FileHash: "h1"})
+	repo.Create(&model.Photo{FilePath: "/photos/b.jpg", FileHash: "h2"})
+	repo.Create(&model.Photo{FilePath: "/other/c.jpg", FileHash: "h3"})
+
+	count, err := svc.DeletePhotosByPathPrefix("/photos/")
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), count)
+
+	total, _ := svc.CountAll()
+	assert.Equal(t, int64(1), total)
+}
+
+func TestPhotoService_GetPhotosByPathPrefix(t *testing.T) {
+	svc, repo := newPhotoServicePure(t)
+	repo.Create(&model.Photo{FilePath: "/photos/a.jpg", FileHash: "h1"})
+	repo.Create(&model.Photo{FilePath: "/photos/b.jpg", FileHash: "h2"})
+	repo.Create(&model.Photo{FilePath: "/other/c.jpg", FileHash: "h3"})
+
+	photos, err := svc.GetPhotosByPathPrefix("/photos/")
+	require.NoError(t, err)
+	assert.Len(t, photos, 2)
+}
+
+func TestPhotoService_CountPhotosByPathPrefix(t *testing.T) {
+	svc, repo := newPhotoServicePure(t)
+	repo.Create(&model.Photo{FilePath: "/photos/a.jpg", FileHash: "h1"})
+	repo.Create(&model.Photo{FilePath: "/other/c.jpg", FileHash: "h2"})
+
+	count, err := svc.CountPhotosByPathPrefix("/photos/")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), count)
+}
+
+func TestPhotoService_GetScanTask_NilWhenNoActive(t *testing.T) {
+	svc, _ := newPhotoServicePure(t)
+	assert.Nil(t, svc.GetScanTask())
 }

@@ -1,0 +1,100 @@
+package repository
+
+import (
+	"testing"
+	"time"
+
+	"github.com/davidhoo/relive/internal/model"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestGeocodeJobRepo_Create(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewGeocodeJobRepository(db)
+
+	job := &model.GeocodeJob{PhotoID: 1, Status: "pending", Source: "scan", QueuedAt: time.Now()}
+	require.NoError(t, repo.Create(job))
+	assert.NotZero(t, job.ID)
+}
+
+func TestGeocodeJobRepo_GetActiveByPhotoID(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewGeocodeJobRepository(db)
+
+	now := time.Now()
+	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 1, Status: "pending", Source: "scan", QueuedAt: now}))
+
+	got, err := repo.GetActiveByPhotoID(1)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, uint(1), got.PhotoID)
+}
+
+func TestGeocodeJobRepo_GetActiveByPhotoID_NotFound(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewGeocodeJobRepository(db)
+
+	got, err := repo.GetActiveByPhotoID(999)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+func TestGeocodeJobRepo_ClaimNextJob(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewGeocodeJobRepository(db)
+
+	now := time.Now()
+	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 1, Status: "pending", Source: "scan", QueuedAt: now}))
+
+	claimed, err := repo.ClaimNextJob()
+	require.NoError(t, err)
+	require.NotNil(t, claimed)
+	assert.Equal(t, "processing", claimed.Status)
+}
+
+func TestGeocodeJobRepo_ClaimNextJob_Empty(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewGeocodeJobRepository(db)
+
+	claimed, err := repo.ClaimNextJob()
+	require.NoError(t, err)
+	assert.Nil(t, claimed)
+}
+
+func TestGeocodeJobRepo_CancelPendingJobs(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewGeocodeJobRepository(db)
+
+	now := time.Now()
+	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 1, Status: "pending", Source: "scan", QueuedAt: now}))
+	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 2, Status: "queued", Source: "scan", QueuedAt: now}))
+	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 3, Status: "processing", Source: "scan", QueuedAt: now}))
+
+	count, err := repo.CancelPendingJobs()
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), count)
+}
+
+func TestGeocodeJobRepo_GetStats(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewGeocodeJobRepository(db)
+
+	now := time.Now()
+	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 1, Status: "pending", Source: "scan", QueuedAt: now}))
+	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 2, Status: "completed", Source: "scan", QueuedAt: now}))
+	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 3, Status: "completed", Source: "scan", QueuedAt: now}))
+
+	stats, err := repo.GetStats()
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), stats.Total)
+	assert.Equal(t, int64(1), stats.Pending)
+	assert.Equal(t, int64(2), stats.Completed)
+}
