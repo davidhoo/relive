@@ -158,6 +158,27 @@ func (c *Checkpoint) MarkFailed(photoID uint, errorMsg string) error {
 	return nil
 }
 
+// GetStatus 获取照片的 checkpoint 状态
+// 返回空字符串表示无记录
+func (c *Checkpoint) GetStatus(photoID uint) (string, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	var status string
+	err := c.db.QueryRow(
+		"SELECT status FROM checkpoint WHERE photo_id = ?",
+		photoID,
+	).Scan(&status)
+
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get status: %w", err)
+	}
+	return status, nil
+}
+
 // IsProcessed 检查照片是否已处理（analyzed, submitted 或 failed）
 // 只要开始分析或完成都算已处理，避免重复获取任务
 func (c *Checkpoint) IsProcessed(photoID uint) (bool, error) {

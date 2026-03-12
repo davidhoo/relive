@@ -58,9 +58,12 @@ func NewTaskManager(client *APIClient, analyzerID string, batchSize int) *TaskMa
 	}
 }
 
-// FetchTasks 获取新任务
-func (tm *TaskManager) FetchTasks(ctx context.Context) ([]model.AnalysisTask, error) {
-	resp, err := tm.client.GetTasks(ctx, tm.batchSize, tm.analyzerID)
+// FetchTasks 获取新任务，limit 指定本次获取数量
+func (tm *TaskManager) FetchTasks(ctx context.Context, limit int) ([]model.AnalysisTask, error) {
+	if limit <= 0 {
+		limit = tm.batchSize
+	}
+	resp, err := tm.client.GetTasks(ctx, limit, tm.analyzerID)
 	if err != nil {
 		return nil, fmt.Errorf("fetch tasks: %w", err)
 	}
@@ -75,10 +78,7 @@ func (tm *TaskManager) FetchTasks(ctx context.Context) ([]model.AnalysisTask, er
 
 	logger.Infof("Fetched %d tasks (%d remaining in queue)", len(resp.Tasks), resp.TotalRemaining)
 
-	// 为每个任务启动心跳
-	for _, task := range resp.Tasks {
-		tm.StartHeartbeat(task.ID, task.LockExpiresAt)
-	}
+	// 心跳在 processLoop 中按需启动，避免对即将跳过的任务创建无用 goroutine
 
 	return resp.Tasks, nil
 }

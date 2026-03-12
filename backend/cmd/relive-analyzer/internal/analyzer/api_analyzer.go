@@ -254,8 +254,9 @@ func (a *APIAnalyzer) Run() error {
 	return nil
 }
 
-// restoreUnsubmitted 恢复检查点中 analyzed 状态的结果到缓冲区
-// 用于程序崩溃后重启时，重新提交未成功提交的结果
+// restoreUnsubmitted 清理检查点中 analyzed 状态的过期记录
+// 这些记录表示上次运行中分析完成但提交未成功（崩溃、网络失败等）
+// 清除这些记录后，服务器会重新分配任务，analyzer 会重新分析
 func (a *APIAnalyzer) restoreUnsubmitted() error {
 	photoIDs, err := a.checkpoint.GetAnalyzed()
 	if err != nil {
@@ -266,13 +267,14 @@ func (a *APIAnalyzer) restoreUnsubmitted() error {
 		return nil
 	}
 
-	logger.Infof("Found %d unsubmitted results from previous run, will retry submission", len(photoIDs))
+	// 清除这些过期的 analyzed 记录，让服务器重新分配任务进行分析
+	for _, photoID := range photoIDs {
+		if err := a.checkpoint.ResetFailed(photoID); err != nil {
+			logger.Warnf("Failed to reset stale checkpoint for photo %d: %v", photoID, err)
+		}
+	}
 
-	// 注意：这里我们只记录了 photoID，没有记录完整的 AnalysisResult
-	// 这是因为结果已经保存在 buffer.json 中了（通过 Persist）
-	// 如果 buffer.json 丢失了，这些任务将永远处于 analyzed 状态但不会提交
-	// 这种情况下，下次获取任务时会跳过（IsProcessed 返回 true），需要手动清理
-
+	logger.Infof("Cleared %d stale 'analyzed' checkpoint entries from previous run, will re-process when server assigns", len(photoIDs))
 	return nil
 }
 
@@ -367,16 +369,25 @@ func (a *APIAnalyzer) fetchLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			// 检查任务队列
-			if a.taskManager.TaskCount() < a.config.Analyzer.FetchLimit {
-				ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
-				_, err := a.taskManager.FetchTasks(ctx)
-				cancel()
+			// 计算需要补充的数量：目标是保持本地队列 = workers 数量
+			// 避免取太多任务在本地排队空等（浪费服务器锁时间）
+			current := a.taskManager.TaskCount()
+			target := a.config.Analyzer.Workers
+			if target < a.config.Analyzer.FetchLimit {
+				target = a.config.Analyzer.FetchLimit
+			}
+			need := target - current
+			if need <= 0 {
+				continue
+			}
 
-				if err != nil {
-					if err.Error() != "no tasks available" {
-						logger.Warnf("Failed to fetch tasks: %v", err)
-					}
+			ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+			_, err := a.taskManager.FetchTasks(ctx, need)
+			cancel()
+
+			if err != nil {
+				if err.Error() != "no tasks available" {
+					logger.Warnf("Failed to fetch tasks: %v", err)
 				}
 			}
 
@@ -403,29 +414,46 @@ func (a *APIAnalyzer) processLoop() {
 			continue
 		}
 
-		// 检查是否已经处理过（但如果是服务端新分配的任务，重置状态）
+		// 检查本地 checkpoint 状态
+		// 核心原则：服务器是 source of truth。如果服务器分配了任务（ai_analyzed=false），
+		// 说明服务器没有收到分析结果，本地 checkpoint 的 analyzed/submitted 状态是过期的。
 		processed, err := a.checkpoint.IsProcessed(task.PhotoID)
 		if err != nil {
 			logger.Errorf("Failed to check checkpoint: %v", err)
 		}
 		if processed {
-			// 如果是 failed 状态，允许重试；其他状态跳过
-			shouldRetry, err := a.checkpoint.ShouldRetry(task.PhotoID, 3)
-			if err != nil {
-				logger.Warnf("Failed to check retry status for photo %d: %v", task.PhotoID, err)
+			status, _ := a.checkpoint.GetStatus(task.PhotoID)
+			switch status {
+			case string(analyzerCache.StatusAnalyzed), string(analyzerCache.StatusSubmitted), "success":
+				// 本地认为已分析/已提交，但服务器仍然分配了任务，说明提交未成功
+				// 清除本地过期记录，重新分析
+				logger.Infof("Photo %d has stale checkpoint status '%s', server reassigned, will re-process", task.PhotoID, status)
+				a.checkpoint.ResetFailed(task.PhotoID)
+			case string(analyzerCache.StatusFailed):
+				// 本地失败状态，检查是否可以重试
+				shouldRetry, err := a.checkpoint.ShouldRetry(task.PhotoID, 3)
+				if err != nil {
+					logger.Warnf("Failed to check retry status for photo %d: %v", task.PhotoID, err)
+				}
+				if !shouldRetry {
+					logger.Debugf("Photo %d failed too many times locally, skipping", task.PhotoID)
+					// 释放任务，但不递增服务器 retry_count（retryLater=true）
+					ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
+					a.taskManager.ReleaseTask(ctx, task.ID, "local_retry_exhausted", "", true)
+					cancel()
+					continue
+				}
+				logger.Infof("Photo %d will be retried, resetting checkpoint status", task.PhotoID)
+				a.checkpoint.ResetFailed(task.PhotoID)
+			default:
+				// 未知状态，清除后重新处理
+				logger.Warnf("Photo %d has unknown checkpoint status '%s', resetting", task.PhotoID, status)
+				a.checkpoint.ResetFailed(task.PhotoID)
 			}
-			if !shouldRetry {
-				logger.Debugf("Photo %d already processed, skipping", task.PhotoID)
-				// 释放任务，通知服务器清除锁并递增重试计数
-				ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
-				a.taskManager.ReleaseTask(ctx, task.ID, "already_processed", "", false)
-				cancel()
-				continue
-			}
-			// 重置状态，允许重试
-			logger.Infof("Photo %d will be retried, resetting checkpoint status", task.PhotoID)
-			a.checkpoint.ResetFailed(task.PhotoID)
 		}
+
+		// 通过 checkpoint 检查后才启动心跳（避免对即将跳过的任务创建无用 goroutine）
+		a.taskManager.StartHeartbeat(task.ID, task.LockExpiresAt)
 
 		// 提交到工作池
 		t := task // 捕获循环变量
