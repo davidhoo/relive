@@ -805,7 +805,7 @@ func (h *PhotoHandler) generateDevicePreviewFile(photo *model.Photo, profileName
 
 	title, subtitle := buildPhotoDisplayText(photo)
 	cacheKey := fmt.Sprintf(
-		"device-preview:v1:%s:%d:%d:%d:%s:%s:%s",
+		"device-preview:v2:%s:%d:%d:%d:%s:%s:%s",
 		photo.FilePath,
 		fileInfo.Size(),
 		fileInfo.ModTime().UnixNano(),
