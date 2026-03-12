@@ -30,8 +30,9 @@ type GeocodeTaskService interface {
 	GetStats() (*model.GeocodeStatsResponse, error)
 	GetBackgroundLogs() []string
 	RepairLegacyStatus() (int64, error)
-	EnqueuePhoto(photoID uint, source string, priority int) error
+	EnqueuePhoto(photoID uint, source string, priority int, force bool) error
 	EnqueueByPath(path string, source string, priority int) (int, error)
+	GeocodePhoto(photoID uint) error
 	HandleShutdown() error
 }
 
@@ -146,12 +147,12 @@ func (s *geocodeTaskService) HandleShutdown() error {
 	return s.StopBackground()
 }
 
-func (s *geocodeTaskService) EnqueuePhoto(photoID uint, source string, priority int) error {
+func (s *geocodeTaskService) EnqueuePhoto(photoID uint, source string, priority int, force bool) error {
 	photo, err := s.photoRepo.GetByID(photoID)
 	if err != nil {
 		return err
 	}
-	return s.enqueuePhotoModel(photo, source, priority)
+	return s.enqueuePhotoModel(photo, source, priority, force)
 }
 
 func (s *geocodeTaskService) EnqueueByPath(path string, source string, priority int) (int, error) {
@@ -161,7 +162,7 @@ func (s *geocodeTaskService) EnqueueByPath(path string, source string, priority 
 	}
 	count := 0
 	for i := range photos {
-		if err := s.enqueuePhotoModel(photos[i], source, priority); err != nil {
+		if err := s.enqueuePhotoModel(photos[i], source, priority, false); err != nil {
 			logger.Warnf("enqueue geocode by path failed for photo %d: %v", photos[i].ID, err)
 			continue
 		}
@@ -170,7 +171,47 @@ func (s *geocodeTaskService) EnqueueByPath(path string, source string, priority 
 	return count, nil
 }
 
-func (s *geocodeTaskService) enqueuePhotoModel(photo *model.Photo, source string, priority int) error {
+// GeocodePhoto 直接为单张照片执行 GPS 逆地理编码（同步执行，不经过队列）
+func (s *geocodeTaskService) GeocodePhoto(photoID uint) error {
+	photo, err := s.photoRepo.GetByID(photoID)
+	if err != nil {
+		return err
+	}
+	if photo == nil {
+		return fmt.Errorf("photo %d not found", photoID)
+	}
+	if photo.GPSLatitude == nil || photo.GPSLongitude == nil {
+		return fmt.Errorf("照片没有 GPS 坐标")
+	}
+	if *photo.GPSLatitude == 0 && *photo.GPSLongitude == 0 {
+		return fmt.Errorf("GPS 坐标无效 (0, 0)")
+	}
+
+	loc, err := s.geocodeService.ReverseGeocode(*photo.GPSLatitude, *photo.GPSLongitude)
+	now := time.Now()
+	if err != nil {
+		_ = s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+			"geocode_status": "failed",
+		}).Error
+		return fmt.Errorf("GPS 解析失败: %w", err)
+	}
+
+	provider := ""
+	location := ""
+	if loc != nil {
+		provider = loc.Provider
+		location = loc.FormatDisplay()
+	}
+
+	return s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+		"location":         location,
+		"geocode_status":   "ready",
+		"geocode_provider": provider,
+		"geocoded_at":      &now,
+	}).Error
+}
+
+func (s *geocodeTaskService) enqueuePhotoModel(photo *model.Photo, source string, priority int, force bool) error {
 	if photo == nil {
 		return fmt.Errorf("photo is nil")
 	}
@@ -187,7 +228,7 @@ func (s *geocodeTaskService) enqueuePhotoModel(photo *model.Photo, source string
 	if priority <= 0 {
 		priority = geocodePriorityManual
 	}
-	if strings.TrimSpace(photo.Location) != "" && (photo.GeocodeStatus == "ready" || photo.GeocodeStatus == "" || photo.GeocodeStatus == "none") {
+	if !force && strings.TrimSpace(photo.Location) != "" && (photo.GeocodeStatus == "ready" || photo.GeocodeStatus == "" || photo.GeocodeStatus == "none") {
 		now := time.Now()
 		return s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
 			"geocode_status": "ready",
@@ -360,7 +401,7 @@ func (s *geocodeTaskService) seedPendingJobs() error {
 		Where("(geocode_status != ? OR geocode_status IS NULL)", "ready").
 		FindInBatches(&photos, 200, func(tx *gorm.DB, batch int) error {
 			for i := range photos {
-				if err := s.enqueuePhotoModel(&photos[i], geocodeSourceManual, geocodePriorityManual); err != nil {
+				if err := s.enqueuePhotoModel(&photos[i], geocodeSourceManual, geocodePriorityManual, false); err != nil {
 					if !isSQLiteLockError(err) {
 						logger.Warnf("seed geocode job failed for photo %d: %v", photos[i].ID, err)
 					}

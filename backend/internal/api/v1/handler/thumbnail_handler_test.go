@@ -50,7 +50,7 @@ func (s *stubThumbnailService) GetBackgroundLogs() []string {
 	}
 	return nil
 }
-func (s *stubThumbnailService) EnqueuePhoto(photoID uint, source string, priority int) error {
+func (s *stubThumbnailService) EnqueuePhoto(photoID uint, source string, priority int, force bool) error {
 	if s.enqueuePhotoFunc != nil {
 		return s.enqueuePhotoFunc(photoID, source, priority)
 	}
@@ -63,6 +63,7 @@ func (s *stubThumbnailService) EnqueueByPath(path string, source string, priorit
 	return 0, nil
 }
 func (s *stubThumbnailService) HandleShutdown() error { return nil }
+func (s *stubThumbnailService) GeneratePhoto(photoID uint, force bool) error { return nil }
 
 func TestThumbnailHandler_StartBackground_Success(t *testing.T) {
 	h := NewThumbnailHandler(&stubThumbnailService{})

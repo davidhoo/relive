@@ -7,7 +7,13 @@
             <el-icon><ArrowLeft /></el-icon>
             返回
           </el-button>
-          <div>
+          <div class="header-actions">
+            <el-button @click="handleThumbnail" :loading="thumbnailing">
+              {{ thumbnailing ? '生成中...' : (photo?.thumbnail_status === 'ready' ? '重新生成缩略图' : '生成缩略图') }}
+            </el-button>
+            <el-button @click="handleGeocode" :loading="geocoding" :disabled="!photo?.gps_latitude || !photo?.gps_longitude">
+              {{ geocoding ? '解析中...' : (photo?.location ? '重新解析 GPS' : '解析 GPS') }}
+            </el-button>
             <el-tooltip
               content="需要先配置 AI Provider 才能使用分析功能"
               placement="left"
@@ -154,12 +160,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, InfoFilled } from '@element-plus/icons-vue'
 import { photoApi } from '@/api/photo'
 import { aiApi } from '@/api/ai'
+import { geocodeApi } from '@/api/geocode'
+import { thumbnailApi } from '@/api/thumbnail'
 import type { Photo } from '@/types/photo'
 import dayjs from 'dayjs'
 import { useUserStore } from '@/stores/user'
@@ -171,6 +179,23 @@ const userStore = useUserStore()
 const photo = ref<Photo | null>(null)
 const loading = ref(false)
 const analyzing = ref(false)
+const geocoding = ref(false)
+const thumbnailing = ref(false)
+
+// 统一管理所有轮询定时器，离开页面时清理
+const activeTimers: ReturnType<typeof setInterval | typeof setTimeout>[] = []
+const addTimer = (id: ReturnType<typeof setInterval | typeof setTimeout>) => {
+  activeTimers.push(id)
+  return id
+}
+const clearAllTimers = () => {
+  activeTimers.forEach(id => clearInterval(id as any))
+  activeTimers.length = 0
+}
+
+onBeforeUnmount(() => {
+  clearAllTimers()
+})
 
 // 获取照片缩略图 URL
 const getPhotoThumbnailUrl = (photoId: number, version?: string) => {
@@ -260,6 +285,39 @@ const loadPhoto = async () => {
   }
 }
 
+// GPS 解析
+const handleGeocode = async () => {
+  if (!photo.value) return
+
+  try {
+    geocoding.value = true
+    await geocodeApi.geocode(photo.value.id)
+    await loadPhoto()
+    ElMessage.success('GPS 解析完成')
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || error.message || 'GPS 解析失败')
+  } finally {
+    geocoding.value = false
+  }
+}
+
+// 生成缩略图
+const handleThumbnail = async () => {
+  if (!photo.value) return
+
+  try {
+    thumbnailing.value = true
+    const isRegenerate = photo.value.thumbnail_status === 'ready'
+    await thumbnailApi.generate(photo.value.id, isRegenerate)
+    await loadPhoto()
+    ElMessage.success('缩略图生成完成')
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || error.message || '缩略图生成失败')
+  } finally {
+    thumbnailing.value = false
+  }
+}
+
 // AI 分析/重新分析
 const handleAnalyze = async () => {
   if (!photo.value) return
@@ -281,7 +339,7 @@ const handleAnalyze = async () => {
     const lastAnalyzedAt = photo.value.analyzed_at
 
     // 轮询结果
-    const timer = setInterval(async () => {
+    const timer = addTimer(setInterval(async () => {
       await loadPhoto()
       // 首次分析：检测 ai_analyzed 变为 true
       // 重新分析：检测 analyzed_at 时间变化
@@ -294,13 +352,13 @@ const handleAnalyze = async () => {
         analyzing.value = false
         ElMessage.success('分析完成')
       }
-    }, 2000)
+    }, 2000))
 
     // 60秒超时（重新分析可能需要更长时间）
-    setTimeout(() => {
+    addTimer(setTimeout(() => {
       clearInterval(timer)
       analyzing.value = false
-    }, 60000)
+    }, 60000))
   } catch (error: any) {
     analyzing.value = false
     // 特殊处理 AI 服务未配置的情况
@@ -361,6 +419,11 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
 }
 
 h3,

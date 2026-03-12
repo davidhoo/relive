@@ -65,7 +65,7 @@ func (h *GeocodeHandler) Enqueue(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: err.Error()}})
 		return
 	}
-	if err := h.service.EnqueuePhoto(req.PhotoID, "manual", 80); err != nil {
+	if err := h.service.EnqueuePhoto(req.PhotoID, "manual", 80, req.Force); err != nil {
 		c.JSON(http.StatusInternalServerError, model.Response{Success: false, Error: &model.ErrorInfo{Code: "ENQUEUE_FAILED", Message: err.Error()}})
 		return
 	}
@@ -84,4 +84,17 @@ func (h *GeocodeHandler) EnqueueByPath(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, model.Response{Success: true, Message: "已加入 GPS 逆地理编码队列", Data: gin.H{"count": count}})
+}
+
+func (h *GeocodeHandler) Geocode(c *gin.Context) {
+	var req model.GeocodeEnqueueRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: err.Error()}})
+		return
+	}
+	if err := h.service.GeocodePhoto(req.PhotoID); err != nil {
+		c.JSON(http.StatusInternalServerError, model.Response{Success: false, Error: &model.ErrorInfo{Code: "GEOCODE_FAILED", Message: err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "GPS 解析完成"})
 }

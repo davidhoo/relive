@@ -374,6 +374,7 @@ type ThumbnailStatsResponse struct {
 
 type ThumbnailEnqueueRequest struct {
 	PhotoID uint `json:"photo_id" binding:"required"`
+	Force   bool `json:"force"`
 }
 
 type ThumbnailBatchEnqueueRequest struct {
@@ -400,6 +401,7 @@ type GeocodeStatsResponse struct {
 
 type GeocodeEnqueueRequest struct {
 	PhotoID uint `json:"photo_id" binding:"required"`
+	Force   bool `json:"force"`
 }
 
 type GeocodeBatchEnqueueRequest struct {

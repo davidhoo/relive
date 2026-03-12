@@ -1244,7 +1244,7 @@ func (s *photoService) enqueueGeocodeForPhoto(photo *model.Photo, source string,
 	if s.geocodeTaskService == nil || photo == nil || photo.ID == 0 {
 		return
 	}
-	if err := s.geocodeTaskService.EnqueuePhoto(photo.ID, source, priority); err != nil {
+	if err := s.geocodeTaskService.EnqueuePhoto(photo.ID, source, priority, false); err != nil {
 		logger.Warnf("enqueue geocode failed for photo %d: %v", photo.ID, err)
 	}
 }
@@ -1253,7 +1253,7 @@ func (s *photoService) enqueueThumbnailForPhoto(photo *model.Photo, source strin
 	if s.thumbnailService == nil || photo == nil || photo.ID == 0 {
 		return
 	}
-	if err := s.thumbnailService.EnqueuePhoto(photo.ID, source, priority); err != nil {
+	if err := s.thumbnailService.EnqueuePhoto(photo.ID, source, priority, false); err != nil {
 		logger.Warnf("enqueue thumbnail failed for photo %d: %v", photo.ID, err)
 	}
 }

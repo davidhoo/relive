@@ -180,6 +180,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				thumbnails.GET("/stats", handlers.Thumbnail.GetStats)
 				thumbnails.POST("/enqueue", handlers.Thumbnail.Enqueue)
 				thumbnails.POST("/enqueue-by-path", handlers.Thumbnail.EnqueueByPath)
+				thumbnails.POST("/generate", handlers.Thumbnail.Generate)
 			}
 
 			geocode := authorized.Group("/geocode")
@@ -192,6 +193,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				geocode.POST("/repair-legacy-status", handlers.Geocode.RepairLegacyStatus)
 				geocode.POST("/enqueue", handlers.Geocode.Enqueue)
 				geocode.POST("/enqueue-by-path", handlers.Geocode.EnqueueByPath)
+				geocode.POST("/geocode", handlers.Geocode.Geocode)
 			}
 
 			// AI 分析相关

@@ -31,8 +31,9 @@ type ThumbnailService interface {
 	GetTaskStatus() *model.ThumbnailTask
 	GetStats() (*model.ThumbnailStatsResponse, error)
 	GetBackgroundLogs() []string
-	EnqueuePhoto(photoID uint, source string, priority int) error
+	EnqueuePhoto(photoID uint, source string, priority int, force bool) error
 	EnqueueByPath(path string, source string, priority int) (int, error)
+	GeneratePhoto(photoID uint, force bool) error
 	HandleShutdown() error
 }
 
@@ -143,12 +144,12 @@ func (s *thumbnailService) HandleShutdown() error {
 	return s.StopBackground()
 }
 
-func (s *thumbnailService) EnqueuePhoto(photoID uint, source string, priority int) error {
+func (s *thumbnailService) EnqueuePhoto(photoID uint, source string, priority int, force bool) error {
 	photo, err := s.photoRepo.GetByID(photoID)
 	if err != nil {
 		return err
 	}
-	return s.enqueuePhotoModel(photo, source, priority)
+	return s.enqueuePhotoModel(photo, source, priority, force)
 }
 
 func (s *thumbnailService) EnqueueByPath(path string, source string, priority int) (int, error) {
@@ -158,7 +159,7 @@ func (s *thumbnailService) EnqueueByPath(path string, source string, priority in
 	}
 	count := 0
 	for _, photo := range photos {
-		if err := s.enqueuePhotoModel(photo, source, priority); err != nil {
+		if err := s.enqueuePhotoModel(photo, source, priority, false); err != nil {
 			logger.Warnf("enqueue thumbnail by path failed for photo %d: %v", photo.ID, err)
 			continue
 		}
@@ -167,7 +168,59 @@ func (s *thumbnailService) EnqueueByPath(path string, source string, priority in
 	return count, nil
 }
 
-func (s *thumbnailService) enqueuePhotoModel(photo *model.Photo, source string, priority int) error {
+// GeneratePhoto 直接为单张照片生成缩略图（同步执行，不经过队列）
+func (s *thumbnailService) GeneratePhoto(photoID uint, force bool) error {
+	photo, err := s.photoRepo.GetByID(photoID)
+	if err != nil {
+		return err
+	}
+	if photo == nil {
+		return fmt.Errorf("photo %d not found", photoID)
+	}
+
+	thumbnailPath := photo.ThumbnailPath
+	if thumbnailPath == "" {
+		thumbnailPath = util.GenerateDerivedImagePath(photo.FilePath)
+	}
+
+	// 非强制模式下，如果文件已存在则直接标记 ready
+	if !force {
+		fullPath := filepath.Join(s.config.Photos.ThumbnailPath, thumbnailPath)
+		if _, err := os.Stat(fullPath); err == nil {
+			now := time.Now()
+			return s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+				"thumbnail_path":         thumbnailPath,
+				"thumbnail_status":       "ready",
+				"thumbnail_generated_at": &now,
+			}).Error
+		}
+	} else {
+		// 强制模式：删除旧文件
+		fullPath := filepath.Join(s.config.Photos.ThumbnailPath, thumbnailPath)
+		if _, err := os.Stat(fullPath); err == nil {
+			if err := os.Remove(fullPath); err != nil {
+				logger.Warnf("Failed to remove old thumbnail for photo %d: %v", photo.ID, err)
+			}
+		}
+	}
+
+	relPath, err := s.generator.GenerateThumbnail(photo.FilePath)
+	now := time.Now()
+	if err != nil {
+		_ = s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+			"thumbnail_status": "failed",
+		}).Error
+		return fmt.Errorf("生成缩略图失败: %w", err)
+	}
+
+	return s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+		"thumbnail_path":         relPath,
+		"thumbnail_status":       "ready",
+		"thumbnail_generated_at": &now,
+	}).Error
+}
+
+func (s *thumbnailService) enqueuePhotoModel(photo *model.Photo, source string, priority int, force bool) error {
 	if photo == nil {
 		return fmt.Errorf("photo is nil")
 	}
@@ -182,20 +235,30 @@ func (s *thumbnailService) enqueuePhotoModel(photo *model.Photo, source string, 
 		thumbnailPath = util.GenerateDerivedImagePath(photo.FilePath)
 	}
 	fullPath := filepath.Join(s.config.Photos.ThumbnailPath, thumbnailPath)
-	if _, err := os.Stat(fullPath); err == nil {
-		// 文件已存在，更新数据库状态为 ready
-		generatedAt := time.Now()
-		updateErr := s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
-			"thumbnail_path":         thumbnailPath,
-			"thumbnail_status":       "ready",
-			"thumbnail_generated_at": &generatedAt,
-		}).Error
-		if updateErr != nil {
-			logger.Warnf("Update photo %d thumbnail status to ready failed: %v", photo.ID, updateErr)
-			return updateErr
+
+	if !force {
+		if _, err := os.Stat(fullPath); err == nil {
+			// 文件已存在，更新数据库状态为 ready
+			generatedAt := time.Now()
+			updateErr := s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+				"thumbnail_path":         thumbnailPath,
+				"thumbnail_status":       "ready",
+				"thumbnail_generated_at": &generatedAt,
+			}).Error
+			if updateErr != nil {
+				logger.Warnf("Update photo %d thumbnail status to ready failed: %v", photo.ID, updateErr)
+				return updateErr
+			}
+			logger.Debugf("Photo %d thumbnail already exists, updated status to ready", photo.ID)
+			return nil
 		}
-		logger.Debugf("Photo %d thumbnail already exists, updated status to ready", photo.ID)
-		return nil
+	} else {
+		// 强制重新生成：删除旧缩略图文件
+		if _, err := os.Stat(fullPath); err == nil {
+			if err := os.Remove(fullPath); err != nil {
+				logger.Warnf("Failed to remove old thumbnail for photo %d: %v", photo.ID, err)
+			}
+		}
 	}
 
 	now := time.Now()
@@ -534,7 +597,7 @@ func (s *thumbnailService) enqueuePhotoWithRetry(photoID uint) error {
 		if photo == nil {
 			return fmt.Errorf("photo %d not found", photoID)
 		}
-		err = s.enqueuePhotoModel(photo, thumbnailSourceManual, thumbnailPriorityManual)
+		err = s.enqueuePhotoModel(photo, thumbnailSourceManual, thumbnailPriorityManual, false)
 		if err == nil {
 			return nil
 		}

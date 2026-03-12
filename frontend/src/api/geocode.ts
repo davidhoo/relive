@@ -21,7 +21,11 @@ export const geocodeApi = {
   repairLegacyStatus() {
     return http.post<ApiResponse<{ count: number }>>('/geocode/repair-legacy-status')
   },
-  enqueue(photoId: number) {
-    return http.post<ApiResponse<void>>('/geocode/enqueue', { photo_id: photoId })
+  enqueue(photoId: number, force: boolean = false) {
+    return http.post<ApiResponse<void>>('/geocode/enqueue', { photo_id: photoId, force })
+  },
+
+  geocode(photoId: number) {
+    return http.post<ApiResponse<void>>('/geocode/geocode', { photo_id: photoId })
   },
 }

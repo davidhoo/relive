@@ -384,7 +384,7 @@ func (h *PhotoHandler) GetPhotos(c *gin.Context) {
 			if photo.GPSLatitude == nil || photo.GPSLongitude == nil || strings.TrimSpace(photo.Location) != "" {
 				continue
 			}
-			if err := h.geocodeTaskService.EnqueuePhoto(photo.ID, "passive", 100); err != nil {
+			if err := h.geocodeTaskService.EnqueuePhoto(photo.ID, "passive", 100, false); err != nil {
 				logger.Warnf("Passive geocode enqueue failed for photo %d: %v", photo.ID, err)
 			}
 		}
@@ -447,7 +447,7 @@ func (h *PhotoHandler) GetPhotoByID(c *gin.Context) {
 	}
 
 	if h.geocodeTaskService != nil && photo.GPSLatitude != nil && photo.GPSLongitude != nil && strings.TrimSpace(photo.Location) == "" {
-		if err := h.geocodeTaskService.EnqueuePhoto(photo.ID, "passive", 100); err != nil {
+		if err := h.geocodeTaskService.EnqueuePhoto(photo.ID, "passive", 100, false); err != nil {
 			logger.Warnf("Passive geocode enqueue failed for photo %d: %v", photo.ID, err)
 		}
 	}
@@ -732,7 +732,7 @@ func (h *PhotoHandler) GetPhotoThumbnail(c *gin.Context) {
 	}
 
 	if h.thumbnailService != nil {
-		if err := h.thumbnailService.EnqueuePhoto(photo.ID, "passive", 100); err != nil {
+		if err := h.thumbnailService.EnqueuePhoto(photo.ID, "passive", 100, false); err != nil {
 			logger.Warnf("Passive thumbnail enqueue failed for photo %d: %v", photo.ID, err)
 		}
 	}

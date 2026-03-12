@@ -23,7 +23,11 @@ export const thumbnailApi = {
     return http.get<ApiResponse<ThumbnailStats>>('/thumbnails/stats')
   },
 
-  enqueue(photoId: number) {
-    return http.post<ApiResponse<void>>('/thumbnails/enqueue', { photo_id: photoId })
+  enqueue(photoId: number, force: boolean = false) {
+    return http.post<ApiResponse<void>>('/thumbnails/enqueue', { photo_id: photoId, force })
+  },
+
+  generate(photoId: number, force: boolean = false) {
+    return http.post<ApiResponse<void>>('/thumbnails/generate', { photo_id: photoId, force })
   },
 }
