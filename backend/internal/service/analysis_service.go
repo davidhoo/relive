@@ -358,8 +358,8 @@ func (s *analysisService) SubmitResultsDirectly(results []model.AnalysisResult, 
 	return resp, nil
 }
 
-// batchUpdatePhotos 使用单条 SQL 批量更新所有照片
-// 使用 CASE WHEN 语句，直接嵌入值避免参数绑定问题
+// batchUpdatePhotos 在事务内逐条更新照片（参数化查询，安全可靠）
+// 批量大小受 API 限制（最多 50 条），逐条更新在事务内性能完全可接受
 func (s *analysisService) batchUpdatePhotos(tx *gorm.DB, results []struct {
 	result       model.AnalysisResult
 	overallScore int
@@ -369,77 +369,28 @@ func (s *analysisService) batchUpdatePhotos(tx *gorm.DB, results []struct {
 		return nil
 	}
 
-	// 构建 CASE WHEN 子句
-	var (
-		idCases       []string
-		descCases     []string
-		captionCases  []string
-		memoryCases   []string
-		beautyCases   []string
-		overallCases  []string
-		reasonCases   []string
-		categoryCases []string
-		tagsCases     []string
-		providerCases []string
-		analyzedCases []string
-		photoIDList   []string
-	)
-
 	for _, vr := range results {
-		id := vr.result.PhotoID
-		idCases = append(idCases, fmt.Sprintf("WHEN %d THEN 1", id))
-		// 转义字符串，直接嵌入 SQL
-		descCases = append(descCases, fmt.Sprintf("WHEN %d THEN '%s'", id, escapeSQL(vr.result.Description)))
-		captionCases = append(captionCases, fmt.Sprintf("WHEN %d THEN '%s'", id, escapeSQL(vr.result.Caption)))
-		memoryCases = append(memoryCases, fmt.Sprintf("WHEN %d THEN %d", id, vr.result.MemoryScore))
-		beautyCases = append(beautyCases, fmt.Sprintf("WHEN %d THEN %d", id, vr.result.BeautyScore))
-		overallCases = append(overallCases, fmt.Sprintf("WHEN %d THEN %d", id, vr.overallScore))
-		reasonCases = append(reasonCases, fmt.Sprintf("WHEN %d THEN '%s'", id, escapeSQL(vr.result.ScoreReason)))
-		categoryCases = append(categoryCases, fmt.Sprintf("WHEN %d THEN '%s'", id, escapeSQL(vr.result.MainCategory)))
-		tagsCases = append(tagsCases, fmt.Sprintf("WHEN %d THEN '%s'", id, escapeSQL(vr.result.Tags)))
-		providerCases = append(providerCases, fmt.Sprintf("WHEN %d THEN '%s'", id, escapeSQL(vr.aiProvider)))
-		analyzedCases = append(analyzedCases, fmt.Sprintf("WHEN %d THEN '%s'", id, now.Format("2006-01-02 15:04:05")))
-		photoIDList = append(photoIDList, fmt.Sprintf("%d", id))
+		if err := tx.Model(&model.Photo{}).Where("id = ?", vr.result.PhotoID).Updates(map[string]interface{}{
+			"ai_analyzed":              true,
+			"description":              vr.result.Description,
+			"caption":                  vr.result.Caption,
+			"memory_score":             vr.result.MemoryScore,
+			"beauty_score":             vr.result.BeautyScore,
+			"overall_score":            vr.overallScore,
+			"score_reason":             vr.result.ScoreReason,
+			"main_category":            vr.result.MainCategory,
+			"tags":                     vr.result.Tags,
+			"ai_provider":              vr.aiProvider,
+			"analyzed_at":              now,
+			"analysis_lock_id":         nil,
+			"analysis_lock_expired_at": nil,
+			"analysis_retry_count":     0,
+		}).Error; err != nil {
+			return fmt.Errorf("update photo %d: %w", vr.result.PhotoID, err)
+		}
 	}
 
-	// 构建完整 SQL（所有值直接嵌入，无参数绑定）
-	sql := fmt.Sprintf(`UPDATE photos SET
-		ai_analyzed = CASE id %s ELSE ai_analyzed END,
-		description = CASE id %s ELSE description END,
-		caption = CASE id %s ELSE caption END,
-		memory_score = CASE id %s ELSE memory_score END,
-		beauty_score = CASE id %s ELSE beauty_score END,
-		overall_score = CASE id %s ELSE overall_score END,
-		score_reason = CASE id %s ELSE score_reason END,
-		main_category = CASE id %s ELSE main_category END,
-		tags = CASE id %s ELSE tags END,
-		ai_provider = CASE id %s ELSE ai_provider END,
-		analyzed_at = CASE id %s ELSE analyzed_at END,
-		analysis_lock_id = NULL,
-		analysis_lock_expired_at = NULL,
-		analysis_retry_count = 0
-	WHERE id IN (%s)`,
-		strings.Join(idCases, " "),
-		strings.Join(descCases, " "),
-		strings.Join(captionCases, " "),
-		strings.Join(memoryCases, " "),
-		strings.Join(beautyCases, " "),
-		strings.Join(overallCases, " "),
-		strings.Join(reasonCases, " "),
-		strings.Join(categoryCases, " "),
-		strings.Join(tagsCases, " "),
-		strings.Join(providerCases, " "),
-		strings.Join(analyzedCases, " "),
-		strings.Join(photoIDList, ","),
-	)
-
-	return tx.Exec(sql).Error
-}
-
-// escapeSQL 转义 SQL 字符串中的单引号
-func escapeSQL(s string) string {
-	// 单引号转义为两个单引号
-	return strings.ReplaceAll(s, "'", "''")
+	return nil
 }
 
 // GetStats 获取分析统计
