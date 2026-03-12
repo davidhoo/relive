@@ -160,27 +160,43 @@ func IsHEIC(filePath string) bool {
 func OpenImage(filePath string) (image.Image, error) {
 	// 如果是 HEIC 格式，使用专门的解码器
 	if IsHEIC(filePath) {
-		file, err := os.Open(filePath)
-		if err != nil {
-			return nil, err
-		}
-		defer file.Close()
-
-		img, err := goheif.Decode(file)
-		if err != nil {
-			return nil, err
-		}
-
-		info, err := readHEIFTransformInfoFromFile(file)
-		if err != nil {
+		img, err := openHEIC(filePath)
+		if err == nil {
 			return img, nil
 		}
-
-		return applyHEIFTransforms(img, info), nil
+		// goheif 解码失败（可能是扩展名为 .HEIC 但实际是 JPEG 等格式），
+		// fallback 到 imaging 库尝试按实际格式解码
+		fallbackImg, fallbackErr := imaging.Open(filePath)
+		if fallbackErr != nil {
+			// 两种方式都失败，返回原始 goheif 错误（更有诊断价值）
+			return nil, err
+		}
+		return fallbackImg, nil
 	}
 
 	// 其他格式使用 imaging 库
 	return imaging.Open(filePath)
+}
+
+// openHEIC 使用 goheif 解码 HEIC 文件并应用 HEIF 变换
+func openHEIC(filePath string) (image.Image, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	img, err := goheif.Decode(file)
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := readHEIFTransformInfoFromFile(file)
+	if err != nil {
+		return img, nil
+	}
+
+	return applyHEIFTransforms(img, info), nil
 }
 
 func normalizeImageForDisplay(filePath string, img image.Image) image.Image {
