@@ -2,20 +2,9 @@
 
 # Relive 本地部署脚本
 # 用途：本地构建并启动 Docker 服务
-# 使用：./deploy.sh [--quick]
+# 使用：./deploy.sh
 
 set -e
-
-# 参数解析
-QUICK_MODE=false
-for arg in "$@"; do
-    case $arg in
-        --quick|-q)
-            QUICK_MODE=true
-            shift
-            ;;
-    esac
-done
 
 # 颜色定义
 GREEN='\033[0;32m'

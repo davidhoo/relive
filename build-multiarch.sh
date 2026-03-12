@@ -28,7 +28,7 @@ echo ""
 # 1. 检查环境
 # ============================================
 
-echo -e "${BLUE}[1/5]${NC} 检查构建环境..."
+echo -e "${BLUE}[1/4]${NC} 检查构建环境..."
 
 # 检查 Docker
 if ! command -v docker &> /dev/null; then
@@ -51,7 +51,7 @@ echo ""
 # 2. 创建 buildx builder
 # ============================================
 
-echo -e "${BLUE}[2/5]${NC} 配置构建器..."
+echo -e "${BLUE}[2/4]${NC} 配置构建器..."
 
 # 检查是否已存在 builder
 if docker buildx ls | grep -q "relive-builder"; then
@@ -73,7 +73,7 @@ echo ""
 # 3. 构建统一镜像（包含前端和后端）
 # ============================================
 
-echo -e "${BLUE}[3/5]${NC} 构建统一镜像（多架构）..."
+echo -e "${BLUE}[3/4]${NC} 构建统一镜像（多架构）..."
 
 echo "  构建 davidhu/relive:$VERSION"
 echo "  架构：linux/amd64, linux/arm64"
@@ -90,12 +90,7 @@ docker buildx build \
   --push \
   .
 
-if [ $? -eq 0 ]; then
-    echo -e "${GREEN}  ✓${NC} 统一镜像构建成功"
-else
-    echo -e "${RED}  ❌ 统一镜像构建失败${NC}"
-    exit 1
-fi
+echo -e "${GREEN}  ✓${NC} 统一镜像构建成功"
 
 echo ""
 
@@ -103,7 +98,7 @@ echo ""
 # 4. 验证镜像
 # ============================================
 
-echo -e "${BLUE}[4/5]${NC} 验证镜像..."
+echo -e "${BLUE}[4/4]${NC} 验证镜像..."
 
 echo ""
 echo "  镜像信息："
