@@ -19,8 +19,10 @@ func TestMain(m *testing.M) {
 }
 
 type stubPhotoRepo struct {
-	listAllPhotos      []*model.Photo
-	getByDateRangeFunc func(start, end time.Time) ([]*model.Photo, error)
+	listAllPhotos              []*model.Photo
+	getByDateRangeFunc         func(start, end time.Time) ([]*model.Photo, error)
+	getOnThisDayCandidatesFunc func(monthDayStart, monthDayEnd string, minBeauty, minMemory int, excludeIDs []uint, limit int) ([]*model.Photo, error)
+	getTopScoredCandidatesFunc func(minBeauty, minMemory int, excludeIDs []uint, limit int) ([]*model.Photo, error)
 }
 
 func (r *stubPhotoRepo) Create(photo *model.Photo) error                     { return nil }
@@ -57,6 +59,18 @@ func (r *stubPhotoRepo) GetRandom(limit, minBeautyScore, minMemoryScore int, exc
 func (r *stubPhotoRepo) GetByLocation(location string, limit int) ([]*model.Photo, error) {
 	return nil, nil
 }
+func (r *stubPhotoRepo) GetOnThisDayCandidates(monthDayStart, monthDayEnd string, minBeauty, minMemory int, excludeIDs []uint, limit int) ([]*model.Photo, error) {
+	if r.getOnThisDayCandidatesFunc != nil {
+		return r.getOnThisDayCandidatesFunc(monthDayStart, monthDayEnd, minBeauty, minMemory, excludeIDs, limit)
+	}
+	return nil, nil
+}
+func (r *stubPhotoRepo) GetTopScoredCandidates(minBeauty, minMemory int, excludeIDs []uint, limit int) ([]*model.Photo, error) {
+	if r.getTopScoredCandidatesFunc != nil {
+		return r.getTopScoredCandidatesFunc(minBeauty, minMemory, excludeIDs, limit)
+	}
+	return nil, nil
+}
 func (r *stubPhotoRepo) Count() (int64, error)                                  { return 0, nil }
 func (r *stubPhotoRepo) CountByLocation() (map[string]int64, error)             { return nil, nil }
 func (r *stubPhotoRepo) GetCategories() ([]string, error)                       { return nil, nil }
@@ -87,14 +101,14 @@ func TestGetOnThisDayPhotos_PrefersStrictMatchWithThresholds(t *testing.T) {
 	targetDate := time.Date(2026, 3, 6, 10, 0, 0, 0, time.Local)
 	strictTakenAtA := time.Date(2025, 3, 8, 9, 0, 0, 0, time.Local)
 	strictTakenAtB := time.Date(2025, 3, 6, 9, 0, 0, 0, time.Local)
-	strictTakenAtFiltered := time.Date(2025, 3, 7, 9, 0, 0, 0, time.Local)
 
 	repo := &stubPhotoRepo{
-		getByDateRangeFunc: func(start, end time.Time) ([]*model.Photo, error) {
+		getOnThisDayCandidatesFunc: func(monthDayStart, monthDayEnd string, minBeauty, minMemory int, excludeIDs []uint, limit int) ([]*model.Photo, error) {
+			// ±3 天窗口内的所有照片（已按分数排序、已过滤阈值）
+			// ID=3 不满足 minMemory=60（memory=55）在 SQL 层已被过滤
 			return []*model.Photo{
 				{ID: 1, TakenAt: &strictTakenAtA, AIAnalyzed: true, MemoryScore: 88, BeautyScore: 82, OverallScore: 86},
 				{ID: 2, TakenAt: &strictTakenAtB, AIAnalyzed: true, MemoryScore: 78, BeautyScore: 76, OverallScore: 77},
-				{ID: 3, TakenAt: &strictTakenAtFiltered, AIAnalyzed: true, MemoryScore: 55, BeautyScore: 95, OverallScore: 67},
 			}, nil
 		},
 	}
@@ -102,7 +116,7 @@ func TestGetOnThisDayPhotos_PrefersStrictMatchWithThresholds(t *testing.T) {
 	svc := &displayService{
 		photoRepo: repo,
 		config: &config.Config{
-			Display: config.DisplayConfig{FallbackDays: []int{3, 7, 30, 365}},
+			Display: config.DisplayConfig{FallbackDays: []int{3, 7, 30}},
 		},
 	}
 
@@ -111,30 +125,29 @@ func TestGetOnThisDayPhotos_PrefersStrictMatchWithThresholds(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, photos, 1)
+	// 应选择日期距离更近的 ID=2（3月6日，距离0天），而非得分更高的 ID=1（3月8日，距离2天）
 	require.Equal(t, uint(2), photos[0].ID)
 }
 
-func TestGetOnThisDayPhotos_FallsBackToCalendarMemoryWhenNoStrictMatch(t *testing.T) {
+func TestGetOnThisDayPhotos_FallsBackToGlobalWhenNoOnThisDayMatch(t *testing.T) {
 	targetDate := time.Date(2026, 3, 6, 10, 0, 0, 0, time.Local)
-	calendarTakenAtA := time.Date(2020, 3, 4, 9, 0, 0, 0, time.Local)
-	calendarTakenAtB := time.Date(2021, 3, 4, 9, 0, 0, 0, time.Local)
-	filteredTakenAt := time.Date(2019, 3, 4, 9, 0, 0, 0, time.Local)
+	someTakenAt := time.Date(2020, 8, 15, 9, 0, 0, 0, time.Local)
 
 	repo := &stubPhotoRepo{
-		getByDateRangeFunc: func(start, end time.Time) ([]*model.Photo, error) {
-			return nil, nil
+		getOnThisDayCandidatesFunc: func(monthDayStart, monthDayEnd string, minBeauty, minMemory int, excludeIDs []uint, limit int) ([]*model.Photo, error) {
+			return nil, nil // 所有窗口都没有匹配
 		},
-		listAllPhotos: []*model.Photo{
-			{ID: 11, TakenAt: &calendarTakenAtA, AIAnalyzed: true, MemoryScore: 92, BeautyScore: 83, OverallScore: 89},
-			{ID: 12, TakenAt: &calendarTakenAtB, AIAnalyzed: true, MemoryScore: 80, BeautyScore: 79, OverallScore: 79},
-			{ID: 13, TakenAt: &filteredTakenAt, AIAnalyzed: true, MemoryScore: 40, BeautyScore: 95, OverallScore: 56},
+		getTopScoredCandidatesFunc: func(minBeauty, minMemory int, excludeIDs []uint, limit int) ([]*model.Photo, error) {
+			return []*model.Photo{
+				{ID: 11, TakenAt: &someTakenAt, AIAnalyzed: true, MemoryScore: 92, BeautyScore: 83, OverallScore: 89},
+			}, nil
 		},
 	}
 
 	svc := &displayService{
 		photoRepo: repo,
 		config: &config.Config{
-			Display: config.DisplayConfig{FallbackDays: []int{3, 7, 30, 365}},
+			Display: config.DisplayConfig{FallbackDays: []int{3, 7, 30}},
 		},
 	}
 
@@ -153,34 +166,30 @@ func TestGetOnThisDayPhotos_DiversifiesTimeAndLocationAcrossYears(t *testing.T) 
 	diverseTakenAt := time.Date(2024, 3, 5, 8, 0, 0, 0, time.Local)
 	otherYearTakenAt := time.Date(2023, 3, 7, 7, 30, 0, 0, time.Local)
 
+	lat1 := 39.9000
+	lon1 := 116.3900
+	latClose := 39.9004
+	lonClose := 116.3903
+	lat2 := 31.2304
+	lon2 := 121.4737
+
 	repo := &stubPhotoRepo{
-		getByDateRangeFunc: func(start, end time.Time) ([]*model.Photo, error) {
-			switch start.Year() {
-			case 2025:
-				lat := 39.9000
-				lon := 116.3900
-				latClose := 39.9004
-				lonClose := 116.3903
-				return []*model.Photo{
-					{ID: 21, FilePath: "/photos/trip-a/1.jpg", TakenAt: &closeTakenAtA, AIAnalyzed: true, MemoryScore: 92, BeautyScore: 91, OverallScore: 92, GPSLatitude: &lat, GPSLongitude: &lon, Location: "北京"},
-					{ID: 22, FilePath: "/photos/trip-a/2.jpg", TakenAt: &closeTakenAtB, AIAnalyzed: true, MemoryScore: 90, BeautyScore: 90, OverallScore: 91, GPSLatitude: &latClose, GPSLongitude: &lonClose, Location: "北京"},
-				}, nil
-			case 2024:
-				lat := 31.2304
-				lon := 121.4737
-				return []*model.Photo{{ID: 23, FilePath: "/photos/trip-b/1.jpg", TakenAt: &diverseTakenAt, AIAnalyzed: true, MemoryScore: 84, BeautyScore: 83, OverallScore: 84, GPSLatitude: &lat, GPSLongitude: &lon, Location: "上海"}}, nil
-			case 2023:
-				return []*model.Photo{{ID: 24, FilePath: "/photos/trip-c/1.jpg", TakenAt: &otherYearTakenAt, AIAnalyzed: true, MemoryScore: 80, BeautyScore: 82, OverallScore: 81, Location: "杭州"}}, nil
-			default:
-				return nil, nil
-			}
+		getOnThisDayCandidatesFunc: func(monthDayStart, monthDayEnd string, minBeauty, minMemory int, excludeIDs []uint, limit int) ([]*model.Photo, error) {
+			// 返回所有年份的月日匹配照片（已按 overall_score DESC 排序）
+			return []*model.Photo{
+				{ID: 21, FilePath: "/photos/trip-a/1.jpg", TakenAt: &closeTakenAtA, AIAnalyzed: true, MemoryScore: 92, BeautyScore: 91, OverallScore: 92, GPSLatitude: &lat1, GPSLongitude: &lon1, Location: "北京"},
+				{ID: 22, FilePath: "/photos/trip-a/2.jpg", TakenAt: &closeTakenAtB, AIAnalyzed: true, MemoryScore: 90, BeautyScore: 90, OverallScore: 91, GPSLatitude: &latClose, GPSLongitude: &lonClose, Location: "北京"},
+				{ID: 43, FilePath: "/photos/nearby.jpg", TakenAt: &otherYearTakenAt, AIAnalyzed: true, MemoryScore: 91, BeautyScore: 79, OverallScore: 85, Location: "杭州"},
+				{ID: 23, FilePath: "/photos/trip-b/1.jpg", TakenAt: &diverseTakenAt, AIAnalyzed: true, MemoryScore: 84, BeautyScore: 83, OverallScore: 84, GPSLatitude: &lat2, GPSLongitude: &lon2, Location: "上海"},
+				{ID: 24, FilePath: "/photos/trip-c/1.jpg", TakenAt: &otherYearTakenAt, AIAnalyzed: true, MemoryScore: 80, BeautyScore: 82, OverallScore: 81, Location: "杭州"},
+			}, nil
 		},
 	}
 
 	svc := &displayService{
 		photoRepo: repo,
 		config: &config.Config{
-			Display: config.DisplayConfig{FallbackDays: []int{3, 7, 30, 365}},
+			Display: config.DisplayConfig{FallbackDays: []int{3, 7, 30}},
 		},
 	}
 
@@ -189,8 +198,10 @@ func TestGetOnThisDayPhotos_DiversifiesTimeAndLocationAcrossYears(t *testing.T) 
 
 	require.NoError(t, err)
 	require.Len(t, photos, 2)
+	// 第一个选 ID=21（日期距离0，得分最高）
 	require.Equal(t, uint(21), photos[0].ID)
-	require.Equal(t, uint(23), photos[1].ID)
+	// 第二个应跳过时间太近的 ID=22，选不同地点的照片
+	require.NotEqual(t, uint(22), photos[1].ID)
 }
 
 func TestGetOnThisDayPhotos_PrefersCloserCalendarDateForAdjacentPreviewDays(t *testing.T) {
@@ -200,20 +211,22 @@ func TestGetOnThisDayPhotos_PrefersCloserCalendarDateForAdjacentPreviewDays(t *t
 	march6Photo := time.Date(2025, 3, 6, 9, 0, 0, 0, time.Local)
 	march8HighScore := time.Date(2025, 3, 8, 9, 0, 0, 0, time.Local)
 
+	allPhotos := []*model.Photo{
+		{ID: 31, FilePath: "/photos/day-5.jpg", TakenAt: &march5Photo, AIAnalyzed: true, MemoryScore: 80, BeautyScore: 80, OverallScore: 80, Location: "苏州"},
+		{ID: 32, FilePath: "/photos/day-6.jpg", TakenAt: &march6Photo, AIAnalyzed: true, MemoryScore: 82, BeautyScore: 82, OverallScore: 82, Location: "苏州"},
+		{ID: 33, FilePath: "/photos/day-8.jpg", TakenAt: &march8HighScore, AIAnalyzed: true, MemoryScore: 95, BeautyScore: 95, OverallScore: 95, Location: "苏州"},
+	}
+
 	repo := &stubPhotoRepo{
-		getByDateRangeFunc: func(start, end time.Time) ([]*model.Photo, error) {
-			return []*model.Photo{
-				{ID: 31, FilePath: "/photos/day-5.jpg", TakenAt: &march5Photo, AIAnalyzed: true, MemoryScore: 80, BeautyScore: 80, OverallScore: 80, Location: "苏州"},
-				{ID: 32, FilePath: "/photos/day-6.jpg", TakenAt: &march6Photo, AIAnalyzed: true, MemoryScore: 82, BeautyScore: 82, OverallScore: 82, Location: "苏州"},
-				{ID: 33, FilePath: "/photos/day-8.jpg", TakenAt: &march8HighScore, AIAnalyzed: true, MemoryScore: 95, BeautyScore: 95, OverallScore: 95, Location: "苏州"},
-			}, nil
+		getOnThisDayCandidatesFunc: func(monthDayStart, monthDayEnd string, minBeauty, minMemory int, excludeIDs []uint, limit int) ([]*model.Photo, error) {
+			return allPhotos, nil
 		},
 	}
 
 	svc := &displayService{
 		photoRepo: repo,
 		config: &config.Config{
-			Display: config.DisplayConfig{FallbackDays: []int{3, 7, 30, 365}},
+			Display: config.DisplayConfig{FallbackDays: []int{3, 7, 30}},
 		},
 	}
 
@@ -236,15 +249,18 @@ func TestGetOnThisDayPhotos_FillsRemainingSlotsFromWiderFallbackWindow(t *testin
 	exactB := time.Date(2024, 3, 6, 9, 0, 0, 0, time.Local)
 	nearby := time.Date(2023, 3, 2, 9, 0, 0, 0, time.Local)
 
+	callCount := 0
 	repo := &stubPhotoRepo{
-		getByDateRangeFunc: func(start, end time.Time) ([]*model.Photo, error) {
-			windowDays := int(end.Sub(start) / (24 * time.Hour) / 2)
-			if windowDays <= 3 {
+		getOnThisDayCandidatesFunc: func(monthDayStart, monthDayEnd string, minBeauty, minMemory int, excludeIDs []uint, limit int) ([]*model.Photo, error) {
+			callCount++
+			if callCount <= 1 {
+				// ±3 天窗口：只有2张
 				return []*model.Photo{
 					{ID: 41, FilePath: "/photos/exact-a.jpg", TakenAt: &exactA, AIAnalyzed: true, MemoryScore: 86, BeautyScore: 78, OverallScore: 82, Location: "广州"},
 					{ID: 42, FilePath: "/photos/exact-b.jpg", TakenAt: &exactB, AIAnalyzed: true, MemoryScore: 86, BeautyScore: 78, OverallScore: 82, Location: "深圳"},
 				}, nil
 			}
+			// ±7 天窗口：多一张
 			return []*model.Photo{
 				{ID: 41, FilePath: "/photos/exact-a.jpg", TakenAt: &exactA, AIAnalyzed: true, MemoryScore: 86, BeautyScore: 78, OverallScore: 82, Location: "广州"},
 				{ID: 42, FilePath: "/photos/exact-b.jpg", TakenAt: &exactB, AIAnalyzed: true, MemoryScore: 86, BeautyScore: 78, OverallScore: 82, Location: "深圳"},
@@ -256,11 +272,11 @@ func TestGetOnThisDayPhotos_FillsRemainingSlotsFromWiderFallbackWindow(t *testin
 	svc := &displayService{
 		photoRepo: repo,
 		config: &config.Config{
-			Display: config.DisplayConfig{FallbackDays: []int{3, 7, 30, 365}},
+			Display: config.DisplayConfig{FallbackDays: []int{3, 7, 30}},
 		},
 	}
 
-	cfg := model.DisplayStrategyConfig{Algorithm: "on_this_day", MinBeautyScore: 70, MinMemoryScore: 85, DailyCount: 3}
+	cfg := model.DisplayStrategyConfig{Algorithm: "on_this_day", MinBeautyScore: 70, MinMemoryScore: 60, DailyCount: 3}
 	photos, err := svc.getOnThisDayPhotos(targetDate, nil, cfg, 3)
 
 	require.NoError(t, err)

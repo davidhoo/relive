@@ -213,106 +213,58 @@ func (s *displayService) RecordDisplay(record *model.DisplayRecord) error {
 	return s.displayRecordRepo.Create(record)
 }
 
-func (s *displayService) getSmartPhotos(cfg model.DisplayStrategyConfig, excludePhotoIDs []uint, limit int, referenceDate time.Time) ([]*model.Photo, error) {
-	normalizeDisplayStrategyConfig(&cfg)
-	if limit <= 0 {
-		limit = 1
-	}
-
-	photos, err := s.photoRepo.ListAll()
-	if err != nil {
-		return nil, fmt.Errorf("list photos: %w", err)
-	}
-
-	candidatesByMonthDay := make(map[string][]*model.Photo)
-	excludeSet := make(map[uint]struct{}, len(excludePhotoIDs))
-	for _, id := range excludePhotoIDs {
-		excludeSet[id] = struct{}{}
-	}
-
-	for _, photo := range photos {
-		if photo == nil || !photo.AIAnalyzed {
-			continue
-		}
-		if _, excluded := excludeSet[photo.ID]; excluded {
-			continue
-		}
-
-		if photo.TakenAt == nil {
-			continue
-		}
-		if photo.MemoryScore < cfg.MinMemoryScore || photo.BeautyScore < cfg.MinBeautyScore {
-			continue
-		}
-
-		monthDay := photo.TakenAt.Format("01-02")
-		candidatesByMonthDay[monthDay] = append(candidatesByMonthDay[monthDay], photo)
-	}
-
-	for offset := 0; offset <= 365; offset++ {
-		monthDay := referenceDate.AddDate(0, 0, -offset).Format("01-02")
-		candidates := candidatesByMonthDay[monthDay]
-		if len(candidates) > 0 {
-			return selectSmartFallbackPhotos(candidates, limit, cfg), nil
-		}
-	}
-
-	return nil, nil
-}
-
 func (s *displayService) getOnThisDayPhotos(targetDate time.Time, excludePhotoIDs []uint, cfg model.DisplayStrategyConfig, limit int) ([]*model.Photo, error) {
 	normalizeDisplayStrategyConfig(&cfg)
 	if limit <= 0 {
 		limit = 1
 	}
 
-	// 尝试多种降级策略
-	fallbackDays := s.config.Display.FallbackDays // [3, 7, 30, 365]
+	// 第1层：on_this_day — 按月日匹配，窗口 [3, 7, 30]
+	fallbackDays := s.config.Display.FallbackDays
 	if len(fallbackDays) == 0 {
-		fallbackDays = []int{3, 7, 30, 365}
+		fallbackDays = []int{3, 7, 30}
 	}
+	// 去掉 365 天窗口（语义不合理，用全局兜底替代）
+	var effectiveDays []int
+	for _, d := range fallbackDays {
+		if d < 365 {
+			effectiveDays = append(effectiveDays, d)
+		}
+	}
+	if len(effectiveDays) == 0 {
+		effectiveDays = []int{3, 7, 30}
+	}
+
 	targetPoolSize := max(limit*cfg.CandidatePoolFactor, max(limit*2, 6))
 	collectedAll := make([]*model.Photo, 0, targetPoolSize)
 	collectedSeen := make(map[uint]struct{}, targetPoolSize)
 	bestSelected := make([]*model.Photo, 0, limit)
 
-	for _, days := range fallbackDays {
+	for _, days := range effectiveDays {
 		logger.Debugf("Trying on_this_day fallback: target=%s, ±%d days", targetDate.Format("2006-01-02"), days)
-		collected := make([]*model.Photo, 0, targetPoolSize)
-		yearsHit := 0
 
-		// 逐年查找（从最近的年份开始）
-		for year := 1; year <= 100; year++ {
-			start := targetDate.AddDate(-year, 0, -days)
-			end := targetDate.AddDate(-year, 0, days)
+		// 计算月日窗口
+		startDate := targetDate.AddDate(0, 0, -days)
+		endDate := targetDate.AddDate(0, 0, days)
+		monthDayStart := startDate.Format("01-02")
+		monthDayEnd := endDate.Format("01-02")
 
-			photos, err := s.photoRepo.GetByDateRange(start, end)
-			if err != nil {
-				logger.Warnf("Get photos by date range failed: %v", err)
-				continue
-			}
-
-			candidates := filterDisplayCandidates(photos, excludePhotoIDs, cfg, true)
-
-			if len(candidates) > 0 {
-				collected = append(collected, candidates...)
-				yearsHit++
-				if len(collected) >= targetPoolSize && yearsHit >= min(limit, 3) {
-					break
-				}
-			}
+		candidates, err := s.photoRepo.GetOnThisDayCandidates(
+			monthDayStart, monthDayEnd,
+			cfg.MinBeautyScore, cfg.MinMemoryScore,
+			excludePhotoIDs, targetPoolSize,
+		)
+		if err != nil {
+			logger.Warnf("GetOnThisDayCandidates failed: %v", err)
+			continue
 		}
 
-		if len(collected) > 0 {
-			collectedAll = appendUniquePhotos(collectedAll, collected, collectedSeen)
+		if len(candidates) > 0 {
+			collectedAll = appendUniquePhotos(collectedAll, candidates, collectedSeen)
 			selected := selectOnThisDayPhotos(targetDate, collectedAll, limit, cfg)
 			logger.Infof(
-				"Found on_this_day candidates with fallback ±%d days, years=%d, window_candidates=%d, total_candidates=%d, selected=%d",
-				days,
-				yearsHit,
-				len(collected),
-				len(collectedAll),
-				len(selected),
+				"Found on_this_day candidates with fallback ±%d days, window_candidates=%d, total_candidates=%d, selected=%d",
+				days, len(candidates), len(collectedAll), len(selected),
 			)
 			if len(selected) > len(bestSelected) {
 				bestSelected = append([]*model.Photo(nil), selected...)
@@ -327,16 +279,8 @@ func (s *displayService) getOnThisDayPhotos(targetDate time.Time, excludePhotoID
 		return bestSelected, nil
 	}
 
-	logger.Infof("No strict on_this_day match found, trying smart calendar fallback")
-	smartFallbackPhotos, err := s.getSmartPhotos(cfg, excludePhotoIDs, limit, targetDate)
-	if err != nil {
-		return nil, fmt.Errorf("get smart fallback photos: %w", err)
-	}
-	if len(smartFallbackPhotos) > 0 {
-		return smartFallbackPhotos, nil
-	}
-
-	logger.Warn("All on_this_day fallback strategies failed, selecting top scored photo")
+	// 第2层：全局兜底 — 按分数排序取 top N
+	logger.Infof("No on_this_day match found, selecting top scored photos as global fallback")
 	topPhotos, err := s.selectGlobalFallbackPhotos(excludePhotoIDs, cfg, limit)
 	if err != nil {
 		return nil, fmt.Errorf("get top scored photo: %w", err)
@@ -349,31 +293,24 @@ func (s *displayService) getOnThisDayPhotos(targetDate time.Time, excludePhotoID
 }
 
 func (s *displayService) selectGlobalFallbackPhotos(excludePhotoIDs []uint, cfg model.DisplayStrategyConfig, limit int) ([]*model.Photo, error) {
-	photos, err := s.photoRepo.ListAll()
-	if err != nil {
-		return nil, fmt.Errorf("list photos: %w", err)
-	}
+	poolSize := max(limit*cfg.CandidatePoolFactor, max(limit*2, 6))
 
-	candidates := filterDisplayCandidates(photos, excludePhotoIDs, cfg, false)
+	// 先用阈值过滤
+	candidates, err := s.photoRepo.GetTopScoredCandidates(cfg.MinBeautyScore, cfg.MinMemoryScore, excludePhotoIDs, poolSize)
+	if err != nil {
+		return nil, fmt.Errorf("get top scored candidates: %w", err)
+	}
 	if len(candidates) > 0 {
 		return selectDiversifiedPhotos(candidates, limit, cfg), nil
 	}
 
-	if len(excludePhotoIDs) > 0 {
-		candidates = filterDisplayCandidates(photos, nil, cfg, false)
-		if len(candidates) > 0 {
-			return selectDiversifiedPhotos(candidates, limit, cfg), nil
-		}
+	// 降低阈值到 0，忽略 exclude
+	candidates, err = s.photoRepo.GetTopScoredCandidates(0, 0, nil, poolSize)
+	if err != nil {
+		return nil, fmt.Errorf("get unrestricted candidates: %w", err)
 	}
 
-	var unrestricted []*model.Photo
-	for _, photo := range photos {
-		if photo != nil && photo.AIAnalyzed {
-			unrestricted = append(unrestricted, photo)
-		}
-	}
-
-	return selectDiversifiedPhotos(unrestricted, limit, cfg), nil
+	return selectDiversifiedPhotos(candidates, limit, cfg), nil
 }
 
 func (s *displayService) getDisplayStrategyConfig() model.DisplayStrategyConfig {
@@ -481,10 +418,6 @@ func pickRandomPhotos(photos []*model.Photo, limit int) []*model.Photo {
 
 func selectOnThisDayPhotos(targetDate time.Time, photos []*model.Photo, limit int, cfg model.DisplayStrategyConfig) []*model.Photo {
 	return selectDiversifiedRankedPhotos(rankOnThisDayCandidates(targetDate, photos), limit, cfg)
-}
-
-func selectSmartFallbackPhotos(photos []*model.Photo, limit int, cfg model.DisplayStrategyConfig) []*model.Photo {
-	return selectDiversifiedPhotos(photos, limit, cfg)
 }
 
 type diversitySelectionOptions struct {

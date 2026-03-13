@@ -291,3 +291,105 @@ func TestPhotoRepository_BatchCreate(t *testing.T) {
 	count, _ := repo.Count()
 	assert.Equal(t, int64(100), count)
 }
+
+func TestPhotoRepository_GetOnThisDayCandidates(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	repo := NewPhotoRepository(db)
+
+	// 创建不同年份、相同月日附近的照片
+	takenAt1 := time.Date(2024, 3, 6, 10, 0, 0, 0, time.Local) // 3月6日
+	takenAt2 := time.Date(2023, 3, 8, 10, 0, 0, 0, time.Local) // 3月8日（±3天窗口内）
+	takenAt3 := time.Date(2022, 3, 20, 10, 0, 0, 0, time.Local) // 3月20日（±3天窗口外）
+	takenAt4 := time.Date(2021, 3, 5, 10, 0, 0, 0, time.Local) // 3月5日（低分）
+
+	testPhotos := []*model.Photo{
+		{FilePath: "/p1.jpg", FileName: "p1.jpg", FileSize: 1, FileHash: "h1", Width: 100, Height: 100, TakenAt: &takenAt1, AIAnalyzed: true, MemoryScore: 80, BeautyScore: 80, OverallScore: 80},
+		{FilePath: "/p2.jpg", FileName: "p2.jpg", FileSize: 1, FileHash: "h2", Width: 100, Height: 100, TakenAt: &takenAt2, AIAnalyzed: true, MemoryScore: 75, BeautyScore: 75, OverallScore: 75},
+		{FilePath: "/p3.jpg", FileName: "p3.jpg", FileSize: 1, FileHash: "h3", Width: 100, Height: 100, TakenAt: &takenAt3, AIAnalyzed: true, MemoryScore: 90, BeautyScore: 90, OverallScore: 90},
+		{FilePath: "/p4.jpg", FileName: "p4.jpg", FileSize: 1, FileHash: "h4", Width: 100, Height: 100, TakenAt: &takenAt4, AIAnalyzed: true, MemoryScore: 50, BeautyScore: 50, OverallScore: 50},
+		{FilePath: "/p5.jpg", FileName: "p5.jpg", FileSize: 1, FileHash: "h5", Width: 100, Height: 100, TakenAt: &takenAt1, AIAnalyzed: false, MemoryScore: 90, BeautyScore: 90, OverallScore: 90}, // 未分析
+	}
+	for _, p := range testPhotos {
+		assert.NoError(t, repo.Create(p))
+	}
+
+	// ±3天窗口: 03-03 到 03-09
+	photos, err := repo.GetOnThisDayCandidates("03-03", "03-09", 70, 70, nil, 10)
+	assert.NoError(t, err)
+	assert.Len(t, photos, 2) // p1(03-06) 和 p2(03-08)，p4 分数不够，p5 未分析
+
+	// 验证按 overall_score DESC 排序
+	assert.Equal(t, 80, photos[0].OverallScore)
+	assert.Equal(t, 75, photos[1].OverallScore)
+
+	// 测试 excludeIDs
+	photos, err = repo.GetOnThisDayCandidates("03-03", "03-09", 70, 70, []uint{testPhotos[0].ID}, 10)
+	assert.NoError(t, err)
+	assert.Len(t, photos, 1) // 排除了 p1
+
+	// 测试 limit
+	photos, err = repo.GetOnThisDayCandidates("03-03", "03-09", 70, 70, nil, 1)
+	assert.NoError(t, err)
+	assert.Len(t, photos, 1)
+}
+
+func TestPhotoRepository_GetOnThisDayCandidates_CrossYear(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	repo := NewPhotoRepository(db)
+
+	dec30 := time.Date(2024, 12, 30, 10, 0, 0, 0, time.Local)
+	jan02 := time.Date(2023, 1, 2, 10, 0, 0, 0, time.Local)
+	jun15 := time.Date(2024, 6, 15, 10, 0, 0, 0, time.Local)
+
+	testPhotos := []*model.Photo{
+		{FilePath: "/d1.jpg", FileName: "d1.jpg", FileSize: 1, FileHash: "dh1", Width: 100, Height: 100, TakenAt: &dec30, AIAnalyzed: true, MemoryScore: 80, BeautyScore: 80, OverallScore: 80},
+		{FilePath: "/d2.jpg", FileName: "d2.jpg", FileSize: 1, FileHash: "dh2", Width: 100, Height: 100, TakenAt: &jan02, AIAnalyzed: true, MemoryScore: 75, BeautyScore: 75, OverallScore: 75},
+		{FilePath: "/d3.jpg", FileName: "d3.jpg", FileSize: 1, FileHash: "dh3", Width: 100, Height: 100, TakenAt: &jun15, AIAnalyzed: true, MemoryScore: 90, BeautyScore: 90, OverallScore: 90},
+	}
+	for _, p := range testPhotos {
+		assert.NoError(t, repo.Create(p))
+	}
+
+	// 跨年窗口: 12-28 到 01-04（monthDayStart > monthDayEnd）
+	photos, err := repo.GetOnThisDayCandidates("12-28", "01-04", 70, 70, nil, 10)
+	assert.NoError(t, err)
+	assert.Len(t, photos, 2) // dec30 和 jan02，不含 jun15
+}
+
+func TestPhotoRepository_GetTopScoredCandidates(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	repo := NewPhotoRepository(db)
+
+	takenAt := time.Date(2024, 6, 1, 10, 0, 0, 0, time.Local)
+	testPhotos := []*model.Photo{
+		{FilePath: "/t1.jpg", FileName: "t1.jpg", FileSize: 1, FileHash: "th1", Width: 100, Height: 100, TakenAt: &takenAt, AIAnalyzed: true, MemoryScore: 90, BeautyScore: 90},
+		{FilePath: "/t2.jpg", FileName: "t2.jpg", FileSize: 1, FileHash: "th2", Width: 100, Height: 100, TakenAt: &takenAt, AIAnalyzed: true, MemoryScore: 80, BeautyScore: 80},
+		{FilePath: "/t3.jpg", FileName: "t3.jpg", FileSize: 1, FileHash: "th3", Width: 100, Height: 100, TakenAt: &takenAt, AIAnalyzed: true, MemoryScore: 50, BeautyScore: 50},
+		{FilePath: "/t4.jpg", FileName: "t4.jpg", FileSize: 1, FileHash: "th4", Width: 100, Height: 100, TakenAt: &takenAt, AIAnalyzed: false, MemoryScore: 95, BeautyScore: 95},
+	}
+	for _, p := range testPhotos {
+		assert.NoError(t, repo.Create(p))
+	}
+
+	// 带阈值
+	photos, err := repo.GetTopScoredCandidates(70, 70, nil, 10)
+	assert.NoError(t, err)
+	assert.Len(t, photos, 2) // t1 和 t2（t3 分数不够，t4 未分析）
+	assert.True(t, photos[0].OverallScore >= photos[1].OverallScore, "should be sorted by overall_score DESC")
+
+	// 带 excludeIDs
+	photos, err = repo.GetTopScoredCandidates(70, 70, []uint{testPhotos[0].ID}, 10)
+	assert.NoError(t, err)
+	assert.Len(t, photos, 1)
+
+	// 带 limit
+	photos, err = repo.GetTopScoredCandidates(0, 0, nil, 2)
+	assert.NoError(t, err)
+	assert.Len(t, photos, 2)
+}

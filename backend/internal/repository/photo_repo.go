@@ -43,6 +43,8 @@ type PhotoRepository interface {
 	GetTopByScore(limit int, excludePhotoIDs []uint) ([]*model.Photo, error)
 	GetRandom(limit, minBeautyScore, minMemoryScore int, excludePhotoIDs []uint) ([]*model.Photo, error)
 	GetByLocation(location string, limit int) ([]*model.Photo, error)
+	GetOnThisDayCandidates(monthDayStart, monthDayEnd string, minBeauty, minMemory int, excludeIDs []uint, limit int) ([]*model.Photo, error)
+	GetTopScoredCandidates(minBeauty, minMemory int, excludeIDs []uint, limit int) ([]*model.Photo, error)
 
 	// 统计
 	Count() (int64, error)
@@ -386,6 +388,46 @@ func (r *photoRepository) GetByLocation(location string, limit int) ([]*model.Ph
 		Order("taken_at DESC").
 		Limit(limit).
 		Find(&photos).Error
+	return photos, err
+}
+
+// GetOnThisDayCandidates 按月日范围查找"往年今日"候选照片，单条 SQL 替代逐年循环
+// monthDayStart/monthDayEnd 格式为 "01-02"（MM-DD）
+// 自动处理跨年边界（如 12-30 到 01-03）
+func (r *photoRepository) GetOnThisDayCandidates(monthDayStart, monthDayEnd string, minBeauty, minMemory int, excludeIDs []uint, limit int) ([]*model.Photo, error) {
+	var photos []*model.Photo
+	query := r.db.Scopes(activeScope).
+		Where("ai_analyzed = ?", true).
+		Where("taken_at IS NOT NULL").
+		Where("beauty_score >= ? AND memory_score >= ?", minBeauty, minMemory)
+
+	if monthDayStart > monthDayEnd {
+		// 跨年边界：如 12-28 到 01-04
+		query = query.Where("(strftime('%m-%d', taken_at) >= ? OR strftime('%m-%d', taken_at) <= ?)", monthDayStart, monthDayEnd)
+	} else {
+		query = query.Where("strftime('%m-%d', taken_at) BETWEEN ? AND ?", monthDayStart, monthDayEnd)
+	}
+
+	if len(excludeIDs) > 0 {
+		query = query.Where("id NOT IN ?", excludeIDs)
+	}
+
+	err := query.Order("overall_score DESC").Limit(limit).Find(&photos).Error
+	return photos, err
+}
+
+// GetTopScoredCandidates 按综合评分排序获取候选照片，替代 ListAll + 内存过滤
+func (r *photoRepository) GetTopScoredCandidates(minBeauty, minMemory int, excludeIDs []uint, limit int) ([]*model.Photo, error) {
+	var photos []*model.Photo
+	query := r.db.Scopes(activeScope).
+		Where("ai_analyzed = ?", true).
+		Where("beauty_score >= ? AND memory_score >= ?", minBeauty, minMemory)
+
+	if len(excludeIDs) > 0 {
+		query = query.Where("id NOT IN ?", excludeIDs)
+	}
+
+	err := query.Order("overall_score DESC, taken_at DESC").Limit(limit).Find(&photos).Error
 	return photos, err
 }
 
