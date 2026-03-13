@@ -1,118 +1,6 @@
 <template>
   <div class="config-page">
-    <PageHeader title="配置管理" subtitle="维护扫描路径、自动扫描、地理编码、AI 服务与提示词" :gradient="true">
-      <template #actions>
-        <el-button type="primary" @click="handleAddPath">
-          <el-icon><Plus /></el-icon>
-          添加路径
-        </el-button>
-      </template>
-    </PageHeader>
-
-    <!-- Scan Paths Card -->
-    <el-card shadow="never" class="scan-paths-card">
-      <template #header>
-        <SectionHeader :icon="FolderOpened" title="扫描路径配置" />
-      </template>
-
-      <div v-loading="loading">
-        <div class="paths-list">
-          <el-empty v-if="!scanPaths.length" description="暂无扫描路径配置">
-            <el-button type="primary" @click="handleAddPath">添加第一个路径</el-button>
-          </el-empty>
-          <div
-            v-for="path in scanPaths"
-          :key="path.id"
-          class="path-item"
-          :class="{ disabled: !path.enabled }"
-        >
-          <div class="path-info">
-            <div class="path-header">
-              <el-checkbox v-model="path.enabled" @change="handleToggleEnabled(path)">
-                {{ path.name }}
-              </el-checkbox>
-              <el-tag v-if="path.is_default" type="success" size="small">默认</el-tag>
-            </div>
-            <div class="path-details">
-              <div class="path-location">{{ path.path }}</div>
-              <div class="path-meta">
-                <span>
-                  <el-tag :type="path.auto_scan_enabled ? 'success' : 'info'" size="small" effect="light">
-                    {{ path.auto_scan_enabled ? '自动扫描' : '仅手动' }}
-                  </el-tag>
-                </span>
-                <span v-if="path.last_scanned_at">
-                  <el-icon><Clock /></el-icon>
-                  上次扫描: {{ formatTime(path.last_scanned_at) }}
-                </span>
-                <span v-else class="never-scanned">从未扫描</span>
-              </div>
-            </div>
-          </div>
-          <div class="path-actions">
-            <el-switch
-              v-model="path.auto_scan_enabled"
-              active-text="自动"
-              inactive-text="手动"
-              @change="handleToggleAutoScan(path)"
-            />
-            <el-button
-              v-if="!path.is_default"
-              link
-              @click="handleSetDefault(path)"
-              class="action-link"
-            >
-              设为默认
-            </el-button>
-            <el-button link @click="handleEditPath(path)" class="action-link">
-              编辑
-            </el-button>
-            <el-button link @click="handleDeletePath(path)" class="danger-link">
-              删除
-            </el-button>
-          </div>
-        </div>
-
-        <div class="auto-scan-config-panel">
-          <div class="auto-scan-config-header">
-            <div class="auto-scan-config-title">自动扫描设置</div>
-            <el-button type="primary" @click="handleSaveAutoScanConfig" :loading="savingAutoScan">
-              <el-icon><Check /></el-icon>
-              保存自动扫描配置
-            </el-button>
-          </div>
-          <el-form :model="autoScanConfig" label-width="120px">
-            <el-form-item label="全局自动扫描">
-              <el-switch v-model="autoScanConfig.enabled" />
-              <div class="form-hint">关闭后，所有路径都不会自动检查目录变化。</div>
-            </el-form-item>
-            <el-form-item label="扫描频率">
-              <div class="model-select-row">
-                <el-select v-model="autoScanIntervalSelection" class="select-width-md" @change="handleAutoScanIntervalSelectionChange">
-                  <el-option :value="10" label="10 分钟" />
-                  <el-option :value="30" label="30 分钟" />
-                  <el-option :value="60" label="1 小时" />
-                  <el-option :value="120" label="2 小时" />
-                  <el-option :value="720" label="12 小时" />
-                  <el-option :value="1440" label="1 天" />
-                  <el-option value="__custom__" label="自定义" />
-                </el-select>
-                <el-input-number
-                  v-if="autoScanIntervalSelection === '__custom__'"
-                  v-model="autoScanConfig.interval_minutes"
-                  :min="1"
-                  :max="10080"
-                  class="input-number-width-md"
-                />
-                <span v-if="autoScanIntervalSelection === '__custom__'">分钟</span>
-              </div>
-              <div class="form-hint">仅对已启用且开启自动扫描的路径生效。系统按设定周期检查目录变化，检测到变化才触发异步扫描。</div>
-            </el-form-item>
-          </el-form>
-        </div>
-      </div>
-      </div>
-    </el-card>
+    <PageHeader title="配置管理" subtitle="维护地理编码、AI 服务与提示词配置" :gradient="true" />
 
     <!-- Geocode Configuration Card -->
     <el-card shadow="never" class="geocode-card">
@@ -753,69 +641,20 @@
       </div>
     </el-card>
 
-    <!-- Add/Edit Path Dialog -->
-    <el-dialog
-      v-model="dialogVisible"
-      :title="isEdit ? '编辑扫描路径' : '添加扫描路径'"
-      width="600px"
-    >
-      <el-form :model="pathForm" label-width="100px" ref="formRef">
-        <el-form-item label="名称" required>
-          <el-input v-model="pathForm.name" placeholder="例如: iPhone 2025-11" />
-        </el-form-item>
-        <el-form-item label="路径" required>
-          <div class="input-with-button">
-            <el-input v-model="pathForm.path" placeholder="/path/to/photos" />
-            <el-button @click="handleBrowsePath">
-              <el-icon><FolderOpened /></el-icon>
-              浏览
-            </el-button>
-            <el-button @click="handleValidatePath" :loading="validating">验证</el-button>
-          </div>
-          <div v-if="validationResult" :class="['validation-result', validationResult.valid ? 'valid' : 'invalid']">
-            <el-icon v-if="validationResult.valid"><CircleCheck /></el-icon>
-            <el-icon v-else><CircleClose /></el-icon>
-            <span>{{ validationResult.valid ? '路径有效' : validationResult.error }}</span>
-          </div>
-        </el-form-item>
-        <el-form-item label="设置">
-          <el-checkbox v-model="pathForm.is_default">设为默认路径</el-checkbox>
-          <el-checkbox v-model="pathForm.enabled">启用此路径</el-checkbox>
-          <el-checkbox v-model="pathForm.auto_scan_enabled">启用自动扫描</el-checkbox>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleSavePath" :loading="saving">保存</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- Path Browser Dialog -->
-    <PathBrowser v-model="pathBrowserVisible" :initial-path="pathForm.path" @select="handlePathSelected" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import PathBrowser from '@/components/PathBrowser.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { configApi, promptApi, type ScanPathConfig, type AutoScanConfig, type GeocodeConfig, type AIConfig, type PromptConfig, defaultPrompts, getCitiesDataStatus, downloadCitiesData, type CitiesDataStatus } from '@/api/config'
-import { photoApi } from '@/api/photo'
+import { configApi, promptApi, type AutoScanConfig, type GeocodeConfig, type AIConfig, type PromptConfig, defaultPrompts, getCitiesDataStatus, downloadCitiesData, type CitiesDataStatus } from '@/api/config'
 import dayjs from 'dayjs'
-import { v4 as uuidv4 } from 'uuid'
-import { FolderOpened, CircleCheck, CircleClose, Document, RefreshLeft, Check, Download, SuccessFilled, Link, Location, Clock, Cpu, Plus } from '@element-plus/icons-vue'
+import { Document, RefreshLeft, Check, Download, SuccessFilled, Link, Location, Cpu } from '@element-plus/icons-vue'
 
-// Scan paths state
-const scanPaths = ref<ScanPathConfig[]>([])
+// Auto scan config state
 const loading = ref(false)
-const dialogVisible = ref(false)
-const isEdit = ref(false)
-const saving = ref(false)
-const validating = ref(false)
-const validationResult = ref<{ valid: boolean; error?: string } | null>(null)
-const pathBrowserVisible = ref(false)
 const autoScanConfig = ref<AutoScanConfig>(configApi.getDefaultAutoScanConfig())
 const savingAutoScan = ref(false)
 const autoScanIntervalSelection = ref<number | '__custom__'>(60)
@@ -827,14 +666,6 @@ const citiesDataStatus = ref<CitiesDataStatus>({
   exists: false,
   file_path: '',
   download_url: ''
-})
-
-const pathForm = ref<Partial<ScanPathConfig>>({
-  name: '',
-  path: '',
-  is_default: false,
-  enabled: true,
-  auto_scan_enabled: true,
 })
 
 // Geocode configuration state
@@ -907,187 +738,6 @@ const syncAutoScanIntervalSelection = () => {
 const handleAutoScanIntervalSelectionChange = (value: number | '__custom__') => {
   if (value !== '__custom__') {
     autoScanConfig.value.interval_minutes = value
-  }
-}
-
-// Scan paths functions
-const loadScanPaths = async () => {
-  loading.value = true
-  try {
-    const config = await configApi.getScanPaths()
-    scanPaths.value = (config.paths || []).map(path => ({ ...path, auto_scan_enabled: path.auto_scan_enabled ?? true }))
-  } catch (error: any) {
-    ElMessage.error('加载扫描路径失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-const handleAddPath = () => {
-  isEdit.value = false
-  pathForm.value = {
-    name: '',
-    path: '',
-    is_default: scanPaths.value.length === 0, // First path is default
-    enabled: true,
-    auto_scan_enabled: true,
-  }
-  validationResult.value = null
-  dialogVisible.value = true
-}
-
-const handleEditPath = (path: ScanPathConfig) => {
-  isEdit.value = true
-  pathForm.value = { ...path }
-  validationResult.value = null
-  dialogVisible.value = true
-}
-
-const handleBrowsePath = () => {
-  pathBrowserVisible.value = true
-}
-
-const handlePathSelected = (path: string) => {
-  pathForm.value.path = path
-}
-
-const handleValidatePath = async () => {
-  if (!pathForm.value.path) {
-    ElMessage.warning('请输入路径')
-    return
-  }
-
-  validating.value = true
-  try {
-    const result = await configApi.validatePath(pathForm.value.path)
-    validationResult.value = result
-    if (result.valid) {
-      ElMessage.success('路径验证成功')
-    }
-  } catch (error: any) {
-    ElMessage.error('路径验证失败')
-  } finally {
-    validating.value = false
-  }
-}
-
-const handleSavePath = async () => {
-  if (!pathForm.value.name || !pathForm.value.path) {
-    ElMessage.warning('请填写完整信息')
-    return
-  }
-
-  saving.value = true
-  try {
-    const newPaths = [...scanPaths.value]
-
-    if (isEdit.value) {
-      // Update existing
-      const index = newPaths.findIndex(p => p.id === pathForm.value.id)
-      if (index !== -1) {
-        // If setting as default, unset others
-        if (pathForm.value.is_default) {
-          newPaths.forEach(p => p.is_default = false)
-        }
-        newPaths[index] = pathForm.value as ScanPathConfig
-      }
-    } else {
-      // Add new
-      const newPath: ScanPathConfig = {
-        id: uuidv4(),
-        name: pathForm.value.name!,
-        path: pathForm.value.path!,
-        is_default: pathForm.value.is_default || false,
-        enabled: pathForm.value.enabled ?? true,
-        auto_scan_enabled: pathForm.value.auto_scan_enabled ?? true,
-        created_at: new Date().toISOString(),
-      }
-
-      // If setting as default, unset others
-      if (newPath.is_default) {
-        newPaths.forEach(p => p.is_default = false)
-      }
-
-      newPaths.push(newPath)
-    }
-
-    await configApi.updateScanPaths({ paths: newPaths })
-    ElMessage.success('保存成功')
-    dialogVisible.value = false
-    await loadScanPaths()
-  } catch (error: any) {
-    ElMessage.error('保存失败')
-  } finally {
-    saving.value = false
-  }
-}
-
-const handleDeletePath = async (path: ScanPathConfig) => {
-  try {
-    // 查找路径对应的照片数量
-    const photoCount = await getPhotoCountByPath(path.path)
-
-    let message = `确定要删除扫描路径「${path.name}」吗？`
-    if (photoCount > 0) {
-      message += `<br><br><strong class="danger-link">警告：该路径下有 ${photoCount} 张照片，删除路径将同时删除这些照片的数据库记录和缩略图！</strong>`
-    }
-
-    await ElMessageBox.confirm(message, '确认删除', {
-      type: 'warning',
-      dangerouslyUseHTMLString: true,
-      confirmButtonText: '确认删除',
-      cancelButtonText: '取消',
-    })
-
-    // 调用新 API 删除路径及其关联数据
-    const result = await configApi.deleteScanPath(path.id)
-    ElMessage.success(result.message || '删除成功')
-    await loadScanPaths()
-  } catch (error: any) {
-    if (error !== 'cancel') {
-      ElMessage.error(error.message || '删除失败')
-    }
-  }
-}
-
-// 获取路径下的照片数量（用于提示）
-const getPhotoCountByPath = async (path: string): Promise<number> => {
-  const res = await photoApi.countByPaths({ paths: [path] })
-  return res.data?.data?.counts?.[path] || 0
-}
-
-const handleSetDefault = async (path: ScanPathConfig) => {
-  const newPaths = scanPaths.value.map(p => ({
-    ...p,
-    is_default: p.id === path.id,
-  }))
-
-  try {
-    await configApi.updateScanPaths({ paths: newPaths })
-    ElMessage.success('已设为默认路径')
-    await loadScanPaths()
-  } catch (error: any) {
-    ElMessage.error('操作失败')
-  }
-}
-
-const handleToggleEnabled = async (path: ScanPathConfig) => {
-  try {
-    await configApi.updateScanPaths({ paths: scanPaths.value })
-    ElMessage.success(path.enabled ? '已启用' : '已禁用')
-  } catch (error: any) {
-    ElMessage.error('操作失败')
-    path.enabled = !path.enabled
-  }
-}
-
-const handleToggleAutoScan = async (path: ScanPathConfig) => {
-  try {
-    await configApi.updateScanPaths({ paths: scanPaths.value })
-    ElMessage.success(path.auto_scan_enabled ? '已开启自动扫描' : '已切换为仅手动扫描')
-  } catch (error: any) {
-    ElMessage.error('操作失败')
-    path.auto_scan_enabled = !path.auto_scan_enabled
   }
 }
 
@@ -1272,7 +922,6 @@ const handleResetPrompts = async () => {
 }
 
 onMounted(() => {
-  loadScanPaths()
   loadAutoScanConfig()
   loadGeocodeConfig()
   loadAIConfig()

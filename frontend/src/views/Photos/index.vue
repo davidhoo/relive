@@ -5,10 +5,33 @@
     <!-- 扫描路径列表 -->
     <el-card shadow="never" class="scan-paths-card animate-fade-in" v-loading="scanPathLoading">
       <template #header>
-        <SectionHeader :icon="FolderOpened" title="扫描路径">
+        <SectionHeader :icon="FolderOpened" :title="`扫描路径 (${scanPaths.length})`">
         <template #actions>
           <div class="scan-paths-actions">
-            <span class="count-pill">{{ scanPaths.length }}</span>
+            <div class="auto-scan-inline">
+              <el-tooltip content="全局自动扫描开关" placement="top">
+                <el-switch
+                  v-model="autoScanConfig.enabled"
+                  size="small"
+                  active-text="自动扫描"
+                  @change="handleAutoScanToggle"
+                />
+              </el-tooltip>
+              <el-select
+                v-if="autoScanConfig.enabled"
+                v-model="autoScanConfig.interval_minutes"
+                size="small"
+                class="auto-scan-interval-select"
+                @change="handleAutoScanIntervalChange"
+              >
+                <el-option :value="10" label="10 分钟" />
+                <el-option :value="30" label="30 分钟" />
+                <el-option :value="60" label="1 小时" />
+                <el-option :value="120" label="2 小时" />
+                <el-option :value="720" label="12 小时" />
+                <el-option :value="1440" label="1 天" />
+              </el-select>
+            </div>
             <el-button
               type="danger"
               size="small"
@@ -21,9 +44,9 @@
               <el-icon><Delete /></el-icon>
               清理
             </el-button>
-            <el-button plain size="small" @click="goToConfig" class="manage-btn">
-              <el-icon><Setting /></el-icon>
-              管理路径
+            <el-button type="primary" size="small" @click="handleAddPath" class="manage-btn">
+              <el-icon><Plus /></el-icon>
+              添加路径
             </el-button>
           </div>
         </template>
@@ -47,7 +70,6 @@
               >
                 {{ row.name }}
               </span>
-              <el-tag v-if="row.is_default" type="success" size="small" effect="light">默认</el-tag>
             </div>
           </template>
         </el-table-column>
@@ -64,13 +86,16 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="状态" width="130" align="center">
+        <el-table-column label="状态" width="160" align="center">
           <template #default="{ row }">
             <div class="derived-status-icons">
-              <el-tooltip :content="row.enabled ? '路径已启用' : '路径已禁用'" placement="top">
-                <span class="derived-status-icon" :class="row.enabled ? 'is-ready' : 'is-idle'">
-                  <el-icon><SwitchButton /></el-icon>
-                </span>
+              <el-tooltip :content="row.enabled ? '点击禁用' : '点击启用'" placement="top">
+                <el-switch
+                  v-model="row.enabled"
+                  size="small"
+                  @change="handleToggleEnabled(row)"
+                  style="margin-right: 4px;"
+                />
               </el-tooltip>
               <el-tooltip :content="getPathAnalysisDerivedTooltip(row.path)" placement="top">
                 <span class="derived-status-icon" :class="getPathAnalysisDerivedState(row.path)">
@@ -85,6 +110,11 @@
               <el-tooltip :content="getPathGeocodeDerivedTooltip(row.path)" placement="top">
                 <span class="derived-status-icon" :class="getPathGeocodeDerivedState(row.path)">
                   <el-icon><Location /></el-icon>
+                </span>
+              </el-tooltip>
+              <el-tooltip :content="row.auto_scan_enabled ? '自动扫描' : '仅手动扫描'" placement="top">
+                <span class="derived-status-icon" :class="row.auto_scan_enabled ? 'is-ready' : 'is-idle'">
+                  <el-icon><Timer /></el-icon>
                 </span>
               </el-tooltip>
             </div>
@@ -120,7 +150,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="170" align="center">
+        <el-table-column label="操作" width="250" align="center">
           <template #default="{ row }">
             <div class="path-action-group">
               <el-button
@@ -160,6 +190,25 @@
               >
                 重建
               </el-button>
+              <el-button
+                size="small"
+                plain
+                :disabled="isPathTaskActive(row)"
+                @click="handleEditPath(row)"
+                class="edit-btn"
+              >
+                编辑
+              </el-button>
+              <el-button
+                type="danger"
+                size="small"
+                plain
+                :disabled="isPathTaskActive(row)"
+                @click="handleDeletePath(row)"
+                class="delete-btn"
+              >
+                删除
+              </el-button>
             </div>
           </template>
         </el-table-column>
@@ -181,9 +230,9 @@
       </div>
 
       <el-empty v-if="scanPaths.length === 0 && !scanPathLoading" description="暂无扫描路径" :image-size="80">
-        <el-button type="primary" @click="goToConfig">
-          <el-icon><Setting /></el-icon>
-          前往配置
+        <el-button type="primary" @click="handleAddPath">
+          <el-icon><Plus /></el-icon>
+          添加路径
         </el-button>
       </el-empty>
     </el-card>
@@ -191,10 +240,9 @@
     <!-- 照片列表 -->
     <el-card shadow="never" class="photos-grid-card animate-fade-in" v-loading="loading">
       <template #header>
-        <SectionHeader :icon="Picture" title="照片列表">
+        <SectionHeader :icon="Picture" :title="`照片列表（共 ${total} 张）`">
         <template #actions>
           <div class="photos-list-actions">
-            <span class="count-pill">共 {{ total }} 张</span>
             <el-radio-group v-model="filterAnalyzed" @change="handleSearch" size="default" class="filter-group">
               <el-radio-button label="">全部</el-radio-button>
               <el-radio-button label="true">已分析</el-radio-button>
@@ -217,9 +265,9 @@
 
       <!-- 空状态：系统中没有照片 -->
       <el-empty v-if="!photos.length && !loading && systemTotal === 0" description="暂无照片" :image-size="120">
-        <el-button type="primary" @click="goToConfig">
-          <el-icon><Setting /></el-icon>
-          前往配置添加路径
+        <el-button type="primary" @click="handleAddPath">
+          <el-icon><Plus /></el-icon>
+          添加扫描路径
         </el-button>
       </el-empty>
 
@@ -264,9 +312,9 @@
             <el-tag
               v-for="category in categories"
               :key="category"
-              :type="searchQuery === category ? 'primary' : 'info'"
+              :type="filterCategory === category ? 'primary' : 'info'"
               class="filter-tag"
-              @click="handleFilterClick(category)"
+              @click="handleCategoryClick(category)"
             >
               {{ category }}
             </el-tag>
@@ -284,9 +332,9 @@
             <el-tag
               v-for="tag in displayedTags"
               :key="tag"
-              :type="searchQuery === tag ? 'primary' : 'info'"
+              :type="filterTag === tag ? 'primary' : 'info'"
               class="filter-tag"
-              @click="handleFilterClick(tag)"
+              @click="handleTagClick(tag)"
             >
               {{ tag }}
             </el-tag>
@@ -326,12 +374,21 @@
             <div
               class="photo-card photo-card-parallax animate-scale-in"
               :style="{ animationDelay: `${index * 30}ms` }"
-              @click="gotoDetail(photo.id)"
+              :class="{ 'is-selected': selectedPhotos.has(photo.id) }"
+              @click="selectedPhotos.size > 0 ? toggleSelectPhoto(photo.id) : gotoDetail(photo.id)"
             >
               <div class="photo-image-wrapper">
+                <!-- 选择按钮 -->
+                <div
+                  class="photo-select-btn"
+                  :class="{ selected: selectedPhotos.has(photo.id) }"
+                  @click.stop="toggleSelectPhoto(photo.id)"
+                >
+                  <el-icon v-if="selectedPhotos.has(photo.id)"><Select /></el-icon>
+                </div>
                 <el-image
                     :src="getPhotoThumbnailUrl(photo.id, photo.updated_at)"
-                  :preview-src-list="[getPhotoUrl(photo.id)]"
+                  :preview-src-list="selectedPhotos.size > 0 ? [] : [getPhotoUrl(photo.id)]"
                   fit="cover"
                   class="photo-image"
                   loading="lazy"
@@ -413,20 +470,84 @@
         </div>
       </div>
     </el-card>
+
+    <!-- 选中照片悬浮工具栏 -->
+    <Transition name="float-toolbar">
+      <div v-if="selectedPhotos.size > 0" class="selection-toolbar">
+        <el-button
+          :icon="Close"
+          circle
+          size="small"
+          @click="selectedPhotos = new Set()"
+          title="取消选择"
+        />
+        <span class="selection-count">已选中 {{ selectedPhotos.size }} 张照片</span>
+        <el-tooltip :content="filterStatus === 'excluded' ? '恢复选中照片' : '移除选中照片'" placement="top">
+          <el-button
+            :type="filterStatus === 'excluded' ? 'success' : 'danger'"
+            :icon="filterStatus === 'excluded' ? RefreshLeft : Delete"
+            circle
+            @click="filterStatus === 'excluded' ? handleRestoreSelected() : handleExcludeSelected()"
+            :loading="excludingPhotos"
+          />
+        </el-tooltip>
+      </div>
+    </Transition>
+
+    <!-- 添加/编辑扫描路径对话框 -->
+    <el-dialog
+      v-model="addPathDialogVisible"
+      :title="isEditPath ? '编辑扫描路径' : '添加扫描路径'"
+      width="600px"
+    >
+      <el-form :model="pathForm" label-width="100px">
+        <el-form-item label="名称" required>
+          <el-input v-model="pathForm.name" placeholder="例如: iPhone 2025-11" />
+        </el-form-item>
+        <el-form-item label="路径" required>
+          <div class="input-with-button">
+            <el-input v-model="pathForm.path" placeholder="/path/to/photos" />
+            <el-button @click="pathBrowserVisible = true">
+              <el-icon><FolderOpened /></el-icon>
+              浏览
+            </el-button>
+            <el-button @click="handleValidatePath" :loading="validatingPath">验证</el-button>
+          </div>
+          <div v-if="pathValidationResult" :class="['validation-result', pathValidationResult.valid ? 'valid' : 'invalid']">
+            <el-icon v-if="pathValidationResult.valid"><CircleCheck /></el-icon>
+            <el-icon v-else><CircleClose /></el-icon>
+            <span>{{ pathValidationResult.valid ? '路径有效' : pathValidationResult.error }}</span>
+          </div>
+        </el-form-item>
+        <el-form-item label="设置">
+          <el-switch v-model="pathForm.enabled" active-text="启用" inactive-text="禁用" style="margin-right: 24px;" />
+          <el-switch v-model="pathForm.auto_scan_enabled" active-text="自动扫描" inactive-text="仅手动" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="addPathDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handleSavePath" :loading="savingPath">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 路径浏览器 -->
+    <PathBrowser v-model="pathBrowserVisible" :initial-path="pathForm.path" @select="(path: string) => pathForm.path = path" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { ArrowDown, ArrowUp, Clock, Collection, Delete, Files, Filter, Folder, FolderOpened, FullScreen, Loading, Location, MagicStick, Picture, PictureFilled, PriceTag, QuestionFilled, Refresh, Search, Setting, Star, SwitchButton } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowUp, CircleCheck, CircleClose, Clock, Close, Collection, Delete, Files, Filter, Folder, FolderOpened, FullScreen, Loading, Location, MagicStick, Picture, PictureFilled, Plus, PriceTag, QuestionFilled, Refresh, RefreshLeft, Search, Select, Star, SwitchButton, Timer } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
+import PathBrowser from '@/components/PathBrowser.vue'
 import { photoApi } from '@/api/photo'
-import { configApi, type ScanPathConfig } from '@/api/config'
+import { configApi, type ScanPathConfig, type AutoScanConfig } from '@/api/config'
 import type { Photo } from '@/types/photo'
 import { useUserStore } from '@/stores/user'
+import { v4 as uuidv4 } from 'uuid'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -438,6 +559,8 @@ const pageSize = ref(20)
 const total = ref(0)
 const systemTotal = ref(0) // 系统中所有照片的总数（不带筛选）
 const searchQuery = ref('')
+const filterCategory = ref('')  // 分类精确筛选
+const filterTag = ref('')       // 标签筛选
 const filterAnalyzed = ref('')
 const filterThumbnail = ref('')
 const filterGPS = ref('')
@@ -451,6 +574,63 @@ const currentTaskStatus = ref<string>('')
 const currentScanPath = ref<string>('') // 当前正在扫描的路径
 const currentScanType = ref<'scan' | 'rebuild' | ''>('') // 当前扫描类型
 const cleaningUp = ref(false)
+const autoScanConfig = ref<AutoScanConfig>(configApi.getDefaultAutoScanConfig())
+const selectedPhotos = ref<Set<number>>(new Set())
+const excludingPhotos = ref(false)
+
+const toggleSelectPhoto = (id: number) => {
+  const next = new Set(selectedPhotos.value)
+  if (next.has(id)) {
+    next.delete(id)
+  } else {
+    next.add(id)
+  }
+  selectedPhotos.value = next
+}
+
+const handleExcludeSelected = async () => {
+  const ids = Array.from(selectedPhotos.value)
+  try {
+    await ElMessageBox.confirm(
+      `确定要移除选中的 ${ids.length} 张照片吗？移除后照片将进入回收站。`,
+      '确认移除',
+      { type: 'warning', confirmButtonText: '确认移除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+
+  excludingPhotos.value = true
+  try {
+    await photoApi.batchUpdateStatus({ photo_ids: ids, status: 'excluded' })
+    ElMessage.success(`已移除 ${ids.length} 张照片`)
+    selectedPhotos.value = new Set()
+    loadPhotos()
+    loadExcludedCount()
+    loadPathDerivedStatus()
+  } catch (error: any) {
+    ElMessage.error(error.message || '移除失败')
+  } finally {
+    excludingPhotos.value = false
+  }
+}
+
+const handleRestoreSelected = async () => {
+  const ids = Array.from(selectedPhotos.value)
+  excludingPhotos.value = true
+  try {
+    await photoApi.batchUpdateStatus({ photo_ids: ids, status: 'active' })
+    ElMessage.success(`已恢复 ${ids.length} 张照片`)
+    selectedPhotos.value = new Set()
+    loadPhotos()
+    loadExcludedCount()
+    loadPathDerivedStatus()
+  } catch (error: any) {
+    ElMessage.error(error.message || '恢复失败')
+  } finally {
+    excludingPhotos.value = false
+  }
+}
 const excludedCount = ref(0)
 const categories = ref<string[]>([])
 const tags = ref<string[]>([])
@@ -652,9 +832,135 @@ const formatRelativeTime = (dateStr: string) => {
   }
 }
 
-// 前往配置页面
-const goToConfig = () => {
-  router.push('/config')
+// 添加/编辑路径相关状态
+const addPathDialogVisible = ref(false)
+const pathBrowserVisible = ref(false)
+const savingPath = ref(false)
+const validatingPath = ref(false)
+const pathValidationResult = ref<{ valid: boolean; error?: string } | null>(null)
+const pathForm = ref({ id: '', name: '', path: '', enabled: true, auto_scan_enabled: true })
+const isEditPath = ref(false)
+
+// 添加路径
+const handleAddPath = () => {
+  isEditPath.value = false
+  pathForm.value = { id: '', name: '', path: '', enabled: true, auto_scan_enabled: true }
+  pathValidationResult.value = null
+  addPathDialogVisible.value = true
+}
+
+// 编辑路径
+const handleEditPath = (path: ScanPathConfig) => {
+  isEditPath.value = true
+  pathForm.value = { id: path.id, name: path.name, path: path.path, enabled: path.enabled, auto_scan_enabled: path.auto_scan_enabled }
+  pathValidationResult.value = null
+  addPathDialogVisible.value = true
+}
+
+// 验证路径
+const handleValidatePath = async () => {
+  if (!pathForm.value.path) {
+    ElMessage.warning('请输入路径')
+    return
+  }
+  validatingPath.value = true
+  try {
+    const result = await configApi.validatePath(pathForm.value.path)
+    pathValidationResult.value = result
+    if (result.valid) {
+      ElMessage.success('路径验证成功')
+    }
+  } catch (error: any) {
+    ElMessage.error('路径验证失败')
+  } finally {
+    validatingPath.value = false
+  }
+}
+
+// 保存路径
+const handleSavePath = async () => {
+  if (!pathForm.value.name || !pathForm.value.path) {
+    ElMessage.warning('请填写完整信息')
+    return
+  }
+  savingPath.value = true
+  try {
+    let newPaths: ScanPathConfig[]
+
+    if (isEditPath.value) {
+      // 编辑现有路径
+      newPaths = scanPaths.value.map(p =>
+        p.id === pathForm.value.id
+          ? { ...p, name: pathForm.value.name, path: pathForm.value.path, enabled: pathForm.value.enabled, auto_scan_enabled: pathForm.value.auto_scan_enabled }
+          : p
+      )
+    } else {
+      // 添加新路径
+      const newPath: ScanPathConfig = {
+        id: uuidv4(),
+        name: pathForm.value.name,
+        path: pathForm.value.path,
+        is_default: false,
+        enabled: pathForm.value.enabled,
+        auto_scan_enabled: pathForm.value.auto_scan_enabled,
+        created_at: new Date().toISOString(),
+      }
+      newPaths = [...scanPaths.value, newPath]
+    }
+
+    await configApi.updateScanPaths({ paths: newPaths })
+    ElMessage.success(isEditPath.value ? '修改成功' : '添加成功')
+    addPathDialogVisible.value = false
+    await loadScanPaths()
+  } catch (error: any) {
+    ElMessage.error(isEditPath.value ? '修改失败' : '添加失败')
+  } finally {
+    savingPath.value = false
+  }
+}
+
+// 切换路径启用状态
+const handleToggleEnabled = async (path: ScanPathConfig) => {
+  try {
+    await configApi.updateScanPaths({ paths: scanPaths.value })
+    ElMessage.success(path.enabled ? '已启用' : '已禁用')
+  } catch (error: any) {
+    ElMessage.error('操作失败')
+    path.enabled = !path.enabled
+  }
+}
+
+// 删除路径
+const handleDeletePath = async (path: ScanPathConfig) => {
+  try {
+    const paths = scanPaths.value.map(p => p.path)
+    const res = await photoApi.countByPaths({ paths: [path.path] })
+    const photoCount = res.data?.data?.counts?.[path.path] || 0
+
+    let message = `确定要删除扫描路径「${path.name}」吗？`
+    if (photoCount > 0) {
+      message += `<br><br><strong style="color: var(--el-color-danger)">警告：该路径下有 ${photoCount} 张照片，删除路径将同时删除这些照片的数据库记录和缩略图！</strong>`
+    }
+
+    await ElMessageBox.confirm(message, '确认删除', {
+      type: 'warning',
+      dangerouslyUseHTMLString: true,
+      confirmButtonText: '确认删除',
+      cancelButtonText: '取消',
+    })
+
+    const result = await configApi.deleteScanPath(path.id)
+    ElMessage.success(result.message || '删除成功')
+    await loadScanPaths()
+    loadSystemTotal()
+    loadExcludedCount()
+    loadCategoriesAndTags()
+    loadPhotos()
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.message || '删除失败')
+    }
+  }
 }
 
 // 加载系统总照片数（不带任何筛选）
@@ -679,6 +985,8 @@ const loadExcludedCount = async () => {
 // 重置搜索条件
 const resetSearch = () => {
   searchQuery.value = ''
+  filterCategory.value = ''
+  filterTag.value = ''
   filterAnalyzed.value = ''
   filterThumbnail.value = ''
   filterGPS.value = ''
@@ -698,6 +1006,14 @@ const loadPhotos = async () => {
 
     if (searchQuery.value) {
       params.search = searchQuery.value
+    }
+
+    if (filterCategory.value) {
+      params.category = filterCategory.value
+    }
+
+    if (filterTag.value) {
+      params.tag = filterTag.value
     }
 
     if (filterAnalyzed.value) {
@@ -728,6 +1044,9 @@ const loadPhotos = async () => {
 
 // 搜索处理
 const handleSearch = () => {
+  // 搜索时清除分类和标签筛选
+  filterCategory.value = ''
+  filterTag.value = ''
   currentPage.value = 1
   loadPhotos()
 }
@@ -735,6 +1054,31 @@ const handleSearch = () => {
 // 分页处理
 const handlePageChange = () => {
   loadPhotos()
+}
+
+// 加载自动扫描配置
+const loadAutoScanConfig = async () => {
+  autoScanConfig.value = await configApi.getAutoScanConfig()
+}
+
+// 保存自动扫描配置（开关切换）
+const handleAutoScanToggle = async () => {
+  try {
+    await configApi.updateAutoScanConfig(autoScanConfig.value)
+    ElMessage.success(autoScanConfig.value.enabled ? '自动扫描已开启' : '自动扫描已关闭')
+  } catch (error: any) {
+    ElMessage.error('保存自动扫描配置失败')
+  }
+}
+
+// 保存自动扫描配置（频率变更）
+const handleAutoScanIntervalChange = async () => {
+  try {
+    await configApi.updateAutoScanConfig(autoScanConfig.value)
+    ElMessage.success('扫描频率已更新')
+  } catch (error: any) {
+    ElMessage.error('保存自动扫描配置失败')
+  }
 }
 
 // 加载扫描路径
@@ -773,14 +1117,28 @@ const loadCategoriesAndTags = async () => {
   }
 }
 
-// 点击分类/标签筛选
-const handleFilterClick = (value: string) => {
-  if (searchQuery.value === value) {
-    // 如果已经选中了，取消筛选
-    searchQuery.value = ''
+// 点击分类筛选
+const handleCategoryClick = (value: string) => {
+  if (filterCategory.value === value) {
+    filterCategory.value = ''
   } else {
-    searchQuery.value = value
+    filterCategory.value = value
   }
+  // 分类和标签互斥
+  filterTag.value = ''
+  currentPage.value = 1
+  loadPhotos()
+}
+
+// 点击标签筛选
+const handleTagClick = (value: string) => {
+  if (filterTag.value === value) {
+    filterTag.value = ''
+  } else {
+    filterTag.value = value
+  }
+  // 标签和分类互斥
+  filterCategory.value = ''
   currentPage.value = 1
   loadPhotos()
 }
@@ -789,6 +1147,8 @@ const handleFilterClick = (value: string) => {
 const handlePathClick = (row: ScanPathConfig) => {
   // 退出回收站模式
   filterStatus.value = ''
+  filterCategory.value = ''
+  filterTag.value = ''
   if (searchQuery.value === row.path) {
     searchQuery.value = ''
   } else {
@@ -805,6 +1165,8 @@ const handleRecycleBinClick = () => {
   } else {
     filterStatus.value = 'excluded'
     searchQuery.value = ''
+    filterCategory.value = ''
+    filterTag.value = ''
   }
   currentPage.value = 1
   loadPhotos()
@@ -1014,6 +1376,12 @@ const gotoDetail = (photoId: number) => {
   if (searchQuery.value) {
     query.search = searchQuery.value
   }
+  if (filterCategory.value) {
+    query.category = filterCategory.value
+  }
+  if (filterTag.value) {
+    query.tag = filterTag.value
+  }
 
   router.push({
     path: `/photos/${photoId}`,
@@ -1085,8 +1453,9 @@ const shouldShowRebuildButton = (path: ScanPathConfig) => {
 }
 
 onMounted(() => {
-  // Load scan paths first
+  // Load scan paths and auto scan config
   loadScanPaths()
+  loadAutoScanConfig()
 
   // 加载系统总照片数
   loadSystemTotal()
@@ -1126,6 +1495,12 @@ onMounted(() => {
   // 恢复搜索关键词
   if (query.search) {
     searchQuery.value = String(query.search)
+  }
+  if (query.category) {
+    filterCategory.value = String(query.category)
+  }
+  if (query.tag) {
+    filterTag.value = String(query.tag)
   }
 
   loadPhotos()
@@ -1203,6 +1578,16 @@ defineExpose({
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.auto-scan-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.auto-scan-interval-select {
+  width: 100px;
 }
 
 .count-pill {
@@ -1604,6 +1989,59 @@ defineExpose({
   border-color: var(--color-primary);
 }
 
+/* ============ 照片选择按钮 ============ */
+.photo-select-btn {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 10;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.7);
+  background: rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s, background 0.2s, border-color 0.2s;
+}
+
+.photo-card:hover .photo-select-btn {
+  opacity: 1;
+}
+
+.photo-select-btn.selected {
+  opacity: 1;
+  background: #e05a3a;
+  border-color: #e05a3a;
+  color: #fff;
+}
+
+.photo-select-btn.selected .el-icon {
+  font-size: 14px;
+}
+
+.photo-select-btn:hover:not(.selected) {
+  background: rgba(0, 0, 0, 0.4);
+  border-color: #fff;
+}
+
+.photo-card.is-selected .photo-image-wrapper {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+.photo-card.is-selected .photo-image-wrapper::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 5;
+  pointer-events: none;
+}
+
 .photo-image {
   width: 100%;
   height: 100%;
@@ -1928,6 +2366,73 @@ defineExpose({
   justify-content: center;
   color: var(--el-color-danger);
   font-weight: var(--font-weight-medium);
+}
+
+/* ============ 添加路径对话框 ============ */
+.input-with-button {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+}
+
+.input-with-button .el-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.input-with-button .el-button {
+  flex-shrink: 0;
+}
+
+.validation-result {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 14px;
+}
+
+.validation-result.valid {
+  color: var(--color-success);
+}
+
+.validation-result.invalid {
+  color: var(--color-error);
+}
+
+/* ============ 选中照片悬浮工具栏 ============ */
+.selection-toolbar {
+  position: fixed;
+  bottom: 32px;
+  right: 32px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  background: #1a1a2e;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-lg, 12px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+
+.selection-count {
+  font-size: 14px;
+  font-weight: var(--font-weight-medium, 500);
+  color: #fff;
+  white-space: nowrap;
+}
+
+.float-toolbar-enter-active,
+.float-toolbar-leave-active {
+  transition: all 0.3s ease;
+}
+
+.float-toolbar-enter-from,
+.float-toolbar-leave-to {
+  opacity: 0;
+  transform: translateY(16px);
 }
 
 </style>

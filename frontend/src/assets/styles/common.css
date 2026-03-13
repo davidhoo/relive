@@ -257,50 +257,50 @@ body {
 }
 
 /* ============ Element Plus 按钮覆盖 - 青绿色 ============ */
-.el-button--primary {
+.el-button--primary:not(.is-plain):not(.is-link) {
   background: var(--color-primary);
   border-color: var(--color-primary);
   border-radius: var(--radius-sm);
 }
 
-.el-button--primary:hover,
-.el-button--primary:focus {
+.el-button--primary:not(.is-plain):not(.is-link):hover,
+.el-button--primary:not(.is-plain):not(.is-link):focus {
   background: var(--color-primary-dark);
   border-color: var(--color-primary-dark);
 }
 
-.el-button--success {
+.el-button--success:not(.is-plain):not(.is-link) {
   background: var(--color-success);
   border-color: var(--color-success);
   border-radius: var(--radius-sm);
 }
 
-.el-button--success:hover,
-.el-button--success:focus {
+.el-button--success:not(.is-plain):not(.is-link):hover,
+.el-button--success:not(.is-plain):not(.is-link):focus {
   background: var(--color-success-dark);
   border-color: var(--color-success-dark);
 }
 
-.el-button--warning {
+.el-button--warning:not(.is-plain):not(.is-link) {
   background: var(--color-warning);
   border-color: var(--color-warning);
   border-radius: var(--radius-sm);
 }
 
-.el-button--warning:hover,
-.el-button--warning:focus {
+.el-button--warning:not(.is-plain):not(.is-link):hover,
+.el-button--warning:not(.is-plain):not(.is-link):focus {
   background: var(--color-warning-dark);
   border-color: var(--color-warning-dark);
 }
 
-.el-button--danger {
+.el-button--danger:not(.is-plain):not(.is-link) {
   background: var(--color-error);
   border-color: var(--color-error);
   border-radius: var(--radius-sm);
 }
 
-.el-button--danger:hover,
-.el-button--danger:focus {
+.el-button--danger:not(.is-plain):not(.is-link):hover,
+.el-button--danger:not(.is-plain):not(.is-link):focus {
   background: var(--color-error-dark);
   border-color: var(--color-error-dark);
 }
