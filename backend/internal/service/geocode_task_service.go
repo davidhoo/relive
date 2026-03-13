@@ -162,6 +162,9 @@ func (s *geocodeTaskService) EnqueueByPath(path string, source string, priority 
 	}
 	count := 0
 	for i := range photos {
+		if photos[i].Status == model.PhotoStatusExcluded {
+			continue
+		}
 		if err := s.enqueuePhotoModel(photos[i], source, priority, false); err != nil {
 			logger.Warnf("enqueue geocode by path failed for photo %d: %v", photos[i].ID, err)
 			continue
@@ -214,6 +217,9 @@ func (s *geocodeTaskService) GeocodePhoto(photoID uint) error {
 func (s *geocodeTaskService) enqueuePhotoModel(photo *model.Photo, source string, priority int, force bool) error {
 	if photo == nil {
 		return fmt.Errorf("photo is nil")
+	}
+	if photo.Status == model.PhotoStatusExcluded {
+		return nil
 	}
 	// 排除无效 GPS 坐标（为 nil 或为 0,0）
 	if photo.GPSLatitude == nil || photo.GPSLongitude == nil {
@@ -394,8 +400,9 @@ func (s *geocodeTaskService) seedPendingJobs() error {
 	}
 
 	var photos []model.Photo
-	// 排除 GPS 为 0,0 的无效坐标
+	// 排除 GPS 为 0,0 的无效坐标，排除 excluded 照片
 	err = s.db.Model(&model.Photo{}).
+		Where("status = ?", model.PhotoStatusActive).
 		Where("gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL").
 		Where("gps_latitude != 0 OR gps_longitude != 0").
 		Where("(geocode_status != ? OR geocode_status IS NULL)", "ready").

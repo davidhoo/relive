@@ -159,6 +159,9 @@ func (s *thumbnailService) EnqueueByPath(path string, source string, priority in
 	}
 	count := 0
 	for _, photo := range photos {
+		if photo.Status == model.PhotoStatusExcluded {
+			continue
+		}
 		if err := s.enqueuePhotoModel(photo, source, priority, false); err != nil {
 			logger.Warnf("enqueue thumbnail by path failed for photo %d: %v", photo.ID, err)
 			continue
@@ -223,6 +226,9 @@ func (s *thumbnailService) GeneratePhoto(photoID uint, force bool) error {
 func (s *thumbnailService) enqueuePhotoModel(photo *model.Photo, source string, priority int, force bool) error {
 	if photo == nil {
 		return fmt.Errorf("photo is nil")
+	}
+	if photo.Status == model.PhotoStatusExcluded {
+		return nil
 	}
 	if source == "" {
 		source = thumbnailSourceManual
@@ -516,12 +522,12 @@ func (s *thumbnailService) seedPendingJobs() error {
 		return nil
 	}
 
-	// 检查是否所有照片都已经处理完成
+	// 检查是否所有照片都已经处理完成（排除 excluded 照片）
 	var totalPhotos, readyPhotos int64
-	if err := s.db.Model(&model.Photo{}).Count(&totalPhotos).Error; err != nil {
+	if err := s.db.Model(&model.Photo{}).Where("status = ?", model.PhotoStatusActive).Count(&totalPhotos).Error; err != nil {
 		logger.Warnf("Failed to count total photos: %v", err)
 	}
-	if err := s.db.Model(&model.Photo{}).Where("thumbnail_status = ?", "ready").Count(&readyPhotos).Error; err != nil {
+	if err := s.db.Model(&model.Photo{}).Where("status = ?", model.PhotoStatusActive).Where("thumbnail_status = ?", "ready").Count(&readyPhotos).Error; err != nil {
 		logger.Warnf("Failed to count ready photos: %v", err)
 	}
 	if totalPhotos > 0 && totalPhotos == readyPhotos {
@@ -533,10 +539,11 @@ func (s *thumbnailService) seedPendingJobs() error {
 	s.appendBackgroundLog("正在扫描历史照片...")
 	logger.Info("Scanning photos for thumbnail jobs...")
 
-	// 先收集所有需要处理的照片ID，避免在FindInBatches回调中进行写入操作
+	// 先收集所有需要处理的照片ID，避免在FindInBatches回调中进行写入操作（排除 excluded 照片）
 	var photoIDs []uint
 	err = s.db.Model(&model.Photo{}).
 		Select("id").
+		Where("status = ?", model.PhotoStatusActive).
 		Where("thumbnail_status != ? OR thumbnail_status IS NULL OR thumbnail_path = ''", "ready").
 		FindInBatches(&photoIDs, 500, func(tx *gorm.DB, batch int) error {
 			logger.Debugf("Collecting batch %d, IDs in batch: %d", batch, len(photoIDs))
