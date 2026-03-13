@@ -183,6 +183,7 @@ func BuildDisplayCanvas(filePath string, width, height int, title, subtitle stri
 	if err != nil {
 		return nil, err
 	}
+	img = normalizeImageForDisplay(filePath, img)
 	return buildDisplayCanvas(img, width, height, title, subtitle), nil
 }
 
