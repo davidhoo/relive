@@ -11,7 +11,14 @@
 
     <el-card shadow="never" class="section-card animate-fade-in">
       <template #header>
-        <SectionHeader :icon="Setting" title="AI Provider 配置" />
+        <SectionHeader :icon="Cpu" title="分析引擎状态">
+          <template #actions>
+            <div class="header-actions-inline">
+              <span class="status-pill" :class="providerPillClass">AI {{ providerPillText }}</span>
+              <span class="status-pill" :class="runtimePillClass">{{ runtimePillText }}</span>
+            </div>
+          </template>
+        </SectionHeader>
       </template>
 
       <el-alert
@@ -24,29 +31,22 @@
         class="provider-alert"
       />
 
-      <div v-else class="provider-inline-row">
-        <div class="provider-inline-item">
-          <span class="provider-inline-label">当前 Provider</span>
-          <el-tag type="primary" effect="light" round>{{ providerInfo.name }}</el-tag>
-        </div>
-        <div class="provider-inline-item">
-          <span class="provider-inline-label">服务状态</span>
-          <el-tag :type="providerInfo.is_available ? 'success' : 'danger'" effect="light" round>
-            {{ providerInfo.is_available ? '可用' : '不可用' }}
-          </el-tag>
-        </div>
-      </div>
-    </el-card>
-
-    <el-card shadow="never" class="section-card animate-fade-in animate-delay-1">
-      <template #header>
-        <SectionHeader :icon="Cpu" title="分析运行状态" />
-      </template>
-
       <div class="runtime-inline-list">
+        <div v-if="providerInfo" class="runtime-inline-row">
+          <div class="runtime-inline-item">
+            <span class="runtime-inline-label">AI Provider</span>
+            <el-tag type="primary" effect="light" round>{{ providerInfo.name }}</el-tag>
+          </div>
+          <div class="runtime-inline-item">
+            <span class="runtime-inline-label">服务状态</span>
+            <el-tag :type="providerInfo.is_available ? 'success' : 'danger'" effect="light" round>
+              {{ providerInfo.is_available ? '可用' : '不可用' }}
+            </el-tag>
+          </div>
+        </div>
         <div class="runtime-inline-row">
           <div class="runtime-inline-item">
-            <span class="runtime-inline-label">当前状态</span>
+            <span class="runtime-inline-label">运行状态</span>
             <el-tag :type="runtimeStatus?.is_active ? 'warning' : 'success'" effect="light" round>
               {{ runtimeStatus?.is_active ? '已占用' : '空闲' }}
             </el-tag>
@@ -56,7 +56,7 @@
             <span class="runtime-inline-value">{{ runtimeModeText }}</span>
           </div>
         </div>
-        <div class="runtime-inline-row">
+        <div v-if="runtimeStatus?.is_active" class="runtime-inline-row">
           <div class="runtime-inline-item">
             <span class="runtime-inline-label">占用实例</span>
             <span class="runtime-inline-value mono">{{ runtimeStatus?.owner_id || '-' }}</span>
@@ -75,7 +75,7 @@
       </div>
     </el-card>
 
-    <el-card shadow="never" class="section-card animate-fade-in animate-delay-2">
+    <el-card shadow="never" class="section-card animate-fade-in animate-delay-1">
       <template #header>
         <SectionHeader :icon="MagicStick" title="批量分析" />
       </template>
@@ -112,7 +112,7 @@
       </div>
     </el-card>
 
-    <el-card shadow="never" class="section-card animate-fade-in animate-delay-3">
+    <el-card shadow="never" class="section-card animate-fade-in animate-delay-2">
       <template #header>
         <SectionHeader :icon="MagicStick" title="后台分析">
           <template #actions>
@@ -168,9 +168,9 @@
       </div>
     </el-card>
 
-    <el-card shadow="never" class="section-card animate-fade-in animate-delay-4" v-if="progress">
+    <el-card shadow="never" class="section-card animate-fade-in animate-delay-3" v-if="progress">
       <template #header>
-        <SectionHeader :icon="DataLine" title="分析进度">
+        <SectionHeader :icon="DataLine" title="在线分析进度">
           <template #actions>
             <div class="header-actions-inline">
               <span class="status-pill" :class="progressPillClass">{{ progressPillText }}</span>
@@ -239,7 +239,7 @@
       </div>
     </el-card>
 
-    <el-empty v-else description="暂无分析任务" />
+    <el-empty v-else description="暂无在线分析任务" />
   </div>
 </template>
 
@@ -626,27 +626,6 @@ watch(backgroundLogs, async () => {
 
 .provider-alert {
   border-radius: 18px;
-}
-
-.provider-inline-row {
-  display: flex;
-  align-items: center;
-  gap: 32px;
-  padding: 4px 12px;
-  flex-wrap: wrap;
-}
-
-.provider-inline-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 40px;
-}
-
-.provider-inline-label {
-  color: var(--color-text-secondary);
-  font-size: 14px;
-  font-weight: var(--font-weight-medium);
 }
 
 .runtime-inline-list {

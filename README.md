@@ -9,6 +9,8 @@
 > 你的 NAS 里存了多少照片？它们上一次被翻看是什么时候？
 > Relive 通过 AI 理解每张照片，以”往年今日”为线索，每天把值得重温的记忆送到你的相框上。
 
+<img src="docs/images/photo-frame.png" width="400" alt="ESP32 E-Ink Photo Frame">
+
 Relive 是一个自部署的照片回忆系统 —— 扫描你 NAS 中的照片，用 AI 理解内容，然后每天在相框或屏幕上呈现值得重温的瞬间。
 
 它由四部分组成：
@@ -49,9 +51,6 @@ Relive 是一个自部署的照片回忆系统 —— 扫描你 NAS 中的照片
 
 <details>
 <summary>点击展开截图</summary>
-
-### ESP32 墨水屏相框实物
-<img src="docs/images/photo-frame.png" width="400" alt="ESP32 E-Ink Photo Frame">
 
 ### 仪表盘
 ![Dashboard](docs/images/dashboard.png)
