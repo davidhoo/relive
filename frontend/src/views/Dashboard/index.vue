@@ -438,10 +438,12 @@ const gotoPhotoDetail = (photoId: number) => {
   router.push(`/photos/${photoId}`)
 }
 
-onMounted(async () => {
-  await systemStore.fetchStats()
-  await loadRecentPhotos()
-  await loadAIProgress()
+onMounted(() => {
+  Promise.all([
+    systemStore.fetchStats(),
+    loadRecentPhotos(),
+    loadAIProgress(),
+  ])
 })
 </script>
 

@@ -93,43 +93,43 @@ func (h *SystemHandler) Health(c *gin.Context) {
 func (h *SystemHandler) Stats(c *gin.Context) {
 	var stats model.SystemStatsResponse
 
-	// 统计照片总数
-	h.db.Model(&model.Photo{}).Where("status = ?", model.PhotoStatusActive).Count(&stats.TotalPhotos)
+	// 照片统计：一条 SQL 同时获取总数、已分析数、存储空间
+	var photoStats struct {
+		Total    int64 `gorm:"column:total"`
+		Analyzed int64 `gorm:"column:analyzed"`
+		Size     int64 `gorm:"column:size"`
+	}
+	h.db.Model(&model.Photo{}).
+		Where("status = ?", model.PhotoStatusActive).
+		Select("COUNT(*) as total, SUM(CASE WHEN ai_analyzed = 1 THEN 1 ELSE 0 END) as analyzed, COALESCE(SUM(file_size), 0) as size").
+		Scan(&photoStats)
+	stats.TotalPhotos = photoStats.Total
+	stats.AnalyzedPhotos = photoStats.Analyzed
+	stats.UnanalyzedPhotos = photoStats.Total - photoStats.Analyzed
+	stats.StorageSize = photoStats.Size
 
-	// 统计已分析照片
-	h.db.Model(&model.Photo{}).Where("status = ? AND ai_analyzed = ?", model.PhotoStatusActive, true).Count(&stats.AnalyzedPhotos)
-
-	// 统计未分析照片
-	stats.UnanalyzedPhotos = stats.TotalPhotos - stats.AnalyzedPhotos
-
-	// 统计设备总数
-	h.db.Model(&model.Device{}).Count(&stats.TotalDevices)
-
-	// 统计在线设备（5分钟内有最近活跃记录）
+	// 设备统计：一条 SQL 同时获取总数和在线数
 	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
+	var deviceStats struct {
+		Total  int64 `gorm:"column:total"`
+		Online int64 `gorm:"column:online"`
+	}
 	h.db.Model(&model.Device{}).
-		Where("last_seen > ?", fiveMinutesAgo).
-		Count(&stats.OnlineDevices)
+		Select("COUNT(*) as total, SUM(CASE WHEN last_seen > ? THEN 1 ELSE 0 END) as online", fiveMinutesAgo).
+		Scan(&deviceStats)
+	stats.TotalDevices = deviceStats.Total
+	stats.OnlineDevices = deviceStats.Online
 
-	// 统计展示记录总数
+	// 展示记录总数
 	h.db.Model(&model.DisplayRecord{}).Count(&stats.TotalDisplays)
 
-	// 统计存储空间（所有照片文件大小之和）
-	var totalSize int64
-	h.db.Model(&model.Photo{}).Where("status = ?", model.PhotoStatusActive).Select("COALESCE(SUM(file_size), 0)").Scan(&totalSize)
-	stats.StorageSize = totalSize
-
-	// 获取数据库文件大小
+	// 数据库文件大小
 	stats.DatabaseSize = h.getDatabaseSize()
 	stats.DatabaseUpdatedAt = h.getDatabaseUpdatedAt()
 
-	// 获取 Go 版本
+	// 运行时信息
 	stats.GoVersion = runtime.Version()
-
-	// 获取运行时长
 	stats.Uptime = int64(time.Since(h.startTime).Seconds())
-
-	// 统计时间
 	stats.Timestamp = time.Now()
 
 	c.JSON(http.StatusOK, model.Response{
