@@ -5,6 +5,7 @@ set -e
 CONFIG_FILE="${CONFIG_FILE:-/app/config.yaml}"
 DB_PATH="${DB_PATH:-/app/data/relive.db}"
 CITIES_FILE="${CITIES_FILE:-/app/data/cities500.txt}"
+ALTERNATE_NAMES_FILE="${ALTERNATE_NAMES_FILE:-/app/data/alternateNamesV2.txt}"
 AUTO_IMPORT="${AUTO_IMPORT_CITIES:-true}"
 
 if [ "$AUTO_IMPORT" != "true" ]; then
@@ -29,6 +30,19 @@ if [ -f "$DB_PATH" ]; then
         echo "City data already exists: $CITY_COUNT cities"
         echo "Skipping import to avoid duplicate data"
         echo "======================================"
+
+        # 即使城市数据已存在，也检查是否需要导入中文名
+        if [ -f "$ALTERNATE_NAMES_FILE" ]; then
+            ZH_COUNT=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM cities WHERE name_zh != '' AND name_zh IS NOT NULL;" 2>/dev/null || echo "0")
+            if [ "$ZH_COUNT" = "0" ]; then
+                echo "Chinese city names not found, importing..."
+                /app/import-cities --alternate-names "$ALTERNATE_NAMES_FILE" --config "$CONFIG_FILE" || \
+                    echo "Warning: Chinese city names import failed (non-fatal)"
+            else
+                echo "Chinese city names already exist: $ZH_COUNT entries"
+            fi
+        fi
+
         exit 0
     fi
 fi
@@ -49,7 +63,14 @@ echo "Source: $CITIES_FILE"
 echo "Database: $DB_PATH"
 echo "======================================"
 
-if /app/import-cities --file "$CITIES_FILE" --config "$CONFIG_FILE"; then
+# 构建导入命令参数
+IMPORT_ARGS="--file $CITIES_FILE --config $CONFIG_FILE"
+if [ -f "$ALTERNATE_NAMES_FILE" ]; then
+    IMPORT_ARGS="$IMPORT_ARGS --alternate-names $ALTERNATE_NAMES_FILE"
+    echo "Also importing Chinese city names from: $ALTERNATE_NAMES_FILE"
+fi
+
+if /app/import-cities $IMPORT_ARGS; then
     echo "======================================"
     echo "City data import completed successfully"
     echo "======================================"

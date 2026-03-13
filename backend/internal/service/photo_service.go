@@ -692,15 +692,30 @@ func (s *photoService) GeocodePhotoIfNeeded(photo *model.Photo) error {
 
 	// 设置位置信息（立即返回给前端）- 使用标准显示格式
 	photo.Location = location.FormatDisplay()
+	photo.Country = location.Country
+	photo.Province = location.Province
+	photo.City = location.City
+	photo.District = location.District
+	photo.Street = location.Street
+	photo.POI = location.POI
 	logger.Debugf("Real-time geocoded photo %d: (%f, %f) -> %s",
 		photo.ID, *photo.GPSLatitude, *photo.GPSLongitude, photo.Location)
 
 	// 异步回写到数据库
+	loc := &model.LocationFields{
+		Location: photo.Location,
+		Country:  location.Country,
+		Province: location.Province,
+		City:     location.City,
+		District: location.District,
+		Street:   location.Street,
+		POI:      location.POI,
+	}
 	go func() {
-		if err := s.repo.UpdateLocation(photo.ID, photo.Location); err != nil {
+		if err := s.repo.UpdateLocationFull(photo.ID, loc); err != nil {
 			logger.Errorf("Failed to update location for photo %d: %v", photo.ID, err)
 		} else {
-			logger.Debugf("Location saved to database for photo %d: %s", photo.ID, photo.Location)
+			logger.Debugf("Location saved to database for photo %d: %s", photo.ID, loc.Location)
 		}
 	}()
 
@@ -1599,7 +1614,16 @@ func (s *photoService) RegeocodeAllPhotos() (int, error) {
 		}
 
 		// 更新数据库
-		if err := s.repo.UpdateLocation(photo.ID, newLocation); err != nil {
+		loc := &model.LocationFields{
+			Location: newLocation,
+			Country:  location.Country,
+			Province: location.Province,
+			City:     location.City,
+			District: location.District,
+			Street:   location.Street,
+			POI:      location.POI,
+		}
+		if err := s.repo.UpdateLocationFull(photo.ID, loc); err != nil {
 			logger.Errorf("Failed to update location for photo %d: %v", photo.ID, err)
 			failed++
 			continue

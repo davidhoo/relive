@@ -58,6 +58,7 @@ type PhotoRepository interface {
 
 	// 地理编码
 	UpdateLocation(id uint, location string) error
+	UpdateLocationFull(id uint, loc *model.LocationFields) error
 	ListWithGPS() ([]*model.Photo, error) // 获取所有有GPS坐标的照片
 
 	// 重建相关
@@ -462,6 +463,21 @@ func (r *photoRepository) UpdateLocation(id uint, location string) error {
 	return r.db.Model(&model.Photo{}).
 		Where("id = ?", id).
 		Update("location", location).Error
+}
+
+// UpdateLocationFull 更新照片的完整位置信息（含结构化字段）
+func (r *photoRepository) UpdateLocationFull(id uint, loc *model.LocationFields) error {
+	return r.db.Model(&model.Photo{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"location": loc.Location,
+			"country":  loc.Country,
+			"province": loc.Province,
+			"city":     loc.City,
+			"district": loc.District,
+			"street":   loc.Street,
+			"poi":      loc.POI,
+		}).Error
 }
 
 // ListByPathPrefix 根据路径前缀获取所有照片（用于重建时找出已删除的文件）

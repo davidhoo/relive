@@ -44,6 +44,12 @@ type Photo struct {
 	GPSLatitude     *float64   `json:"gps_latitude"`                                         // GPS 纬度
 	GPSLongitude    *float64   `json:"gps_longitude"`                                        // GPS 经度
 	Location        string     `gorm:"type:varchar(200);index:idx_location" json:"location"` // 位置（城市）
+	Country         string     `gorm:"type:varchar(100)" json:"country"`                    // 国家
+	Province        string     `gorm:"type:varchar(100)" json:"province"`                   // 省份
+	City            string     `gorm:"type:varchar(100);index:idx_photo_city" json:"city"`  // 城市
+	District        string     `gorm:"type:varchar(100)" json:"district"`                   // 区/县
+	Street          string     `gorm:"type:varchar(200)" json:"street"`                     // 街道
+	POI             string     `gorm:"type:varchar(200)" json:"poi"`                        // 商圈/地标
 	GeocodeStatus   string     `gorm:"type:varchar(20);default:none;index:idx_geocode_status" json:"geocode_status"`
 	GeocodeProvider string     `gorm:"column:geocode_provider;type:varchar(50)" json:"geocode_provider"`
 	GeocodedAt      *time.Time `json:"geocoded_at"`
@@ -108,6 +114,17 @@ func CalcOverallScore(memoryScore, beautyScore int) int {
 // CalculateOverallScore 计算综合评分（70% 回忆 + 30% 美观）
 func (p *Photo) CalculateOverallScore() {
 	p.OverallScore = CalcOverallScore(p.MemoryScore, p.BeautyScore)
+}
+
+// LocationFields 位置信息结构体（用于 UpdateLocationFull 参数传递）
+type LocationFields struct {
+	Location string
+	Country  string
+	Province string
+	City     string
+	District string
+	Street   string
+	POI      string
 }
 
 // IsAnalyzed 是否已分析

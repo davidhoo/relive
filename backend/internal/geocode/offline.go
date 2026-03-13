@@ -196,8 +196,14 @@ func (p *OfflineProvider) ReverseGeocode(lat, lon float64) (*Location, error) {
 	countryName := getCountryName(nearestCity.Country)
 	provinceName := getProvinceName(nearestCity.Country, nearestCity.AdminName)
 
+	// 优先使用中文城市名
+	cityName := nearestCity.Name
+	if nearestCity.NameZH != "" {
+		cityName = nearestCity.NameZH
+	}
+
 	location := &Location{
-		City:      nearestCity.Name,
+		City:      cityName,
 		Country:   countryName,
 		Province:  provinceName,
 		Latitude:  lat,
@@ -206,8 +212,7 @@ func (p *OfflineProvider) ReverseGeocode(lat, lon float64) (*Location, error) {
 		Duration:  time.Since(startTime),
 	}
 
-	// 离线数据库显示格式：省份 + 城市（城市名可能是英文）
-	// 例如：四川省Chengdu，北京市Beijing
+	// 离线数据库显示格式：省份 + 城市
 	if location.Province != "" && location.City != "" {
 		location.FullName = location.Province + location.City
 	} else if location.Province != "" {

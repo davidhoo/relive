@@ -780,19 +780,28 @@ export interface CitiesDataStatus {
   file_path: string
   file_size?: number
   city_count?: number
+  has_zh_names: boolean
   download_url: string
 }
 
 // Cities data management functions
 export const getCitiesDataStatus = async (): Promise<CitiesDataStatus> => {
   const response = await http.get<ApiResponse<CitiesDataStatus>>('/config/cities-data/status')
-  return response.data?.data || { exists: false, file_path: '', download_url: '' }
+  return response.data?.data || { exists: false, file_path: '', has_zh_names: false, download_url: '' }
 }
 
 export const downloadCitiesData = async (): Promise<{ message: string }> => {
   const response = await http.post<ApiResponse<{ message: string }>>('/config/cities-data/download')
   if (!response.data?.success) {
     throw new Error(response.data?.message || 'Failed to download cities data')
+  }
+  return response.data.data || { message: 'Download started' }
+}
+
+export const downloadAlternateNames = async (): Promise<{ message: string }> => {
+  const response = await http.post<ApiResponse<{ message: string }>>('/config/cities-data/download-zh-names')
+  if (!response.data?.success) {
+    throw new Error(response.data?.message || 'Failed to download Chinese city names')
   }
   return response.data.data || { message: 'Download started' }
 }

@@ -687,6 +687,7 @@ type CitiesDataStatus struct {
 	FilePath    string `json:"file_path"`
 	FileSize    int64  `json:"file_size,omitempty"`
 	CityCount   int    `json:"city_count,omitempty"`
+	HasZHNames  bool   `json:"has_zh_names"`
 	DownloadURL string `json:"download_url"`
 }
 
@@ -724,6 +725,11 @@ func (h *ConfigHandler) GetCitiesDataStatus(c *gin.Context) {
 		var count int64
 		if err := db.Model(&model.City{}).Count(&count).Error; err == nil {
 			status.CityCount = int(count)
+		}
+		// 检查是否有中文名数据
+		var zhCount int64
+		if err := db.Model(&model.City{}).Where("name_zh != '' AND name_zh IS NOT NULL").Count(&zhCount).Error; err == nil {
+			status.HasZHNames = zhCount > 0
 		}
 	}
 
@@ -874,9 +880,139 @@ func (h *ConfigHandler) DownloadCitiesData(c *gin.Context) {
 		return
 	}
 
+	// 下载并导入中文城市名（alternateNamesV2.zip）
+	zhImported := 0
+	altNamesFile := filepath.Join(dataDir, "alternateNamesV2.txt")
+	altNamesZip := filepath.Join(dataDir, "alternateNamesV2.zip")
+
+	logger.Info("Downloading alternateNamesV2.zip for Chinese city names...")
+	altResp, altErr := http.Get("https://download.geonames.org/export/dump/alternateNamesV2.zip")
+	if altErr != nil {
+		logger.Warnf("Failed to download alternate names (non-fatal): %v", altErr)
+	} else {
+		defer altResp.Body.Close()
+		if altResp.StatusCode == http.StatusOK {
+			altOut, err := os.Create(altNamesZip)
+			if err == nil {
+				_, err = io.Copy(altOut, altResp.Body)
+				altOut.Close()
+				if err == nil {
+					if err := unzipFile(altNamesZip, dataDir); err == nil {
+						if count, err := h.importAlternateNames(altNamesFile); err == nil {
+							zhImported = count
+						} else {
+							logger.Warnf("Failed to import alternate names (non-fatal): %v", err)
+						}
+					} else {
+						logger.Warnf("Failed to extract alternate names (non-fatal): %v", err)
+					}
+				}
+				os.Remove(altNamesZip)
+			}
+		}
+	}
+
+	message := fmt.Sprintf("Cities data downloaded and imported successfully. Total %d cities in database.", importedCount)
+	if zhImported > 0 {
+		message += fmt.Sprintf(" %d Chinese city names imported.", zhImported)
+	}
+
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
-		Message: fmt.Sprintf("Cities data downloaded and imported successfully. Total %d cities in database.", importedCount),
+		Message: message,
+	})
+}
+
+// DownloadAlternateNames 下载并导入中文城市名数据
+// @Summary 下载中文城市名数据
+// @Description 下载 alternateNamesV2.zip 并导入中文城市名
+// @Tags Config
+// @Produce json
+// @Success 200 {object} model.Response
+// @Failure 500 {object} model.Response
+// @Router /api/v1/config/cities-data/download-zh-names [post]
+func (h *ConfigHandler) DownloadAlternateNames(c *gin.Context) {
+	dataDir := filepath.Dir(h.cfg.Database.Path)
+	if dataDir == "" || dataDir == "." {
+		dataDir = "./data"
+	}
+
+	altNamesFile := filepath.Join(dataDir, "alternateNamesV2.txt")
+	altNamesZip := filepath.Join(dataDir, "alternateNamesV2.zip")
+
+	// 确保目录存在
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "CREATE_DIR_FAILED", Message: err.Error()},
+		})
+		return
+	}
+
+	// 下载
+	logger.Info("Downloading alternateNamesV2.zip...")
+	resp, err := http.Get("https://download.geonames.org/export/dump/alternateNamesV2.zip")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "DOWNLOAD_FAILED", Message: fmt.Sprintf("Failed to download: %v", err)},
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "DOWNLOAD_FAILED", Message: fmt.Sprintf("HTTP status: %d", resp.StatusCode)},
+		})
+		return
+	}
+
+	out, err := os.Create(altNamesZip)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "CREATE_FILE_FAILED", Message: err.Error()},
+		})
+		return
+	}
+
+	_, err = io.Copy(out, resp.Body)
+	out.Close()
+	if err != nil {
+		os.Remove(altNamesZip)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "SAVE_FILE_FAILED", Message: err.Error()},
+		})
+		return
+	}
+
+	// 解压
+	if err := unzipFile(altNamesZip, dataDir); err != nil {
+		os.Remove(altNamesZip)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "EXTRACT_FAILED", Message: err.Error()},
+		})
+		return
+	}
+	os.Remove(altNamesZip)
+
+	// 导入
+	count, err := h.importAlternateNames(altNamesFile)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "IMPORT_FAILED", Message: err.Error()},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: fmt.Sprintf("Chinese city names imported successfully. %d cities updated.", count),
 	})
 }
 
@@ -989,6 +1125,104 @@ func parseCityLine(line string) (*model.City, error) {
 	return city, nil
 }
 
+// importAlternateNames 从 alternateNamesV2.txt 导入中文城市名
+func (h *ConfigHandler) importAlternateNames(filePath string) (int, error) {
+	db := database.GetDB()
+	if db == nil {
+		return 0, fmt.Errorf("database not initialized")
+	}
+
+	// 获取数据库中所有城市的 geoname_id
+	var geonameIDs []int
+	if err := db.Model(&model.City{}).Pluck("geoname_id", &geonameIDs).Error; err != nil {
+		return 0, fmt.Errorf("failed to get geoname IDs: %w", err)
+	}
+	geonameIDSet := make(map[int]bool, len(geonameIDs))
+	for _, id := range geonameIDs {
+		geonameIDSet[id] = true
+	}
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return 0, fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	// 解析中文名：geonameID -> 中文名（优先 isPreferredName）
+	zhNames := make(map[int]string)
+	zhPreferred := make(map[int]bool)
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+
+	for scanner.Scan() {
+		fields := strings.Split(scanner.Text(), "\t")
+		if len(fields) < 5 || fields[2] != "zh" {
+			continue
+		}
+
+		geonameID, err := strconv.Atoi(fields[1])
+		if err != nil || !geonameIDSet[geonameID] {
+			continue
+		}
+
+		name := strings.TrimSpace(fields[3])
+		if name == "" {
+			continue
+		}
+
+		isPreferred := fields[4] == "1"
+		if zhPreferred[geonameID] && !isPreferred {
+			continue
+		}
+
+		zhNames[geonameID] = name
+		if isPreferred {
+			zhPreferred[geonameID] = true
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return 0, fmt.Errorf("error reading file: %w", err)
+	}
+
+	if len(zhNames) == 0 {
+		return 0, nil
+	}
+
+	// 批量更新
+	batchSize := 1000
+	type item struct {
+		id   int
+		name string
+	}
+	var items []item
+	for id, name := range zhNames {
+		items = append(items, item{id: id, name: name})
+	}
+
+	for i := 0; i < len(items); i += batchSize {
+		end := i + batchSize
+		if end > len(items) {
+			end = len(items)
+		}
+		batch := items[i:end]
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			for _, it := range batch {
+				if err := tx.Model(&model.City{}).Where("geoname_id = ?", it.id).Update("name_zh", it.name).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			return 0, fmt.Errorf("failed to update at offset %d: %w", i, err)
+		}
+	}
+
+	logger.Infof("Imported %d Chinese city names", len(items))
+	return len(items), nil
+}
+
 // unzipFile 解压 zip 文件
 func unzipFile(src, dest string) error {
 	r, err := zip.OpenReader(src)
@@ -997,9 +1231,14 @@ func unzipFile(src, dest string) error {
 	}
 	defer r.Close()
 
+	// 允许解压的文件名集合
+	allowedFiles := map[string]bool{
+		"cities500.txt":        true,
+		"alternateNamesV2.txt": true,
+	}
+
 	for _, f := range r.File {
-		// 只解压 cities500.txt
-		if f.Name != "cities500.txt" {
+		if !allowedFiles[f.Name] {
 			continue
 		}
 

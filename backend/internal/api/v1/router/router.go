@@ -232,6 +232,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				// 城市数据管理
 				configGroup.GET("/cities-data/status", handlers.Config.GetCitiesDataStatus)
 				configGroup.POST("/cities-data/download", handlers.Config.DownloadCitiesData)
+				configGroup.POST("/cities-data/download-zh-names", handlers.Config.DownloadAlternateNames)
 			}
 		}
 	}

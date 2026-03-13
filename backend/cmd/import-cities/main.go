@@ -37,9 +37,22 @@ import (
 // 17: timezone
 // 18: modification date
 
+// GeoNames alternateNamesV2.txt 文件格式
+// 0: alternateNameId
+// 1: geonameid
+// 2: isolanguage
+// 3: alternate name
+// 4: isPreferredName
+// 5: isShortName
+// 6: isColloquial
+// 7: isHistoric
+// 8: from
+// 9: to
+
 func main() {
 	// 命令行参数
 	filePath := flag.String("file", "", "GeoNames cities500.txt 文件路径")
+	alternateNamesPath := flag.String("alternate-names", "", "GeoNames alternateNamesV2.txt 文件路径（用于导入中文城市名）")
 	configPath := flag.String("config", "config.dev.yaml", "配置文件路径")
 	batchSize := flag.Int("batch", 1000, "批量插入大小")
 	checkOnly := flag.Bool("check", false, "仅检查数据库中的城市数量")
@@ -74,14 +87,17 @@ func main() {
 		os.Exit(0)
 	}
 
-	if *filePath == "" {
+	if *filePath == "" && *alternateNamesPath == "" {
 		fmt.Println("使用说明:")
 		fmt.Println("  go run cmd/import-cities/main.go --file cities500.txt")
+		fmt.Println("  go run cmd/import-cities/main.go --alternate-names alternateNamesV2.txt  # 导入中文名")
+		fmt.Println("  go run cmd/import-cities/main.go --file cities500.txt --alternate-names alternateNamesV2.txt")
 		fmt.Println("  go run cmd/import-cities/main.go --check  # 检查已导入数量")
 		fmt.Println("")
 		fmt.Println("下载数据:")
 		fmt.Println("  wget https://download.geonames.org/export/dump/cities500.zip")
-		fmt.Println("  unzip cities500.zip")
+		fmt.Println("  wget https://download.geonames.org/export/dump/alternateNamesV2.zip")
+		fmt.Println("  unzip cities500.zip && unzip alternateNamesV2.zip")
 		os.Exit(1)
 	}
 
@@ -90,14 +106,26 @@ func main() {
 		logger.Fatalf("Failed to migrate cities table: %v", err)
 	}
 
+	// 导入 cities500.txt
+	if *filePath != "" {
+		importCities(db, *filePath, *batchSize)
+	}
+
+	// 导入中文名
+	if *alternateNamesPath != "" {
+		importAlternateNames(db, *alternateNamesPath, *batchSize)
+	}
+}
+
+func importCities(db *gorm.DB, filePath string, batchSize int) {
 	// 打开文件
-	file, err := os.Open(*filePath)
+	file, err := os.Open(filePath)
 	if err != nil {
 		logger.Fatalf("Failed to open file: %v", err)
 	}
 	defer file.Close()
 
-	logger.Infof("Parsing cities from %s...", *filePath)
+	logger.Infof("Parsing cities from %s...", filePath)
 
 	// 先解析全部数据
 	scanner := bufio.NewScanner(file)
@@ -135,8 +163,8 @@ func main() {
 			return fmt.Errorf("failed to clear cities table: %w", err)
 		}
 
-		for i := 0; i < len(allCities); i += *batchSize {
-			end := i + *batchSize
+		for i := 0; i < len(allCities); i += batchSize {
+			end := i + batchSize
 			if end > len(allCities) {
 				end = len(allCities)
 			}
@@ -162,6 +190,130 @@ func main() {
 	var count int64
 	db.Model(&model.City{}).Count(&count)
 	logger.Infof("Cities in database: %d", count)
+}
+
+// importAlternateNames 从 alternateNamesV2.txt 导入中文城市名到 cities 表的 name_zh 字段
+func importAlternateNames(db *gorm.DB, filePath string, batchSize int) {
+	// 先获取所有已导入城市的 geoname_id 集合
+	var geonameIDs []int
+	if err := db.Model(&model.City{}).Pluck("geoname_id", &geonameIDs).Error; err != nil {
+		logger.Fatalf("Failed to get geoname IDs: %v", err)
+	}
+	geonameIDSet := make(map[int]bool, len(geonameIDs))
+	for _, id := range geonameIDs {
+		geonameIDSet[id] = true
+	}
+	logger.Infof("Found %d cities in database, loading alternate names...", len(geonameIDs))
+
+	// 解析 alternateNamesV2.txt，提取 zh 语言的首选名称
+	file, err := os.Open(filePath)
+	if err != nil {
+		logger.Fatalf("Failed to open alternate names file: %v", err)
+	}
+	defer file.Close()
+
+	// geonameID -> 中文名（优先 isPreferredName）
+	zhNames := make(map[int]string)
+	zhPreferred := make(map[int]bool) // 标记是否已有 preferred 名称
+
+	scanner := bufio.NewScanner(file)
+	// alternateNamesV2.txt 行可能很长
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+	lineCount := 0
+	matchCount := 0
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		lineCount++
+
+		fields := strings.Split(line, "\t")
+		if len(fields) < 5 {
+			continue
+		}
+
+		// fields[2] = isolanguage
+		if fields[2] != "zh" {
+			continue
+		}
+
+		geonameID, err := strconv.Atoi(fields[1])
+		if err != nil {
+			continue
+		}
+
+		// 只处理我们数据库中有的城市
+		if !geonameIDSet[geonameID] {
+			continue
+		}
+
+		name := strings.TrimSpace(fields[3])
+		if name == "" {
+			continue
+		}
+
+		isPreferred := len(fields) > 4 && fields[4] == "1"
+
+		// 如果已有 preferred 名称，跳过非 preferred 的
+		if zhPreferred[geonameID] && !isPreferred {
+			continue
+		}
+
+		zhNames[geonameID] = name
+		if isPreferred {
+			zhPreferred[geonameID] = true
+		}
+		matchCount++
+	}
+
+	if err := scanner.Err(); err != nil {
+		logger.Fatalf("Error reading alternate names file: %v", err)
+	}
+
+	logger.Infof("Parsed %d lines, found %d zh names for %d cities", lineCount, matchCount, len(zhNames))
+
+	if len(zhNames) == 0 {
+		logger.Info("No Chinese names found, skipping update")
+		return
+	}
+
+	// 批量更新 name_zh
+	updatedCount := 0
+	type updateItem struct {
+		geonameID int
+		nameZH    string
+	}
+	var items []updateItem
+	for id, name := range zhNames {
+		items = append(items, updateItem{geonameID: id, nameZH: name})
+	}
+
+	for i := 0; i < len(items); i += batchSize {
+		end := i + batchSize
+		if end > len(items) {
+			end = len(items)
+		}
+		batch := items[i:end]
+
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			for _, item := range batch {
+				if err := tx.Model(&model.City{}).
+					Where("geoname_id = ?", item.geonameID).
+					Update("name_zh", item.nameZH).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			logger.Fatalf("Failed to update Chinese names at offset %d: %v", i, err)
+		}
+
+		updatedCount += len(batch)
+		if updatedCount%5000 == 0 || updatedCount == len(items) {
+			logger.Infof("Updated %d/%d Chinese city names...", updatedCount, len(items))
+		}
+	}
+
+	logger.Infof("Chinese city names import completed: %d cities updated", updatedCount)
 }
 
 func parseLine(line string) (*model.City, error) {

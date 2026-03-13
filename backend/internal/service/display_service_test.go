@@ -63,8 +63,9 @@ func (r *stubPhotoRepo) GetCategories() ([]string, error)                       
 func (r *stubPhotoRepo) GetTags() ([]string, error)                             { return nil, nil }
 func (r *stubPhotoRepo) BatchCreate(photos []*model.Photo, batchSize int) error { return nil }
 func (r *stubPhotoRepo) BatchUpdate(photos []*model.Photo, batchSize int) error { return nil }
-func (r *stubPhotoRepo) UpdateLocation(id uint, location string) error          { return nil }
-func (r *stubPhotoRepo) ListWithGPS() ([]*model.Photo, error)                   { return nil, nil }
+func (r *stubPhotoRepo) UpdateLocation(id uint, location string) error               { return nil }
+func (r *stubPhotoRepo) UpdateLocationFull(id uint, loc *model.LocationFields) error { return nil }
+func (r *stubPhotoRepo) ListWithGPS() ([]*model.Photo, error)                        { return nil, nil }
 func (r *stubPhotoRepo) ListByPathPrefix(prefix string) ([]*model.Photo, error) { return nil, nil }
 func (r *stubPhotoRepo) SoftDeleteByPathPrefix(prefix string) error             { return nil }
 func (r *stubPhotoRepo) CountByPathPrefix(prefix string) (int64, error)         { return 0, nil }

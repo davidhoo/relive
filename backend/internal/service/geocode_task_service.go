@@ -204,18 +204,16 @@ func (s *geocodeTaskService) GeocodePhoto(photoID uint) error {
 	}
 
 	provider := ""
-	location := ""
 	if loc != nil {
 		provider = loc.Provider
-		location = loc.FormatDisplay()
 	}
 
-	return s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
-		"location":         location,
-		"geocode_status":   "ready",
-		"geocode_provider": provider,
-		"geocoded_at":      &now,
-	}).Error
+	updates := geocodeLocationFields(loc)
+	updates["geocode_status"] = "ready"
+	updates["geocode_provider"] = provider
+	updates["geocoded_at"] = &now
+
+	return s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(updates).Error
 }
 
 func (s *geocodeTaskService) enqueuePhotoModel(photo *model.Photo, source string, priority int, force bool) error {
@@ -340,17 +338,14 @@ func (s *geocodeTaskService) processJob(job *model.GeocodeJob, photo *model.Phot
 		return err
 	}
 	provider := ""
-	location := ""
 	if loc != nil {
 		provider = loc.Provider
-		location = loc.FormatDisplay()
 	}
-	if err := s.updatePhotoWithRetry(photo.ID, map[string]interface{}{
-		"location":         location,
-		"geocode_status":   "ready",
-		"geocode_provider": provider,
-		"geocoded_at":      &now,
-	}); err != nil {
+	updates := geocodeLocationFields(loc)
+	updates["geocode_status"] = "ready"
+	updates["geocode_provider"] = provider
+	updates["geocoded_at"] = &now
+	if err := s.updatePhotoWithRetry(photo.ID, updates); err != nil {
 		logger.Warnf("update photo %d after geocode success failed: %v", photo.ID, err)
 	}
 	if err := s.updateJobWithRetry(job.ID, map[string]interface{}{"status": "completed", "completed_at": &now, "last_error": ""}); err != nil {
@@ -470,4 +465,27 @@ func formatGeocodeLocation(loc *internalgeocode.Location) string {
 		return ""
 	}
 	return loc.FormatDisplay()
+}
+
+// geocodeLocationFields 从 geocode.Location 提取所有位置字段为 map，供 processJob 和 GeocodePhoto 共用
+func geocodeLocationFields(loc *internalgeocode.Location) map[string]interface{} {
+	fields := map[string]interface{}{
+		"location": "",
+		"country":  "",
+		"province": "",
+		"city":     "",
+		"district": "",
+		"street":   "",
+		"poi":      "",
+	}
+	if loc != nil {
+		fields["location"] = loc.FormatDisplay()
+		fields["country"] = loc.Country
+		fields["province"] = loc.Province
+		fields["city"] = loc.City
+		fields["district"] = loc.District
+		fields["street"] = loc.Street
+		fields["poi"] = loc.POI
+	}
+	return fields
 }

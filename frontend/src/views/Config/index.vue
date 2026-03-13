@@ -254,6 +254,24 @@
                   <br />
                   <strong>大小:</strong> {{ formatFileSize(citiesDataStatus.file_size) }}
                 </div>
+                <div v-if="!citiesDataStatus.has_zh_names" class="zh-names-section">
+                  <el-divider />
+                  <div class="zh-names-hint">
+                    <el-icon class="warning-icon"><WarningFilled /></el-icon>
+                    <span>中文城市名尚未导入，离线解析的城市名可能显示为英文。</span>
+                  </div>
+                  <el-button size="small" type="primary" @click="handleDownloadZHNames" :loading="downloadingZHNames">
+                    <el-icon><Download /></el-icon>
+                    {{ downloadingZHNames ? '导入中...' : '导入中文城市名 (~260MB)' }}
+                  </el-button>
+                </div>
+                <div v-else class="zh-names-section">
+                  <el-divider />
+                  <div>
+                    <el-icon><SuccessFilled /></el-icon>
+                    <span>中文城市名已就绪</span>
+                  </div>
+                </div>
               </el-alert>
             </template>
           </el-alert>
@@ -649,9 +667,9 @@ import { ref, onMounted } from 'vue'
 import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { configApi, promptApi, type AutoScanConfig, type GeocodeConfig, type AIConfig, type PromptConfig, defaultPrompts, getCitiesDataStatus, downloadCitiesData, type CitiesDataStatus } from '@/api/config'
+import { configApi, promptApi, type AutoScanConfig, type GeocodeConfig, type AIConfig, type PromptConfig, defaultPrompts, getCitiesDataStatus, downloadCitiesData, downloadAlternateNames, type CitiesDataStatus } from '@/api/config'
 import dayjs from 'dayjs'
-import { Document, RefreshLeft, Check, Download, SuccessFilled, Link, Location, Cpu } from '@element-plus/icons-vue'
+import { Document, RefreshLeft, Check, Download, SuccessFilled, WarningFilled, Link, Location, Cpu } from '@element-plus/icons-vue'
 
 // Auto scan config state
 const loading = ref(false)
@@ -661,10 +679,12 @@ const autoScanIntervalSelection = ref<number | '__custom__'>(60)
 
 // Cities data state
 const downloadingCities = ref(false)
+const downloadingZHNames = ref(false)
 const citiesDownloadProgress = ref(0)
 const citiesDataStatus = ref<CitiesDataStatus>({
   exists: false,
   file_path: '',
+  has_zh_names: false,
   download_url: ''
 })
 
@@ -868,6 +888,19 @@ const handleDownloadCities = async () => {
     ElMessage.error('下载失败: ' + (error.message || '未知错误'))
   } finally {
     downloadingCities.value = false
+  }
+}
+
+const handleDownloadZHNames = async () => {
+  downloadingZHNames.value = true
+  try {
+    const result = await downloadAlternateNames()
+    await loadCitiesDataStatus()
+    ElMessage.success(result.message || '中文城市名导入成功！')
+  } catch (error: any) {
+    ElMessage.error('导入失败: ' + (error.message || '未知错误'))
+  } finally {
+    downloadingZHNames.value = false
   }
 }
 
@@ -1214,6 +1247,22 @@ onMounted(() => {
 
 .hint-block {
   margin-top: 8px;
+}
+
+.zh-names-section {
+  margin-top: 4px;
+}
+
+.zh-names-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+  color: var(--el-color-warning);
+}
+
+.warning-icon {
+  color: var(--el-color-warning);
 }
 
 .section-top-gap {
