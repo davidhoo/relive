@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.2] - 2026-03-13
+
+### Added
+- **照片级永久排除功能** - Photo 表新增 `status` 字段（active/excluded），排除后重扫不恢复
+- **照片位置结构化存储** - Photo 表新增 country/province/city/district 字段，支持结构化地理信息
+- **城市中文名支持** - City 表 name_zh 字段，离线 geocode 返回中文地名
+- **全量重建 GPS 位置解析** - 新增 API 及前端入口，复用后台任务基础设施一键重解析所有照片位置
+- **照片列表分类和标签筛选** - 支持按 main_category 和 tags 精确过滤
+- **照片管理页面集成扫描路径配置** - 集成路径配置与批量选择功能
+- **照片详情页修改分类** - 支持在详情页直接修改照片分类
+- **中文城市名异步导入** - alternateNamesV2.zip（~190MB）改为后台异步任务 + 前端进度条轮询，解决超时问题
+
+### Fixed
+- **BuildDisplayCanvas EXIF 方向校正** - 修复缺少方向校正导致批次图片旋转的问题
+- **中文城市名导入语言变体** - 支持 zh-CN/zh/zh-TW 全部变体，优先级 zh-CN > zh > zh-TW
+- **离线 geocode 海外地址格式** - 修正海外地址显示格式
+- **excluded 照片过滤遗漏** - 缩略图和 GPS 解析后台任务、照片列表均正确过滤 excluded 照片
+
+### Changed
+- **展示策略查询性能优化** - 消除百年循环和 ListAll 全量加载，改为按日期窗口查询
+- **DownloadCitiesData 简化** - 不再附带下载 alternateNames，中文城市名改为独立异步操作
+- **Analysis 页面 UI** - 合并 Provider 与运行状态卡片，布局更紧凑
+
+---
+
 ## [1.0.1] - 2026-03-13
 
 ### Fixed
