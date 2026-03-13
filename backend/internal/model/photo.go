@@ -6,12 +6,21 @@ import (
 	"gorm.io/gorm"
 )
 
+// 照片状态常量
+const (
+	PhotoStatusActive   = "active"   // 正常状态
+	PhotoStatusExcluded = "excluded" // 已排除
+)
+
 // Photo 照片模型
 type Photo struct {
 	ID        uint           `gorm:"primarykey" json:"id"`
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+
+	// 状态
+	Status string `gorm:"type:varchar(20);default:'active';index:idx_status" json:"status"` // active/excluded
 
 	// 文件信息
 	FilePath       string     `gorm:"type:text;not null;uniqueIndex:idx_file_path" json:"file_path"` // 文件路径
@@ -104,4 +113,9 @@ func (p *Photo) IsAnalyzed() bool {
 // HasGPS 是否有 GPS 信息
 func (p *Photo) HasGPS() bool {
 	return p.GPSLatitude != nil && p.GPSLongitude != nil
+}
+
+// IsActive 是否为正常状态
+func (p *Photo) IsActive() bool {
+	return p.Status == PhotoStatusActive
 }

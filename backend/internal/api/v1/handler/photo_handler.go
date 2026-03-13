@@ -365,6 +365,7 @@ func (h *PhotoHandler) GetPhotos(c *gin.Context) {
 	search := c.Query("search")
 	sortBy := c.DefaultQuery("sort_by", "taken_at")
 	sortDesc := c.DefaultQuery("sort_desc", "true") == "true"
+	status := c.Query("status") // active(默认)/excluded/all
 
 	// 构建请求
 	req := &model.GetPhotosRequest{
@@ -377,6 +378,7 @@ func (h *PhotoHandler) GetPhotos(c *gin.Context) {
 		Search:       search,
 		SortBy:       sortBy,
 		SortDesc:     sortDesc,
+		Status:       status,
 	}
 
 	// 查询照片
@@ -1055,6 +1057,50 @@ func (h *PhotoHandler) CountDerivedStatusByPaths(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, model.Response{Success: true, Message: "Success", Data: model.CountDerivedStatusByPathsResponse{Stats: stats}})
+}
+
+// BatchUpdateStatus 批量更新照片状态（排除/恢复）
+// @Summary 批量更新照片状态
+// @Description 批量将照片标记为排除或恢复为正常状态
+// @Tags photos
+// @Accept json
+// @Produce json
+// @Param request body model.BatchUpdateStatusRequest true "批量更新状态请求"
+// @Success 200 {object} model.Response
+// @Failure 400 {object} model.Response
+// @Failure 500 {object} model.Response
+// @Router /api/v1/photos/batch-status [patch]
+func (h *PhotoHandler) BatchUpdateStatus(c *gin.Context) {
+	var req model.BatchUpdateStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INVALID_REQUEST",
+				Message: err.Error(),
+			},
+		})
+		return
+	}
+
+	affected, err := h.photoService.BatchUpdateStatus(&req)
+	if err != nil {
+		logger.Errorf("Batch update status failed: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "UPDATE_FAILED",
+				Message: "Failed to update photo status: " + err.Error(),
+			},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: fmt.Sprintf("Successfully updated %d photos", affected),
+		Data:    map[string]int64{"affected": affected},
+	})
 }
 
 // StartScan 启动异步扫描任务

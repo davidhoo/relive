@@ -61,12 +61,13 @@ func (s *analysisService) GetPendingTasks(limit int, analyzerID string) ([]model
 
 	// 1. 统计剩余待分析数量
 	err := s.db.Model(&model.Photo{}).
-		Where(`ai_analyzed = ?
+		Where(`status = ?
+			AND ai_analyzed = ?
 			AND thumbnail_status = ?
 			AND (gps_latitude IS NULL OR gps_longitude IS NULL OR geocode_status = ?)
 			AND (analysis_lock_expired_at IS NULL OR analysis_lock_expired_at < ?)
 			AND analysis_retry_count < ?`,
-			false, "ready", "ready", time.Now(), 10).
+			model.PhotoStatusActive, false, "ready", "ready", time.Now(), 10).
 		Count(&totalRemaining).Error
 	if err != nil {
 		return nil, 0, err
@@ -80,7 +81,8 @@ func (s *analysisService) GetPendingTasks(limit int, analyzerID string) ([]model
 	result := s.db.Model(&model.Photo{}).
 		Where(`id IN (
 			SELECT id FROM photos
-			WHERE ai_analyzed = ?
+			WHERE status = ?
+			  AND ai_analyzed = ?
 			  AND thumbnail_status = ?
 			  AND (gps_latitude IS NULL OR gps_longitude IS NULL OR geocode_status = ?)
 			  AND (analysis_lock_expired_at IS NULL OR analysis_lock_expired_at < ?)
@@ -88,7 +90,7 @@ func (s *analysisService) GetPendingTasks(limit int, analyzerID string) ([]model
 			  AND deleted_at IS NULL
 			ORDER BY id ASC
 			LIMIT ?
-		)`, false, "ready", "ready", time.Now(), 10, limit).
+		)`, model.PhotoStatusActive, false, "ready", "ready", time.Now(), 10, limit).
 		Updates(map[string]interface{}{
 			"analysis_lock_id":         analyzerID,
 			"analysis_lock_expired_at": lockExpiredAt,
@@ -398,21 +400,21 @@ func (s *analysisService) GetStats(deviceID uint) (*model.AnalyzerStatsResponse,
 	var stats model.AnalyzerStatsResponse
 
 	// 统计总数
-	err := s.db.Model(&model.Photo{}).Count(&stats.TotalPhotos).Error
+	err := s.db.Model(&model.Photo{}).Where("status = ?", model.PhotoStatusActive).Count(&stats.TotalPhotos).Error
 	if err != nil {
 		return nil, err
 	}
 
 	// 统计已分析
-	err = s.db.Model(&model.Photo{}).Where("ai_analyzed = ?", true).Count(&stats.Analyzed).Error
+	err = s.db.Model(&model.Photo{}).Where("status = ? AND ai_analyzed = ?", model.PhotoStatusActive, true).Count(&stats.Analyzed).Error
 	if err != nil {
 		return nil, err
 	}
 
 	// 统计待分析（不含被锁定的）
 	err = s.db.Model(&model.Photo{}).
-		Where("ai_analyzed = ? AND (analysis_lock_expired_at IS NULL OR analysis_lock_expired_at < ?)",
-			false, time.Now()).
+		Where("status = ? AND ai_analyzed = ? AND (analysis_lock_expired_at IS NULL OR analysis_lock_expired_at < ?)",
+			model.PhotoStatusActive, false, time.Now()).
 		Count(&stats.Pending).Error
 	if err != nil {
 		return nil, err
@@ -420,7 +422,7 @@ func (s *analysisService) GetStats(deviceID uint) (*model.AnalyzerStatsResponse,
 
 	// 统计被锁定的
 	err = s.db.Model(&model.Photo{}).
-		Where("analysis_lock_expired_at >= ?", time.Now()).
+		Where("status = ? AND analysis_lock_expired_at >= ?", model.PhotoStatusActive, time.Now()).
 		Count(&stats.Locked).Error
 	if err != nil {
 		return nil, err
@@ -428,7 +430,7 @@ func (s *analysisService) GetStats(deviceID uint) (*model.AnalyzerStatsResponse,
 
 	// 统计失败的（重试次数超过3次）
 	err = s.db.Model(&model.Photo{}).
-		Where("ai_analyzed = ? AND analysis_retry_count >= ?", false, 3).
+		Where("status = ? AND ai_analyzed = ? AND analysis_retry_count >= ?", model.PhotoStatusActive, false, 3).
 		Count(&stats.Failed).Error
 	if err != nil {
 		return nil, err
@@ -446,7 +448,7 @@ func (s *analysisService) GetStats(deviceID uint) (*model.AnalyzerStatsResponse,
 // CleanExpiredLocks 清理过期的任务锁
 func (s *analysisService) CleanExpiredLocks() (int64, error) {
 	result := s.db.Model(&model.Photo{}).
-		Where("analysis_lock_expired_at < ? AND ai_analyzed = ?", time.Now(), false).
+		Where("analysis_lock_expired_at < ? AND ai_analyzed = ? AND status = ?", time.Now(), false, model.PhotoStatusActive).
 		Updates(map[string]interface{}{
 			"analysis_lock_id":         nil,
 			"analysis_lock_expired_at": nil,

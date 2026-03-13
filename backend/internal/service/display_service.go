@@ -749,6 +749,9 @@ func filterDisplayCandidates(photos []*model.Photo, excludePhotoIDs []uint, cfg 
 		if photo == nil || !photo.AIAnalyzed {
 			continue
 		}
+		if photo.Status != model.PhotoStatusActive && photo.Status != "" {
+			continue
+		}
 		if _, excluded := excludeSet[photo.ID]; excluded {
 			continue
 		}

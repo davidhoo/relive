@@ -48,6 +48,7 @@ type GetPhotosRequest struct {
 	Search       string `form:"search"`        // 搜索关键词（可选，搜索路径、设备ID、标签）
 	SortBy       string `form:"sort_by"`       // 排序字段（taken_at/overall_score）
 	SortDesc     bool   `form:"sort_desc"`     // 是否降序
+	Status       string `form:"status"`        // 状态筛选：active(默认)/excluded/all
 }
 
 // GetDisplayPhotoRequest 获取展示照片请求
@@ -450,4 +451,10 @@ type UserInfoResponse struct {
 // 注意：布尔值不使用 required binding，因为 false 也是合法值
 type UpdateDeviceEnabledRequest struct {
 	Enabled bool `json:"enabled"`
+}
+
+// BatchUpdateStatusRequest 批量更新照片状态请求
+type BatchUpdateStatusRequest struct {
+	PhotoIDs []uint `json:"photo_ids" binding:"required,min=1"`
+	Status   string `json:"status" binding:"required,oneof=active excluded"`
 }

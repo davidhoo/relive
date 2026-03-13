@@ -62,4 +62,9 @@ export const photoApi = {
   countDerivedStatusByPaths(data: CountDerivedStatusByPathsRequest) {
     return http.post<ApiResponse<CountDerivedStatusByPathsResponse>>('/photos/derived-status-by-paths', data)
   },
+
+  // 批量更新照片状态（排除/恢复）
+  batchUpdateStatus(data: { photo_ids: number[]; status: string }) {
+    return http.patch<ApiResponse<{ affected: number }>>('/photos/batch-status', data)
+  },
 }

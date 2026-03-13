@@ -165,6 +165,21 @@
         </el-table-column>
       </el-table>
 
+      <!-- 回收站（虚拟路径） -->
+      <div
+        v-if="excludedCount > 0"
+        class="recycle-bin-row"
+        :class="{ active: filterStatus === 'excluded' }"
+        @click="handleRecycleBinClick"
+      >
+        <div class="recycle-bin-cell name">
+          <el-icon class="path-icon" style="color: var(--el-color-danger)"><Delete /></el-icon>
+          <span class="path-name">回收站</span>
+        </div>
+        <div class="recycle-bin-cell path">已排除的照片</div>
+        <div class="recycle-bin-cell count">{{ excludedCount }}</div>
+      </div>
+
       <el-empty v-if="scanPaths.length === 0 && !scanPathLoading" description="暂无扫描路径" :image-size="80">
         <el-button type="primary" @click="goToConfig">
           <el-icon><Setting /></el-icon>
@@ -426,6 +441,7 @@ const searchQuery = ref('')
 const filterAnalyzed = ref('')
 const filterThumbnail = ref('')
 const filterGPS = ref('')
+const filterStatus = ref('') // '': active(默认), 'excluded': 回收站
 const scanPaths = ref<ScanPathConfig[]>([])
 const scanPathLoading = ref(false)
 const scanningPathId = ref<string>('')
@@ -435,6 +451,7 @@ const currentTaskStatus = ref<string>('')
 const currentScanPath = ref<string>('') // 当前正在扫描的路径
 const currentScanType = ref<'scan' | 'rebuild' | ''>('') // 当前扫描类型
 const cleaningUp = ref(false)
+const excludedCount = ref(0)
 const categories = ref<string[]>([])
 const tags = ref<string[]>([])
 
@@ -650,12 +667,22 @@ const loadSystemTotal = async () => {
   }
 }
 
+const loadExcludedCount = async () => {
+  try {
+    const res = await photoApi.getList({ page_size: 1, status: 'excluded' })
+    excludedCount.value = res.data?.data?.total || 0
+  } catch {
+    excludedCount.value = 0
+  }
+}
+
 // 重置搜索条件
 const resetSearch = () => {
   searchQuery.value = ''
   filterAnalyzed.value = ''
   filterThumbnail.value = ''
   filterGPS.value = ''
+  filterStatus.value = ''
   currentPage.value = 1
   loadPhotos()
 }
@@ -683,6 +710,10 @@ const loadPhotos = async () => {
 
     if (filterGPS.value) {
       params.has_gps = filterGPS.value
+    }
+
+    if (filterStatus.value) {
+      params.status = filterStatus.value
     }
 
     const res = await photoApi.getList(params)
@@ -756,11 +787,24 @@ const handleFilterClick = (value: string) => {
 
 // 点击路径名称搜索
 const handlePathClick = (row: ScanPathConfig) => {
+  // 退出回收站模式
+  filterStatus.value = ''
   if (searchQuery.value === row.path) {
-    // 如果已经选中了，取消筛选
     searchQuery.value = ''
   } else {
     searchQuery.value = row.path
+  }
+  currentPage.value = 1
+  loadPhotos()
+}
+
+const handleRecycleBinClick = () => {
+  if (filterStatus.value === 'excluded') {
+    // 已经在回收站模式，退出
+    filterStatus.value = ''
+  } else {
+    filterStatus.value = 'excluded'
+    searchQuery.value = ''
   }
   currentPage.value = 1
   loadPhotos()
@@ -962,6 +1006,9 @@ const gotoDetail = (photoId: number) => {
   if (filterGPS.value) {
     query.has_gps = filterGPS.value
   }
+  if (filterStatus.value) {
+    query.status = filterStatus.value
+  }
 
   // 保存搜索关键词
   if (searchQuery.value) {
@@ -1043,6 +1090,7 @@ onMounted(() => {
 
   // 加载系统总照片数
   loadSystemTotal()
+  loadExcludedCount()
 
   // 加载分类和标签
   loadCategoriesAndTags()
@@ -1070,6 +1118,9 @@ onMounted(() => {
   }
   if (query.has_gps) {
     filterGPS.value = String(query.has_gps)
+  }
+  if (query.status) {
+    filterStatus.value = String(query.status)
   }
 
   // 恢复搜索关键词
@@ -1837,6 +1888,46 @@ defineExpose({
 
 .collapse-icon {
   font-size: 12px;
+}
+
+.recycle-bin-row {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-top: 1px solid var(--el-border-color-lighter);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+  font-size: var(--font-size-sm);
+}
+
+.recycle-bin-row:hover {
+  background-color: var(--color-bg-secondary);
+}
+
+.recycle-bin-row.active {
+  background-color: var(--el-color-danger-light-9);
+}
+
+.recycle-bin-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.recycle-bin-cell.name {
+  min-width: 120px;
+}
+
+.recycle-bin-cell.path {
+  flex: 1;
+  color: var(--color-text-secondary);
+}
+
+.recycle-bin-cell.count {
+  width: 80px;
+  justify-content: center;
+  color: var(--el-color-danger);
+  font-weight: var(--font-weight-medium);
 }
 
 </style>

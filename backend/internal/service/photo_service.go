@@ -58,6 +58,9 @@ type PhotoService interface {
 	// 路径统计
 	CountPhotosByPathPrefix(pathPrefix string) (int64, error)
 	GetPathDerivedStatus(pathPrefix string) (*model.PathDerivedStatus, error)
+
+	// 照片状态管理
+	BatchUpdateStatus(req *model.BatchUpdateStatusRequest) (int64, error)
 }
 
 // photoService 照片服务实现
@@ -638,7 +641,7 @@ func (s *photoService) GetPhotos(req *model.GetPhotosRequest) ([]*model.Photo, i
 	}
 
 	// 调用 Repository
-	return s.repo.List(req.Page, req.PageSize, req.Analyzed, req.HasThumbnail, req.HasGPS, req.Location, req.Search, req.SortBy, req.SortDesc, enabledPaths)
+	return s.repo.List(req.Page, req.PageSize, req.Analyzed, req.HasThumbnail, req.HasGPS, req.Location, req.Search, req.SortBy, req.SortDesc, enabledPaths, req.Status)
 }
 
 // CountAll 统计照片总数
@@ -771,6 +774,11 @@ func (s *photoService) GetPathDerivedStatus(pathPrefix string) (*model.PathDeriv
 		return nil, fmt.Errorf("get derived status by path prefix: %w", err)
 	}
 	return status, nil
+}
+
+// BatchUpdateStatus 批量更新照片状态
+func (s *photoService) BatchUpdateStatus(req *model.BatchUpdateStatusRequest) (int64, error) {
+	return s.repo.BatchUpdateStatus(req.PhotoIDs, req.Status)
 }
 
 // getEnabledScanPaths 获取启用的扫描路径列表
@@ -1118,6 +1126,16 @@ func (s *photoService) processScanFile(ctx context.Context, jobID string, task s
 
 	progress.setCurrentFile(filepath.Base(task.path))
 	existing := existingByPath[task.path]
+
+	// 跳过 excluded 照片，不更新不恢复
+	if existing != nil && existing.Status == model.PhotoStatusExcluded {
+		seenFiles.Lock()
+		seenFiles.items[existing.FilePath] = struct{}{}
+		seenFiles.Unlock()
+		progress.incrementProcessed(1)
+		return nil
+	}
+
 	if s.canReuseExistingPhoto(existing, task.info, rebuild) {
 		seenFiles.Lock()
 		seenFiles.items[existing.FilePath] = struct{}{}

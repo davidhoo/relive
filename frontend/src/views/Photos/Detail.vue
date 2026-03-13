@@ -8,6 +8,24 @@
             返回
           </el-button>
           <div class="header-actions">
+            <el-button
+              v-if="photo?.status === 'excluded'"
+              type="success"
+              @click="handleRestore"
+              :loading="statusUpdating"
+            >
+              <el-icon><RefreshRight /></el-icon>
+              恢复照片
+            </el-button>
+            <el-button
+              v-else
+              type="danger"
+              @click="handleExclude"
+              :loading="statusUpdating"
+            >
+              <el-icon><Delete /></el-icon>
+              排除照片
+            </el-button>
             <el-button @click="handleThumbnail" :loading="thumbnailing">
               {{ thumbnailing ? '生成中...' : (photo?.thumbnail_status === 'ready' ? '重新生成缩略图' : '生成缩略图') }}
             </el-button>
@@ -26,6 +44,15 @@
           </div>
         </div>
       </template>
+
+      <el-alert
+        v-if="photo.status === 'excluded'"
+        title="该照片已被排除，不参与展示、分析和统计"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 16px"
+      />
 
       <el-row :gutter="20">
         <!-- 左侧：照片预览 -->
@@ -162,8 +189,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { ArrowLeft, InfoFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, InfoFilled, Delete, RefreshRight } from '@element-plus/icons-vue'
 import { photoApi } from '@/api/photo'
 import { aiApi } from '@/api/ai'
 import { geocodeApi } from '@/api/geocode'
@@ -171,6 +197,7 @@ import { thumbnailApi } from '@/api/thumbnail'
 import type { Photo } from '@/types/photo'
 import dayjs from 'dayjs'
 import { useUserStore } from '@/stores/user'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const route = useRoute()
 const router = useRouter()
@@ -181,6 +208,7 @@ const loading = ref(false)
 const analyzing = ref(false)
 const geocoding = ref(false)
 const thumbnailing = ref(false)
+const statusUpdating = ref(false)
 
 // 统一管理所有轮询定时器，离开页面时清理
 const activeTimers: ReturnType<typeof setInterval | typeof setTimeout>[] = []
@@ -384,18 +412,60 @@ const handleTagClick = (tag: string) => {
   })
 }
 
+// 排除照片
+const handleExclude = async () => {
+  if (!photo.value) return
+  try {
+    await ElMessageBox.confirm(
+      '排除后该照片将不参与展示、分析和统计，重新扫描也不会恢复。确定排除？',
+      '排除照片',
+      { confirmButtonText: '排除', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  try {
+    statusUpdating.value = true
+    await photoApi.batchUpdateStatus({ photo_ids: [photo.value.id], status: 'excluded' })
+    ElMessage.success('照片已排除')
+    await loadPhoto()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || '排除失败')
+  } finally {
+    statusUpdating.value = false
+  }
+}
+
+// 恢复照片
+const handleRestore = async () => {
+  if (!photo.value) return
+  try {
+    statusUpdating.value = true
+    await photoApi.batchUpdateStatus({ photo_ids: [photo.value.id], status: 'active' })
+    ElMessage.success('照片已恢复')
+    await loadPhoto()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || '恢复失败')
+  } finally {
+    statusUpdating.value = false
+  }
+}
+
 // 返回
 const goBack = () => {
   const query = route.query
 
   // 如果有查询参数，返回到对应状态的列表页
-  if (query.page || query.analyzed || query.search) {
+  if (query.page || query.analyzed || query.search || query.has_thumbnail || query.has_gps || query.status) {
     router.push({
       path: '/photos',
       query: {
         ...(query.page && { page: query.page }),
         ...(query.pageSize && { pageSize: query.pageSize }),
         ...(query.analyzed && { analyzed: query.analyzed }),
+        ...(query.has_thumbnail && { has_thumbnail: query.has_thumbnail }),
+        ...(query.has_gps && { has_gps: query.has_gps }),
+        ...(query.status && { status: query.status }),
         ...(query.search && { search: query.search })
       }
     })

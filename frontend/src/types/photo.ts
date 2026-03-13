@@ -45,6 +45,9 @@ export interface Photo {
   // 时间戳
   created_at: string
   updated_at: string
+
+  // 状态
+  status?: string // active/excluded
 }
 
 // 照片列表请求参数
@@ -56,6 +59,7 @@ export interface PhotoListParams {
   search?: string
   sort_by?: string
   sort_desc?: boolean
+  status?: string
 }
 
 // 照片统计

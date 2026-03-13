@@ -91,14 +91,14 @@ func (a *Analyzer) CheckStatus() error {
 
 	// Count total photos
 	var total int
-	err := a.db.QueryRow("SELECT COUNT(*) FROM photos").Scan(&total)
+	err := a.db.QueryRow("SELECT COUNT(*) FROM photos WHERE status = 'active'").Scan(&total)
 	if err != nil {
 		return fmt.Errorf("count total photos: %w", err)
 	}
 
 	// Count analyzed photos
 	var analyzed int
-	err = a.db.QueryRow("SELECT COUNT(*) FROM photos WHERE ai_analyzed = 1").Scan(&analyzed)
+	err = a.db.QueryRow("SELECT COUNT(*) FROM photos WHERE ai_analyzed = 1 AND status = 'active'").Scan(&analyzed)
 	if err != nil {
 		return fmt.Errorf("count analyzed photos: %w", err)
 	}
@@ -123,7 +123,7 @@ func (a *Analyzer) EstimateCost() error {
 
 	// Count unanalyzed photos
 	var unanalyzed int
-	err := a.db.QueryRow("SELECT COUNT(*) FROM photos WHERE ai_analyzed = 0").Scan(&unanalyzed)
+	err := a.db.QueryRow("SELECT COUNT(*) FROM photos WHERE ai_analyzed = 0 AND status = 'active'").Scan(&unanalyzed)
 	if err != nil {
 		return fmt.Errorf("count unanalyzed photos: %w", err)
 	}
@@ -255,7 +255,7 @@ func (a *Analyzer) loadUnanalyzedPhotos() ([]model.Photo, error) {
 		SELECT id, file_path, file_name, file_hash, width, height,
 		       taken_at, camera_model, location, gps_latitude, gps_longitude
 		FROM photos
-		WHERE ai_analyzed = 0
+		WHERE ai_analyzed = 0 AND status = 'active'
 		ORDER BY id ASC
 	`
 

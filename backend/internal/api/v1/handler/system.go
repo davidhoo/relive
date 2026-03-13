@@ -94,10 +94,10 @@ func (h *SystemHandler) Stats(c *gin.Context) {
 	var stats model.SystemStatsResponse
 
 	// 统计照片总数
-	h.db.Model(&model.Photo{}).Count(&stats.TotalPhotos)
+	h.db.Model(&model.Photo{}).Where("status = ?", model.PhotoStatusActive).Count(&stats.TotalPhotos)
 
 	// 统计已分析照片
-	h.db.Model(&model.Photo{}).Where("ai_analyzed = ?", true).Count(&stats.AnalyzedPhotos)
+	h.db.Model(&model.Photo{}).Where("status = ? AND ai_analyzed = ?", model.PhotoStatusActive, true).Count(&stats.AnalyzedPhotos)
 
 	// 统计未分析照片
 	stats.UnanalyzedPhotos = stats.TotalPhotos - stats.AnalyzedPhotos
@@ -116,7 +116,7 @@ func (h *SystemHandler) Stats(c *gin.Context) {
 
 	// 统计存储空间（所有照片文件大小之和）
 	var totalSize int64
-	h.db.Model(&model.Photo{}).Select("COALESCE(SUM(file_size), 0)").Scan(&totalSize)
+	h.db.Model(&model.Photo{}).Where("status = ?", model.PhotoStatusActive).Select("COALESCE(SUM(file_size), 0)").Scan(&totalSize)
 	stats.StorageSize = totalSize
 
 	// 获取数据库文件大小

@@ -10,6 +10,11 @@ import (
 	"gorm.io/gorm"
 )
 
+// activeScope 只查询 active 状态的照片
+func activeScope(db *gorm.DB) *gorm.DB {
+	return db.Where("status = ?", model.PhotoStatusActive)
+}
+
 // PhotoRepository 照片仓库接口
 type PhotoRepository interface {
 	// 基础 CRUD
@@ -23,7 +28,7 @@ type PhotoRepository interface {
 	ExistsByFilePath(filePath string) (bool, error)
 
 	// 列表查询
-	List(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, sortBy string, sortDesc bool, enabledPaths []string) ([]*model.Photo, int64, error)
+	List(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, sortBy string, sortDesc bool, enabledPaths []string, status string) ([]*model.Photo, int64, error)
 	ListAll() ([]*model.Photo, error)
 	ListByIDs(ids []uint) ([]*model.Photo, error)
 
@@ -62,6 +67,9 @@ type PhotoRepository interface {
 	// 路径统计
 	CountByPathPrefix(prefix string) (int64, error)
 	GetDerivedStatusByPathPrefix(prefix string) (*model.PathDerivedStatus, error)
+
+	// 状态管理
+	BatchUpdateStatus(ids []uint, status string) (int64, error)
 }
 
 // photoRepository 照片仓库实现
@@ -134,12 +142,22 @@ func (r *photoRepository) ExistsByFilePath(filePath string) (bool, error) {
 }
 
 // List 分页列表查询
-func (r *photoRepository) List(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, sortBy string, sortDesc bool, enabledPaths []string) ([]*model.Photo, int64, error) {
+func (r *photoRepository) List(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, sortBy string, sortDesc bool, enabledPaths []string, status string) ([]*model.Photo, int64, error) {
 	var photos []*model.Photo
 	var total int64
 
 	// 构建查询
 	query := r.db.Model(&model.Photo{})
+
+	// status 过滤：默认只查 active，支持 excluded 和 all
+	switch status {
+	case "excluded":
+		query = query.Where("status = ?", model.PhotoStatusExcluded)
+	case "all":
+		// 不加过滤
+	default:
+		query = query.Scopes(activeScope)
+	}
 
 	// 筛选启用的路径
 	if enabledPaths != nil {
@@ -253,7 +271,7 @@ func buildPathPrefixCondition(prefix string) (string, []interface{}) {
 // ListAll 获取所有照片
 func (r *photoRepository) ListAll() ([]*model.Photo, error) {
 	var photos []*model.Photo
-	err := r.db.Find(&photos).Error
+	err := r.db.Scopes(activeScope).Find(&photos).Error
 	return photos, err
 }
 
@@ -267,7 +285,7 @@ func (r *photoRepository) ListByIDs(ids []uint) ([]*model.Photo, error) {
 // GetUnanalyzed 获取未分析的照片
 func (r *photoRepository) GetUnanalyzed(limit int) ([]*model.Photo, error) {
 	var photos []*model.Photo
-	err := r.db.Where(`ai_analyzed = ?
+	err := r.db.Scopes(activeScope).Where(`ai_analyzed = ?
 		AND thumbnail_status = ?
 		AND (gps_latitude IS NULL OR gps_longitude IS NULL OR geocode_status = ?)`, false, "ready", "ready").
 		Order("taken_at DESC").
@@ -296,21 +314,21 @@ func (r *photoRepository) MarkAsAnalyzed(id uint, description, caption, mainCate
 // CountAnalyzed 统计已分析照片数
 func (r *photoRepository) CountAnalyzed() (int64, error) {
 	var count int64
-	err := r.db.Model(&model.Photo{}).Where("ai_analyzed = ?", true).Count(&count).Error
+	err := r.db.Model(&model.Photo{}).Scopes(activeScope).Where("ai_analyzed = ?", true).Count(&count).Error
 	return count, err
 }
 
 // CountUnanalyzed 统计未分析照片数
 func (r *photoRepository) CountUnanalyzed() (int64, error) {
 	var count int64
-	err := r.db.Model(&model.Photo{}).Where("ai_analyzed = ?", false).Count(&count).Error
+	err := r.db.Model(&model.Photo{}).Scopes(activeScope).Where("ai_analyzed = ?", false).Count(&count).Error
 	return count, err
 }
 
 // GetByDateRange 根据日期范围获取照片
 func (r *photoRepository) GetByDateRange(start, end time.Time) ([]*model.Photo, error) {
 	var photos []*model.Photo
-	err := r.db.Where("taken_at BETWEEN ? AND ?", start, end).
+	err := r.db.Scopes(activeScope).Where("taken_at BETWEEN ? AND ?", start, end).
 		Order("taken_at DESC").
 		Find(&photos).Error
 	return photos, err
@@ -319,7 +337,7 @@ func (r *photoRepository) GetByDateRange(start, end time.Time) ([]*model.Photo, 
 // GetTopByScore 获取评分最高的照片
 func (r *photoRepository) GetTopByScore(limit int, excludePhotoIDs []uint) ([]*model.Photo, error) {
 	var photos []*model.Photo
-	query := r.db.Where("ai_analyzed = ?", true).
+	query := r.db.Scopes(activeScope).Where("ai_analyzed = ?", true).
 		Order("overall_score DESC, taken_at DESC")
 
 	if len(excludePhotoIDs) > 0 {
@@ -334,7 +352,7 @@ func (r *photoRepository) GetTopByScore(limit int, excludePhotoIDs []uint) ([]*m
 func (r *photoRepository) GetRandom(limit, minBeautyScore, minMemoryScore int, excludePhotoIDs []uint) ([]*model.Photo, error) {
 	var photos []*model.Photo
 
-	query := r.db.Where(
+	query := r.db.Scopes(activeScope).Where(
 		"ai_analyzed = ? AND beauty_score >= ? AND memory_score >= ?",
 		true,
 		minBeautyScore,
@@ -352,7 +370,7 @@ func (r *photoRepository) GetRandom(limit, minBeautyScore, minMemoryScore int, e
 // GetByLocation 根据位置获取照片
 func (r *photoRepository) GetByLocation(location string, limit int) ([]*model.Photo, error) {
 	var photos []*model.Photo
-	err := r.db.Where("location LIKE ?", "%"+location+"%").
+	err := r.db.Scopes(activeScope).Where("location LIKE ?", "%"+location+"%").
 		Order("taken_at DESC").
 		Limit(limit).
 		Find(&photos).Error
@@ -362,7 +380,7 @@ func (r *photoRepository) GetByLocation(location string, limit int) ([]*model.Ph
 // Count 统计照片总数
 func (r *photoRepository) Count() (int64, error) {
 	var count int64
-	err := r.db.Model(&model.Photo{}).Count(&count).Error
+	err := r.db.Model(&model.Photo{}).Scopes(activeScope).Count(&count).Error
 	return count, err
 }
 
@@ -374,7 +392,7 @@ func (r *photoRepository) CountByLocation() (map[string]int64, error) {
 	}
 
 	var results []Result
-	err := r.db.Model(&model.Photo{}).
+	err := r.db.Model(&model.Photo{}).Scopes(activeScope).
 		Select("location, COUNT(*) as count").
 		Where("location != ''").
 		Group("location").
@@ -465,7 +483,7 @@ func (r *photoRepository) CountByPathPrefix(prefix string) (int64, error) {
 		return 0, nil
 	}
 
-	err := r.db.Model(&model.Photo{}).Where(condition, values...).Count(&count).Error
+	err := r.db.Model(&model.Photo{}).Scopes(activeScope).Where(condition, values...).Count(&count).Error
 	return count, err
 }
 
@@ -477,7 +495,7 @@ func (r *photoRepository) GetDerivedStatusByPathPrefix(prefix string) (*model.Pa
 	}
 
 	var result model.PathDerivedStatus
-	err := r.db.Model(&model.Photo{}).
+	err := r.db.Model(&model.Photo{}).Scopes(activeScope).
 		Where(condition, values...).
 		Select(`
 			COUNT(*) as photo_total,
@@ -499,7 +517,7 @@ func (r *photoRepository) GetDerivedStatusByPathPrefix(prefix string) (*model.Pa
 // GetCategories 获取所有分类
 func (r *photoRepository) GetCategories() ([]string, error) {
 	var categories []string
-	err := r.db.Model(&model.Photo{}).
+	err := r.db.Model(&model.Photo{}).Scopes(activeScope).
 		Where("main_category != ? AND main_category IS NOT NULL", "").
 		Distinct("main_category").
 		Pluck("main_category", &categories).Error
@@ -511,7 +529,7 @@ func (r *photoRepository) GetTags() ([]string, error) {
 	var tagRows []struct {
 		Tags string
 	}
-	err := r.db.Model(&model.Photo{}).
+	err := r.db.Model(&model.Photo{}).Scopes(activeScope).
 		Where("tags != ? AND tags IS NOT NULL", "").
 		Pluck("tags", &tagRows).Error
 	if err != nil {
@@ -545,6 +563,12 @@ func (r *photoRepository) GetTags() ([]string, error) {
 // ListWithGPS 获取所有有GPS坐标的照片
 func (r *photoRepository) ListWithGPS() ([]*model.Photo, error) {
 	var photos []*model.Photo
-	err := r.db.Where("gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL").Find(&photos).Error
+	err := r.db.Scopes(activeScope).Where("gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL").Find(&photos).Error
 	return photos, err
+}
+
+// BatchUpdateStatus 批量更新照片状态
+func (r *photoRepository) BatchUpdateStatus(ids []uint, status string) (int64, error) {
+	result := r.db.Model(&model.Photo{}).Where("id IN ?", ids).Update("status", status)
+	return result.RowsAffected, result.Error
 }

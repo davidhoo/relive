@@ -119,6 +119,10 @@ func AutoMigrate(db *gorm.DB) error {
 		return err
 	}
 
+	if err := migratePhotoStatusColumn(db); err != nil {
+		return err
+	}
+
 	if err := cleanupObsoleteDeviceColumns(db); err != nil {
 		return err
 	}
@@ -138,6 +142,11 @@ func migrateDeviceLastSeenColumn(db *gorm.DB) error {
 		return nil
 	}
 	return migrator.RenameColumn(&model.Device{}, "last_heartbeat", "last_seen")
+}
+
+// migratePhotoStatusColumn 将旧照片的 status 字段设为 active
+func migratePhotoStatusColumn(db *gorm.DB) error {
+	return db.Exec("UPDATE photos SET status = ? WHERE status IS NULL OR status = ''", model.PhotoStatusActive).Error
 }
 
 func cleanupObsoleteDeviceColumns(db *gorm.DB) error {
