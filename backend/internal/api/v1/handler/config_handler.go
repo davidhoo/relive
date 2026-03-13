@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
@@ -21,6 +23,17 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+// zhNamesTask 中文城市名导入异步任务状态
+type zhNamesTask struct {
+	mu          sync.RWMutex
+	Status      string     `json:"status"`       // idle/downloading/extracting/importing/completed/failed
+	Phase       string     `json:"phase"`         // 当前阶段描述
+	Progress    int        `json:"progress"`      // 百分比 0-100
+	Message     string     `json:"message"`       // 完成/错误信息
+	StartedAt   *time.Time `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at"`
+}
 
 // ConfigHandler 配置处理器
 type ConfigHandler struct {
@@ -34,6 +47,7 @@ type ConfigHandler struct {
 	photoRepo      repository.PhotoRepository
 	aiHandler      *AIHandler // 用于更新 AIHandler 的 aiService
 	db             *gorm.DB
+	zhTask         *zhNamesTask
 }
 
 // NewConfigHandler 创建配置处理器
@@ -48,6 +62,7 @@ func NewConfigHandler(service service.ConfigService, aiService service.AIService
 		photoRepo:      photoRepo,
 		cfg:            cfg,
 		db:             db,
+		zhTask:         &zhNamesTask{Status: "idle"},
 	}
 }
 
@@ -880,42 +895,7 @@ func (h *ConfigHandler) DownloadCitiesData(c *gin.Context) {
 		return
 	}
 
-	// 下载并导入中文城市名（alternateNamesV2.zip）
-	zhImported := 0
-	altNamesFile := filepath.Join(dataDir, "alternateNamesV2.txt")
-	altNamesZip := filepath.Join(dataDir, "alternateNamesV2.zip")
-
-	logger.Info("Downloading alternateNamesV2.zip for Chinese city names...")
-	altResp, altErr := http.Get("https://download.geonames.org/export/dump/alternateNamesV2.zip")
-	if altErr != nil {
-		logger.Warnf("Failed to download alternate names (non-fatal): %v", altErr)
-	} else {
-		defer altResp.Body.Close()
-		if altResp.StatusCode == http.StatusOK {
-			altOut, err := os.Create(altNamesZip)
-			if err == nil {
-				_, err = io.Copy(altOut, altResp.Body)
-				altOut.Close()
-				if err == nil {
-					if err := unzipFile(altNamesZip, dataDir); err == nil {
-						if count, err := h.importAlternateNames(altNamesFile); err == nil {
-							zhImported = count
-						} else {
-							logger.Warnf("Failed to import alternate names (non-fatal): %v", err)
-						}
-					} else {
-						logger.Warnf("Failed to extract alternate names (non-fatal): %v", err)
-					}
-				}
-				os.Remove(altNamesZip)
-			}
-		}
-	}
-
 	message := fmt.Sprintf("Cities data downloaded and imported successfully. Total %d cities in database.", importedCount)
-	if zhImported > 0 {
-		message += fmt.Sprintf(" %d Chinese city names imported.", zhImported)
-	}
 
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
@@ -923,15 +903,88 @@ func (h *ConfigHandler) DownloadCitiesData(c *gin.Context) {
 	})
 }
 
-// DownloadAlternateNames 下载并导入中文城市名数据
-// @Summary 下载中文城市名数据
-// @Description 下载 alternateNamesV2.zip 并导入中文城市名
+// DownloadAlternateNames 启动异步下载并导入中文城市名数据
+// @Summary 下载中文城市名数据（异步）
+// @Description 异步下载 alternateNamesV2.zip 并导入中文城市名
 // @Tags Config
 // @Produce json
 // @Success 200 {object} model.Response
+// @Failure 409 {object} model.Response
 // @Failure 500 {object} model.Response
 // @Router /api/v1/config/cities-data/download-zh-names [post]
 func (h *ConfigHandler) DownloadAlternateNames(c *gin.Context) {
+	h.zhTask.mu.Lock()
+	if h.zhTask.Status == "downloading" || h.zhTask.Status == "extracting" || h.zhTask.Status == "importing" {
+		h.zhTask.mu.Unlock()
+		c.JSON(http.StatusConflict, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "TASK_RUNNING", Message: "中文城市名导入任务正在运行中"},
+		})
+		return
+	}
+	now := time.Now()
+	h.zhTask.Status = "downloading"
+	h.zhTask.Phase = "正在下载 alternateNamesV2.zip..."
+	h.zhTask.Progress = 0
+	h.zhTask.Message = ""
+	h.zhTask.StartedAt = &now
+	h.zhTask.CompletedAt = nil
+	h.zhTask.mu.Unlock()
+
+	go h.runZHNamesTask()
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "中文城市名导入任务已启动",
+	})
+}
+
+// GetZHNamesTaskStatus 获取中文城市名导入任务状态
+// @Summary 获取中文城市名导入任务状态
+// @Tags Config
+// @Produce json
+// @Success 200 {object} model.Response
+// @Router /api/v1/config/cities-data/zh-names-task [get]
+func (h *ConfigHandler) GetZHNamesTaskStatus(c *gin.Context) {
+	h.zhTask.mu.RLock()
+	defer h.zhTask.mu.RUnlock()
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Data: map[string]interface{}{
+			"status":       h.zhTask.Status,
+			"phase":        h.zhTask.Phase,
+			"progress":     h.zhTask.Progress,
+			"message":      h.zhTask.Message,
+			"started_at":   h.zhTask.StartedAt,
+			"completed_at": h.zhTask.CompletedAt,
+		},
+	})
+}
+
+// progressWriter 用于跟踪下载进度
+type progressWriter struct {
+	total      int64
+	written    int64
+	task       *zhNamesTask
+	basePct    int // 进度基线
+	rangePct   int // 进度范围
+}
+
+func (pw *progressWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	pw.written += int64(n)
+	if pw.total > 0 {
+		pct := pw.basePct + int(float64(pw.written)/float64(pw.total)*float64(pw.rangePct))
+		pw.task.mu.Lock()
+		pw.task.Progress = pct
+		pw.task.mu.Unlock()
+	}
+	return n, nil
+}
+
+// runZHNamesTask 后台执行中文城市名下载→解压→导入
+func (h *ConfigHandler) runZHNamesTask() {
 	dataDir := filepath.Dir(h.cfg.Database.Path)
 	if dataDir == "" || dataDir == "." {
 		dataDir = "./data"
@@ -940,80 +993,235 @@ func (h *ConfigHandler) DownloadAlternateNames(c *gin.Context) {
 	altNamesFile := filepath.Join(dataDir, "alternateNamesV2.txt")
 	altNamesZip := filepath.Join(dataDir, "alternateNamesV2.zip")
 
+	setFailed := func(msg string) {
+		h.zhTask.mu.Lock()
+		h.zhTask.Status = "failed"
+		h.zhTask.Phase = ""
+		h.zhTask.Message = msg
+		now := time.Now()
+		h.zhTask.CompletedAt = &now
+		h.zhTask.mu.Unlock()
+		logger.Errorf("ZH names task failed: %s", msg)
+	}
+
 	// 确保目录存在
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, model.Response{
-			Success: false,
-			Error:   &model.ErrorInfo{Code: "CREATE_DIR_FAILED", Message: err.Error()},
-		})
+		setFailed(fmt.Sprintf("创建目录失败: %v", err))
 		return
 	}
 
-	// 下载
-	logger.Info("Downloading alternateNamesV2.zip...")
+	// --- 下载阶段 (0-60%) ---
+	logger.Info("ZH names task: downloading alternateNamesV2.zip...")
 	resp, err := http.Get("https://download.geonames.org/export/dump/alternateNamesV2.zip")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, model.Response{
-			Success: false,
-			Error:   &model.ErrorInfo{Code: "DOWNLOAD_FAILED", Message: fmt.Sprintf("Failed to download: %v", err)},
-		})
+		setFailed(fmt.Sprintf("下载失败: %v", err))
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		c.JSON(http.StatusInternalServerError, model.Response{
-			Success: false,
-			Error:   &model.ErrorInfo{Code: "DOWNLOAD_FAILED", Message: fmt.Sprintf("HTTP status: %d", resp.StatusCode)},
-		})
+		setFailed(fmt.Sprintf("下载返回 HTTP %d", resp.StatusCode))
 		return
 	}
 
 	out, err := os.Create(altNamesZip)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, model.Response{
-			Success: false,
-			Error:   &model.ErrorInfo{Code: "CREATE_FILE_FAILED", Message: err.Error()},
-		})
+		setFailed(fmt.Sprintf("创建文件失败: %v", err))
 		return
 	}
 
-	_, err = io.Copy(out, resp.Body)
+	pw := &progressWriter{
+		total:    resp.ContentLength,
+		task:     h.zhTask,
+		basePct:  0,
+		rangePct: 60,
+	}
+	_, err = io.Copy(out, io.TeeReader(resp.Body, pw))
 	out.Close()
 	if err != nil {
 		os.Remove(altNamesZip)
-		c.JSON(http.StatusInternalServerError, model.Response{
-			Success: false,
-			Error:   &model.ErrorInfo{Code: "SAVE_FILE_FAILED", Message: err.Error()},
-		})
+		setFailed(fmt.Sprintf("保存文件失败: %v", err))
 		return
 	}
 
-	// 解压
+	// --- 解压阶段 (60-70%) ---
+	h.zhTask.mu.Lock()
+	h.zhTask.Status = "extracting"
+	h.zhTask.Phase = "正在解压 alternateNamesV2.zip..."
+	h.zhTask.Progress = 60
+	h.zhTask.mu.Unlock()
+
+	logger.Info("ZH names task: extracting...")
 	if err := unzipFile(altNamesZip, dataDir); err != nil {
 		os.Remove(altNamesZip)
-		c.JSON(http.StatusInternalServerError, model.Response{
-			Success: false,
-			Error:   &model.ErrorInfo{Code: "EXTRACT_FAILED", Message: err.Error()},
-		})
+		setFailed(fmt.Sprintf("解压失败: %v", err))
 		return
 	}
 	os.Remove(altNamesZip)
 
-	// 导入
-	count, err := h.importAlternateNames(altNamesFile)
+	h.zhTask.mu.Lock()
+	h.zhTask.Progress = 70
+	h.zhTask.mu.Unlock()
+
+	// --- 导入阶段 (70-100%) ---
+	h.zhTask.mu.Lock()
+	h.zhTask.Status = "importing"
+	h.zhTask.Phase = "正在导入中文城市名..."
+	h.zhTask.mu.Unlock()
+
+	logger.Info("ZH names task: importing...")
+	count, err := h.importAlternateNamesWithProgress(altNamesFile)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, model.Response{
-			Success: false,
-			Error:   &model.ErrorInfo{Code: "IMPORT_FAILED", Message: err.Error()},
-		})
+		setFailed(fmt.Sprintf("导入失败: %v", err))
 		return
 	}
 
-	c.JSON(http.StatusOK, model.Response{
-		Success: true,
-		Message: fmt.Sprintf("Chinese city names imported successfully. %d cities updated.", count),
-	})
+	// --- 完成 ---
+	h.zhTask.mu.Lock()
+	h.zhTask.Status = "completed"
+	h.zhTask.Phase = ""
+	h.zhTask.Progress = 100
+	h.zhTask.Message = fmt.Sprintf("导入完成，共更新 %d 个中文城市名", count)
+	now := time.Now()
+	h.zhTask.CompletedAt = &now
+	h.zhTask.mu.Unlock()
+	logger.Infof("ZH names task completed: %d cities updated", count)
+}
+
+// importAlternateNamesWithProgress 带进度更新的中文名导入
+func (h *ConfigHandler) importAlternateNamesWithProgress(filePath string) (int, error) {
+	db := database.GetDB()
+	if db == nil {
+		return 0, fmt.Errorf("database not initialized")
+	}
+
+	// 获取数据库中所有城市的 geoname_id
+	var geonameIDs []int
+	if err := db.Model(&model.City{}).Pluck("geoname_id", &geonameIDs).Error; err != nil {
+		return 0, fmt.Errorf("failed to get geoname IDs: %w", err)
+	}
+	geonameIDSet := make(map[int]bool, len(geonameIDs))
+	for _, id := range geonameIDs {
+		geonameIDSet[id] = true
+	}
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return 0, fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	// 获取文件大小用于计算进度
+	fileInfo, _ := file.Stat()
+	fileSize := fileInfo.Size()
+
+	// 解析中文名
+	zhNames := make(map[int]string)
+	zhPriority := make(map[int]int)
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+
+	var bytesRead int64
+	for scanner.Scan() {
+		line := scanner.Text()
+		bytesRead += int64(len(line)) + 1 // +1 for newline
+
+		// 更新进度 (70-95%)
+		if fileSize > 0 {
+			pct := 70 + int(float64(bytesRead)/float64(fileSize)*25)
+			if pct > 95 {
+				pct = 95
+			}
+			h.zhTask.mu.Lock()
+			h.zhTask.Progress = pct
+			h.zhTask.mu.Unlock()
+		}
+
+		fields := strings.Split(line, "\t")
+		if len(fields) < 5 {
+			continue
+		}
+
+		lang := fields[2]
+		var priority int
+		switch lang {
+		case "zh-CN":
+			priority = 3
+		case "zh":
+			priority = 2
+		case "zh-TW":
+			priority = 1
+		default:
+			continue
+		}
+
+		geonameID, err := strconv.Atoi(fields[1])
+		if err != nil || !geonameIDSet[geonameID] {
+			continue
+		}
+
+		name := strings.TrimSpace(fields[3])
+		if name == "" {
+			continue
+		}
+
+		isPreferred := fields[4] == "1"
+		existingPri := zhPriority[geonameID]
+		if priority < existingPri {
+			continue
+		}
+		if priority == existingPri && !isPreferred {
+			continue
+		}
+
+		zhNames[geonameID] = name
+		zhPriority[geonameID] = priority
+	}
+
+	if err := scanner.Err(); err != nil {
+		return 0, fmt.Errorf("error reading file: %w", err)
+	}
+
+	if len(zhNames) == 0 {
+		return 0, nil
+	}
+
+	// 批量更新 (95-100%)
+	h.zhTask.mu.Lock()
+	h.zhTask.Phase = fmt.Sprintf("正在写入数据库（%d 条）...", len(zhNames))
+	h.zhTask.Progress = 95
+	h.zhTask.mu.Unlock()
+
+	batchSize := 1000
+	type item struct {
+		id   int
+		name string
+	}
+	var items []item
+	for id, name := range zhNames {
+		items = append(items, item{id: id, name: name})
+	}
+
+	for i := 0; i < len(items); i += batchSize {
+		end := i + batchSize
+		if end > len(items) {
+			end = len(items)
+		}
+		batch := items[i:end]
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			for _, it := range batch {
+				if err := tx.Model(&model.City{}).Where("geoname_id = ?", it.id).Update("name_zh", it.name).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			return 0, fmt.Errorf("failed to update at offset %d: %w", i, err)
+		}
+	}
+
+	return len(items), nil
 }
 
 // importCitiesFromFile 从文件导入城市数据到数据库
@@ -1123,119 +1331,6 @@ func parseCityLine(line string) (*model.City, error) {
 	}
 
 	return city, nil
-}
-
-// importAlternateNames 从 alternateNamesV2.txt 导入中文城市名
-func (h *ConfigHandler) importAlternateNames(filePath string) (int, error) {
-	db := database.GetDB()
-	if db == nil {
-		return 0, fmt.Errorf("database not initialized")
-	}
-
-	// 获取数据库中所有城市的 geoname_id
-	var geonameIDs []int
-	if err := db.Model(&model.City{}).Pluck("geoname_id", &geonameIDs).Error; err != nil {
-		return 0, fmt.Errorf("failed to get geoname IDs: %w", err)
-	}
-	geonameIDSet := make(map[int]bool, len(geonameIDs))
-	for _, id := range geonameIDs {
-		geonameIDSet[id] = true
-	}
-
-	file, err := os.Open(filePath)
-	if err != nil {
-		return 0, fmt.Errorf("failed to open file: %w", err)
-	}
-	defer file.Close()
-
-	// 解析中文名：geonameID -> 中文名（优先级：zh-CN > zh > zh-TW）
-	zhNames := make(map[int]string)
-	zhPriority := make(map[int]int)
-
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
-
-	for scanner.Scan() {
-		fields := strings.Split(scanner.Text(), "\t")
-		if len(fields) < 5 {
-			continue
-		}
-
-		lang := fields[2]
-		var priority int
-		switch lang {
-		case "zh-CN":
-			priority = 3
-		case "zh":
-			priority = 2
-		case "zh-TW":
-			priority = 1
-		default:
-			continue
-		}
-
-		geonameID, err := strconv.Atoi(fields[1])
-		if err != nil || !geonameIDSet[geonameID] {
-			continue
-		}
-
-		name := strings.TrimSpace(fields[3])
-		if name == "" {
-			continue
-		}
-
-		isPreferred := fields[4] == "1"
-		existingPri := zhPriority[geonameID]
-		if priority < existingPri {
-			continue
-		}
-		if priority == existingPri && !isPreferred {
-			continue
-		}
-
-		zhNames[geonameID] = name
-		zhPriority[geonameID] = priority
-	}
-
-	if err := scanner.Err(); err != nil {
-		return 0, fmt.Errorf("error reading file: %w", err)
-	}
-
-	if len(zhNames) == 0 {
-		return 0, nil
-	}
-
-	// 批量更新
-	batchSize := 1000
-	type item struct {
-		id   int
-		name string
-	}
-	var items []item
-	for id, name := range zhNames {
-		items = append(items, item{id: id, name: name})
-	}
-
-	for i := 0; i < len(items); i += batchSize {
-		end := i + batchSize
-		if end > len(items) {
-			end = len(items)
-		}
-		batch := items[i:end]
-		if err := db.Transaction(func(tx *gorm.DB) error {
-			for _, it := range batch {
-				if err := tx.Model(&model.City{}).Where("geoname_id = ?", it.id).Update("name_zh", it.name).Error; err != nil {
-					return err
-				}
-			}
-			return nil
-		}); err != nil {
-			return 0, fmt.Errorf("failed to update at offset %d: %w", i, err)
-		}
-	}
-
-	logger.Infof("Imported %d Chinese city names", len(items))
-	return len(items), nil
 }
 
 // unzipFile 解压 zip 文件

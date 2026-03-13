@@ -801,7 +801,21 @@ export const downloadCitiesData = async (): Promise<{ message: string }> => {
 export const downloadAlternateNames = async (): Promise<{ message: string }> => {
   const response = await http.post<ApiResponse<{ message: string }>>('/config/cities-data/download-zh-names')
   if (!response.data?.success) {
-    throw new Error(response.data?.message || 'Failed to download Chinese city names')
+    throw new Error(response.data?.message || 'Failed to start Chinese city names task')
   }
-  return response.data.data || { message: 'Download started' }
+  return response.data.data || { message: 'Task started' }
+}
+
+export interface ZHNamesTaskStatus {
+  status: string       // idle/downloading/extracting/importing/completed/failed
+  phase: string
+  progress: number
+  message: string
+  started_at?: string
+  completed_at?: string
+}
+
+export const getZHNamesTaskStatus = async (): Promise<ZHNamesTaskStatus> => {
+  const response = await http.get<ApiResponse<ZHNamesTaskStatus>>('/config/cities-data/zh-names-task')
+  return response.data?.data || { status: 'idle', phase: '', progress: 0, message: '' }
 }
