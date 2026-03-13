@@ -30,7 +30,7 @@ func NewHandlers(db *gorm.DB, services *service.Services, repos *repository.Repo
 		System:    NewSystemHandler(db, cfg, services),
 		Photo:     NewPhotoHandler(services.Photo, services.Thumbnail, services.GeocodeTask, services.Config, cfg),
 		Thumbnail: NewThumbnailHandler(services.Thumbnail),
-		Geocode:   NewGeocodeHandler(services.GeocodeTask, services.Photo),
+		Geocode:   NewGeocodeHandler(services.GeocodeTask),
 		Display:   NewDisplayHandler(services.Display, services.Device, cfg),
 		Device:    deviceHandler,
 		Config:    NewConfigHandler(services.Config, services.AI, services.AnalysisRuntime, services.Photo, services.Prompt, services.Geocode, repos.Photo, cfg, db),

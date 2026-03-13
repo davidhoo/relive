@@ -5,17 +5,15 @@ import (
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/service"
-	"github.com/davidhoo/relive/pkg/logger"
 	"github.com/gin-gonic/gin"
 )
 
 type GeocodeHandler struct {
-	service      service.GeocodeTaskService
-	photoService service.PhotoService
+	service service.GeocodeTaskService
 }
 
-func NewGeocodeHandler(service service.GeocodeTaskService, photoService service.PhotoService) *GeocodeHandler {
-	return &GeocodeHandler{service: service, photoService: photoService}
+func NewGeocodeHandler(service service.GeocodeTaskService) *GeocodeHandler {
+	return &GeocodeHandler{service: service}
 }
 
 func (h *GeocodeHandler) StartBackground(c *gin.Context) {
@@ -102,13 +100,10 @@ func (h *GeocodeHandler) Geocode(c *gin.Context) {
 }
 
 func (h *GeocodeHandler) RegeocodeAll(c *gin.Context) {
-	go func() {
-		count, err := h.photoService.RegeocodeAllPhotos()
-		if err != nil {
-			logger.Errorf("RegeocodeAll failed: %v", err)
-			return
-		}
-		logger.Infof("RegeocodeAll completed: %d photos updated", count)
-	}()
-	c.JSON(http.StatusOK, model.Response{Success: true, Message: "全量重建解析已在后台启动"})
+	task, err := h.service.StartRegeocodeAll()
+	if err != nil {
+		c.JSON(http.StatusConflict, model.Response{Success: false, Error: &model.ErrorInfo{Code: "START_FAILED", Message: err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "全量重建解析已启动", Data: task})
 }

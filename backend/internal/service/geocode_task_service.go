@@ -25,6 +25,7 @@ const (
 
 type GeocodeTaskService interface {
 	StartBackground() (*model.GeocodeTask, error)
+	StartRegeocodeAll() (*model.GeocodeTask, error)
 	StopBackground() error
 	GetTaskStatus() *model.GeocodeTask
 	GetStats() (*model.GeocodeStatsResponse, error)
@@ -77,6 +78,26 @@ func (s *geocodeTaskService) StartBackground() (*model.GeocodeTask, error) {
 	s.resetBackgroundLogs()
 	s.appendBackgroundLog("GPS 逆地理编码后台任务已启动")
 	go s.runBackground(active)
+	return cloneGeocodeTask(task), nil
+}
+
+func (s *geocodeTaskService) StartRegeocodeAll() (*model.GeocodeTask, error) {
+	if s.geocodeService == nil {
+		return nil, fmt.Errorf("geocode service not configured")
+	}
+	s.taskMutex.Lock()
+	defer s.taskMutex.Unlock()
+	if s.active != nil {
+		return nil, fmt.Errorf("geocode task already running")
+	}
+	now := time.Now()
+	task := &model.GeocodeTask{Status: "running", StartedAt: &now}
+	active := &activeGeocodeTask{stopCh: make(chan struct{}), done: make(chan struct{})}
+	s.task = task
+	s.active = active
+	s.resetBackgroundLogs()
+	s.appendBackgroundLog("全量重建 GPS 位置解析已启动")
+	go s.runRegeocodeAll(active)
 	return cloneGeocodeTask(task), nil
 }
 
@@ -354,6 +375,91 @@ func (s *geocodeTaskService) processJob(job *model.GeocodeJob, photo *model.Phot
 	s.updateTaskProgress(func(task *model.GeocodeTask) { task.ProcessedJobs++ })
 	s.appendBackgroundLog(fmt.Sprintf("解析照片 #%d 位置成功（provider=%s）", photo.ID, provider))
 	return nil
+}
+
+func (s *geocodeTaskService) runRegeocodeAll(active *activeGeocodeTask) {
+	defer func() {
+		now := time.Now()
+		s.taskMutex.Lock()
+		if s.task != nil && (s.task.Status == "running" || s.task.Status == "stopping") {
+			s.task.Status = "stopped"
+			s.task.StoppedAt = &now
+		}
+		s.appendBackgroundLog("全量重建 GPS 位置解析已完成")
+		s.active = nil
+		s.taskMutex.Unlock()
+		close(active.done)
+	}()
+
+	// 获取所有有 GPS 坐标的照片
+	photos, err := s.photoRepo.ListWithGPS()
+	if err != nil {
+		s.appendBackgroundLog(fmt.Sprintf("获取 GPS 照片列表失败：%v", err))
+		return
+	}
+
+	total := 0
+	for _, p := range photos {
+		if p.GPSLatitude != nil && p.GPSLongitude != nil && !(*p.GPSLatitude == 0 && *p.GPSLongitude == 0) && p.Status == model.PhotoStatusActive {
+			total++
+		}
+	}
+	s.appendBackgroundLog(fmt.Sprintf("共 %d 张有效 GPS 照片需要重建解析", total))
+
+	updated := 0
+	failed := 0
+	for _, photo := range photos {
+		// 检查停止信号
+		active.mu.Lock()
+		stopRequested := active.stop
+		active.mu.Unlock()
+		if stopRequested {
+			s.appendBackgroundLog(fmt.Sprintf("收到停止请求，已处理 %d 张，中止剩余", updated+failed))
+			break
+		}
+
+		if photo.GPSLatitude == nil || photo.GPSLongitude == nil {
+			continue
+		}
+		if *photo.GPSLatitude == 0 && *photo.GPSLongitude == 0 {
+			continue
+		}
+		if photo.Status == model.PhotoStatusExcluded {
+			continue
+		}
+
+		s.updateTaskProgress(func(task *model.GeocodeTask) { task.CurrentPhotoID = photo.ID })
+
+		loc, err := s.geocodeService.ReverseGeocode(*photo.GPSLatitude, *photo.GPSLongitude)
+		now := time.Now()
+		if err != nil {
+			failed++
+			s.updateTaskProgress(func(task *model.GeocodeTask) { task.ProcessedJobs++ })
+			if failed <= 10 {
+				s.appendBackgroundLog(fmt.Sprintf("解析照片 #%d 失败：%v", photo.ID, err))
+			}
+			continue
+		}
+
+		provider := ""
+		if loc != nil {
+			provider = loc.Provider
+		}
+		fields := geocodeLocationFields(loc)
+		fields["geocode_status"] = "ready"
+		fields["geocode_provider"] = provider
+		fields["geocoded_at"] = &now
+
+		if err := s.updatePhotoWithRetry(photo.ID, fields); err != nil {
+			failed++
+			logger.Warnf("update photo %d after regeocode failed: %v", photo.ID, err)
+		} else {
+			updated++
+		}
+		s.updateTaskProgress(func(task *model.GeocodeTask) { task.ProcessedJobs++ })
+	}
+
+	s.appendBackgroundLog(fmt.Sprintf("全量重建完成：成功 %d，失败 %d，共 %d", updated, failed, total))
 }
 
 // updatePhotoWithRetry 带重试机制的 photo 更新

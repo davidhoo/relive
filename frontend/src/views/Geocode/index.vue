@@ -22,10 +22,10 @@
       <div class="section-content">
         <div class="control-row control-row-stack">
           <div class="control-row-main">
-            <el-button v-if="!taskRunning && !taskStopping" type="primary" size="large" @click="handleStart" :loading="starting" class="action-btn-primary">开启后台解析</el-button>
-            <el-button v-else type="danger" size="large" @click="handleStop" :loading="stopping" :disabled="taskStopping" class="action-btn-danger">{{ taskStopping ? '停止中...' : '停止后台解析' }}</el-button>
+            <el-button v-if="!taskRunning && !taskStopping" type="primary" size="large" @click="handleStart" :loading="starting" :disabled="regeocoding" class="action-btn-primary">开启后台解析</el-button>
+            <el-button v-else type="danger" size="large" @click="handleStop" :loading="stopping" :disabled="taskStopping" class="action-btn-danger">{{ taskStopping ? '停止中...' : '停止后台任务' }}</el-button>
             <el-button plain size="large" @click="handleRepairLegacyStatus" :loading="repairing">修复历史状态</el-button>
-            <el-button plain size="large" type="warning" @click="handleRegeocodeAll" :loading="regeocoding">全量重建解析</el-button>
+            <el-button plain size="large" type="warning" @click="handleRegeocodeAll" :loading="regeocoding" :disabled="taskRunning || taskStopping">全量重建解析</el-button>
           </div>
           <div class="inline-note-wrap">
             <el-text type="info" class="inline-info-text aligned-note">后台解析会持续处理 GPS 逆地理编码队列。照片详情访问到未解析位置的照片时，会自动触发热点优先补队列。</el-text>
