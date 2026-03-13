@@ -108,6 +108,7 @@ func (s *geocodeTaskService) GetTaskStatus() *model.GeocodeTask {
 func (s *geocodeTaskService) RepairLegacyStatus() (int64, error) {
 	now := time.Now()
 	result := s.db.Model(&model.Photo{}).
+		Where("status = ?", model.PhotoStatusActive).
 		Where("location != '' AND (geocode_status IS NULL OR geocode_status = '' OR geocode_status = 'none')").
 		Updates(map[string]interface{}{
 			"geocode_status":   "ready",
@@ -182,6 +183,9 @@ func (s *geocodeTaskService) GeocodePhoto(photoID uint) error {
 	}
 	if photo == nil {
 		return fmt.Errorf("photo %d not found", photoID)
+	}
+	if photo.Status == model.PhotoStatusExcluded {
+		return fmt.Errorf("photo %d is excluded", photoID)
 	}
 	if photo.GPSLatitude == nil || photo.GPSLongitude == nil {
 		return fmt.Errorf("照片没有 GPS 坐标")
@@ -304,6 +308,12 @@ func (s *geocodeTaskService) runBackground(active *activeGeocodeTask) {
 		}
 		if photo.GPSLatitude == nil || photo.GPSLongitude == nil ||
 			(*photo.GPSLatitude == 0 && *photo.GPSLongitude == 0) {
+			now := time.Now()
+			_ = s.updateJobWithRetry(job.ID, map[string]interface{}{"status": "cancelled", "completed_at": &now})
+			s.updateTaskProgress(func(task *model.GeocodeTask) { task.ProcessedJobs++ })
+			continue
+		}
+		if photo.Status == model.PhotoStatusExcluded {
 			now := time.Now()
 			_ = s.updateJobWithRetry(job.ID, map[string]interface{}{"status": "cancelled", "completed_at": &now})
 			s.updateTaskProgress(func(task *model.GeocodeTask) { task.ProcessedJobs++ })

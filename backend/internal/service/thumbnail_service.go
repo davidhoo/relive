@@ -180,6 +180,9 @@ func (s *thumbnailService) GeneratePhoto(photoID uint, force bool) error {
 	if photo == nil {
 		return fmt.Errorf("photo %d not found", photoID)
 	}
+	if photo.Status == model.PhotoStatusExcluded {
+		return fmt.Errorf("photo %d is excluded", photoID)
+	}
 
 	thumbnailPath := photo.ThumbnailPath
 	if thumbnailPath == "" {
@@ -410,6 +413,12 @@ func (s *thumbnailService) processJob(job *model.ThumbnailJob) error {
 		now := time.Now()
 		_ = s.jobRepo.UpdateFields(job.ID, map[string]interface{}{"status": "failed", "last_error": err.Error(), "completed_at": &now})
 		return err
+	}
+	if photo.Status == model.PhotoStatusExcluded {
+		now := time.Now()
+		_ = s.jobRepo.UpdateFields(job.ID, map[string]interface{}{"status": "cancelled", "completed_at": &now})
+		s.updateTaskProgress(func(task *model.ThumbnailTask) { task.ProcessedJobs++ })
+		return nil
 	}
 	relPath, err := s.generator.GenerateThumbnail(photo.FilePath)
 	now := time.Now()

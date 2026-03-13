@@ -523,6 +523,10 @@ func (s *aiService) analyzePhotoInternal(photoID uint, force bool) error {
 		return fmt.Errorf("get photo: %w", err)
 	}
 
+	if photo.Status == model.PhotoStatusExcluded {
+		return fmt.Errorf("photo %d is excluded", photoID)
+	}
+
 	// 检查是否已分析（非强制模式下跳过已分析的照片）
 	if photo.AIAnalyzed && !force {
 		logger.Warnf("Photo %d already analyzed, skipping", photoID)
