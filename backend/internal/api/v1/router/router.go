@@ -196,6 +196,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				geocode.POST("/enqueue", handlers.Geocode.Enqueue)
 				geocode.POST("/enqueue-by-path", handlers.Geocode.EnqueueByPath)
 				geocode.POST("/geocode", handlers.Geocode.Geocode)
+				geocode.POST("/regeocode-all", handlers.Geocode.RegeocodeAll)
 			}
 
 			// AI 分析相关

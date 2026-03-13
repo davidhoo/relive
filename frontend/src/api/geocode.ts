@@ -28,4 +28,7 @@ export const geocodeApi = {
   geocode(photoId: number) {
     return http.post<ApiResponse<void>>('/geocode/geocode', { photo_id: photoId })
   },
+  regeocodeAll() {
+    return http.post<ApiResponse<void>>('/geocode/regeocode-all')
+  },
 }

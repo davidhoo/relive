@@ -1608,12 +1608,8 @@ func (s *photoService) RegeocodeAllPhotos() (int, error) {
 		}
 
 		newLocation := location.FormatDisplay()
-		if newLocation == photo.Location {
-			// 位置没变，跳过
-			continue
-		}
 
-		// 更新数据库
+		// 更新数据库（强制覆盖所有位置字段，包括结构化字段回填）
 		loc := &model.LocationFields{
 			Location: newLocation,
 			Country:  location.Country,

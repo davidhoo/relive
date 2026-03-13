@@ -5,15 +5,17 @@ import (
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/service"
+	"github.com/davidhoo/relive/pkg/logger"
 	"github.com/gin-gonic/gin"
 )
 
 type GeocodeHandler struct {
-	service service.GeocodeTaskService
+	service      service.GeocodeTaskService
+	photoService service.PhotoService
 }
 
-func NewGeocodeHandler(service service.GeocodeTaskService) *GeocodeHandler {
-	return &GeocodeHandler{service: service}
+func NewGeocodeHandler(service service.GeocodeTaskService, photoService service.PhotoService) *GeocodeHandler {
+	return &GeocodeHandler{service: service, photoService: photoService}
 }
 
 func (h *GeocodeHandler) StartBackground(c *gin.Context) {
@@ -97,4 +99,16 @@ func (h *GeocodeHandler) Geocode(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, model.Response{Success: true, Message: "GPS 解析完成"})
+}
+
+func (h *GeocodeHandler) RegeocodeAll(c *gin.Context) {
+	go func() {
+		count, err := h.photoService.RegeocodeAllPhotos()
+		if err != nil {
+			logger.Errorf("RegeocodeAll failed: %v", err)
+			return
+		}
+		logger.Infof("RegeocodeAll completed: %d photos updated", count)
+	}()
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "全量重建解析已在后台启动"})
 }
