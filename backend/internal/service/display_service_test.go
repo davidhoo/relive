@@ -31,7 +31,7 @@ func (r *stubPhotoRepo) GetByFilePath(filePath string) (*model.Photo, error) { r
 func (r *stubPhotoRepo) GetByFileHash(fileHash string) (*model.Photo, error) { return nil, nil }
 func (r *stubPhotoRepo) Exists(id uint) (bool, error)                        { return false, nil }
 func (r *stubPhotoRepo) ExistsByFilePath(filePath string) (bool, error)      { return false, nil }
-func (r *stubPhotoRepo) List(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, sortBy string, sortDesc bool, enabledPaths []string, status string) ([]*model.Photo, int64, error) {
+func (r *stubPhotoRepo) List(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string) ([]*model.Photo, int64, error) {
 	return nil, 0, nil
 }
 func (r *stubPhotoRepo) ListAll() ([]*model.Photo, error)                { return r.listAllPhotos, nil }

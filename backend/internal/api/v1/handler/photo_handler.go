@@ -363,6 +363,8 @@ func (h *PhotoHandler) GetPhotos(c *gin.Context) {
 
 	location := c.Query("location")
 	search := c.Query("search")
+	category := c.Query("category")
+	tag := c.Query("tag")
 	sortBy := c.DefaultQuery("sort_by", "taken_at")
 	sortDesc := c.DefaultQuery("sort_desc", "true") == "true"
 	status := c.Query("status") // active(默认)/excluded/all
@@ -376,6 +378,8 @@ func (h *PhotoHandler) GetPhotos(c *gin.Context) {
 		HasGPS:       hasGPS,
 		Location:     location,
 		Search:       search,
+		Category:     category,
+		Tag:          tag,
 		SortBy:       sortBy,
 		SortDesc:     sortDesc,
 		Status:       status,

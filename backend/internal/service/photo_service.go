@@ -644,7 +644,7 @@ func (s *photoService) GetPhotos(req *model.GetPhotosRequest) ([]*model.Photo, i
 	}
 
 	// 调用 Repository
-	return s.repo.List(req.Page, req.PageSize, req.Analyzed, req.HasThumbnail, req.HasGPS, req.Location, req.Search, req.SortBy, req.SortDesc, enabledPaths, req.Status)
+	return s.repo.List(req.Page, req.PageSize, req.Analyzed, req.HasThumbnail, req.HasGPS, req.Location, req.Search, req.Category, req.Tag, req.SortBy, req.SortDesc, enabledPaths, req.Status)
 }
 
 // CountAll 统计照片总数

@@ -28,7 +28,7 @@ type PhotoRepository interface {
 	ExistsByFilePath(filePath string) (bool, error)
 
 	// 列表查询
-	List(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, sortBy string, sortDesc bool, enabledPaths []string, status string) ([]*model.Photo, int64, error)
+	List(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string) ([]*model.Photo, int64, error)
 	ListAll() ([]*model.Photo, error)
 	ListByIDs(ids []uint) ([]*model.Photo, error)
 
@@ -145,7 +145,7 @@ func (r *photoRepository) ExistsByFilePath(filePath string) (bool, error) {
 }
 
 // List 分页列表查询
-func (r *photoRepository) List(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, sortBy string, sortDesc bool, enabledPaths []string, status string) ([]*model.Photo, int64, error) {
+func (r *photoRepository) List(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string) ([]*model.Photo, int64, error) {
 	var photos []*model.Photo
 	var total int64
 
@@ -215,6 +215,14 @@ func (r *photoRepository) List(page, pageSize int, analyzed *bool, hasThumbnail 
 			"file_path LIKE ? OR file_name LIKE ? OR main_category LIKE ? OR tags LIKE ? OR description LIKE ? OR caption LIKE ? OR location LIKE ?",
 			searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern,
 		)
+	}
+	// 分类精确筛选
+	if category != "" {
+		query = query.Where("main_category = ?", category)
+	}
+	// 标签筛选
+	if tag != "" {
+		query = query.Where("tags LIKE ?", "%"+tag+"%")
 	}
 
 	// 统计总数

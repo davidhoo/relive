@@ -113,7 +113,7 @@ func TestPhotoRepository_List(t *testing.T) {
 	}
 
 	// 测试分页
-	photos, total, err := repo.List(1, 10, nil, nil, nil, "", "", "overall_score", true, nil, "")
+	photos, total, err := repo.List(1, 10, nil, nil, nil, "", "", "", "", "overall_score", true, nil, "")
 
 	// 验证
 	assert.NoError(t, err)
@@ -122,7 +122,7 @@ func TestPhotoRepository_List(t *testing.T) {
 
 	// 测试筛选已分析
 	analyzed := true
-	photos, total, err = repo.List(1, 10, &analyzed, nil, nil, "", "", "overall_score", true, nil, "")
+	photos, total, err = repo.List(1, 10, &analyzed, nil, nil, "", "", "", "", "overall_score", true, nil, "")
 	assert.NoError(t, err)
 	assert.Equal(t, int64(8), total) // 8 个已分析（0,2,4,6,8,10,12,14）
 }
@@ -227,7 +227,7 @@ func TestPhotoRepository_ListByPathPrefix_RespectsDirectoryBoundary(t *testing.T
 	assert.NoError(t, err)
 	assert.Equal(t, int64(2), count)
 
-	filtered, total, err := repo.List(1, 10, nil, nil, nil, "", "", "id", false, []string{"/photos/trip"}, "")
+	filtered, total, err := repo.List(1, 10, nil, nil, nil, "", "", "", "", "id", false, []string{"/photos/trip"}, "")
 	assert.NoError(t, err)
 	assert.Equal(t, int64(2), total)
 	assert.Len(t, filtered, 2)
@@ -252,12 +252,12 @@ func TestPhotoRepository_List_WithNoEnabledPaths_ReturnsEmpty(t *testing.T) {
 	}
 	assert.NoError(t, repo.Create(photo))
 
-	items, total, err := repo.List(1, 10, nil, nil, nil, "", "", "id", false, []string{}, "")
+	items, total, err := repo.List(1, 10, nil, nil, nil, "", "", "", "", "id", false, []string{}, "")
 	assert.NoError(t, err)
 	assert.Empty(t, items)
 	assert.Equal(t, int64(0), total)
 
-	items, total, err = repo.List(1, 10, nil, nil, nil, "", "", "id", false, nil, "")
+	items, total, err = repo.List(1, 10, nil, nil, nil, "", "", "", "", "id", false, nil, "")
 	assert.NoError(t, err)
 	assert.Len(t, items, 1)
 	assert.Equal(t, int64(1), total)

@@ -155,7 +155,7 @@
                       type="primary"
                       size="large"
                       class="clickable-tag"
-                      @click="handleTagClick(photo.main_category!)"
+                      @click="handleCategoryClick(photo.main_category!)"
                     >
                       {{ photo.main_category }}
                     </el-tag>
@@ -482,11 +482,21 @@ const handleCategoryChange = async (value: string) => {
 }
 
 // 点击标签/分类跳转列表页
+const handleCategoryClick = (category: string) => {
+  router.push({
+    path: '/photos',
+    query: {
+      category: category.trim(),
+      page: '1'
+    }
+  })
+}
+
 const handleTagClick = (tag: string) => {
   router.push({
     path: '/photos',
     query: {
-      search: tag.trim(),
+      tag: tag.trim(),
       page: '1'
     }
   })
@@ -536,7 +546,7 @@ const goBack = () => {
   const query = route.query
 
   // 如果有查询参数，返回到对应状态的列表页
-  if (query.page || query.analyzed || query.search || query.has_thumbnail || query.has_gps || query.status) {
+  if (query.page || query.analyzed || query.search || query.has_thumbnail || query.has_gps || query.status || query.category || query.tag) {
     router.push({
       path: '/photos',
       query: {
@@ -546,7 +556,9 @@ const goBack = () => {
         ...(query.has_thumbnail && { has_thumbnail: query.has_thumbnail }),
         ...(query.has_gps && { has_gps: query.has_gps }),
         ...(query.status && { status: query.status }),
-        ...(query.search && { search: query.search })
+        ...(query.search && { search: query.search }),
+        ...(query.category && { category: query.category }),
+        ...(query.tag && { tag: query.tag })
       }
     })
   } else {

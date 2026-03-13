@@ -46,6 +46,8 @@ type GetPhotosRequest struct {
 	HasGPS       *bool  `form:"has_gps"`       // 是否有GPS位置（可选）
 	Location     string `form:"location"`      // 位置筛选（可选）
 	Search       string `form:"search"`        // 搜索关键词（可选，搜索路径、设备ID、标签）
+	Category     string `form:"category"`      // 分类精确筛选（可选）
+	Tag          string `form:"tag"`           // 标签筛选（可选）
 	SortBy       string `form:"sort_by"`       // 排序字段（taken_at/overall_score）
 	SortDesc     bool   `form:"sort_desc"`     // 是否降序
 	Status       string `form:"status"`        // 状态筛选：active(默认)/excluded/all
