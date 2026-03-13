@@ -295,6 +295,25 @@ Docker 构建时通过 build-args 注入额外信息：
 
 ## Recent Features
 
+### Photo Management Enhancements (2026-03-13)
+- 照片级永久排除功能：Photo 表新增 `status` 字段（active/excluded），排除后重扫不恢复
+- 照片列表支持分类（main_category）和标签（tags）精确筛选
+- 照片详情页支持修改分类
+- 照片管理页面集成扫描路径配置与批量选择功能
+- 缩略图和 GPS 解析后台任务自动过滤 excluded 照片
+
+### Location & Geocoding (2026-03-13)
+- 照片位置结构化存储：Photo 表新增 country/province/city/district 字段
+- 城市中文名支持：City 表 name_zh 字段，离线 geocode 返回中文地名
+- 全量重建 GPS 位置解析 API 及前端入口（复用后台任务基础设施）
+- 中文城市名导入改为异步任务 + 前端进度条轮询（解决 190MB 文件超时问题）
+- 离线 geocode 海外地址显示格式修正
+
+### Performance & Fixes (2026-03-13)
+- 展示策略查询性能优化：消除百年循环和 ListAll 全量加载
+- BuildDisplayCanvas 缺少 EXIF 方向校正导致批次图片旋转修复
+- 中文城市名导入支持 zh-CN/zh/zh-TW 全部变体
+
 ### ESP32 Firmware v1.0.0 (2026-03-12)
 - 双配置源：Office 模式（编译时配置）与 NVS 模式（AP 配网）
 - AP 配网门户（SSID: relive, Web 配置页面）
