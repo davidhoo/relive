@@ -72,6 +72,11 @@ type Photo struct {
 	DisplayRecords []DisplayRecord `gorm:"foreignKey:PhotoID" json:"-"` // 展示记录
 }
 
+// UpdateCategoryRequest 更新分类请求
+type UpdateCategoryRequest struct {
+	Category string `json:"category"`
+}
+
 // TableName 指定表名
 func (Photo) TableName() string {
 	return "photos"

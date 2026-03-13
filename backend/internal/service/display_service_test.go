@@ -72,6 +72,7 @@ func (r *stubPhotoRepo) GetDerivedStatusByPathPrefix(prefix string) (*model.Path
 	return &model.PathDerivedStatus{}, nil
 }
 func (r *stubPhotoRepo) BatchUpdateStatus(ids []uint, status string) (int64, error) { return 0, nil }
+func (r *stubPhotoRepo) UpdateCategory(id uint, category string) error              { return nil }
 
 func TestNormalizeDisplayStrategyConfig_MergesSmartIntoOnThisDay(t *testing.T) {
 	cfg := &model.DisplayStrategyConfig{Algorithm: "smart"}

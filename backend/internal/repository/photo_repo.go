@@ -70,6 +70,9 @@ type PhotoRepository interface {
 
 	// 状态管理
 	BatchUpdateStatus(ids []uint, status string) (int64, error)
+
+	// 分类更新
+	UpdateCategory(id uint, category string) error
 }
 
 // photoRepository 照片仓库实现
@@ -571,4 +574,9 @@ func (r *photoRepository) ListWithGPS() ([]*model.Photo, error) {
 func (r *photoRepository) BatchUpdateStatus(ids []uint, status string) (int64, error) {
 	result := r.db.Model(&model.Photo{}).Where("id IN ?", ids).Update("status", status)
 	return result.RowsAffected, result.Error
+}
+
+// UpdateCategory 更新照片分类
+func (r *photoRepository) UpdateCategory(id uint, category string) error {
+	return r.db.Model(&model.Photo{}).Where("id = ?", id).Update("main_category", category).Error
 }

@@ -1103,6 +1103,65 @@ func (h *PhotoHandler) BatchUpdateStatus(c *gin.Context) {
 	})
 }
 
+// UpdateCategory 更新照片分类
+// @Summary 更新照片分类
+// @Description 更新指定 ID 照片的主分类
+// @Tags photos
+// @Accept json
+// @Produce json
+// @Param id path int true "照片 ID"
+// @Param request body model.UpdateCategoryRequest true "更新分类请求"
+// @Success 200 {object} model.Response
+// @Failure 400 {object} model.Response
+// @Failure 500 {object} model.Response
+// @Router /api/v1/photos/{id}/category [patch]
+func (h *PhotoHandler) UpdateCategory(c *gin.Context) {
+	// 解析 ID
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INVALID_REQUEST",
+				Message: "Invalid photo ID",
+			},
+		})
+		return
+	}
+
+	// 解析请求体
+	var req model.UpdateCategoryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INVALID_REQUEST",
+				Message: err.Error(),
+			},
+		})
+		return
+	}
+
+	// 更新分类
+	if err := h.photoService.UpdateCategory(uint(id), req.Category); err != nil {
+		logger.Errorf("Update category failed: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "UPDATE_FAILED",
+				Message: "Failed to update category: " + err.Error(),
+			},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "Category updated successfully",
+	})
+}
+
 // StartScan 启动异步扫描任务
 // @Summary 启动异步扫描任务
 // @Description 启动后台扫描任务，立即返回任务 ID，通过 GetScanTask 查询进度

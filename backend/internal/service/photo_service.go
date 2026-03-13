@@ -61,6 +61,9 @@ type PhotoService interface {
 
 	// 照片状态管理
 	BatchUpdateStatus(req *model.BatchUpdateStatusRequest) (int64, error)
+
+	// 分类更新
+	UpdateCategory(id uint, category string) error
 }
 
 // photoService 照片服务实现
@@ -779,6 +782,11 @@ func (s *photoService) GetPathDerivedStatus(pathPrefix string) (*model.PathDeriv
 // BatchUpdateStatus 批量更新照片状态
 func (s *photoService) BatchUpdateStatus(req *model.BatchUpdateStatusRequest) (int64, error) {
 	return s.repo.BatchUpdateStatus(req.PhotoIDs, req.Status)
+}
+
+// UpdateCategory 更新照片分类
+func (s *photoService) UpdateCategory(id uint, category string) error {
+	return s.repo.UpdateCategory(id, category)
 }
 
 // getEnabledScanPaths 获取启用的扫描路径列表

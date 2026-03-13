@@ -146,16 +146,52 @@
             </div>
 
             <!-- 分类 -->
-            <div class="detail-section" v-if="photo.main_category">
+            <div class="detail-section">
               <h4>分类</h4>
-              <el-tag
-                type="primary"
-                size="large"
-                class="clickable-tag"
-                @click="handleTagClick(photo.main_category!)"
-              >
-                {{ photo.main_category }}
-              </el-tag>
+              <div class="category-edit-container">
+                <template v-if="!categoryEditing">
+                  <template v-if="photo.main_category">
+                    <el-tag
+                      type="primary"
+                      size="large"
+                      class="clickable-tag"
+                      @click="handleTagClick(photo.main_category!)"
+                    >
+                      {{ photo.main_category }}
+                    </el-tag>
+                    <el-icon class="edit-icon-btn" @click="startCategoryEdit"><Edit /></el-icon>
+                  </template>
+                  <el-button
+                    v-else
+                    link
+                    type="primary"
+                    size="small"
+                    @click="startCategoryEdit"
+                  >
+                    + 添加分类
+                  </el-button>
+                </template>
+                <template v-else>
+                  <el-select
+                    v-model="categoryValue"
+                    filterable
+                    placeholder="请选择分类"
+                    size="default"
+                    style="width: 200px"
+                    :loading="categoriesLoading"
+                    @change="handleCategoryChange"
+                    @visible-change="(visible: boolean) => { if (!visible && categoryEditing) cancelCategoryEdit() }"
+                    ref="categorySelectRef"
+                  >
+                    <el-option
+                      v-for="cat in availableCategories"
+                      :key="cat"
+                      :label="cat"
+                      :value="cat"
+                    />
+                  </el-select>
+                </template>
+              </div>
             </div>
 
             <!-- 标签 -->
@@ -187,9 +223,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, InfoFilled, Delete, RefreshRight } from '@element-plus/icons-vue'
+import { ArrowLeft, InfoFilled, Delete, RefreshRight, Edit } from '@element-plus/icons-vue'
 import { photoApi } from '@/api/photo'
 import { aiApi } from '@/api/ai'
 import { geocodeApi } from '@/api/geocode'
@@ -209,6 +245,13 @@ const analyzing = ref(false)
 const geocoding = ref(false)
 const thumbnailing = ref(false)
 const statusUpdating = ref(false)
+
+// 分类编辑状态
+const categoryEditing = ref(false)
+const categoryValue = ref('')
+const availableCategories = ref<string[]>([])
+const categoriesLoading = ref(false)
+const categorySelectRef = ref<any>(null)
 
 // 统一管理所有轮询定时器，离开页面时清理
 const activeTimers: ReturnType<typeof setInterval | typeof setTimeout>[] = []
@@ -401,6 +444,43 @@ const handleAnalyze = async () => {
   }
 }
 
+// 开始编辑分类
+const startCategoryEdit = async () => {
+  categoryValue.value = photo.value?.main_category || ''
+  categoryEditing.value = true
+  categoriesLoading.value = true
+  try {
+    const res = await photoApi.getCategories()
+    availableCategories.value = res.data?.data || []
+  } catch {
+    availableCategories.value = []
+  } finally {
+    categoriesLoading.value = false
+  }
+  await nextTick()
+  categorySelectRef.value?.focus()
+  categorySelectRef.value?.$el?.querySelector('input')?.click()
+}
+
+// 取消编辑分类
+const cancelCategoryEdit = () => {
+  categoryEditing.value = false
+  categoryValue.value = ''
+}
+
+// 分类选择改变时保存
+const handleCategoryChange = async (value: string) => {
+  if (!photo.value) return
+  try {
+    await photoApi.updateCategory(photo.value.id, value || '')
+    ElMessage.success('分类已更新')
+    categoryEditing.value = false
+    await loadPhoto()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || error.message || '更新分类失败')
+  }
+}
+
 // 点击标签/分类跳转列表页
 const handleTagClick = (tag: string) => {
   router.push({
@@ -568,6 +648,25 @@ h4 {
 .analysis-result-text {
   white-space: pre-wrap;
   line-height: 1.6;
+}
+
+.category-edit-container {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.edit-icon-btn {
+  font-size: 14px;
+  color: #909399;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.edit-icon-btn:hover {
+  color: var(--el-color-primary);
 }
 
 </style>

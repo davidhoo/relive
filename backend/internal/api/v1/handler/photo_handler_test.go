@@ -70,6 +70,7 @@ func (s *stubPhotoService) GetPhotosByPathPrefix(_ string) ([]*model.Photo, erro
 func (s *stubPhotoService) CountPhotosByPathPrefix(_ string) (int64, error) { return 0, nil }
 func (s *stubPhotoService) GetPathDerivedStatus(_ string) (*model.PathDerivedStatus, error) { return nil, nil }
 func (s *stubPhotoService) BatchUpdateStatus(_ *model.BatchUpdateStatusRequest) (int64, error) { return 0, nil }
+func (s *stubPhotoService) UpdateCategory(_ uint, _ string) error { return nil }
 
 func TestPhotoHandler_GetPhotoStats_Success(t *testing.T) {
 	svc := &stubPhotoService{

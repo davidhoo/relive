@@ -67,4 +67,9 @@ export const photoApi = {
   batchUpdateStatus(data: { photo_ids: number[]; status: string }) {
     return http.patch<ApiResponse<{ affected: number }>>('/photos/batch-status', data)
   },
+
+  // 更新照片分类
+  updateCategory(id: number, category: string) {
+    return http.patch<ApiResponse<any>>(`/photos/${id}/category`, { category })
+  },
 }
