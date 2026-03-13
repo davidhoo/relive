@@ -212,9 +212,9 @@ func importAlternateNames(db *gorm.DB, filePath string, batchSize int) {
 	}
 	defer file.Close()
 
-	// geonameID -> 中文名（优先 isPreferredName）
+	// geonameID -> 中文名（优先级：zh-CN > zh > zh-TW）
 	zhNames := make(map[int]string)
-	zhPreferred := make(map[int]bool) // 标记是否已有 preferred 名称
+	zhPriority := make(map[int]int) // 已选名称的优先级
 
 	scanner := bufio.NewScanner(file)
 	// alternateNamesV2.txt 行可能很长
@@ -231,8 +231,17 @@ func importAlternateNames(db *gorm.DB, filePath string, batchSize int) {
 			continue
 		}
 
-		// fields[2] = isolanguage
-		if fields[2] != "zh" {
+		// fields[2] = isolanguage，匹配 zh、zh-CN、zh-TW
+		lang := fields[2]
+		var priority int
+		switch lang {
+		case "zh-CN":
+			priority = 3
+		case "zh":
+			priority = 2
+		case "zh-TW":
+			priority = 1
+		default:
 			continue
 		}
 
@@ -253,15 +262,17 @@ func importAlternateNames(db *gorm.DB, filePath string, batchSize int) {
 
 		isPreferred := len(fields) > 4 && fields[4] == "1"
 
-		// 如果已有 preferred 名称，跳过非 preferred 的
-		if zhPreferred[geonameID] && !isPreferred {
+		// 同优先级内，preferred 优先；高优先级语言直接覆盖低优先级
+		existingPri := zhPriority[geonameID]
+		if priority < existingPri {
+			continue
+		}
+		if priority == existingPri && !isPreferred {
 			continue
 		}
 
 		zhNames[geonameID] = name
-		if isPreferred {
-			zhPreferred[geonameID] = true
-		}
+		zhPriority[geonameID] = priority
 		matchCount++
 	}
 

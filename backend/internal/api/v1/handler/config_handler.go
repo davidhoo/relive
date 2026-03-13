@@ -1148,16 +1148,29 @@ func (h *ConfigHandler) importAlternateNames(filePath string) (int, error) {
 	}
 	defer file.Close()
 
-	// 解析中文名：geonameID -> 中文名（优先 isPreferredName）
+	// 解析中文名：geonameID -> 中文名（优先级：zh-CN > zh > zh-TW）
 	zhNames := make(map[int]string)
-	zhPreferred := make(map[int]bool)
+	zhPriority := make(map[int]int)
 
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 
 	for scanner.Scan() {
 		fields := strings.Split(scanner.Text(), "\t")
-		if len(fields) < 5 || fields[2] != "zh" {
+		if len(fields) < 5 {
+			continue
+		}
+
+		lang := fields[2]
+		var priority int
+		switch lang {
+		case "zh-CN":
+			priority = 3
+		case "zh":
+			priority = 2
+		case "zh-TW":
+			priority = 1
+		default:
 			continue
 		}
 
@@ -1172,14 +1185,16 @@ func (h *ConfigHandler) importAlternateNames(filePath string) (int, error) {
 		}
 
 		isPreferred := fields[4] == "1"
-		if zhPreferred[geonameID] && !isPreferred {
+		existingPri := zhPriority[geonameID]
+		if priority < existingPri {
+			continue
+		}
+		if priority == existingPri && !isPreferred {
 			continue
 		}
 
 		zhNames[geonameID] = name
-		if isPreferred {
-			zhPreferred[geonameID] = true
-		}
+		zhPriority[geonameID] = priority
 	}
 
 	if err := scanner.Err(); err != nil {
