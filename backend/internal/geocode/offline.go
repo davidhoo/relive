@@ -112,7 +112,25 @@ func getProvinceName(country, adminCode string) string {
 			return name
 		}
 	}
+	// 非中国国家：admin code 如果是纯数字（如 "12"），不是有意义的省份名，返回空
+	// 如果是文字名称（如 "California"），保留
+	if isNumericCode(adminCode) {
+		return ""
+	}
 	return adminCode
+}
+
+// isNumericCode 检查字符串是否为纯数字代码
+func isNumericCode(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // OfflineProvider 离线地理编码提供商（基于城市数据库）
@@ -212,14 +230,31 @@ func (p *OfflineProvider) ReverseGeocode(lat, lon float64) (*Location, error) {
 		Duration:  time.Since(startTime),
 	}
 
-	// 离线数据库显示格式：省份 + 城市
-	if location.Province != "" && location.City != "" {
-		location.FullName = location.Province + location.City
-	} else if location.Province != "" {
-		location.FullName = location.Province
-	} else if location.City != "" {
-		location.FullName = location.City
+	// 构建显示格式
+	// 中国：省份 + 城市（如"四川省成都"）
+	// 海外：国家 + 省份 + 城市，省份为空时为 国家 + 城市（如"韩国仁川"）
+	if nearestCity.Country == "CN" {
+		if location.Province != "" && location.City != "" {
+			location.FullName = location.Province + location.City
+		} else if location.Province != "" {
+			location.FullName = location.Province
+		} else if location.City != "" {
+			location.FullName = location.City
+		}
 	} else {
+		parts := ""
+		if location.Country != "" {
+			parts = location.Country
+		}
+		if location.Province != "" {
+			parts += location.Province
+		}
+		if location.City != "" {
+			parts += location.City
+		}
+		location.FullName = parts
+	}
+	if location.FullName == "" {
 		location.FullName = location.Country
 	}
 
