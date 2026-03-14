@@ -63,7 +63,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 		// 认证相关（公开接口）
 		auth := v1.Group("/auth")
 		{
-			auth.POST("/login", handlers.Auth.Login)
+			auth.POST("/login", middleware.LoginRateLimit(), handlers.Auth.Login)
 			auth.POST("/logout", handlers.Auth.Logout)
 			// 以下接口需要 JWT 认证，但不需要检查首次登录
 			auth.POST("/change-Password", middleware.JWTAuth(services.Auth), handlers.Auth.ChangePassword)
