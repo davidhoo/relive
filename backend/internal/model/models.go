@@ -14,11 +14,11 @@ type DisplayRecord struct {
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 
 	// 关联信息
-	PhotoID  uint `gorm:"not null;index" json:"photo_id"`  // 照片 ID
-	DeviceID uint `gorm:"not null;index" json:"device_id"` // 设备 ID
+	PhotoID  uint `gorm:"not null;index;index:idx_display_record_lookup,priority:1" json:"photo_id"`  // 照片 ID
+	DeviceID uint `gorm:"not null;index;index:idx_display_record_lookup,priority:2" json:"device_id"` // 设备 ID
 
 	// 展示信息
-	DisplayedAt     time.Time `gorm:"not null;index" json:"displayed_at"`            // 展示时间
+	DisplayedAt     time.Time `gorm:"not null;index;index:idx_display_record_lookup,priority:3" json:"displayed_at"`            // 展示时间
 	DisplayDuration int       `gorm:"default:0" json:"display_duration"`             // 展示时长（秒）
 	TriggerType     string    `gorm:"type:varchar(20);not null" json:"trigger_type"` // 触发类型（scheduled/manual/boot）
 }

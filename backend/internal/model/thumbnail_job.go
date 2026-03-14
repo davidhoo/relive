@@ -12,12 +12,12 @@ type ThumbnailJob struct {
 	UpdatedAt       time.Time  `json:"updated_at"`
 	PhotoID         uint       `gorm:"not null;index:idx_thumbnail_job_photo" json:"photo_id"`
 	FilePath        string     `gorm:"type:text;not null" json:"file_path"`
-	Status          string     `gorm:"type:varchar(20);index:idx_thumbnail_job_status" json:"status"`
-	Priority        int        `gorm:"not null;default:0;index:idx_thumbnail_job_priority" json:"priority"`
+	Status          string     `gorm:"type:varchar(20);index:idx_thumbnail_job_status;index:idx_thumbnail_job_claim,priority:1" json:"status"`
+	Priority        int        `gorm:"not null;default:0;index:idx_thumbnail_job_priority;index:idx_thumbnail_job_claim,priority:2,sort:desc" json:"priority"`
 	Source          string     `gorm:"type:varchar(20);not null" json:"source"`
 	AttemptCount    int        `gorm:"not null;default:0" json:"attempt_count"`
 	LastError       string     `gorm:"type:text" json:"last_error,omitempty"`
-	QueuedAt        time.Time  `gorm:"index" json:"queued_at"`
+	QueuedAt        time.Time  `gorm:"index;index:idx_thumbnail_job_claim,priority:3" json:"queued_at"`
 	StartedAt       *time.Time `json:"started_at,omitempty"`
 	CompletedAt     *time.Time `json:"completed_at,omitempty"`
 	LastRequestedAt *time.Time `gorm:"index" json:"last_requested_at,omitempty"`
