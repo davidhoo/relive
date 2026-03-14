@@ -295,6 +295,15 @@ Docker 构建时通过 build-args 注入额外信息：
 
 ## Recent Features
 
+### v1.1.0 (2026-03-14)
+- 城市数据内嵌二进制：离线 geocoding 开箱即用，启动自动导入，无需手动下载外部数据
+- 登录速率限制：防止暴力破解攻击
+- Dashboard 加载优化：前端并行请求 + 后端合并 SQL 查询
+- 照片管理页优化：新增 `/photos/counts` 轻量接口，减少 HTTP 请求与 SQL 查询
+- 高频查询复合索引：DisplayRecord、Job 等表添加复合索引
+- 代码质量优化：错误处理改进、Job 过期清理机制、死代码清除
+- Dockerfile Go 编译镜像升级至 1.26-alpine
+
 ### Photo Management Enhancements (2026-03-13)
 - 照片级永久排除功能：Photo 表新增 `status` 字段（active/excluded），排除后重扫不恢复
 - 照片列表支持分类（main_category）和标签（tags）精确筛选
@@ -340,14 +349,6 @@ Docker 构建时通过 build-args 注入额外信息：
 - AI configuration changes apply immediately without restart
 - ConfigHandler reinitializes AI service dynamically
 - AIHandler updates its service reference automatically
-
-### Embedded City Data for Offline Geocoding (2026-03-14)
-- City data (cities500 + Chinese names) preprocessed and embedded in binary via `//go:embed`
-- `pkg/geodata/` package: auto-imports on startup if cities table < 1000 rows
-- `cmd/gen-geodata/` one-time tool generates `cities_zh.csv.gz` (~4MB, 230K cities + 42K Chinese names)
-- Removed: `cmd/import-cities/`, `scripts/init-cities.sh`, `import-geonames.sh`, Docker city import scripts
-- Removed: frontend city data download UI (download buttons, progress polling)
-- Single reload API: `POST /api/v1/config/cities-data/reload`
 
 ### Offline Geocoding (2025-03-03)
 - Supports offline, amap, nominatim, weibo, and hybrid modes
