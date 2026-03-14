@@ -1041,6 +1041,28 @@ func (h *PhotoHandler) CountPhotosByPaths(c *gin.Context) {
 	})
 }
 
+// GetPhotoCounts 获取照片按状态计数
+func (h *PhotoHandler) GetPhotoCounts(c *gin.Context) {
+	counts, err := h.photoService.CountByStatus()
+	if err != nil {
+		logger.Errorf("Count photos by status failed: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "QUERY_FAILED",
+				Message: "Failed to get photo counts",
+			},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "Success",
+		Data:    counts,
+	})
+}
+
 // CountDerivedStatusByPaths 按路径统计缩略图与 GPS 派生状态
 func (h *PhotoHandler) CountDerivedStatusByPaths(c *gin.Context) {
 	var req model.CountDerivedStatusByPathsRequest
@@ -1048,16 +1070,17 @@ func (h *PhotoHandler) CountDerivedStatusByPaths(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: err.Error()}})
 		return
 	}
-	stats := make(map[string]model.PathDerivedStatus)
-	for _, path := range req.Paths {
-		derived, err := h.photoService.GetPathDerivedStatus(path)
-		if err != nil {
-			logger.Errorf("Count derived status by path failed: %s, error: %v", path, err)
-			stats[path] = model.PathDerivedStatus{}
-			continue
-		}
-		if derived != nil {
-			stats[path] = *derived
+	statsMap, err := h.photoService.GetPathDerivedStatusBatch(req.Paths)
+	if err != nil {
+		logger.Errorf("Batch count derived status failed: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{Success: false, Error: &model.ErrorInfo{Code: "QUERY_FAILED", Message: "Failed to get derived status"}})
+		return
+	}
+	// 转换为值类型 map
+	stats := make(map[string]model.PathDerivedStatus, len(statsMap))
+	for k, v := range statsMap {
+		if v != nil {
+			stats[k] = *v
 		}
 	}
 	c.JSON(http.StatusOK, model.Response{Success: true, Message: "Success", Data: model.CountDerivedStatusByPathsResponse{Stats: stats}})

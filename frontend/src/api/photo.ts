@@ -1,5 +1,5 @@
 import http from '@/utils/request'
-import type { Photo, PhotoListParams, PhotoStats, ScanPhotosRequest, RebuildPhotosRequest, CleanupPhotosResponse, CountPhotosByPathsRequest, CountPhotosByPathsResponse, CountDerivedStatusByPathsRequest, CountDerivedStatusByPathsResponse } from '@/types/photo'
+import type { Photo, PhotoListParams, PhotoStats, ScanPhotosRequest, RebuildPhotosRequest, CleanupPhotosResponse, CountPhotosByPathsRequest, CountPhotosByPathsResponse, CountDerivedStatusByPathsRequest, CountDerivedStatusByPathsResponse, PhotoCountsResponse } from '@/types/photo'
 import type { ApiResponse, PagedResponse } from '@/types/api'
 
 export const photoApi = {
@@ -41,6 +41,11 @@ export const photoApi = {
   // 获取照片统计
   getStats() {
     return http.get<ApiResponse<PhotoStats>>('/photos/stats')
+  },
+
+  // 获取照片按状态计数（轻量接口）
+  getCounts() {
+    return http.get<ApiResponse<PhotoCountsResponse>>('/photos/counts')
   },
 
   // 获取所有分类

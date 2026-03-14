@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -70,6 +71,12 @@ type PhotoRepository interface {
 	// 路径统计
 	CountByPathPrefix(prefix string) (int64, error)
 	GetDerivedStatusByPathPrefix(prefix string) (*model.PathDerivedStatus, error)
+
+	// 按状态计数
+	CountByStatus() (*model.PhotoCountsResponse, error)
+
+	// 批量路径派生状态
+	GetDerivedStatusByPathPrefixes(prefixes []string) (map[string]*model.PathDerivedStatus, error)
 
 	// 状态管理
 	BatchUpdateStatus(ids []uint, status string) (int64, error)
@@ -645,4 +652,122 @@ func (r *photoRepository) BatchUpdateStatus(ids []uint, status string) (int64, e
 // UpdateCategory 更新照片分类
 func (r *photoRepository) UpdateCategory(id uint, category string) error {
 	return r.db.Model(&model.Photo{}).Where("id = ?", id).Update("main_category", category).Error
+}
+
+// CountByStatus 按状态统计照片数量（单条 SQL）
+func (r *photoRepository) CountByStatus() (*model.PhotoCountsResponse, error) {
+	var result model.PhotoCountsResponse
+	err := r.db.Model(&model.Photo{}).
+		Select(`
+			SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_count,
+			SUM(CASE WHEN status = 'excluded' THEN 1 ELSE 0 END) as excluded_count
+		`).
+		Scan(&result).Error
+	return &result, err
+}
+
+// GetDerivedStatusByPathPrefixes 批量按路径前缀统计派生状态（单条 SQL）
+func (r *photoRepository) GetDerivedStatusByPathPrefixes(prefixes []string) (map[string]*model.PathDerivedStatus, error) {
+	result := make(map[string]*model.PathDerivedStatus)
+	if len(prefixes) == 0 {
+		return result, nil
+	}
+
+	// 构建 CASE WHEN 表达式和 WHERE 条件
+	var caseWhenParts []string
+	var whereConditions []string
+	var args []interface{}
+
+	for _, prefix := range prefixes {
+		normalized := normalizePathPrefix(prefix)
+		if normalized == "" {
+			continue
+		}
+
+		separator := string(filepath.Separator)
+		childPattern := normalized + separator + "%"
+		if normalized == separator {
+			childPattern = normalized + "%"
+		}
+
+		caseWhenParts = append(caseWhenParts,
+			fmt.Sprintf("WHEN file_path = '%s' OR file_path LIKE '%s' THEN '%s'",
+				strings.ReplaceAll(normalized, "'", "''"),
+				strings.ReplaceAll(childPattern, "'", "''"),
+				strings.ReplaceAll(prefix, "'", "''")))
+
+		whereConditions = append(whereConditions, "(file_path = ? OR file_path LIKE ?)")
+		args = append(args, normalized, childPattern)
+	}
+
+	if len(caseWhenParts) == 0 {
+		return result, nil
+	}
+
+	caseExpr := "CASE " + strings.Join(caseWhenParts, " ") + " END"
+	whereExpr := strings.Join(whereConditions, " OR ")
+
+	type row struct {
+		PathGroup        string `gorm:"column:path_group"`
+		PhotoTotal       int64  `gorm:"column:photo_total"`
+		AnalyzedTotal    int64  `gorm:"column:analyzed_total"`
+		ThumbnailTotal   int64  `gorm:"column:thumbnail_total"`
+		ThumbnailReady   int64  `gorm:"column:thumbnail_ready"`
+		ThumbnailFailed  int64  `gorm:"column:thumbnail_failed"`
+		ThumbnailPending int64  `gorm:"column:thumbnail_pending"`
+		GeocodeTotal     int64  `gorm:"column:geocode_total"`
+		GeocodeReady     int64  `gorm:"column:geocode_ready"`
+		GeocodeFailed    int64  `gorm:"column:geocode_failed"`
+		GeocodePending   int64  `gorm:"column:geocode_pending"`
+	}
+
+	var rows []row
+	selectExpr := caseExpr + ` as path_group,
+		COUNT(*) as photo_total,
+		SUM(CASE WHEN ai_analyzed = 1 THEN 1 ELSE 0 END) as analyzed_total,
+		COUNT(*) as thumbnail_total,
+		SUM(CASE WHEN thumbnail_status = 'ready' THEN 1 ELSE 0 END) as thumbnail_ready,
+		SUM(CASE WHEN thumbnail_status = 'failed' THEN 1 ELSE 0 END) as thumbnail_failed,
+		SUM(CASE WHEN thumbnail_status NOT IN ('ready', 'failed') OR thumbnail_status IS NULL THEN 1 ELSE 0 END) as thumbnail_pending,
+		SUM(CASE WHEN gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL THEN 1 ELSE 0 END) as geocode_total,
+		SUM(CASE WHEN (gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL) AND (geocode_status = 'ready' OR (COALESCE(TRIM(location), '') != '')) THEN 1 ELSE 0 END) as geocode_ready,
+		SUM(CASE WHEN (gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL) AND geocode_status = 'failed' THEN 1 ELSE 0 END) as geocode_failed,
+		SUM(CASE WHEN (gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL) AND geocode_status != 'ready' AND geocode_status != 'failed' AND (COALESCE(TRIM(location), '') = '') THEN 1 ELSE 0 END) as geocode_pending`
+
+	err := r.db.Model(&model.Photo{}).Scopes(activeScope).
+		Select(selectExpr).
+		Where(whereExpr, args...).
+		Group("path_group").
+		Find(&rows).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	for _, r := range rows {
+		if r.PathGroup == "" {
+			continue
+		}
+		result[r.PathGroup] = &model.PathDerivedStatus{
+			PhotoTotal:       r.PhotoTotal,
+			AnalyzedTotal:    r.AnalyzedTotal,
+			ThumbnailTotal:   r.ThumbnailTotal,
+			ThumbnailReady:   r.ThumbnailReady,
+			ThumbnailFailed:  r.ThumbnailFailed,
+			ThumbnailPending: r.ThumbnailPending,
+			GeocodeTotal:     r.GeocodeTotal,
+			GeocodeReady:     r.GeocodeReady,
+			GeocodeFailed:    r.GeocodeFailed,
+			GeocodePending:   r.GeocodePending,
+		}
+	}
+
+	// 确保所有请求的路径都有结果
+	for _, prefix := range prefixes {
+		if _, ok := result[prefix]; !ok {
+			result[prefix] = &model.PathDerivedStatus{}
+		}
+	}
+
+	return result, nil
 }

@@ -455,6 +455,12 @@ type UpdateDeviceEnabledRequest struct {
 	Enabled bool `json:"enabled"`
 }
 
+// PhotoCountsResponse 照片按状态计数响应
+type PhotoCountsResponse struct {
+	ActiveCount   int64 `json:"active_count"`
+	ExcludedCount int64 `json:"excluded_count"`
+}
+
 // BatchUpdateStatusRequest 批量更新照片状态请求
 type BatchUpdateStatusRequest struct {
 	PhotoIDs []uint `json:"photo_ids" binding:"required,min=1"`

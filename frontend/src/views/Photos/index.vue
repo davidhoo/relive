@@ -606,7 +606,7 @@ const handleExcludeSelected = async () => {
     ElMessage.success(`已移除 ${ids.length} 张照片`)
     selectedPhotos.value = new Set()
     loadPhotos()
-    loadExcludedCount()
+    loadPhotoCounts()
     loadPathDerivedStatus()
   } catch (error: any) {
     ElMessage.error(error.message || '移除失败')
@@ -623,7 +623,7 @@ const handleRestoreSelected = async () => {
     ElMessage.success(`已恢复 ${ids.length} 张照片`)
     selectedPhotos.value = new Set()
     loadPhotos()
-    loadExcludedCount()
+    loadPhotoCounts()
     loadPathDerivedStatus()
   } catch (error: any) {
     ElMessage.error(error.message || '恢复失败')
@@ -952,8 +952,7 @@ const handleDeletePath = async (path: ScanPathConfig) => {
     const result = await configApi.deleteScanPath(path.id)
     ElMessage.success(result.message || '删除成功')
     await loadScanPaths()
-    loadSystemTotal()
-    loadExcludedCount()
+    loadPhotoCounts()
     loadCategoriesAndTags()
     loadPhotos()
   } catch (error: any) {
@@ -963,22 +962,15 @@ const handleDeletePath = async (path: ScanPathConfig) => {
   }
 }
 
-// 加载系统总照片数（不带任何筛选）
-const loadSystemTotal = async () => {
+// 加载系统照片计数（active + excluded，单条 SQL）
+const loadPhotoCounts = async () => {
   try {
-    const res = await photoApi.getList({ page_size: 1 })
-    systemTotal.value = res.data?.data?.total || 0
+    const res = await photoApi.getCounts()
+    const data = res.data?.data
+    systemTotal.value = data?.active_count || 0
+    excludedCount.value = data?.excluded_count || 0
   } catch (error: any) {
-    console.error('Failed to load system total:', error)
-  }
-}
-
-const loadExcludedCount = async () => {
-  try {
-    const res = await photoApi.getList({ page_size: 1, status: 'excluded' })
-    excludedCount.value = res.data?.data?.total || 0
-  } catch {
-    excludedCount.value = 0
+    console.error('Failed to load photo counts:', error)
   }
 }
 
@@ -1087,20 +1079,20 @@ const loadScanPaths = async () => {
   try {
     const config = await configApi.getScanPaths()
     scanPaths.value = config.paths || []
-    // 加载每个路径的派生状态（包含照片数量）
-    await loadPathDerivedStatus()
-    // 从 derived status 中提取照片数量
+  } catch (error: any) {
+    console.error('Failed to load scan paths:', error)
+    ElMessage.error('加载扫描路径失败')
+  } finally {
+    scanPathLoading.value = false  // 路径列表立即可见
+  }
+  // 派生状态异步加载，不阻塞路径表显示
+  loadPathDerivedStatus().then(() => {
     const counts: Record<string, number> = {}
     for (const [path, status] of Object.entries(pathDerivedStatus.value)) {
       counts[path] = (status as any).photo_total || 0
     }
     pathPhotoCounts.value = counts
-  } catch (error: any) {
-    console.error('Failed to load scan paths:', error)
-    ElMessage.error('加载扫描路径失败')
-  } finally {
-    scanPathLoading.value = false
-  }
+  })
 }
 
 // 加载分类和标签
@@ -1457,9 +1449,8 @@ onMounted(() => {
   loadScanPaths()
   loadAutoScanConfig()
 
-  // 加载系统总照片数
-  loadSystemTotal()
-  loadExcludedCount()
+  // 加载系统照片计数
+  loadPhotoCounts()
 
   // 加载分类和标签
   loadCategoriesAndTags()

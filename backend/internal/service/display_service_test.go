@@ -86,6 +86,8 @@ func (r *stubPhotoRepo) CountByPathPrefix(prefix string) (int64, error)         
 func (r *stubPhotoRepo) GetDerivedStatusByPathPrefix(prefix string) (*model.PathDerivedStatus, error) {
 	return &model.PathDerivedStatus{}, nil
 }
+func (r *stubPhotoRepo) CountByStatus() (*model.PhotoCountsResponse, error) { return &model.PhotoCountsResponse{}, nil }
+func (r *stubPhotoRepo) GetDerivedStatusByPathPrefixes(prefixes []string) (map[string]*model.PathDerivedStatus, error) { return nil, nil }
 func (r *stubPhotoRepo) BatchUpdateStatus(ids []uint, status string) (int64, error) { return 0, nil }
 func (r *stubPhotoRepo) UpdateCategory(id uint, category string) error              { return nil }
 

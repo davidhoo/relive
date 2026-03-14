@@ -58,6 +58,10 @@ type PhotoService interface {
 	// 路径统计
 	CountPhotosByPathPrefix(pathPrefix string) (int64, error)
 	GetPathDerivedStatus(pathPrefix string) (*model.PathDerivedStatus, error)
+	GetPathDerivedStatusBatch(prefixes []string) (map[string]*model.PathDerivedStatus, error)
+
+	// 按状态计数
+	CountByStatus() (*model.PhotoCountsResponse, error)
 
 	// 照片状态管理
 	BatchUpdateStatus(req *model.BatchUpdateStatusRequest) (int64, error)
@@ -792,6 +796,14 @@ func (s *photoService) GetPathDerivedStatus(pathPrefix string) (*model.PathDeriv
 		return nil, fmt.Errorf("get derived status by path prefix: %w", err)
 	}
 	return status, nil
+}
+
+func (s *photoService) GetPathDerivedStatusBatch(prefixes []string) (map[string]*model.PathDerivedStatus, error) {
+	return s.repo.GetDerivedStatusByPathPrefixes(prefixes)
+}
+
+func (s *photoService) CountByStatus() (*model.PhotoCountsResponse, error) {
+	return s.repo.CountByStatus()
 }
 
 // BatchUpdateStatus 批量更新照片状态

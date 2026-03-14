@@ -118,3 +118,8 @@ export interface CountDerivedStatusByPathsRequest {
 export interface CountDerivedStatusByPathsResponse {
   stats: Record<string, PathDerivedStatus>
 }
+
+export interface PhotoCountsResponse {
+  active_count: number
+  excluded_count: number
+}
