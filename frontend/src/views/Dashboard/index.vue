@@ -173,7 +173,7 @@
                 <div class="recent-photo-cover">
                   <el-image
                     :src="getPhotoThumbnailUrl(photo.id, photo.updated_at)"
-                    :preview-src-list="[getPhotoUrl(photo.id)]"
+                    :preview-src-list="[]"
                     fit="cover"
                     class="recent-photo-image"
                     loading="lazy"

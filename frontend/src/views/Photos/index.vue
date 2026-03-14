@@ -388,7 +388,7 @@
                 </div>
                 <el-image
                     :src="getPhotoThumbnailUrl(photo.id, photo.updated_at)"
-                  :preview-src-list="selectedPhotos.size > 0 ? [] : [getPhotoUrl(photo.id)]"
+                  :preview-src-list="[]"
                   fit="cover"
                   class="photo-image"
                   loading="lazy"
