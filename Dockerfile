@@ -87,7 +87,7 @@ COPY backend/config.base.yaml /app/config.base.yaml
 RUN chmod +x /app/docker-entrypoint.sh
 
 # 创建必要的目录
-RUN mkdir -p /app/data/logs /app/data/photos
+RUN mkdir -p /app/data/logs /app/photos
 
 # 设置时区
 ENV TZ=Asia/Shanghai
