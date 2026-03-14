@@ -5,27 +5,38 @@ import (
 	"sync"
 	"time"
 
+	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/pkg/logger"
 )
 
 // TaskScheduler 定时任务调度器
 type TaskScheduler struct {
-	analysisService AnalysisService
-	displayService  DisplayService
-	photoService    PhotoService
-	stopCh          chan struct{}
-	wg              sync.WaitGroup
-	running         bool
-	mu              sync.Mutex
+	analysisService  AnalysisService
+	displayService   DisplayService
+	photoService     PhotoService
+	thumbnailJobRepo repository.ThumbnailJobRepository
+	geocodeJobRepo   repository.GeocodeJobRepository
+	stopCh           chan struct{}
+	wg               sync.WaitGroup
+	running          bool
+	mu               sync.Mutex
 }
 
 // NewTaskScheduler 创建定时任务调度器
-func NewTaskScheduler(analysisService AnalysisService, displayService DisplayService, photoService PhotoService) *TaskScheduler {
+func NewTaskScheduler(
+	analysisService AnalysisService,
+	displayService DisplayService,
+	photoService PhotoService,
+	thumbnailJobRepo repository.ThumbnailJobRepository,
+	geocodeJobRepo repository.GeocodeJobRepository,
+) *TaskScheduler {
 	return &TaskScheduler{
-		analysisService: analysisService,
-		displayService:  displayService,
-		photoService:    photoService,
-		stopCh:          make(chan struct{}),
+		analysisService:  analysisService,
+		displayService:   displayService,
+		photoService:     photoService,
+		thumbnailJobRepo: thumbnailJobRepo,
+		geocodeJobRepo:   geocodeJobRepo,
+		stopCh:           make(chan struct{}),
 	}
 }
 
@@ -53,6 +64,10 @@ func (s *TaskScheduler) Start() {
 	// 启动自动扫描检查任务
 	s.wg.Add(1)
 	go s.autoScanCheckTask()
+
+	// 启动已完成任务清理（每6小时执行一次，清理7天前的终态记录）
+	s.wg.Add(1)
+	go s.cleanTerminalJobsTask()
 
 	logger.Info("Task scheduler started")
 }
@@ -120,6 +135,7 @@ func (s *TaskScheduler) RunOnce() {
 	s.cleanExpiredLocks()
 	s.ensureTodayDailyBatch()
 	s.runAutoScanCheck()
+	s.cleanTerminalJobs()
 }
 
 // RunWithContext 使用上下文运行调度器（支持外部取消）
@@ -211,5 +227,51 @@ func (s *TaskScheduler) runAutoScanCheck() {
 	}
 	if err := s.photoService.RunAutoScanCheck(); err != nil {
 		logger.Warnf("Failed to run auto scan check: %v", err)
+	}
+}
+
+// cleanTerminalJobsTask 定期清理已完成/失败/取消的任务记录
+func (s *TaskScheduler) cleanTerminalJobsTask() {
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(6 * time.Hour)
+	defer ticker.Stop()
+
+	// 启动后延迟 10 分钟再首次清理，避免启动时并发压力
+	select {
+	case <-time.After(10 * time.Minute):
+		s.cleanTerminalJobs()
+	case <-s.stopCh:
+		return
+	}
+
+	for {
+		select {
+		case <-ticker.C:
+			s.cleanTerminalJobs()
+		case <-s.stopCh:
+			return
+		}
+	}
+}
+
+// cleanTerminalJobs 清理 7 天前的终态任务记录
+func (s *TaskScheduler) cleanTerminalJobs() {
+	cutoff := time.Now().AddDate(0, 0, -7)
+
+	if s.thumbnailJobRepo != nil {
+		if count, err := s.thumbnailJobRepo.DeleteTerminalBefore(cutoff); err != nil {
+			logger.Errorf("Failed to clean terminal thumbnail jobs: %v", err)
+		} else if count > 0 {
+			logger.Infof("Cleaned %d terminal thumbnail jobs older than 7 days", count)
+		}
+	}
+
+	if s.geocodeJobRepo != nil {
+		if count, err := s.geocodeJobRepo.DeleteTerminalBefore(cutoff); err != nil {
+			logger.Errorf("Failed to clean terminal geocode jobs: %v", err)
+		} else if count > 0 {
+			logger.Infof("Cleaned %d terminal geocode jobs older than 7 days", count)
+		}
 	}
 }

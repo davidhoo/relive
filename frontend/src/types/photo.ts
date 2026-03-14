@@ -24,9 +24,6 @@ export interface Photo {
   thumbnail_status?: string
   thumbnail_generated_at?: string
 
-  // 设备信息
-  esp32_device_id?: string
-
   // AI 分析结果
   ai_analyzed: boolean
   analyzed_at?: string
@@ -35,8 +32,6 @@ export interface Photo {
   caption?: string
   memory_score?: number
   beauty_score?: number
-  emotion_score?: number
-  technical_score?: number
   overall_score?: number
   score_reason?: string  // 评分理由
   main_category?: string

@@ -61,7 +61,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	displayService := NewDisplayService(db, repos.Photo, repos.DisplayRecord, repos.Device, configService, cfg)
 
 	// 创建定时任务调度器
-	scheduler := NewTaskScheduler(analysisService, displayService, photoService)
+	scheduler := NewTaskScheduler(analysisService, displayService, photoService, repos.ThumbnailJob, repos.GeocodeJob)
 
 	// 创建提示词配置服务
 	promptService := NewPromptService(repos.Config)

@@ -25,6 +25,7 @@ type GeocodeJobRepository interface {
 	ClaimNextJob() (*model.GeocodeJob, error)
 	CancelPendingJobs() (int64, error)
 	GetStats() (*GeocodeJobStats, error)
+	DeleteTerminalBefore(cutoff time.Time) (int64, error)
 }
 
 type geocodeJobRepository struct {
@@ -133,4 +134,13 @@ func (r *geocodeJobRepository) GetStats() (*GeocodeJobStats, error) {
 		}
 	}
 	return stats, nil
+}
+
+func (r *geocodeJobRepository) DeleteTerminalBefore(cutoff time.Time) (int64, error) {
+	result := r.db.Where("status IN ? AND updated_at < ?", []string{"completed", "failed", "cancelled"}, cutoff).
+		Delete(&model.GeocodeJob{})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
 }

@@ -99,10 +99,20 @@ func (h *SystemHandler) Stats(c *gin.Context) {
 		Analyzed int64 `gorm:"column:analyzed"`
 		Size     int64 `gorm:"column:size"`
 	}
-	h.db.Model(&model.Photo{}).
+	if err := h.db.Model(&model.Photo{}).
 		Where("status = ?", model.PhotoStatusActive).
 		Select("COUNT(*) as total, SUM(CASE WHEN ai_analyzed = 1 THEN 1 ELSE 0 END) as analyzed, COALESCE(SUM(file_size), 0) as size").
-		Scan(&photoStats)
+		Scan(&photoStats).Error; err != nil {
+		logger.Errorf("Failed to query photo stats: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "DATABASE_ERROR",
+				Message: "Failed to query photo statistics",
+			},
+		})
+		return
+	}
 	stats.TotalPhotos = photoStats.Total
 	stats.AnalyzedPhotos = photoStats.Analyzed
 	stats.UnanalyzedPhotos = photoStats.Total - photoStats.Analyzed
@@ -114,14 +124,34 @@ func (h *SystemHandler) Stats(c *gin.Context) {
 		Total  int64 `gorm:"column:total"`
 		Online int64 `gorm:"column:online"`
 	}
-	h.db.Model(&model.Device{}).
+	if err := h.db.Model(&model.Device{}).
 		Select("COUNT(*) as total, SUM(CASE WHEN last_seen > ? THEN 1 ELSE 0 END) as online", fiveMinutesAgo).
-		Scan(&deviceStats)
+		Scan(&deviceStats).Error; err != nil {
+		logger.Errorf("Failed to query device stats: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "DATABASE_ERROR",
+				Message: "Failed to query device statistics",
+			},
+		})
+		return
+	}
 	stats.TotalDevices = deviceStats.Total
 	stats.OnlineDevices = deviceStats.Online
 
 	// 展示记录总数
-	h.db.Model(&model.DisplayRecord{}).Count(&stats.TotalDisplays)
+	if err := h.db.Model(&model.DisplayRecord{}).Count(&stats.TotalDisplays).Error; err != nil {
+		logger.Errorf("Failed to query display record count: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "DATABASE_ERROR",
+				Message: "Failed to query display statistics",
+			},
+		})
+		return
+	}
 
 	// 数据库文件大小
 	stats.DatabaseSize = h.getDatabaseSize()

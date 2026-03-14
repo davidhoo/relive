@@ -27,6 +27,7 @@ type ThumbnailJobRepository interface {
 	ClaimNextJob() (*model.ThumbnailJob, error)
 	CancelPendingJobs() (int64, error)
 	GetStats() (*ThumbnailJobStats, error)
+	DeleteTerminalBefore(cutoff time.Time) (int64, error)
 }
 
 type thumbnailJobRepository struct {
@@ -158,4 +159,13 @@ func (r *thumbnailJobRepository) GetStats() (*ThumbnailJobStats, error) {
 		}
 	}
 	return stats, nil
+}
+
+func (r *thumbnailJobRepository) DeleteTerminalBefore(cutoff time.Time) (int64, error) {
+	result := r.db.Where("status IN ? AND updated_at < ?", []string{"completed", "failed", "cancelled"}, cutoff).
+		Delete(&model.ThumbnailJob{})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
 }

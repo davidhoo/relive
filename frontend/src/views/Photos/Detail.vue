@@ -207,13 +207,6 @@
               </el-tag>
             </div>
 
-            <!-- 分析描述 -->
-            <div class="detail-section" v-if="(photo as any).analysis_result">
-              <h4>AI 描述</h4>
-              <el-card shadow="never" class="analysis-card">
-                <p class="analysis-result-text">{{ (photo as any).analysis_result }}</p>
-              </el-card>
-            </div>
           </div>
           <el-empty v-else description="照片尚未分析" />
         </el-col>
@@ -651,15 +644,6 @@ h4 {
 .tag-chip {
   margin-right: 8px;
   margin-top: 8px;
-}
-
-.analysis-card {
-  margin-top: 8px;
-}
-
-.analysis-result-text {
-  white-space: pre-wrap;
-  line-height: 1.6;
 }
 
 .category-edit-container {

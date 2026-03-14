@@ -701,19 +701,6 @@ func filterDisplayCandidates(photos []*model.Photo, excludePhotoIDs []uint, cfg 
 	return candidates
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
 
 func selectTopMemoryPhoto(photos []*model.Photo) *model.Photo {
 	if len(photos) == 0 {
@@ -777,15 +764,6 @@ func resolvePreviewDate(previewDate *time.Time) time.Time {
 	return *previewDate
 }
 
-// contains 检查切片中是否包含元素
-func contains(slice []uint, item uint) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
-}
 
 func effectivePhotoTime(photo *model.Photo) (time.Time, bool) {
 	if photo == nil {
