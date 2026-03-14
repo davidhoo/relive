@@ -191,6 +191,18 @@ make build-analyzer
 - 后台统一管理设备，自动推送当日展示内容
 - 墨水屏相框支持 AP 配网、定时睡眠等低功耗特性
 
+### ESP32 墨水屏相框
+
+基于 ESP32-S3 + 7.3 寸 E Ink Spectra 6 彩色墨水屏的实体相框，每天定时从服务器获取"往年今日"照片并显示。
+
+- **硬件**：ESP32-S3 + Good Display GDEP073E01 (800x480, 6 色)
+- **配网**：首次使用自动进入 AP 配网（SSID: `relive`），Web 页面配置 WiFi、服务器、刷新时间
+- **重新配置**：15 秒内连续按两次 Reset 键（或快速断电两次）重新进入配置页面，已有设置自动回显
+- **低功耗**：定时深度睡眠，睡眠电流约 10μA，每天按设定时间点唤醒刷新
+- **双模式**：Office 模式（编译时配置）与 NVS 模式（AP 配网配置）自动切换
+
+详细说明见 [`devices/photo-frame/esp32/README.md`](devices/photo-frame/esp32/README.md)
+
 ### Web 管理后台
 - 浏览照片和分析结果
 - 管理扫描路径、提示词、AI Provider、设备和展示策略

@@ -30,6 +30,10 @@ public:
     uint8_t getAPFailCount();
     void setAPFailCount(uint8_t count);
     void resetAPFailCount();
+
+    // 双击上电检测（快速断电重启进入 AP 配网）
+    bool getBootFlag();
+    void setBootFlag(bool val);
 };
 
 #endif // NVS_CONFIG_H

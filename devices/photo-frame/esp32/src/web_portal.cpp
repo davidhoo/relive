@@ -178,12 +178,54 @@ function loadSSIDs() {
         sel.innerHTML += '<option value="' + s + '">' + s + '</option>';
       });
       sel.innerHTML += '<option value="__manual__">手动输入...</option>';
+      // 如果已有配置的 SSID，自动选中
+      if (window._savedSSID) {
+        var found = false;
+        for (var i = 0; i < sel.options.length; i++) {
+          if (sel.options[i].value === window._savedSSID) {
+            sel.value = window._savedSSID;
+            found = true;
+            break;
+          }
+        }
+        if (!found && window._savedSSID) {
+          // SSID 不在扫描列表中，切到手动输入
+          sel.value = '__manual__';
+          var inp = document.getElementById('ssid');
+          inp.style.display = 'block';
+          inp.value = window._savedSSID;
+        }
+      }
+    }
+  };
+  xhr.send();
+}
+
+function loadConfig() {
+  var xhr = new XMLHttpRequest();
+  xhr.open('GET', '/config');
+  xhr.onload = function() {
+    if (xhr.status === 200) {
+      var cfg = JSON.parse(xhr.responseText);
+      if (cfg.ssid) window._savedSSID = cfg.ssid;
+      if (cfg.pass) document.getElementById('pass').value = cfg.pass;
+      if (cfg.host) document.getElementById('host').value = cfg.host;
+      if (cfg.port) document.getElementById('port').value = cfg.port;
+      if (cfg.apikey) document.getElementById('apikey').value = cfg.apikey;
+      if (cfg.schedules) {
+        // schedules 格式: "0800,2000"，转为 ["08:00","20:00"]
+        schedules = cfg.schedules.split(',').filter(function(s){return s;}).map(function(s) {
+          return s.substring(0,2) + ':' + s.substring(2);
+        });
+        renderSchedules();
+      }
     }
   };
   xhr.send();
 }
 
 renderSchedules();
+loadConfig();
 loadSSIDs();
 </script>
 </body>
@@ -197,6 +239,7 @@ void WebPortal::begin(WiFiManager* wifi, NVSConfig* nvs) {
 
     _server.on("/", HTTP_GET, [this]() { handleRoot(); });
     _server.on("/scan", HTTP_GET, [this]() { handleScan(); });
+    _server.on("/config", HTTP_GET, [this]() { handleConfig(); });
     _server.on("/save", HTTP_POST, [this]() { handleSave(); });
     _server.on("/status", HTTP_GET, [this]() { handleStatus(); });
 
@@ -279,6 +322,20 @@ void WebPortal::handleStatus() {
     JsonDocument doc;
     doc["configured"] = _nvs->isConfigured();
     doc["ap_ssid"] = AP_SSID;
+
+    String json;
+    serializeJson(doc, json);
+    _server.send(200, "application/json", json);
+}
+
+void WebPortal::handleConfig() {
+    JsonDocument doc;
+    doc["ssid"] = _nvs->getWiFiSSID();
+    doc["pass"] = _nvs->getWiFiPass();
+    doc["host"] = _nvs->getServerHost();
+    doc["port"] = _nvs->getServerPort();
+    doc["apikey"] = _nvs->getAPIKey();
+    doc["schedules"] = _nvs->getSchedules();
 
     String json;
     serializeJson(doc, json);

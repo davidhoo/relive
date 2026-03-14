@@ -255,95 +255,150 @@ void setup() {
     // 初始化 NVS 配置
     nvsConfig.begin();
 
-    // 分配缓冲区
-    if (!allocateBuffer()) {
-        LOG_ERROR("[Main] 内存分配失败，重启");
-        delay(5000);
-        ESP.restart();
-        return;
-    }
+    // 双击上电检测窗口计时
+    unsigned long bootFlagSetTime = 0;
 
-    // 初始化显示
-    if (!display.begin()) {
-        LOG_ERROR("[Main] 显示初始化失败，重启");
-        delay(5000);
-        ESP.restart();
-        return;
-    }
+    // 双击上电检测：15 秒内两次上电 → 进入 AP 配网模式
+    if (nvsConfig.getBootFlag()) {
+        // boot_flag 为 true，说明上次启动未满 15 秒就断电了
+        LOG_INFO("[Main] 检测到快速二次上电，进入 AP 配网模式");
+        nvsConfig.setBootFlag(false);
 
-    // ===== WiFi 扫描 + 模式判断 =====
-
-    if (wifiManager.begin()) {
-        // 办公室模式：编译时凭据连接成功
-        LOG_INFO("[Main] 办公室模式，使用编译时配置");
-        apiClient.begin();
-
-        // 加载刷新计划
-        String schedules = DEFAULT_SCHEDULES;
-        scheduleManager.parseSchedules(schedules);
-
-        // 重置 AP 失败计数
-        nvsConfig.resetAPFailCount();
-    } else {
-        // 非办公室模式
-        if (!nvsConfig.isConfigured()) {
-            // NVS 未配置 → AP 配网
-            LOG_INFO("[Main] NVS 未配置，进入 AP 配网");
+        // 只初始化显示（AP 引导页需要），不分配 imageBuffer 以节省内存
+        if (display.begin()) {
             runAPPortal();
-            // 如果 runAPPortal 返回（NVS 已连接成功），继续下面的流程
-            if (!wifiManager.isConnected()) {
-                return; // 已进入深度睡眠，不会到这里
-            }
-            // 连接成功后设置 API 客户端
-            apiClient.beginWithConfig(
-                nvsConfig.getServerHost(),
-                nvsConfig.getServerPort(),
-                nvsConfig.getAPIKey()
-            );
-            String schedules = nvsConfig.getSchedules();
-            if (schedules.length() == 0) schedules = DEFAULT_SCHEDULES;
-            scheduleManager.parseSchedules(schedules);
-        } else {
-            // NVS 已配置 → 尝试连接
-            LOG_INFO("[Main] 使用 NVS 配置连接");
-            String ssid = nvsConfig.getWiFiSSID();
-            String pass = nvsConfig.getWiFiPass();
-
-            int retries = 0;
-            bool connected = false;
-            while (retries < MAX_WIFI_RETRIES) {
-                if (wifiManager.connectWithCredentials(ssid, pass)) {
-                    connected = true;
-                    break;
-                }
-                retries++;
-                LOG_INFO_F("[Main] WiFi 重试 %d/%d\n", retries, MAX_WIFI_RETRIES);
-                delay(RETRY_DELAY_MS);
-            }
-
-            if (!connected) {
-                // 连续失败 N 次 → AP 配网
-                LOG_ERROR("[Main] WiFi 连续失败，进入 AP 配网");
-                runAPPortal();
-                if (!wifiManager.isConnected()) {
+            if (wifiManager.isConnected()) {
+                apiClient.beginWithConfig(
+                    nvsConfig.getServerHost(),
+                    nvsConfig.getServerPort(),
+                    nvsConfig.getAPIKey()
+                );
+                String schedules = nvsConfig.getSchedules();
+                if (schedules.length() == 0) schedules = DEFAULT_SCHEDULES;
+                scheduleManager.parseSchedules(schedules);
+                // 从 AP 配网回来，分配 imageBuffer 后进入正常工作流程
+                if (!allocateBuffer()) {
+                    LOG_ERROR("[Main] 内存分配失败，重启");
+                    delay(5000);
+                    ESP.restart();
                     return;
                 }
+            } else {
+                return; // AP 超时已进入深度睡眠
             }
+        } else {
+            LOG_ERROR("[Main] 初始化失败，重启");
+            delay(5000);
+            ESP.restart();
+            return;
+        }
+    } else {
+        // 正常启动：设置 boot_flag，15 秒后清零
+        nvsConfig.setBootFlag(true);
+        bootFlagSetTime = millis();
 
-            // 成功连接
-            nvsConfig.resetAPFailCount();
-            apiClient.beginWithConfig(
-                nvsConfig.getServerHost(),
-                nvsConfig.getServerPort(),
-                nvsConfig.getAPIKey()
-            );
-            String schedules = nvsConfig.getSchedules();
-            if (schedules.length() == 0) schedules = DEFAULT_SCHEDULES;
+        // 分配缓冲区
+        if (!allocateBuffer()) {
+            LOG_ERROR("[Main] 内存分配失败，重启");
+            nvsConfig.setBootFlag(false);
+            delay(5000);
+            ESP.restart();
+            return;
+        }
+
+        // 初始化显示
+        if (!display.begin()) {
+            LOG_ERROR("[Main] 显示初始化失败，重启");
+            nvsConfig.setBootFlag(false);
+            delay(5000);
+            ESP.restart();
+            return;
+        }
+
+        // ===== WiFi 扫描 + 模式判断 =====
+
+        if (wifiManager.begin()) {
+            // 办公室模式：编译时凭据连接成功
+            LOG_INFO("[Main] 办公室模式，使用编译时配置");
+            apiClient.begin();
+
+            // 加载刷新计划
+            String schedules = DEFAULT_SCHEDULES;
             scheduleManager.parseSchedules(schedules);
+
+            // 重置 AP 失败计数
+            nvsConfig.resetAPFailCount();
+        } else {
+            // 非办公室模式
+            if (!nvsConfig.isConfigured()) {
+                // NVS 未配置 → AP 配网
+                LOG_INFO("[Main] NVS 未配置，进入 AP 配网");
+                runAPPortal();
+                // 如果 runAPPortal 返回（NVS 已连接成功），继续下面的流程
+                if (!wifiManager.isConnected()) {
+                    return; // 已进入深度睡眠，不会到这里
+                }
+                // 连接成功后设置 API 客户端
+                apiClient.beginWithConfig(
+                    nvsConfig.getServerHost(),
+                    nvsConfig.getServerPort(),
+                    nvsConfig.getAPIKey()
+                );
+                String schedules = nvsConfig.getSchedules();
+                if (schedules.length() == 0) schedules = DEFAULT_SCHEDULES;
+                scheduleManager.parseSchedules(schedules);
+            } else {
+                // NVS 已配置 → 尝试连接
+                LOG_INFO("[Main] 使用 NVS 配置连接");
+                String ssid = nvsConfig.getWiFiSSID();
+                String pass = nvsConfig.getWiFiPass();
+
+                int retries = 0;
+                bool connected = false;
+                while (retries < MAX_WIFI_RETRIES) {
+                    if (wifiManager.connectWithCredentials(ssid, pass)) {
+                        connected = true;
+                        break;
+                    }
+                    retries++;
+                    LOG_INFO_F("[Main] WiFi 重试 %d/%d\n", retries, MAX_WIFI_RETRIES);
+                    delay(RETRY_DELAY_MS);
+                }
+
+                if (!connected) {
+                    // 连续失败 N 次 → AP 配网
+                    LOG_ERROR("[Main] WiFi 连续失败，进入 AP 配网");
+                    runAPPortal();
+                    if (!wifiManager.isConnected()) {
+                        return;
+                    }
+                }
+
+                // 成功连接
+                nvsConfig.resetAPFailCount();
+                apiClient.beginWithConfig(
+                    nvsConfig.getServerHost(),
+                    nvsConfig.getServerPort(),
+                    nvsConfig.getAPIKey()
+                );
+                String schedules = nvsConfig.getSchedules();
+                if (schedules.length() == 0) schedules = DEFAULT_SCHEDULES;
+                scheduleManager.parseSchedules(schedules);
+            }
         }
     }
 
     // ===== 正常工作流程 =====
+
+    // 清除 boot_flag（确保 15 秒窗口已过）
+    if (bootFlagSetTime > 0) {
+        unsigned long elapsed = millis() - bootFlagSetTime;
+        if (elapsed < 15000) {
+            LOG_INFO_F("[Main] 等待双击检测窗口关闭（剩余 %lu ms）\n", 15000 - elapsed);
+            delay(15000 - elapsed);
+        }
+        nvsConfig.setBootFlag(false);
+    }
 
     // 时间无效时尝试 NTP 同步
     if (!scheduleManager.isTimeValid()) {

@@ -73,3 +73,14 @@ void NVSConfig::setAPFailCount(uint8_t count) {
 void NVSConfig::resetAPFailCount() {
     prefs.putUChar("ap_fail_cnt", 0);
 }
+
+bool NVSConfig::getBootFlag() {
+    bool val = prefs.getBool("boot_flag", false);
+    LOG_INFO_F("[NVS] 读取 boot_flag = %s\n", val ? "true" : "false");
+    return val;
+}
+
+void NVSConfig::setBootFlag(bool val) {
+    prefs.putBool("boot_flag", val);
+    LOG_INFO_F("[NVS] boot_flag = %s\n", val ? "true" : "false");
+}

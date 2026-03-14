@@ -23,6 +23,7 @@ private:
     void handleScan();
     void handleSave();
     void handleStatus();
+    void handleConfig();
 };
 
 #endif // WEB_PORTAL_H
