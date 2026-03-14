@@ -42,11 +42,11 @@ func TestRequestBaseURLUsesTLSWhenNoForwardedProto(t *testing.T) {
 
 func TestRewriteTaskDownloadURLReplacesInternalHTTPHost(t *testing.T) {
 	got := rewriteTaskDownloadURL(
-		"http://0.0.0.0:8080/api/v1/photos/42/image?token=temp-token",
+		"http://0.0.0.0:8080/api/v1/photos/42/image",
 		"https://photos.example.com",
 		42,
 	)
-	want := "https://photos.example.com/api/v1/photos/42/image?token=temp-token"
+	want := "https://photos.example.com/api/v1/photos/42/image"
 	if got != want {
 		t.Fatalf("expected rewritten download url %q, got %q", want, got)
 	}

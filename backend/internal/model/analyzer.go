@@ -9,8 +9,7 @@ type AnalysisTask struct {
 	ID                    string     `json:"id"`                      // 任务唯一标识
 	PhotoID               uint       `json:"photo_id"`                // 照片ID
 	FilePath              string     `json:"file_path"`               // 文件路径
-	DownloadURL           string     `json:"download_url"`            // 下载URL
-	DownloadTokenExpiresAt *time.Time `json:"download_token_expires_at,omitempty"` // 下载token过期时间
+	DownloadURL           string     `json:"download_url"`            // 下载URL（Analyzer 通过 API Key header 认证）
 	Width                 int        `json:"width"`                   // 宽度
 	Height                int        `json:"height"`                  // 高度
 	TakenAt               *time.Time `json:"taken_at,omitempty"`      // 拍摄时间

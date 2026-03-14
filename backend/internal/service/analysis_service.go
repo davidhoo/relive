@@ -118,15 +118,13 @@ func (s *analysisService) GetPendingTasks(limit int, analyzerID string) ([]model
 	baseURL = strings.TrimSuffix(baseURL, "/")
 
 	for _, photo := range photos {
-		downloadURL := fmt.Sprintf("%s/api/v1/photos/%d/image?token=%s", baseURL, photo.ID, "temp-token")
-		tokenExpiresAt := time.Now().Add(30 * time.Minute)
+		downloadURL := fmt.Sprintf("%s/api/v1/photos/%d/image", baseURL, photo.ID)
 
 		task := model.AnalysisTask{
 			ID:                     fmt.Sprintf("task_%d_%d", photo.ID, time.Now().Unix()),
 			PhotoID:                photo.ID,
 			FilePath:               photo.FilePath,
 			DownloadURL:            downloadURL,
-			DownloadTokenExpiresAt: &tokenExpiresAt,
 			Width:                  photo.Width,
 			Height:                 photo.Height,
 			TakenAt:                photo.TakenAt,
