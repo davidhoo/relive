@@ -2,10 +2,12 @@ package database
 
 import (
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/pkg/config"
+	"github.com/davidhoo/relive/pkg/geodata"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -81,6 +83,11 @@ func Init(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		if err := AutoMigrate(db); err != nil {
 			return nil, fmt.Errorf("auto migrate: %w", err)
 		}
+	}
+
+	// 确保城市数据已加载（从嵌入数据自动导入）
+	if err := geodata.EnsureCitiesLoaded(db); err != nil {
+		log.Printf("[database] warning: failed to load embedded cities data: %v", err)
 	}
 
 	return db, nil

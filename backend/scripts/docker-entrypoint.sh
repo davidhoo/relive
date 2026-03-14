@@ -4,8 +4,7 @@ set -e
 # Docker 入口点脚本
 # 功能：
 # 1. 检查配置文件，使用默认配置作为后备
-# 2. 自动导入城市数据（如果配置了 AUTO_IMPORT_CITIES）
-# 3. 启动主应用
+# 2. 启动主应用（城市数据在启动时自动从嵌入数据导入）
 
 # 配置文件路径
 CONFIG_FILE="${CONFIG_FILE:-/app/config.yaml}"
@@ -21,9 +20,6 @@ echo "Using config: $CONFIG_FILE"
 
 # 确保数据目录存在
 mkdir -p /app/data/logs /app/data/photos
-
-# 检查并导入城市数据
-/app/init-cities.sh
 
 # 启动主应用
 echo "Starting Relive..."

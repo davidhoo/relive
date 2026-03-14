@@ -129,7 +129,6 @@ echo "📋 镜像内容："
 echo "   ✓ 后端 API 服务（Go + Gin）"
 echo "   ✓ 前端静态文件（Vue3 + Vite）"
 echo "   ✓ relive-analyzer 工具"
-echo "   ✓ import-cities 工具"
 echo ""
 
 echo "🧪 测试命令："

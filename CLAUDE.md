@@ -306,13 +306,11 @@ Docker 构建时通过 build-args 注入额外信息：
 - 照片位置结构化存储：Photo 表新增 country/province/city/district 字段
 - 城市中文名支持：City 表 name_zh 字段，离线 geocode 返回中文地名
 - 全量重建 GPS 位置解析 API 及前端入口（复用后台任务基础设施）
-- 中文城市名导入改为异步任务 + 前端进度条轮询（解决 190MB 文件超时问题）
 - 离线 geocode 海外地址显示格式修正
 
 ### Performance & Fixes (2026-03-13)
 - 展示策略查询性能优化：消除百年循环和 ListAll 全量加载
 - BuildDisplayCanvas 缺少 EXIF 方向校正导致批次图片旋转修复
-- 中文城市名导入支持 zh-CN/zh/zh-TW 全部变体
 
 ### ESP32 Firmware v1.0.0 (2026-03-12)
 - 双配置源：Office 模式（编译时配置）与 NVS 模式（AP 配网）
@@ -343,35 +341,42 @@ Docker 构建时通过 build-args 注入额外信息：
 - ConfigHandler reinitializes AI service dynamically
 - AIHandler updates its service reference automatically
 
-### Offline Geocoding with Auto Import (2025-03-03)
-- Docker container auto-imports city data on first startup
-- Place `cities500.txt` in `./data/backend/` directory
-- Configure via `config.prod.yaml` geocode section
+### Embedded City Data for Offline Geocoding (2026-03-14)
+- City data (cities500 + Chinese names) preprocessed and embedded in binary via `//go:embed`
+- `pkg/geodata/` package: auto-imports on startup if cities table < 1000 rows
+- `cmd/gen-geodata/` one-time tool generates `cities_zh.csv.gz` (~4MB, 230K cities + 42K Chinese names)
+- Removed: `cmd/import-cities/`, `scripts/init-cities.sh`, `import-geonames.sh`, Docker city import scripts
+- Removed: frontend city data download UI (download buttons, progress polling)
+- Single reload API: `POST /api/v1/config/cities-data/reload`
+
+### Offline Geocoding (2025-03-03)
 - Supports offline, amap, nominatim, weibo, and hybrid modes
+- Configure via config or Web UI geocode settings
 
 ### Async Photo Scanning (2025-03-03)
 - Photo scanning uses async task system to prevent timeouts
 - Supports both scan and rebuild operations
 - Frontend polls for progress updates
 
-## Docker Geocoding Setup
+## Offline Geocoding
 
-### Automatic City Data Import
-1. Download GeoNames data:
-   ```bash
-   cd data/backend
-   wget https://download.geonames.org/export/dump/cities500.zip
-   unzip cities500.zip
-   ```
+City data is embedded in the binary (via `pkg/geodata/cities_zh.csv.gz`), no external files needed.
+On first startup, if the `cities` table has fewer than 1000 rows, data is auto-imported.
 
-2. Start container - data imports automatically on first run
+To regenerate the embedded data (when GeoNames updates):
+```bash
+cd backend
+# Download source files
+wget https://download.geonames.org/export/dump/cities500.zip && unzip cities500.zip
+wget https://download.geonames.org/export/dump/alternateNamesV2.zip && unzip alternateNamesV2.zip
+# Generate embedded data
+go run cmd/gen-geodata/main.go -cities cities500.txt -alt alternateNamesV2.txt -out pkg/geodata/cities_zh.csv.gz
+```
 
-3. Configure geocode provider in `config.prod.yaml`:
-   ```yaml
-   geocode:
-     provider: "offline"  # or "hybrid" with fallback
-     offline:
-       max_distance: 100
-   ```
-
-See `docs/docker-geocode.md` for detailed documentation.
+Configure geocode provider in Web UI or `config.prod.yaml`:
+```yaml
+geocode:
+  provider: "offline"  # or "hybrid" with fallback
+  offline:
+    max_distance: 100
+```

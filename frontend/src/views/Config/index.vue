@@ -224,66 +224,11 @@
             class="section-alert"
           >
             <template #default>
-              <div>离线提供商需要导入城市数据库才能使用。如未导入，系统会自动使用备用提供商。</div>
+              <div>离线提供商使用内置的城市数据库（含中文地名），开箱即用，无需额外配置。</div>
               <div class="hint-block">
                 数据源：<a href="https://download.geonames.org/export/dump/" target="_blank">GeoNames</a>
-                (推荐使用 <a href="https://download.geonames.org/export/dump/cities500.zip" target="_blank">cities500.zip</a> - 覆盖面更广)
+                cities500（23 万城市 + 4 万中文地名）
               </div>
-              <div v-if="!citiesDataStatus.exists" class="download-section section-alert">
-                <el-button type="primary" @click="handleDownloadCities" :loading="downloadingCities">
-                  <el-icon><Download /></el-icon>
-                  {{ downloadingCities ? '下载中...' : '下载城市数据 (~180MB)' }}
-                </el-button>
-                <div v-if="downloadingCities" class="download-progress section-alert">
-                  <el-progress :percentage="citiesDownloadProgress" :stroke-width="20" indeterminate />
-                </div>
-              </div>
-              <el-alert
-                v-else-if="citiesDataStatus.exists"
-                title="离线数据库已就绪"
-                type="success"
-                :closable="false"
-                class="section-alert"
-              >
-                <div>
-                  <el-icon><SuccessFilled /></el-icon>
-                  <span>数据已就绪</span>
-                </div>
-                <div class="hint-block">
-                  <strong>位置:</strong> {{ citiesDataStatus.file_path }}
-                  <br />
-                  <strong>大小:</strong> {{ formatFileSize(citiesDataStatus.file_size) }}
-                </div>
-                <div v-if="!citiesDataStatus.has_zh_names || zhNamesTaskRunning" class="zh-names-section">
-                  <el-divider />
-                  <template v-if="zhNamesTaskRunning">
-                    <div class="zh-names-hint">
-                      <span>{{ zhNamesTask.phase }}</span>
-                    </div>
-                    <el-progress :percentage="zhNamesTask.progress" :status="zhNamesTask.status === 'failed' ? 'exception' : undefined" style="margin-bottom: 8px;" />
-                    <div v-if="zhNamesTask.status === 'failed'" style="color: var(--el-color-danger); font-size: 12px;">
-                      {{ zhNamesTask.message }}
-                    </div>
-                  </template>
-                  <template v-else>
-                    <div class="zh-names-hint">
-                      <el-icon class="warning-icon"><WarningFilled /></el-icon>
-                      <span>中文城市名尚未导入，离线解析的城市名可能显示为英文。</span>
-                    </div>
-                    <el-button size="small" type="primary" @click="handleDownloadZHNames" :loading="downloadingZHNames">
-                      <el-icon><Download /></el-icon>
-                      导入中文城市名 (~260MB)
-                    </el-button>
-                  </template>
-                </div>
-                <div v-else class="zh-names-section">
-                  <el-divider />
-                  <div>
-                    <el-icon><SuccessFilled /></el-icon>
-                    <span>中文城市名已就绪</span>
-                  </div>
-                </div>
-              </el-alert>
             </template>
           </el-alert>
         </el-form>
@@ -674,36 +619,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { configApi, promptApi, type AutoScanConfig, type GeocodeConfig, type AIConfig, type PromptConfig, defaultPrompts, getCitiesDataStatus, downloadCitiesData, downloadAlternateNames, getZHNamesTaskStatus, type CitiesDataStatus, type ZHNamesTaskStatus } from '@/api/config'
-import dayjs from 'dayjs'
-import { Document, RefreshLeft, Check, Download, SuccessFilled, WarningFilled, Link, Location, Cpu } from '@element-plus/icons-vue'
+import { configApi, promptApi, type AutoScanConfig, type GeocodeConfig, type AIConfig, type PromptConfig, defaultPrompts } from '@/api/config'
+import { Document, RefreshLeft, Check, Link, Location, Cpu } from '@element-plus/icons-vue'
 
 // Auto scan config state
 const loading = ref(false)
 const autoScanConfig = ref<AutoScanConfig>(configApi.getDefaultAutoScanConfig())
 const savingAutoScan = ref(false)
 const autoScanIntervalSelection = ref<number | '__custom__'>(60)
-
-// Cities data state
-const downloadingCities = ref(false)
-const downloadingZHNames = ref(false)
-const citiesDownloadProgress = ref(0)
-const citiesDataStatus = ref<CitiesDataStatus>({
-  exists: false,
-  file_path: '',
-  has_zh_names: false,
-  download_url: ''
-})
-const zhNamesTask = ref<ZHNamesTaskStatus>({ status: 'idle', phase: '', progress: 0, message: '' })
-const zhNamesPollingTimer = ref<ReturnType<typeof setInterval> | null>(null)
-const zhNamesTaskRunning = computed(() => {
-  const s = zhNamesTask.value.status
-  return s === 'downloading' || s === 'extracting' || s === 'importing'
-})
 
 // Geocode configuration state
 const geocodeConfig = ref<GeocodeConfig>({
@@ -758,11 +685,6 @@ const promptConfig = ref<PromptConfig>({ ...defaultPrompts })
 const loadingPrompts = ref(false)
 const savingPrompts = ref(false)
 const resettingPrompts = ref(false)
-
-const formatTime = (time?: string) => {
-  if (!time) return '-'
-  return dayjs(time).format('YYYY-MM-DD HH:mm:ss')
-}
 
 const autoScanPresetIntervals = [10, 30, 60, 120, 720, 1440]
 
@@ -876,83 +798,6 @@ const openOpenAIDocs = () => {
   window.open('https://platform.openai.com/api-keys', '_blank')
 }
 
-// Cities data functions
-const formatFileSize = (bytes?: number): string => {
-  if (!bytes) return '未知'
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`
-}
-
-const loadCitiesDataStatus = async () => {
-  try {
-    const status = await getCitiesDataStatus()
-    citiesDataStatus.value = status
-  } catch (error) {
-    console.error('Failed to load cities data status:', error)
-  }
-}
-
-const handleDownloadCities = async () => {
-  downloadingCities.value = true
-  citiesDownloadProgress.value = 0
-  try {
-    const result = await downloadCitiesData()
-    await loadCitiesDataStatus()
-    ElMessage.success(result.message || '城市数据下载并导入成功！')
-  } catch (error: any) {
-    ElMessage.error('下载失败: ' + (error.message || '未知错误'))
-  } finally {
-    downloadingCities.value = false
-  }
-}
-
-const startZHNamesPolling = () => {
-  if (zhNamesPollingTimer.value) return
-  zhNamesPollingTimer.value = setInterval(async () => {
-    try {
-      zhNamesTask.value = await getZHNamesTaskStatus()
-      const s = zhNamesTask.value.status
-      if (s === 'completed' || s === 'failed') {
-        stopZHNamesPolling()
-        if (s === 'completed') {
-          ElMessage.success(zhNamesTask.value.message || '中文城市名导入成功！')
-          await loadCitiesDataStatus()
-        } else {
-          ElMessage.error('导入失败: ' + (zhNamesTask.value.message || '未知错误'))
-        }
-      }
-    } catch {
-      stopZHNamesPolling()
-    }
-  }, 2000)
-}
-
-const stopZHNamesPolling = () => {
-  if (zhNamesPollingTimer.value) {
-    clearInterval(zhNamesPollingTimer.value)
-    zhNamesPollingTimer.value = null
-  }
-  downloadingZHNames.value = false
-}
-
-const handleDownloadZHNames = async () => {
-  downloadingZHNames.value = true
-  try {
-    await downloadAlternateNames()
-    startZHNamesPolling()
-  } catch (error: any) {
-    if (error?.response?.status === 409) {
-      // 任务已在运行，直接开始轮询
-      startZHNamesPolling()
-    } else {
-      ElMessage.error('启动失败: ' + (error.message || '未知错误'))
-      downloadingZHNames.value = false
-    }
-  }
-}
-
 // Prompt configuration functions
 const loadPromptConfig = async () => {
   loadingPrompts.value = true
@@ -1008,21 +853,6 @@ onMounted(async () => {
   loadGeocodeConfig()
   loadAIConfig()
   loadPromptConfig()
-  await loadCitiesDataStatus()
-  // 检查是否有正在运行的中文城市名导入任务
-  try {
-    zhNamesTask.value = await getZHNamesTaskStatus()
-    if (zhNamesTaskRunning.value) {
-      downloadingZHNames.value = true
-      startZHNamesPolling()
-    }
-  } catch {
-    // ignore
-  }
-})
-
-onUnmounted(() => {
-  stopZHNamesPolling()
 })
 </script>
 
@@ -1310,22 +1140,6 @@ onUnmounted(() => {
 
 .hint-block {
   margin-top: 8px;
-}
-
-.zh-names-section {
-  margin-top: 4px;
-}
-
-.zh-names-hint {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-bottom: 8px;
-  color: var(--el-color-warning);
-}
-
-.warning-icon {
-  color: var(--el-color-warning);
 }
 
 .section-top-gap {

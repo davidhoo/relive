@@ -231,10 +231,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				configGroup.POST("/prompts/reset", handlers.Config.ResetPromptConfig)
 
 				// 城市数据管理
-				configGroup.GET("/cities-data/status", handlers.Config.GetCitiesDataStatus)
-				configGroup.POST("/cities-data/download", handlers.Config.DownloadCitiesData)
-				configGroup.POST("/cities-data/download-zh-names", handlers.Config.DownloadAlternateNames)
-				configGroup.GET("/cities-data/zh-names-task", handlers.Config.GetZHNamesTaskStatus)
+				configGroup.POST("/cities-data/reload", handlers.Config.ReloadCitiesData)
 			}
 		}
 	}

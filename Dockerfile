@@ -57,12 +57,6 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
     .
 WORKDIR /app
 
-# 构建 import-cities 工具
-RUN CGO_ENABLED=1 GOOS=linux go build \
-    -ldflags "-X github.com/davidhoo/relive/pkg/version.BuildTime=${BUILD_TIME} -X github.com/davidhoo/relive/pkg/version.GitCommit=${VERSION}" \
-    -o /app/import-cities \
-    ./cmd/import-cities/main.go
-
 # Stage 3: 运行阶段
 FROM alpine:latest
 
@@ -82,17 +76,15 @@ RUN apk add --no-cache \
 # 从构建阶段复制后端二进制文件
 COPY --from=backend-builder /app/relive /app/relive
 COPY --from=backend-builder /app/relive-analyzer /app/relive-analyzer
-COPY --from=backend-builder /app/import-cities /app/import-cities
 COPY --from=backend-builder /app/assets/fonts /app/fonts
 
 # 从构建阶段复制前端静态文件
 COPY --from=frontend-builder /frontend/dist /app/frontend/dist
 
 # 复制脚本和默认配置
-COPY backend/scripts/init-cities.sh /app/init-cities.sh
 COPY backend/scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
 COPY backend/config.base.yaml /app/config.base.yaml
-RUN chmod +x /app/init-cities.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
 # 创建必要的目录
 RUN mkdir -p /app/data/logs /app/data/photos
