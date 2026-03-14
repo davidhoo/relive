@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.0] - 2026-03-14
+
+### Added
+- **城市数据内嵌二进制** - cities500 + 中文名预处理为 `pkg/geodata/cities_zh.csv.gz`，`//go:embed` 嵌入，离线 geocoding 开箱即用
+- **登录速率限制** - 登录接口添加速率限制，防止暴力破解攻击
+
+### Changed
+- **Dashboard 加载性能优化** - 前端并行请求 + 后端合并 SQL 查询
+- **照片管理页性能优化** - 新增 `/photos/counts` 轻量接口，减少 HTTP 请求与 SQL 查询
+- **高频查询复合索引** - DisplayRecord、Job 等表添加复合索引优化查询性能
+- **Dockerfile Go 编译镜像升级至 1.26-alpine**
+
+### Fixed
+- 移除 Analyzer 下载链接中无效的 temp-token 占位符
+- 代码质量优化：错误处理改进、Job 过期清理机制、死代码清除
+
+### Removed
+- 城市数据外部导入相关代码（`cmd/import-cities/`、`scripts/init-cities.sh`、前端下载 UI）
+
+---
+
 ## [1.0.2] - 2026-03-13
 
 ### Added
