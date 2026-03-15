@@ -482,6 +482,14 @@
           title="取消选择"
         />
         <span class="selection-count">已选中 {{ selectedPhotos.size }} 张照片</span>
+        <el-tooltip content="设置位置" placement="top">
+          <el-button
+            :icon="Location"
+            circle
+            @click="showBatchLocationPicker = true"
+            :loading="batchLocationLoading"
+          />
+        </el-tooltip>
         <el-tooltip :content="filterStatus === 'excluded' ? '恢复选中照片' : '移除选中照片'" placement="top">
           <el-button
             :type="filterStatus === 'excluded' ? 'success' : 'danger'"
@@ -532,6 +540,12 @@
 
     <!-- 路径浏览器 -->
     <PathBrowser v-model="pathBrowserVisible" :initial-path="pathForm.path" @select="(path: string) => pathForm.path = path" />
+
+    <!-- 批量设置位置 -->
+    <LocationPicker
+      v-model:visible="showBatchLocationPicker"
+      @confirm="handleBatchLocationConfirm"
+    />
   </div>
 </template>
 
@@ -543,6 +557,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 import PathBrowser from '@/components/PathBrowser.vue'
+import LocationPicker from '@/components/LocationPicker.vue'
 import { photoApi } from '@/api/photo'
 import { configApi, type ScanPathConfig, type AutoScanConfig } from '@/api/config'
 import type { Photo } from '@/types/photo'
@@ -577,6 +592,8 @@ const cleaningUp = ref(false)
 const autoScanConfig = ref<AutoScanConfig>(configApi.getDefaultAutoScanConfig())
 const selectedPhotos = ref<Set<number>>(new Set())
 const excludingPhotos = ref(false)
+const showBatchLocationPicker = ref(false)
+const batchLocationLoading = ref(false)
 
 const toggleSelectPhoto = (id: number) => {
   const next = new Set(selectedPhotos.value)
@@ -631,6 +648,31 @@ const handleRestoreSelected = async () => {
     excludingPhotos.value = false
   }
 }
+
+const handleBatchLocationConfirm = async (coords: { latitude: number; longitude: number }) => {
+  const ids = Array.from(selectedPhotos.value)
+  batchLocationLoading.value = true
+  let success = 0
+  let failed = 0
+  for (const id of ids) {
+    try {
+      await photoApi.setLocation(id, coords)
+      success++
+    } catch {
+      failed++
+    }
+  }
+  batchLocationLoading.value = false
+  if (failed === 0) {
+    ElMessage.success(`已为 ${success} 张照片设置位置`)
+  } else {
+    ElMessage.warning(`成功 ${success} 张，失败 ${failed} 张`)
+  }
+  selectedPhotos.value = new Set()
+  loadPhotos()
+  loadPathDerivedStatus()
+}
+
 const excludedCount = ref(0)
 const categories = ref<string[]>([])
 const tags = ref<string[]>([])
