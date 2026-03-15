@@ -334,8 +334,8 @@ func (c *Config) Validate() error {
 	}
 
 	// 验证数据库配置
-	if c.Database.Type != "sqlite" && c.Database.Type != "postgres" {
-		return fmt.Errorf("invalid database type: %s", c.Database.Type)
+	if c.Database.Type != "sqlite" {
+		return fmt.Errorf("unsupported database type: %s (only sqlite is supported)", c.Database.Type)
 	}
 
 	// 验证照片目录

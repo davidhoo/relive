@@ -128,21 +128,6 @@ func GetImageSize(filePath string) (width, height int, err error) {
 	return config.Width, config.Height, nil
 }
 
-// max 返回两个整数中的较大值
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-// min 返回两个整数中的较小值
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
 
 // init 注册 HEIC 解码器
 func init() {

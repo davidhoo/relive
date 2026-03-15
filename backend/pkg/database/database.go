@@ -71,10 +71,6 @@ func Init(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		sqlDB.SetMaxIdleConns(2)
 		sqlDB.SetConnMaxLifetime(time.Hour)
 
-	case "postgres":
-		// TODO: PostgreSQL 支持（后续添加)
-		return nil, fmt.Errorf("postgres not implemented yet")
-
 	default:
 		return nil, fmt.Errorf("unsupported database type: %s", cfg.Type)
 	}

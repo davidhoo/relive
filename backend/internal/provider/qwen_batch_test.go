@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/davidhoo/relive/pkg/config"
@@ -34,16 +35,16 @@ func TestQwenProvider_buildBatchPrompt(t *testing.T) {
 	}
 
 	// Check prompt contains expected elements
-	if !contains(prompt, "5 张照片") {
+	if !strings.Contains(prompt, "5 张照片") {
 		t.Error("Prompt should mention photo count")
 	}
-	if !contains(prompt, "JSON 数组") {
+	if !strings.Contains(prompt, "JSON 数组") {
 		t.Error("Prompt should mention JSON array")
 	}
-	if !contains(prompt, "description") {
+	if !strings.Contains(prompt, "description") {
 		t.Error("Prompt should contain description field")
 	}
-	if !contains(prompt, "memory_score") {
+	if !strings.Contains(prompt, "memory_score") {
 		t.Error("Prompt should contain memory_score field")
 	}
 }
@@ -200,20 +201,6 @@ func TestQwenProvider_parseBatchResponse_MismatchCount(t *testing.T) {
 	if len(results) != 3 {
 		t.Errorf("Expected 3 results (including padded), got %d", len(results))
 	}
-}
-
-// Helper function
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 // Test batch request building

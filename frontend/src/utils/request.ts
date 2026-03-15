@@ -41,13 +41,13 @@ http.interceptors.response.use(
         const userStore = useUserStore()
         userStore.clearUserState()
         ElMessage.error('登录已过期，请重新登录')
-        window.location.href = '/login'
+        import('@/router').then(({ default: router }) => router.push('/login'))
         return Promise.reject(error)
       }
 
       // 处理 403 首次登录需要修改密码
       if (status === 403 && data?.error?.code === 'FIRST_LOGIN_REQUIRED') {
-        window.location.href = '/change-Password'
+        import('@/router').then(({ default: router }) => router.push('/change-Password'))
         return Promise.reject(error)
       }
 
