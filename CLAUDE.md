@@ -298,10 +298,13 @@ Docker 构建时通过 build-args 注入额外信息：
 
 ### Photo Tags Optimization (2026-03-15)
 - 标签存储从 `photos.tags` 逗号分隔文本迁移到独立 `photo_tags` 表（双写保留回滚安全）
-- `GetTags()` 从全表扫描 + 内存去重改为 `SELECT DISTINCT tag FROM photo_tags`
+- `GetTags()` 改为热门标签 + 搜索模式：`GET /photos/tags?q=&limit=15` 返回 `TagsResponse{items: TagWithCount[], total}`
+- 标签按照片数量降序排列，支持关键词搜索（LIKE），默认返回 Top 15，上限 50
 - 标签筛选从 `LIKE '%tag%'` 改为精确子查询匹配
 - 前端 `tags` 类型从 `string` 改为 `string[]`，后端 `Photo.TagList` 字段批量填充
+- 前端标签区域：热门标签带数量、搜索框（300ms debounce）、已选非热门标签单独高亮、末尾显示总标签数
 - 启动自动迁移：从 `photos.tags` 批量拆分写入 `photo_tags`（手动分页，避免 GORM FindInBatches + SQLite 反引号不兼容）
+- 注意：GORM 自定义结构体查询需用 `db.Table("photo_tags").Scan()` 而非 `db.Model(&PhotoTag{}).Find()`
 
 ### v1.1.0 (2026-03-14)
 - 城市数据内嵌二进制：离线 geocoding 开箱即用，启动自动导入，无需手动下载外部数据
