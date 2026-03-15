@@ -2,9 +2,9 @@
   <div class="login-page">
     <div class="login-container">
       <div class="login-header">
-        <el-icon class="logo-icon"><PictureFilled /></el-icon>
+        <img src="/logo-192.png" alt="Relive" class="logo-img" />
         <h1 class="title">Relive</h1>
-        <p class="subtitle">智能照片记忆框</p>
+        <p class="subtitle">让照片重新活过来</p>
       </div>
 
       <el-card class="login-card" shadow="never">
@@ -62,7 +62,7 @@
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { User, Lock, PictureFilled } from '@element-plus/icons-vue'
+import { User, Lock } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 
 const router = useRouter()
@@ -131,8 +131,9 @@ const handleLogin = async () => {
   color: white;
 }
 
-.logo-icon {
-  font-size: 64px;
+.logo-img {
+  width: 80px;
+  height: 80px;
   margin-bottom: 16px;
 }
 
