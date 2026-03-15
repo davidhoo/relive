@@ -2,6 +2,14 @@
 #include "log.h"
 #include <time.h>
 #include <sys/time.h>
+#include <stdlib.h>
+
+// 确保时区已设置（深度睡眠后环境变量丢失）
+static void ensureTimezone() {
+    // POSIX TZ: "CST-8" 表示东八区（符号相反于直觉）
+    setenv("TZ", "CST-8", 1);
+    tzset();
+}
 
 // 从 __DATE__ 提取编译年份（格式 "Mar 12 2026"）
 static int getCompileYear() {
@@ -83,6 +91,9 @@ bool ScheduleManager::isTimeValid() {
 void ScheduleManager::syncTimeFromServer(long serverTimestamp) {
     if (serverTimestamp <= 0) return;
 
+    // 深度睡眠后 TZ 环境变量丢失，必须在 settimeofday 前重新设置
+    ensureTimezone();
+
     struct timeval tv;
     tv.tv_sec = serverTimestamp;
     tv.tv_usec = 0;
@@ -97,6 +108,8 @@ void ScheduleManager::syncTimeFromServer(long serverTimestamp) {
 
 bool ScheduleManager::syncNTP() {
     LOG_INFO("[Schedule] NTP 同步...");
+    // 先确保时区，再启动 NTP（configTime 内部也会设时区，但显式设置更可靠）
+    ensureTimezone();
     configTime(GMT_OFFSET_SEC, DST_OFFSET_SEC, NTP_SERVER);
 
     struct tm timeinfo;
@@ -158,6 +171,7 @@ uint64_t ScheduleManager::calculateSleepDurationMs() {
     }
 
     struct tm timeinfo;
+    ensureTimezone();
     getLocalTime(&timeinfo, 0);
 
     time_t nextEpoch = getNextScheduleEpoch(&timeinfo);
