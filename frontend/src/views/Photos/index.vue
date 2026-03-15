@@ -328,32 +328,19 @@
             <span>标签</span>
           </div>
           <div class="filter-tags-area">
-            <!-- 已选标签（不在当前显示列表时单独展示） -->
-            <el-tag
-              v-if="filterTag && !displayedTagList.some(t => t.tag === filterTag)"
-              type="primary"
-              class="filter-tag"
-              closable
-              @close="handleTagClick(filterTag)"
-              @click="handleTagClick(filterTag)"
-            >
-              {{ filterTag }}
-            </el-tag>
-            <!-- 标签搜索输入框 -->
-            <el-input
-              v-model="tagSearchQuery"
-              placeholder="搜索标签..."
-              :prefix-icon="Search"
-              size="small"
-              clearable
-              class="tag-search-input"
-              @input="handleTagSearch"
-              @clear="tagSearchResults = []"
-            />
-            <!-- 标签列表 -->
             <div class="filter-tags">
+              <!-- 已选标签（URL 恢复，不在热门列表中时单独展示） -->
               <el-tag
-                v-for="item in displayedTagList"
+                v-if="filterTag && !hotTags.some(t => t.tag === filterTag) && (!tempSelectedTag || tempSelectedTag.tag !== filterTag)"
+                type="primary"
+                class="filter-tag"
+                @click="handleTagClick(filterTag)"
+              >
+                {{ filterTag }}
+              </el-tag>
+              <!-- 热门标签列表 -->
+              <el-tag
+                v-for="item in hotTags"
                 :key="item.tag"
                 :type="filterTag === item.tag ? 'primary' : 'info'"
                 class="filter-tag"
@@ -361,11 +348,33 @@
               >
                 {{ item.tag }}<span class="tag-count">({{ item.count }})</span>
               </el-tag>
-              <span v-if="tagSearchQuery.trim() && displayedTagList.length === 0" class="tag-no-result">无匹配标签</span>
-              <span v-if="!tagSearchQuery.trim() && totalTagCount > 0" class="tag-total">共 {{ totalTagCount }} 个标签</span>
+              <!-- 临时选中的非热门标签（末尾显示） -->
+              <el-tag
+                v-if="tempSelectedTag && filterTag === tempSelectedTag.tag"
+                type="primary"
+                class="filter-tag"
+                @click="handleTagClick(tempSelectedTag.tag)"
+              >
+                {{ tempSelectedTag.tag }}<span class="tag-count">({{ tempSelectedTag.count }})</span>
+              </el-tag>
+              <span v-if="totalTagCount > 0" class="tag-cloud-link" @click="openTagCloud">查看所有标签（{{ totalTagCount }}）</span>
             </div>
           </div>
         </div>
+
+        <!-- 标签云弹窗 -->
+        <el-dialog v-model="tagCloudVisible" title="所有标签" width="680px" top="8vh">
+          <el-input v-model="tagCloudSearch" placeholder="搜索标签..." :prefix-icon="Search"
+                    clearable @input="handleTagCloudSearch" />
+          <div class="tag-cloud" v-loading="tagCloudLoading">
+            <el-tag v-for="item in tagCloudList" :key="item.tag"
+                    :type="filterTag === item.tag ? 'primary' : 'info'"
+                    class="tag-cloud-item" @click="handleTagCloudSelect(item.tag)">
+              {{ item.tag }}<span class="tag-count">({{ item.count }})</span>
+            </el-tag>
+            <el-empty v-if="!tagCloudLoading && tagCloudList.length === 0" description="无匹配标签" />
+          </div>
+        </el-dialog>
 
         <!-- 统计信息 -->
         <div class="photos-stats" v-if="filterAnalyzed">
@@ -563,7 +572,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted } from 'vue'
 import { CircleCheck, CircleClose, Clock, Close, Collection, Delete, Files, Filter, Folder, FolderOpened, FullScreen, Loading, Location, MagicStick, Picture, PictureFilled, Plus, PriceTag, QuestionFilled, Refresh, RefreshLeft, Search, Select, Star, SwitchButton, Timer } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -691,9 +700,12 @@ const categories = ref<string[]>([])
 const hotTags = ref<TagInfo[]>([])
 const totalTagCount = ref(0)
 const tagsLoaded = ref(false)
-const tagSearchQuery = ref('')
-const tagSearchResults = ref<TagInfo[]>([])
-let tagSearchTimer: ReturnType<typeof setTimeout> | null = null
+const tempSelectedTag = ref<TagInfo | null>(null)
+const tagCloudVisible = ref(false)
+const tagCloudSearch = ref('')
+const tagCloudList = ref<TagInfo[]>([])
+const tagCloudLoading = ref(false)
+let tagCloudSearchTimer: ReturnType<typeof setTimeout> | null = null
 
 // 存储每个路径的照片数量（从数据库获取）
 const pathPhotoCounts = ref<Record<string, number>>({})
@@ -1160,28 +1172,61 @@ const loadCategoriesAndTags = async () => {
   }
 }
 
-// 搜索标签（debounce 300ms）
-const handleTagSearch = (query: string) => {
-  if (tagSearchTimer) clearTimeout(tagSearchTimer)
-  tagSearchQuery.value = query
+// 打开标签云弹窗
+const openTagCloud = async () => {
+  tagCloudVisible.value = true
+  tagCloudSearch.value = ''
+  tagCloudLoading.value = true
+  try {
+    const res = await photoApi.getTags({ limit: 100 })
+    tagCloudList.value = res.data?.data?.items || []
+  } catch {
+    tagCloudList.value = []
+  } finally {
+    tagCloudLoading.value = false
+  }
+}
+
+// 标签云搜索（debounce 300ms）
+const handleTagCloudSearch = (query: string) => {
+  if (tagCloudSearchTimer) clearTimeout(tagCloudSearchTimer)
   if (!query.trim()) {
-    tagSearchResults.value = []
+    // 清空搜索 → 重新加载热门
+    tagCloudLoading.value = true
+    photoApi.getTags({ limit: 100 }).then(res => {
+      tagCloudList.value = res.data?.data?.items || []
+    }).catch(() => {
+      tagCloudList.value = []
+    }).finally(() => {
+      tagCloudLoading.value = false
+    })
     return
   }
-  tagSearchTimer = setTimeout(async () => {
+  tagCloudSearchTimer = setTimeout(async () => {
+    tagCloudLoading.value = true
     try {
-      const res = await photoApi.getTags({ q: query.trim(), limit: 20 })
-      tagSearchResults.value = res.data?.data?.items || []
+      const res = await photoApi.getTags({ q: query.trim(), limit: 100 })
+      tagCloudList.value = res.data?.data?.items || []
     } catch {
-      tagSearchResults.value = []
+      tagCloudList.value = []
+    } finally {
+      tagCloudLoading.value = false
     }
   }, 300)
 }
 
-// 当前显示的标签列表（搜索时显示搜索结果，否则显示热门标签）
-const displayedTagList = computed<TagInfo[]>(() => {
-  return tagSearchQuery.value.trim() ? tagSearchResults.value : hotTags.value
-})
+// 从标签云选中标签
+const handleTagCloudSelect = (tag: string) => {
+  tagCloudVisible.value = false
+  // 如果不在 hotTags 中，临时添加
+  if (!hotTags.value.some(t => t.tag === tag)) {
+    const item = tagCloudList.value.find(t => t.tag === tag)
+    tempSelectedTag.value = item || { tag, count: 0 }
+  } else {
+    tempSelectedTag.value = null
+  }
+  handleTagClick(tag)
+}
 
 // 点击分类筛选
 const handleCategoryClick = (value: string) => {
@@ -1200,6 +1245,7 @@ const handleCategoryClick = (value: string) => {
 const handleTagClick = (value: string) => {
   if (filterTag.value === value) {
     filterTag.value = ''
+    tempSelectedTag.value = null
   } else {
     filterTag.value = value
   }
@@ -2341,7 +2387,7 @@ defineExpose({
   align-items: flex-start;
   gap: var(--spacing-md);
   margin-bottom: var(--spacing-md);
-  padding: var(--spacing-md) 0;
+  padding: 0 0 var(--spacing-md);
   border-bottom: 1px solid var(--color-border);
 }
 
@@ -2353,7 +2399,7 @@ defineExpose({
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
   white-space: nowrap;
-  padding-top: 6px;
+  padding-top: 0;
 }
 
 .filter-tags {
@@ -2381,27 +2427,33 @@ defineExpose({
   flex: 1;
 }
 
-.tag-search-input {
-  max-width: 220px;
-}
-
 .tag-count {
   margin-left: 2px;
   opacity: 0.7;
   font-size: 0.85em;
 }
 
-.tag-no-result {
-  color: var(--color-text-secondary);
+.tag-cloud-link {
+  color: var(--el-color-primary);
   font-size: var(--font-size-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  padding: 4px 0;
+  &:hover { text-decoration: underline; }
+}
+
+.tag-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  max-height: 60vh;
+  overflow-y: auto;
   padding: 4px 0;
 }
 
-.tag-total {
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  white-space: nowrap;
-  padding: 4px 0;
+.tag-cloud-item {
+  cursor: pointer;
 }
 
 .recycle-bin-row {
