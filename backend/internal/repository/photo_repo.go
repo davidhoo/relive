@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
+	"github.com/davidhoo/relive/pkg/database"
 	"gorm.io/gorm"
 )
 
@@ -218,13 +219,19 @@ func (r *photoRepository) List(page, pageSize int, analyzed *bool, hasThumbnail 
 	if location != "" {
 		query = query.Where("location LIKE ?", "%"+location+"%")
 	}
-	// 搜索关键词（搜索路径、文件名、分类、标签、描述、标题、位置）
+	// 搜索关键词
 	if search != "" {
-		searchPattern := "%" + search + "%"
-		query = query.Where(
-			"file_path LIKE ? OR file_name LIKE ? OR main_category LIKE ? OR tags LIKE ? OR description LIKE ? OR caption LIKE ? OR location LIKE ?",
-			searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern,
-		)
+		if database.FTS5Available {
+			ftsQuery := buildFTSQuery(search)
+			query = query.Where("id IN (SELECT rowid FROM photos_fts WHERE photos_fts MATCH ?)", ftsQuery)
+		} else {
+			// 降级：原 7 字段 LIKE
+			searchPattern := "%" + search + "%"
+			query = query.Where(
+				"file_path LIKE ? OR file_name LIKE ? OR main_category LIKE ? OR tags LIKE ? OR description LIKE ? OR caption LIKE ? OR location LIKE ?",
+				searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern,
+			)
+		}
 	}
 	// 分类精确筛选
 	if category != "" {
@@ -765,4 +772,20 @@ func (r *photoRepository) GetDerivedStatusByPathPrefixes(prefixes []string) (map
 	}
 
 	return result, nil
+}
+
+// buildFTSQuery 构建 FTS5 MATCH 查询字符串
+// 按空格分词，每个词用双引号包裹防止 FTS5 语法冲突，词间隐式 AND
+func buildFTSQuery(search string) string {
+	words := strings.Fields(search)
+	if len(words) == 0 {
+		return `""`
+	}
+	quoted := make([]string, len(words))
+	for i, w := range words {
+		// 转义双引号
+		w = strings.ReplaceAll(w, `"`, `""`)
+		quoted[i] = `"` + w + `"`
+	}
+	return strings.Join(quoted, " ")
 }

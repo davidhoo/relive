@@ -287,7 +287,7 @@
         <div class="search-section">
           <el-input
             v-model="searchQuery"
-            placeholder="搜索照片 (路径、设备ID、标签...)"
+            placeholder="搜索照片（描述、标题、位置、文件名…）"
             clearable
             @clear="handleSearch"
             @keyup.enter="handleSearch"
@@ -1096,9 +1096,6 @@ const loadPhotos = async () => {
 
 // 搜索处理
 const handleSearch = () => {
-  // 搜索时清除分类和标签筛选
-  filterCategory.value = ''
-  filterTag.value = ''
   currentPage.value = 1
   loadPhotos()
 }
@@ -1235,8 +1232,6 @@ const handleCategoryClick = (value: string) => {
   } else {
     filterCategory.value = value
   }
-  // 分类和标签互斥
-  filterTag.value = ''
   currentPage.value = 1
   loadPhotos()
 }
@@ -1249,8 +1244,6 @@ const handleTagClick = (value: string) => {
   } else {
     filterTag.value = value
   }
-  // 标签和分类互斥
-  filterCategory.value = ''
   currentPage.value = 1
   loadPhotos()
 }
@@ -1259,8 +1252,6 @@ const handleTagClick = (value: string) => {
 const handlePathClick = (row: ScanPathConfig) => {
   // 退出回收站模式
   filterStatus.value = ''
-  filterCategory.value = ''
-  filterTag.value = ''
   if (searchQuery.value === row.path) {
     searchQuery.value = ''
   } else {

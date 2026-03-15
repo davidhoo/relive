@@ -17,6 +17,9 @@ import (
 // 全局数据库连接
 var globalDB *gorm.DB
 
+// FTS5Available indicates whether FTS5 full-text search is available
+var FTS5Available bool
+
 // Init 初始化数据库
 func Init(cfg config.DatabaseConfig) (*gorm.DB, error) {
 	var db *gorm.DB
@@ -140,6 +143,11 @@ func AutoMigrate(db *gorm.DB) error {
 		return err
 	}
 
+	if err := migrateFTS5Table(db); err != nil {
+		// FTS5 迁移失败不阻塞启动，降级为 LIKE 搜索
+		log.Printf("[database] warning: FTS5 migration failed: %v, falling back to LIKE search", err)
+	}
+
 	return nil
 }
 
@@ -222,6 +230,77 @@ func migratePhotoTagsTable(db *gorm.DB) error {
 	}
 
 	log.Printf("[database] migrated %d photo tag records", total)
+
+	// 标记已迁移
+	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
+	return nil
+}
+
+// migrateFTS5Table 创建 FTS5 全文搜索虚拟表和同步触发器
+func migrateFTS5Table(db *gorm.DB) error {
+	const migrationKey = "migration.photos_fts5_v1"
+
+	// 检查是否已迁移
+	var cfg model.AppConfig
+	if err := db.Where("key = ?", migrationKey).First(&cfg).Error; err == nil {
+		FTS5Available = true
+		return nil
+	}
+
+	log.Printf("[database] creating FTS5 full-text search index...")
+
+	// 创建 FTS5 虚拟表（external content 模式）
+	fts5SQL := `CREATE VIRTUAL TABLE IF NOT EXISTS photos_fts USING fts5(
+		file_name,
+		description,
+		caption,
+		location,
+		content='photos',
+		content_rowid='id',
+		tokenize='unicode61'
+	)`
+	if err := db.Exec(fts5SQL).Error; err != nil {
+		log.Printf("[database] FTS5 not available (SQLite compiled without FTS5 support): %v", err)
+		return nil // 不返回错误，降级为 LIKE
+	}
+
+	// 全量索引现有数据
+	indexSQL := `INSERT INTO photos_fts(rowid, file_name, description, caption, location)
+		SELECT id, COALESCE(file_name,''), COALESCE(description,''), COALESCE(caption,''), COALESCE(location,'')
+		FROM photos WHERE deleted_at IS NULL`
+	if err := db.Exec(indexSQL).Error; err != nil {
+		return fmt.Errorf("FTS5 initial index: %w", err)
+	}
+
+	// 创建同步触发器
+	triggers := []string{
+		// INSERT 触发器
+		`CREATE TRIGGER IF NOT EXISTS photos_fts_insert AFTER INSERT ON photos BEGIN
+			INSERT INTO photos_fts(rowid, file_name, description, caption, location)
+			VALUES (new.id, COALESCE(new.file_name,''), COALESCE(new.description,''), COALESCE(new.caption,''), COALESCE(new.location,''));
+		END`,
+		// UPDATE 触发器（FTS5 external content: 先删旧行再插新行）
+		`CREATE TRIGGER IF NOT EXISTS photos_fts_update AFTER UPDATE ON photos BEGIN
+			INSERT INTO photos_fts(photos_fts, rowid, file_name, description, caption, location)
+			VALUES ('delete', old.id, COALESCE(old.file_name,''), COALESCE(old.description,''), COALESCE(old.caption,''), COALESCE(old.location,''));
+			INSERT INTO photos_fts(rowid, file_name, description, caption, location)
+			VALUES (new.id, COALESCE(new.file_name,''), COALESCE(new.description,''), COALESCE(new.caption,''), COALESCE(new.location,''));
+		END`,
+		// DELETE 触发器
+		`CREATE TRIGGER IF NOT EXISTS photos_fts_delete AFTER DELETE ON photos BEGIN
+			INSERT INTO photos_fts(photos_fts, rowid, file_name, description, caption, location)
+			VALUES ('delete', old.id, COALESCE(old.file_name,''), COALESCE(old.description,''), COALESCE(old.caption,''), COALESCE(old.location,''));
+		END`,
+	}
+
+	for _, trigger := range triggers {
+		if err := db.Exec(trigger).Error; err != nil {
+			return fmt.Errorf("FTS5 trigger creation: %w", err)
+		}
+	}
+
+	FTS5Available = true
+	log.Printf("[database] FTS5 migration completed")
 
 	// 标记已迁移
 	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
