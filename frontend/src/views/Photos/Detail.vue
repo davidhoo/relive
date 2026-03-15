@@ -198,10 +198,10 @@
             </div>
 
             <!-- 标签 -->
-            <div class="detail-section" v-if="photo.tags">
+            <div class="detail-section" v-if="photo.tags && photo.tags.length > 0">
               <h4>标签</h4>
               <el-tag
-                v-for="tag in photo.tags.split(',')"
+                v-for="tag in photo.tags"
                 :key="tag"
                 class="clickable-tag tag-chip"
                 @click="handleTagClick(tag)"

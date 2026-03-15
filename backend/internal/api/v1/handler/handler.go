@@ -33,7 +33,7 @@ func NewHandlers(db *gorm.DB, services *service.Services, repos *repository.Repo
 		Geocode:   NewGeocodeHandler(services.GeocodeTask),
 		Display:   NewDisplayHandler(services.Display, services.Device, cfg),
 		Device:    deviceHandler,
-		Config:    NewConfigHandler(services.Config, services.AI, services.AnalysisRuntime, services.Photo, services.Prompt, services.Geocode, repos.Photo, cfg, db),
+		Config:    NewConfigHandler(services.Config, services.AI, services.AnalysisRuntime, services.Photo, services.Prompt, services.Geocode, repos.Photo, repos.PhotoTag, cfg, db),
 		Auth:      NewAuthHandler(services.Auth),
 		Analyzer:  NewAnalyzerHandler(services.Photo, services.Analysis, services.AnalysisRuntime),
 	}

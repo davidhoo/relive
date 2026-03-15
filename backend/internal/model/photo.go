@@ -71,8 +71,9 @@ type Photo struct {
 	ScoreReason           string     `gorm:"type:varchar(200)" json:"score_reason"`                  // 评分理由
 
 	// 分类标签
-	MainCategory string `gorm:"type:varchar(50);index:idx_main_category" json:"main_category"` // 主分类
-	Tags         string `gorm:"type:text" json:"tags"`                                         // 标签（JSON数组）
+	MainCategory string   `gorm:"type:varchar(50);index:idx_main_category" json:"main_category"` // 主分类
+	Tags         string   `gorm:"type:text" json:"-"`                                            // 标签（逗号分隔，保留双写）
+	TagList      []string `gorm:"-" json:"tags"`                                                 // 标签列表（仅 JSON 输出）
 
 	// 关联
 	DisplayRecords []DisplayRecord `gorm:"foreignKey:PhotoID" json:"-"` // 展示记录

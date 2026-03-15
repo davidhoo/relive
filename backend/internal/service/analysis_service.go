@@ -34,18 +34,20 @@ type AnalysisService interface {
 
 // analysisService 分析服务实现
 type analysisService struct {
-	db          *gorm.DB
-	photoRepo   repository.PhotoRepository
-	cfg         *config.Config
-	resultQueue *ResultQueue
+	db           *gorm.DB
+	photoRepo    repository.PhotoRepository
+	photoTagRepo repository.PhotoTagRepository
+	cfg          *config.Config
+	resultQueue  *ResultQueue
 }
 
 // NewAnalysisService 创建分析服务
-func NewAnalysisService(db *gorm.DB, photoRepo repository.PhotoRepository, cfg *config.Config) AnalysisService {
+func NewAnalysisService(db *gorm.DB, photoRepo repository.PhotoRepository, photoTagRepo repository.PhotoTagRepository, cfg *config.Config) AnalysisService {
 	return &analysisService{
-		db:        db,
-		photoRepo: photoRepo,
-		cfg:       cfg,
+		db:           db,
+		photoRepo:    photoRepo,
+		photoTagRepo: photoTagRepo,
+		cfg:          cfg,
 	}
 }
 
@@ -387,6 +389,13 @@ func (s *analysisService) batchUpdatePhotos(tx *gorm.DB, results []struct {
 			"analysis_retry_count":     0,
 		}).Error; err != nil {
 			return fmt.Errorf("update photo %d: %w", vr.result.PhotoID, err)
+		}
+
+		// 双写 photo_tags 表
+		if s.photoTagRepo != nil {
+			if err := s.photoTagRepo.SyncTags(vr.result.PhotoID, vr.result.Tags); err != nil {
+				logger.Warnf("Failed to sync tags for photo %d: %v", vr.result.PhotoID, err)
+			}
 		}
 	}
 

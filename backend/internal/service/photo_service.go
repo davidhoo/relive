@@ -73,6 +73,7 @@ type PhotoService interface {
 // photoService 照片服务实现
 type photoService struct {
 	repo               repository.PhotoRepository
+	photoTagRepo       repository.PhotoTagRepository
 	scanJobRepo        repository.ScanJobRepository
 	config             *config.Config
 	configService      ConfigService
@@ -88,12 +89,13 @@ type photoService struct {
 }
 
 // NewPhotoService 创建照片服务
-func NewPhotoService(repo repository.PhotoRepository, scanJobRepo repository.ScanJobRepository, cfg *config.Config, configService ConfigService, geocodeService GeocodeService, thumbnailService ThumbnailService, geocodeTaskService GeocodeTaskService) PhotoService {
+func NewPhotoService(repo repository.PhotoRepository, photoTagRepo repository.PhotoTagRepository, scanJobRepo repository.ScanJobRepository, cfg *config.Config, configService ConfigService, geocodeService GeocodeService, thumbnailService ThumbnailService, geocodeTaskService GeocodeTaskService) PhotoService {
 	// 初始化缩略图生成器（1024px，兼顾展示和 AI 理解）
 	thumbnailGenerator := util.NewThumbnailGenerator(1024, 1024, 90, cfg.Photos.ThumbnailPath)
 
 	service := &photoService{
 		repo:               repo,
+		photoTagRepo:       photoTagRepo,
 		scanJobRepo:        scanJobRepo,
 		config:             cfg,
 		configService:      configService,
@@ -623,7 +625,12 @@ func (s *photoService) isSupportedFormat(filePath string) bool {
 
 // GetPhotoByID 根据 ID 获取照片
 func (s *photoService) GetPhotoByID(id uint) (*model.Photo, error) {
-	return s.repo.GetByID(id)
+	photo, err := s.repo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	s.enrichPhotoTags([]*model.Photo{photo})
+	return photo, nil
 }
 
 // GetPhotos 获取照片列表
@@ -648,7 +655,12 @@ func (s *photoService) GetPhotos(req *model.GetPhotosRequest) ([]*model.Photo, i
 	}
 
 	// 调用 Repository
-	return s.repo.List(req.Page, req.PageSize, req.Analyzed, req.HasThumbnail, req.HasGPS, req.Location, req.Search, req.Category, req.Tag, req.SortBy, req.SortDesc, enabledPaths, req.Status)
+	photos, total, err := s.repo.List(req.Page, req.PageSize, req.Analyzed, req.HasThumbnail, req.HasGPS, req.Location, req.Search, req.Category, req.Tag, req.SortBy, req.SortDesc, enabledPaths, req.Status)
+	if err != nil {
+		return nil, 0, err
+	}
+	s.enrichPhotoTags(photos)
+	return photos, total, nil
 }
 
 // CountAll 统计照片总数
@@ -734,6 +746,27 @@ func (s *photoService) GetCategories() ([]string, error) {
 // GetTags 获取所有标签
 func (s *photoService) GetTags() ([]string, error) {
 	return s.repo.GetTags()
+}
+
+// enrichPhotoTags 从 photo_tags 表批量加载标签填充到 TagList 字段
+func (s *photoService) enrichPhotoTags(photos []*model.Photo) {
+	if len(photos) == 0 || s.photoTagRepo == nil {
+		return
+	}
+	ids := make([]uint, 0, len(photos))
+	for _, p := range photos {
+		ids = append(ids, p.ID)
+	}
+	tagMap, err := s.photoTagRepo.GetTagsByPhotoIDs(ids)
+	if err != nil {
+		logger.Warnf("Failed to load photo tags: %v", err)
+		return
+	}
+	for _, p := range photos {
+		if tags, ok := tagMap[p.ID]; ok {
+			p.TagList = tags
+		}
+	}
 }
 
 // DeletePhotosByPathPrefix 根据路径前缀删除照片

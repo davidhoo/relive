@@ -102,6 +102,7 @@ func GetDB() *gorm.DB {
 func AutoMigrate(db *gorm.DB) error {
 	models := []interface{}{
 		&model.Photo{},
+		&model.PhotoTag{},
 		&model.ScanJob{},
 		&model.ThumbnailJob{},
 		&model.GeocodeJob{},
@@ -131,6 +132,10 @@ func AutoMigrate(db *gorm.DB) error {
 	}
 
 	if err := cleanupObsoleteDeviceColumns(db); err != nil {
+		return err
+	}
+
+	if err := migratePhotoTagsTable(db); err != nil {
 		return err
 	}
 
@@ -166,5 +171,69 @@ func cleanupObsoleteDeviceColumns(db *gorm.DB) error {
 			}
 		}
 	}
+	return nil
+}
+
+// migratePhotoTagsTable 从 photos.tags 列迁移数据到 photo_tags 表
+func migratePhotoTagsTable(db *gorm.DB) error {
+	const migrationKey = "migration.photo_tags_v1"
+
+	// 检查是否已迁移
+	var cfg model.AppConfig
+	if err := db.Where("key = ?", migrationKey).First(&cfg).Error; err == nil {
+		return nil // 已迁移
+	}
+
+	// 检查 photo_tags 表是否已有数据
+	var count int64
+	if err := db.Model(&model.PhotoTag{}).Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		// 表已有数据，标记为已迁移
+		db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
+		return nil
+	}
+
+	// 批量迁移：从 photos.tags 拆分写入 photo_tags
+	log.Printf("[database] migrating photo tags to photo_tags table...")
+
+	const batchSize = 500
+	var total int64
+	var lastID uint
+
+	for {
+		var photos []model.Photo
+		err := db.Select("id, tags").
+			Where("id > ? AND tags IS NOT NULL AND tags != ''", lastID).
+			Order("id ASC").
+			Limit(batchSize).
+			Find(&photos).Error
+		if err != nil {
+			return err
+		}
+		if len(photos) == 0 {
+			break
+		}
+
+		var records []model.PhotoTag
+		for _, p := range photos {
+			for _, tag := range model.SplitTags(p.Tags) {
+				records = append(records, model.PhotoTag{PhotoID: p.ID, Tag: tag})
+			}
+			lastID = p.ID
+		}
+		if len(records) > 0 {
+			if err := db.Create(&records).Error; err != nil {
+				return err
+			}
+			total += int64(len(records))
+		}
+	}
+
+	log.Printf("[database] migrated %d photo tag records", total)
+
+	// 标记已迁移
+	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
 	return nil
 }

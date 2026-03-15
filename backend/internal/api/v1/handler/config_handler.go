@@ -28,12 +28,13 @@ type ConfigHandler struct {
 	geocodeService service.GeocodeService
 	cfg            *config.Config
 	photoRepo      repository.PhotoRepository
+	photoTagRepo   repository.PhotoTagRepository
 	aiHandler      *AIHandler // 用于更新 AIHandler 的 aiService
 	db             *gorm.DB
 }
 
 // NewConfigHandler 创建配置处理器
-func NewConfigHandler(service service.ConfigService, aiService service.AIService, runtimeService service.AnalysisRuntimeService, photoService service.PhotoService, promptService service.PromptService, geocodeService service.GeocodeService, photoRepo repository.PhotoRepository, cfg *config.Config, db *gorm.DB) *ConfigHandler {
+func NewConfigHandler(service service.ConfigService, aiService service.AIService, runtimeService service.AnalysisRuntimeService, photoService service.PhotoService, promptService service.PromptService, geocodeService service.GeocodeService, photoRepo repository.PhotoRepository, photoTagRepo repository.PhotoTagRepository, cfg *config.Config, db *gorm.DB) *ConfigHandler {
 	return &ConfigHandler{
 		service:        service,
 		aiService:      aiService,
@@ -42,6 +43,7 @@ func NewConfigHandler(service service.ConfigService, aiService service.AIService
 		promptService:  promptService,
 		geocodeService: geocodeService,
 		photoRepo:      photoRepo,
+		photoTagRepo:   photoTagRepo,
 		cfg:            cfg,
 		db:             db,
 	}
@@ -170,7 +172,7 @@ func (h *ConfigHandler) SetConfig(c *gin.Context) {
 		} else {
 			// AI service 为 nil，尝试重新初始化
 			logger.Info("AI service not initialized, trying to initialize...")
-			newAIService, err := service.NewAIService(h.photoRepo, h.cfg, h.service, h.runtimeService)
+			newAIService, err := service.NewAIService(h.photoRepo, h.photoTagRepo, h.cfg, h.service, h.runtimeService)
 			if err != nil {
 				logger.Warnf("Failed to initialize AI service after config change: %v", err)
 				c.JSON(http.StatusOK, model.Response{
@@ -368,7 +370,7 @@ func (h *ConfigHandler) SetBatchConfigs(c *gin.Context) {
 		} else {
 			// AI service 为 nil，尝试重新初始化
 			logger.Info("AI service not initialized, trying to initialize...")
-			newAIService, err := service.NewAIService(h.photoRepo, h.cfg, h.service, h.runtimeService)
+			newAIService, err := service.NewAIService(h.photoRepo, h.photoTagRepo, h.cfg, h.service, h.runtimeService)
 			if err != nil {
 				logger.Warnf("Failed to initialize AI service after config change: %v", err)
 				c.JSON(http.StatusOK, model.Response{

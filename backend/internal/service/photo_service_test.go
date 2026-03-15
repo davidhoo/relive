@@ -45,7 +45,7 @@ func newAutoScanTestService(t *testing.T, rootPath string) (*photoService, Confi
 	cfg.Photos.SupportedFormats = []string{".jpg", ".jpeg", ".png", ".heic"}
 	cfg.Photos.ThumbnailPath = filepath.Join(rootPath, ".thumbnails")
 	cfg.Performance.MaxScanWorkers = 1
-	service := NewPhotoService(photoRepo, scanJobRepo, cfg, configService, nil, nil, nil).(*photoService)
+	service := NewPhotoService(photoRepo, nil, scanJobRepo, cfg, configService, nil, nil, nil).(*photoService)
 	return service, configService
 }
 
@@ -339,13 +339,13 @@ func ptrTime(value time.Time) *time.Time {
 
 // --- Pure-logic tests (no filesystem) ---
 
-func newPhotoServicePure(t *testing.T) (PhotoService, repository.PhotoRepository) {
+func newPhotoServicePure(t *testing.T) (PhotoService, repository.PhotoRepository, repository.PhotoTagRepository) {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: gormlogger.Discard})
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
-	require.NoError(t, db.AutoMigrate(&model.Photo{}, &model.ScanJob{}, &model.AppConfig{}))
+	require.NoError(t, db.AutoMigrate(&model.Photo{}, &model.PhotoTag{}, &model.ScanJob{}, &model.AppConfig{}))
 	t.Cleanup(func() {
 		sqlDB, _ := db.DB()
 		if sqlDB != nil {
@@ -353,23 +353,24 @@ func newPhotoServicePure(t *testing.T) (PhotoService, repository.PhotoRepository
 		}
 	})
 	photoRepo := repository.NewPhotoRepository(db)
+	photoTagRepo := repository.NewPhotoTagRepository(db)
 	scanJobRepo := repository.NewScanJobRepository(db)
 	cfg := &config.Config{
 		Photos: config.PhotosConfig{ThumbnailPath: t.TempDir()},
 	}
-	svc := NewPhotoService(photoRepo, scanJobRepo, cfg, nil, nil, nil, nil)
-	return svc, photoRepo
+	svc := NewPhotoService(photoRepo, photoTagRepo, scanJobRepo, cfg, nil, nil, nil, nil)
+	return svc, photoRepo, photoTagRepo
 }
 
 func TestPhotoService_CountAll_Empty(t *testing.T) {
-	svc, _ := newPhotoServicePure(t)
+	svc, _, _ := newPhotoServicePure(t)
 	count, err := svc.CountAll()
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), count)
 }
 
 func TestPhotoService_CountAll_WithPhotos(t *testing.T) {
-	svc, repo := newPhotoServicePure(t)
+	svc, repo, _ := newPhotoServicePure(t)
 	repo.Create(&model.Photo{FilePath: "/a.jpg", FileHash: "h1"})
 	repo.Create(&model.Photo{FilePath: "/b.jpg", FileHash: "h2"})
 
@@ -379,7 +380,7 @@ func TestPhotoService_CountAll_WithPhotos(t *testing.T) {
 }
 
 func TestPhotoService_CountAnalyzed(t *testing.T) {
-	svc, repo := newPhotoServicePure(t)
+	svc, repo, _ := newPhotoServicePure(t)
 	now := time.Now()
 	repo.Create(&model.Photo{FilePath: "/a.jpg", FileHash: "h1", AIAnalyzed: true, AnalyzedAt: &now})
 	repo.Create(&model.Photo{FilePath: "/b.jpg", FileHash: "h2", AIAnalyzed: false})
@@ -390,7 +391,7 @@ func TestPhotoService_CountAnalyzed(t *testing.T) {
 }
 
 func TestPhotoService_CountUnanalyzed(t *testing.T) {
-	svc, repo := newPhotoServicePure(t)
+	svc, repo, _ := newPhotoServicePure(t)
 	now := time.Now()
 	repo.Create(&model.Photo{FilePath: "/a.jpg", FileHash: "h1", AIAnalyzed: true, AnalyzedAt: &now})
 	repo.Create(&model.Photo{FilePath: "/b.jpg", FileHash: "h2", AIAnalyzed: false})
@@ -401,7 +402,7 @@ func TestPhotoService_CountUnanalyzed(t *testing.T) {
 }
 
 func TestPhotoService_GetPhotoByID_Found(t *testing.T) {
-	svc, repo := newPhotoServicePure(t)
+	svc, repo, _ := newPhotoServicePure(t)
 	repo.Create(&model.Photo{FilePath: "/test.jpg", FileHash: "h1"})
 
 	photo, err := svc.GetPhotoByID(1)
@@ -410,13 +411,13 @@ func TestPhotoService_GetPhotoByID_Found(t *testing.T) {
 }
 
 func TestPhotoService_GetPhotoByID_NotFound(t *testing.T) {
-	svc, _ := newPhotoServicePure(t)
+	svc, _, _ := newPhotoServicePure(t)
 	_, err := svc.GetPhotoByID(999)
 	require.Error(t, err)
 }
 
 func TestPhotoService_GetCategories(t *testing.T) {
-	svc, repo := newPhotoServicePure(t)
+	svc, repo, _ := newPhotoServicePure(t)
 	repo.Create(&model.Photo{FilePath: "/a.jpg", FileHash: "h1", MainCategory: "风景"})
 	repo.Create(&model.Photo{FilePath: "/b.jpg", FileHash: "h2", MainCategory: "人物"})
 	repo.Create(&model.Photo{FilePath: "/c.jpg", FileHash: "h3", MainCategory: "风景"})
@@ -428,17 +429,25 @@ func TestPhotoService_GetCategories(t *testing.T) {
 }
 
 func TestPhotoService_GetTags(t *testing.T) {
-	svc, repo := newPhotoServicePure(t)
+	svc, repo, tagRepo := newPhotoServicePure(t)
 	repo.Create(&model.Photo{FilePath: "/a.jpg", FileHash: "h1", Tags: "nature,sky"})
 	repo.Create(&model.Photo{FilePath: "/b.jpg", FileHash: "h2", Tags: "city,night"})
 
+	// Populate photo_tags table (in production, SyncTags is called during AI analysis)
+	tagRepo.SyncTags(1, "nature,sky")
+	tagRepo.SyncTags(2, "city,night")
+
 	tags, err := svc.GetTags()
 	require.NoError(t, err)
-	assert.NotEmpty(t, tags)
+	assert.Len(t, tags, 4)
+	assert.Contains(t, tags, "nature")
+	assert.Contains(t, tags, "sky")
+	assert.Contains(t, tags, "city")
+	assert.Contains(t, tags, "night")
 }
 
 func TestPhotoService_GetPathDerivedStatus(t *testing.T) {
-	svc, repo := newPhotoServicePure(t)
+	svc, repo, _ := newPhotoServicePure(t)
 	lat, lon := 39.9, 116.4
 	repo.Create(&model.Photo{
 		FilePath: "/photos/a.jpg", FileHash: "h1",
@@ -461,7 +470,7 @@ func TestPhotoService_GetPathDerivedStatus(t *testing.T) {
 }
 
 func TestPhotoService_DeletePhotosByPathPrefix(t *testing.T) {
-	svc, repo := newPhotoServicePure(t)
+	svc, repo, _ := newPhotoServicePure(t)
 	repo.Create(&model.Photo{FilePath: "/photos/a.jpg", FileHash: "h1"})
 	repo.Create(&model.Photo{FilePath: "/photos/b.jpg", FileHash: "h2"})
 	repo.Create(&model.Photo{FilePath: "/other/c.jpg", FileHash: "h3"})
@@ -475,7 +484,7 @@ func TestPhotoService_DeletePhotosByPathPrefix(t *testing.T) {
 }
 
 func TestPhotoService_GetPhotosByPathPrefix(t *testing.T) {
-	svc, repo := newPhotoServicePure(t)
+	svc, repo, _ := newPhotoServicePure(t)
 	repo.Create(&model.Photo{FilePath: "/photos/a.jpg", FileHash: "h1"})
 	repo.Create(&model.Photo{FilePath: "/photos/b.jpg", FileHash: "h2"})
 	repo.Create(&model.Photo{FilePath: "/other/c.jpg", FileHash: "h3"})
@@ -486,7 +495,7 @@ func TestPhotoService_GetPhotosByPathPrefix(t *testing.T) {
 }
 
 func TestPhotoService_CountPhotosByPathPrefix(t *testing.T) {
-	svc, repo := newPhotoServicePure(t)
+	svc, repo, _ := newPhotoServicePure(t)
 	repo.Create(&model.Photo{FilePath: "/photos/a.jpg", FileHash: "h1"})
 	repo.Create(&model.Photo{FilePath: "/other/c.jpg", FileHash: "h2"})
 
@@ -496,6 +505,6 @@ func TestPhotoService_CountPhotosByPathPrefix(t *testing.T) {
 }
 
 func TestPhotoService_GetScanTask_NilWhenNoActive(t *testing.T) {
-	svc, _ := newPhotoServicePure(t)
+	svc, _, _ := newPhotoServicePure(t)
 	assert.Nil(t, svc.GetScanTask())
 }

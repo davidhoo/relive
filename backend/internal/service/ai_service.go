@@ -75,6 +75,7 @@ type AIService interface {
 // aiService AI 分析服务实现
 type aiService struct {
 	photoRepo        repository.PhotoRepository
+	photoTagRepo     repository.PhotoTagRepository
 	config           *config.Config
 	configService    ConfigService
 	runtimeService   AnalysisRuntimeService
@@ -128,9 +129,10 @@ type AIConfigFromDB struct {
 }
 
 // NewAIService 创建 AI 分析服务
-func NewAIService(photoRepo repository.PhotoRepository, cfg *config.Config, configService ConfigService, runtimeService AnalysisRuntimeService) (AIService, error) {
+func NewAIService(photoRepo repository.PhotoRepository, photoTagRepo repository.PhotoTagRepository, cfg *config.Config, configService ConfigService, runtimeService AnalysisRuntimeService) (AIService, error) {
 	svc := &aiService{
 		photoRepo:      photoRepo,
+		photoTagRepo:   photoTagRepo,
 		config:         cfg,
 		configService:  configService,
 		runtimeService: runtimeService,
@@ -611,6 +613,13 @@ func (s *aiService) analyzePhotoInternal(photoID uint, force bool) error {
 
 	if err := s.photoRepo.Update(photo); err != nil {
 		return fmt.Errorf("update photo: %w", err)
+	}
+
+	// 双写 photo_tags 表
+	if s.photoTagRepo != nil {
+		if err := s.photoTagRepo.SyncTags(photo.ID, result.Tags); err != nil {
+			logger.Warnf("Failed to sync tags for photo %d: %v", photo.ID, err)
+		}
 	}
 
 	logger.Infof("Photo %d analyzed successfully (2 sessions): memory=%d, beauty=%d, overall=%d, caption=%s",
@@ -1210,6 +1219,12 @@ func (s *aiService) analyzeInBatchesAsync(task *AnalyzeTask, photos []*model.Pho
 						s.appendBackgroundLog(fmt.Sprintf("写入照片 #%d 结果失败：%v", photo.ID, err))
 					}
 				} else {
+					// 双写 photo_tags 表
+					if s.photoTagRepo != nil {
+						if err := s.photoTagRepo.SyncTags(photo.ID, result.Tags); err != nil {
+							logger.Warnf("[Task %s] Failed to sync tags for photo %d: %v", task.ID, photo.ID, err)
+						}
+					}
 					successCount++
 					totalCost += s.provider.BatchCost()
 					if task.Mode == model.AnalysisOwnerTypeBackground {

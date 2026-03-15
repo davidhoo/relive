@@ -3,7 +3,6 @@ package repository
 import (
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -230,9 +229,10 @@ func (r *photoRepository) List(page, pageSize int, analyzed *bool, hasThumbnail 
 	if category != "" {
 		query = query.Where("main_category = ?", category)
 	}
-	// 标签筛选
+	// 标签筛选（精确匹配 photo_tags 表）
 	if tag != "" {
-		query = query.Where("tags LIKE ?", "%"+tag+"%")
+		query = query.Where("id IN (?)",
+			r.db.Model(&model.PhotoTag{}).Select("photo_id").Where("tag = ?", tag))
 	}
 
 	// 统计总数
@@ -600,40 +600,16 @@ func (r *photoRepository) GetCategories() ([]string, error) {
 	return categories, err
 }
 
-// GetTags 获取所有标签
+// GetTags 获取所有标签（从 photo_tags 表查询）
 func (r *photoRepository) GetTags() ([]string, error) {
-	var tagRows []struct {
-		Tags string
-	}
-	err := r.db.Model(&model.Photo{}).Scopes(activeScope).
-		Where("tags != ? AND tags IS NOT NULL", "").
-		Pluck("tags", &tagRows).Error
-	if err != nil {
-		return nil, err
-	}
-
-	// 解析所有标签并去重
-	tagMap := make(map[string]bool)
-	for _, row := range tagRows {
-		tags := strings.Split(row.Tags, ",")
-		for _, tag := range tags {
-			tag = strings.TrimSpace(tag)
-			if tag != "" {
-				tagMap[tag] = true
-			}
-		}
-	}
-
-	// 转换为切片
-	var result []string
-	for tag := range tagMap {
-		result = append(result, tag)
-	}
-
-	// 排序
-	sort.Strings(result)
-
-	return result, nil
+	var tags []string
+	err := r.db.Model(&model.PhotoTag{}).
+		Select("DISTINCT tag").
+		Where("photo_id IN (?)",
+			r.db.Model(&model.Photo{}).Select("id").Where("status = ? AND deleted_at IS NULL", model.PhotoStatusActive)).
+		Order("tag").
+		Pluck("tag", &tags).Error
+	return tags, err
 }
 
 // ListWithGPS 获取所有有GPS坐标的照片

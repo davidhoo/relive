@@ -41,7 +41,7 @@ export interface Photo {
   overall_score?: number
   score_reason?: string  // 评分理由
   main_category?: string
-  tags?: string
+  tags?: string[]
 
   // 时间戳
   created_at: string

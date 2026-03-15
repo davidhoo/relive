@@ -5,6 +5,7 @@ import "gorm.io/gorm"
 // Repositories 所有仓库的集合
 type Repositories struct {
 	Photo         PhotoRepository
+	PhotoTag      PhotoTagRepository
 	ScanJob       ScanJobRepository
 	ThumbnailJob  ThumbnailJobRepository
 	GeocodeJob    GeocodeJobRepository
@@ -19,6 +20,7 @@ func NewRepositories(db *gorm.DB) *Repositories {
 	deviceRepo := NewDeviceRepository(db)
 	return &Repositories{
 		Photo:         NewPhotoRepository(db),
+		PhotoTag:      NewPhotoTagRepository(db),
 		ScanJob:       NewScanJobRepository(db),
 		ThumbnailJob:  NewThumbnailJobRepository(db),
 		GeocodeJob:    NewGeocodeJobRepository(db),
