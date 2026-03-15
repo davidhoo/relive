@@ -24,7 +24,7 @@ func TestAuthHandler_Login_Success(t *testing.T) {
 			}, nil
 		},
 	}
-	h := NewAuthHandler(authSvc, false)
+	h := NewAuthHandler(authSvc)
 
 	body := []byte(`{"username":"admin","Password":"password123"}`)
 	rec := performJSONRequest(t, http.MethodPost, "/api/v1/auth/login", body, nil, h.Login)
@@ -54,7 +54,7 @@ func TestAuthHandler_Login_InvalidCredentials(t *testing.T) {
 			return nil, service.ErrInvalidCredentials
 		},
 	}
-	h := NewAuthHandler(authSvc, false)
+	h := NewAuthHandler(authSvc)
 
 	body := []byte(`{"username":"admin","Password":"wrong"}`)
 	rec := performJSONRequest(t, http.MethodPost, "/api/v1/auth/login", body, nil, h.Login)
@@ -64,7 +64,7 @@ func TestAuthHandler_Login_InvalidCredentials(t *testing.T) {
 
 func TestAuthHandler_Login_BadJSON(t *testing.T) {
 	authSvc := &testutil.StubAuthService{}
-	h := NewAuthHandler(authSvc, false)
+	h := NewAuthHandler(authSvc)
 
 	rec := performJSONRequest(t, http.MethodPost, "/api/v1/auth/login", []byte(`{bad`), nil, h.Login)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
@@ -76,7 +76,7 @@ func TestAuthHandler_Login_InternalError(t *testing.T) {
 			return nil, errors.New("db error")
 		},
 	}
-	h := NewAuthHandler(authSvc, false)
+	h := NewAuthHandler(authSvc)
 
 	body := []byte(`{"username":"admin","Password":"password123"}`)
 	rec := performJSONRequest(t, http.MethodPost, "/api/v1/auth/login", body, nil, h.Login)
@@ -85,7 +85,7 @@ func TestAuthHandler_Login_InternalError(t *testing.T) {
 }
 
 func TestAuthHandler_Logout(t *testing.T) {
-	h := NewAuthHandler(&testutil.StubAuthService{}, false)
+	h := NewAuthHandler(&testutil.StubAuthService{})
 
 	rec := performJSONRequest(t, http.MethodPost, "/api/v1/auth/logout", nil, nil, h.Logout)
 	assert.Equal(t, http.StatusOK, rec.Code)
@@ -112,7 +112,7 @@ func TestAuthHandler_GetUserInfo_Success(t *testing.T) {
 			return &model.UserInfoResponse{ID: 1, Username: "admin", IsFirstLogin: false}, nil
 		},
 	}
-	h := NewAuthHandler(authSvc, false)
+	h := NewAuthHandler(authSvc)
 
 	rec := performJSONRequest(t, http.MethodGet, "/api/v1/auth/user", nil, nil, func(c *gin.Context) {
 		c.Set("userID", uint(1))
@@ -125,7 +125,7 @@ func TestAuthHandler_GetUserInfo_Success(t *testing.T) {
 }
 
 func TestAuthHandler_GetUserInfo_NotAuthenticated(t *testing.T) {
-	h := NewAuthHandler(&testutil.StubAuthService{}, false)
+	h := NewAuthHandler(&testutil.StubAuthService{})
 
 	rec := performJSONRequest(t, http.MethodGet, "/api/v1/auth/user", nil, nil, h.GetUserInfo)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
@@ -137,7 +137,7 @@ func TestAuthHandler_GetUserInfo_NotFound(t *testing.T) {
 			return nil, service.ErrUserNotFound
 		},
 	}
-	h := NewAuthHandler(authSvc, false)
+	h := NewAuthHandler(authSvc)
 
 	rec := performJSONRequest(t, http.MethodGet, "/api/v1/auth/user", nil, nil, func(c *gin.Context) {
 		c.Set("userID", uint(999))
@@ -153,7 +153,7 @@ func TestAuthHandler_ChangePassword_Success(t *testing.T) {
 			return nil
 		},
 	}
-	h := NewAuthHandler(authSvc, false)
+	h := NewAuthHandler(authSvc)
 
 	body := []byte(`{"old_Password":"old123","new_Password":"new123456"}`)
 	rec := performJSONRequest(t, http.MethodPost, "/api/v1/auth/change-password", body, nil, func(c *gin.Context) {
@@ -170,7 +170,7 @@ func TestAuthHandler_ChangePassword_OldPwWrong(t *testing.T) {
 			return service.ErrOldPasswordWrong
 		},
 	}
-	h := NewAuthHandler(authSvc, false)
+	h := NewAuthHandler(authSvc)
 
 	body := []byte(`{"old_Password":"wrong","new_Password":"new123456"}`)
 	rec := performJSONRequest(t, http.MethodPost, "/api/v1/auth/change-password", body, nil, func(c *gin.Context) {

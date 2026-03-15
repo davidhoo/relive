@@ -11,15 +11,13 @@ import (
 
 // AuthHandler 认证处理器
 type AuthHandler struct {
-	authService  service.AuthService
-	isProduction bool
+	authService service.AuthService
 }
 
 // NewAuthHandler 创建认证处理器
-func NewAuthHandler(authService service.AuthService, isProduction bool) *AuthHandler {
+func NewAuthHandler(authService service.AuthService) *AuthHandler {
 	return &AuthHandler{
-		authService:  authService,
-		isProduction: isProduction,
+		authService: authService,
 	}
 }
 
@@ -70,7 +68,8 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	c.SetCookie("relive_session", resp.Token, 86400, "/api/v1/", "", h.isProduction, true)
+	// Secure=false 兼容 HTTP/HTTPS 双协议部署，HttpOnly=true 防 XSS 读取
+	c.SetCookie("relive_session", resp.Token, 86400, "/api/v1/", "", false, true)
 
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
@@ -89,7 +88,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 func (h *AuthHandler) Logout(c *gin.Context) {
 	// JWT 是无状态的，登出由客户端清除 Token
 	// 可选：将 Token 加入黑名单（如果需要实现服务端登出）
-	c.SetCookie("relive_session", "", -1, "/api/v1/", "", h.isProduction, true)
+	c.SetCookie("relive_session", "", -1, "/api/v1/", "", false, true)
 
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,

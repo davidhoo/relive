@@ -1,6 +1,9 @@
 package router
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/davidhoo/relive/internal/api/v1/handler"
@@ -39,10 +42,21 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 	// 在开发环境中，前端由 Vite 独立提供
 	if cfg.Server.StaticPath != "" {
 		r.Static("/assets", cfg.Server.StaticPath+"/assets")
-		r.StaticFile("/", cfg.Server.StaticPath+"/index.html")
-		r.StaticFile("/favicon.ico", cfg.Server.StaticPath+"/favicon.ico")
-		// SPA fallback - 所有非 API 路径都返回 index.html
+		// SPA fallback - 静态文件优先，其余返回 index.html
 		r.NoRoute(func(c *gin.Context) {
+			p := c.Request.URL.Path
+			// 跳过 API 路径
+			if strings.HasPrefix(p, "/api/") {
+				c.JSON(404, gin.H{"error": "not found"})
+				return
+			}
+			// 尝试提供根目录下的静态文件（favicon、logo 等）
+			filePath := filepath.Join(cfg.Server.StaticPath, filepath.Clean(p))
+			if info, err := os.Stat(filePath); err == nil && !info.IsDir() {
+				c.File(filePath)
+				return
+			}
+			// SPA fallback
 			c.File(cfg.Server.StaticPath + "/index.html")
 		})
 	}
