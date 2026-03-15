@@ -44,7 +44,7 @@ type PhotoService interface {
 
 	// 分类和标签
 	GetCategories() ([]string, error)
-	GetTags() ([]string, error)
+	GetTags(query string, limit int) ([]model.TagWithCount, int64, error)
 
 	// 地理编码
 	GeocodePhotoIfNeeded(photo *model.Photo) error
@@ -743,9 +743,17 @@ func (s *photoService) GetCategories() ([]string, error) {
 	return s.repo.GetCategories()
 }
 
-// GetTags 获取所有标签
-func (s *photoService) GetTags() ([]string, error) {
-	return s.repo.GetTags()
+// GetTags 获取热门标签
+func (s *photoService) GetTags(query string, limit int) ([]model.TagWithCount, int64, error) {
+	tags, err := s.repo.GetTags(query, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	total, err := s.repo.CountTags()
+	if err != nil {
+		return tags, 0, err
+	}
+	return tags, total, nil
 }
 
 // enrichPhotoTags 从 photo_tags 表批量加载标签填充到 TagList 字段

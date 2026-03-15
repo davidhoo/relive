@@ -124,3 +124,15 @@ export interface PhotoCountsResponse {
   active_count: number
   excluded_count: number
 }
+
+// 标签及其照片数量
+export interface TagInfo {
+  tag: string
+  count: number
+}
+
+// 标签列表响应（含总数）
+export interface TagsResponse {
+  items: TagInfo[]
+  total: number
+}

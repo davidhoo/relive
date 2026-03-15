@@ -322,35 +322,48 @@
         </div>
 
         <!-- 标签筛选 -->
-        <div class="filter-section" v-if="tags.length > 0">
+        <div class="filter-section" v-if="hotTags.length > 0 || filterTag">
           <div class="filter-label">
             <el-icon><PriceTag /></el-icon>
             <span>标签</span>
-            <el-tag type="info" size="small" effect="plain" class="count-tag">{{ tags.length }}</el-tag>
+            <el-tag type="info" size="small" effect="plain" class="count-tag" v-if="totalTagCount > 0">{{ totalTagCount }}</el-tag>
           </div>
-          <div class="filter-tags">
+          <div class="filter-tags-area">
+            <!-- 已选标签（不在当前显示列表时单独展示） -->
             <el-tag
-              v-for="tag in displayedTags"
-              :key="tag"
-              :type="filterTag === tag ? 'primary' : 'info'"
+              v-if="filterTag && !displayedTagList.some(t => t.tag === filterTag)"
+              type="primary"
               class="filter-tag"
-              @click="handleTagClick(tag)"
+              closable
+              @close="handleTagClick(filterTag)"
+              @click="handleTagClick(filterTag)"
             >
-              {{ tag }}
+              {{ filterTag }}
             </el-tag>
-            <el-button
-              v-if="tags.length > TAGS_DISPLAY_LIMIT"
-              link
+            <!-- 标签搜索输入框 -->
+            <el-input
+              v-model="tagSearchQuery"
+              placeholder="搜索标签..."
+              :prefix-icon="Search"
               size="small"
-              class="collapse-btn"
-              @click="tagsCollapsed = !tagsCollapsed"
-            >
-              <el-icon class="collapse-icon">
-                <ArrowDown v-if="tagsCollapsed" />
-                <ArrowUp v-else />
-              </el-icon>
-              {{ tagsCollapsed ? `展开全部 (${tags.length})` : '收起' }}
-            </el-button>
+              clearable
+              class="tag-search-input"
+              @input="handleTagSearch"
+              @clear="tagSearchResults = []"
+            />
+            <!-- 标签列表 -->
+            <div class="filter-tags">
+              <el-tag
+                v-for="item in displayedTagList"
+                :key="item.tag"
+                :type="filterTag === item.tag ? 'primary' : 'info'"
+                class="filter-tag"
+                @click="handleTagClick(item.tag)"
+              >
+                {{ item.tag }}<span class="tag-count">({{ item.count }})</span>
+              </el-tag>
+              <span v-if="tagSearchQuery.trim() && displayedTagList.length === 0" class="tag-no-result">无匹配标签</span>
+            </div>
           </div>
         </div>
 
@@ -551,7 +564,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { ArrowDown, ArrowUp, CircleCheck, CircleClose, Clock, Close, Collection, Delete, Files, Filter, Folder, FolderOpened, FullScreen, Loading, Location, MagicStick, Picture, PictureFilled, Plus, PriceTag, QuestionFilled, Refresh, RefreshLeft, Search, Select, Star, SwitchButton, Timer } from '@element-plus/icons-vue'
+import { CircleCheck, CircleClose, Clock, Close, Collection, Delete, Files, Filter, Folder, FolderOpened, FullScreen, Loading, Location, MagicStick, Picture, PictureFilled, Plus, PriceTag, QuestionFilled, Refresh, RefreshLeft, Search, Select, Star, SwitchButton, Timer } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
@@ -560,7 +573,7 @@ import PathBrowser from '@/components/PathBrowser.vue'
 import LocationPicker from '@/components/LocationPicker.vue'
 import { photoApi } from '@/api/photo'
 import { configApi, type ScanPathConfig, type AutoScanConfig } from '@/api/config'
-import type { Photo } from '@/types/photo'
+import type { Photo, TagInfo } from '@/types/photo'
 import { useUserStore } from '@/stores/user'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -675,19 +688,11 @@ const handleBatchLocationConfirm = async (coords: { latitude: number; longitude:
 
 const excludedCount = ref(0)
 const categories = ref<string[]>([])
-const tags = ref<string[]>([])
-
-// 标签折叠状态
-const tagsCollapsed = ref(true)
-const TAGS_DISPLAY_LIMIT = 15
-
-// 计算要显示的标签（根据折叠状态）
-const displayedTags = computed(() => {
-  if (tagsCollapsed.value && tags.value.length > TAGS_DISPLAY_LIMIT) {
-    return tags.value.slice(0, TAGS_DISPLAY_LIMIT)
-  }
-  return tags.value
-})
+const hotTags = ref<TagInfo[]>([])
+const totalTagCount = ref(0)
+const tagSearchQuery = ref('')
+const tagSearchResults = ref<TagInfo[]>([])
+let tagSearchTimer: ReturnType<typeof setTimeout> | null = null
 
 // 存储每个路径的照片数量（从数据库获取）
 const pathPhotoCounts = ref<Record<string, number>>({})
@@ -1137,19 +1142,44 @@ const loadScanPaths = async () => {
   })
 }
 
-// 加载分类和标签
+// 加载分类和热门标签
 const loadCategoriesAndTags = async () => {
   try {
     const [categoriesRes, tagsRes] = await Promise.all([
       photoApi.getCategories(),
-      photoApi.getTags()
+      photoApi.getTags({ limit: 15 })
     ])
     categories.value = categoriesRes.data?.data || []
-    tags.value = tagsRes.data?.data || []
+    const tagsData = tagsRes.data?.data
+    hotTags.value = tagsData?.items || []
+    totalTagCount.value = tagsData?.total || 0
   } catch (error: any) {
     console.error('Failed to load categories and tags:', error)
   }
 }
+
+// 搜索标签（debounce 300ms）
+const handleTagSearch = (query: string) => {
+  if (tagSearchTimer) clearTimeout(tagSearchTimer)
+  tagSearchQuery.value = query
+  if (!query.trim()) {
+    tagSearchResults.value = []
+    return
+  }
+  tagSearchTimer = setTimeout(async () => {
+    try {
+      const res = await photoApi.getTags({ q: query.trim(), limit: 20 })
+      tagSearchResults.value = res.data?.data?.items || []
+    } catch {
+      tagSearchResults.value = []
+    }
+  }, 300)
+}
+
+// 当前显示的标签列表（搜索时显示搜索结果，否则显示热门标签）
+const displayedTagList = computed<TagInfo[]>(() => {
+  return tagSearchQuery.value.trim() ? tagSearchResults.value : hotTags.value
+})
 
 // 点击分类筛选
 const handleCategoryClick = (value: string) => {
@@ -2341,24 +2371,28 @@ defineExpose({
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
 }
 
-/* 折叠按钮 */
-.collapse-btn {
+/* 标签筛选区域 */
+.filter-tags-area {
   display: flex;
-  align-items: center;
-  gap: 4px;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  flex: 1;
+}
+
+.tag-search-input {
+  max-width: 220px;
+}
+
+.tag-count {
+  margin-left: 2px;
+  opacity: 0.7;
+  font-size: 0.85em;
+}
+
+.tag-no-result {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
-  padding: 4px 8px;
-  height: auto;
-  margin-left: var(--spacing-xs);
-}
-
-.collapse-btn:hover {
-  color: var(--color-primary);
-}
-
-.collapse-icon {
-  font-size: 12px;
+  padding: 4px 0;
 }
 
 .recycle-bin-row {

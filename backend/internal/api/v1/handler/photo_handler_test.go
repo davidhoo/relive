@@ -61,7 +61,7 @@ func (s *stubPhotoService) GetScanTask() *model.ScanTask { return nil }
 func (s *stubPhotoService) HandleShutdown() error { return nil }
 func (s *stubPhotoService) RunAutoScanCheck() error { return nil }
 func (s *stubPhotoService) GetCategories() ([]string, error) { return nil, nil }
-func (s *stubPhotoService) GetTags() ([]string, error) { return nil, nil }
+func (s *stubPhotoService) GetTags(_ string, _ int) ([]model.TagWithCount, int64, error) { return nil, 0, nil }
 func (s *stubPhotoService) GeocodePhotoIfNeeded(_ *model.Photo) error { return nil }
 func (s *stubPhotoService) RegeocodeAllPhotos() (int, error) { return 0, nil }
 func (s *stubPhotoService) DeletePhotosByPathPrefix(_ string) (int64, error) { return 0, nil }

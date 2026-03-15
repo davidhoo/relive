@@ -965,17 +965,30 @@ func (h *PhotoHandler) GetCategories(c *gin.Context) {
 	})
 }
 
-// GetTags 获取所有照片标签
-// @Summary 获取所有照片标签
-// @Description 获取系统中所有不重复的照片标签
+// GetTags 获取热门标签（支持搜索）
+// @Summary 获取热门标签
+// @Description 获取按照片数量排序的热门标签，支持关键词搜索
 // @Tags photos
 // @Accept json
 // @Produce json
-// @Success 200 {object} model.Response{data=[]string}
+// @Param q query string false "搜索关键词"
+// @Param limit query int false "返回数量限制" default(15)
+// @Success 200 {object} model.Response{data=model.TagsResponse}
 // @Failure 500 {object} model.Response
 // @Router /api/v1/photos/tags [get]
 func (h *PhotoHandler) GetTags(c *gin.Context) {
-	tags, err := h.photoService.GetTags()
+	query := c.Query("q")
+	limit := 15
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if v, err := strconv.Atoi(limitStr); err == nil && v > 0 {
+			if v > 50 {
+				v = 50
+			}
+			limit = v
+		}
+	}
+
+	tags, total, err := h.photoService.GetTags(query, limit)
 	if err != nil {
 		logger.Errorf("Get tags failed: %v", err)
 		c.JSON(http.StatusInternalServerError, model.Response{
@@ -991,7 +1004,7 @@ func (h *PhotoHandler) GetTags(c *gin.Context) {
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
 		Message: "Success",
-		Data:    tags,
+		Data:    model.TagsResponse{Items: tags, Total: total},
 	})
 }
 

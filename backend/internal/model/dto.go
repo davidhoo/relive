@@ -455,6 +455,18 @@ type UpdateDeviceEnabledRequest struct {
 	Enabled bool `json:"enabled"`
 }
 
+// TagWithCount 标签及其照片数量
+type TagWithCount struct {
+	Tag   string `json:"tag" gorm:"column:tag"`
+	Count int    `json:"count" gorm:"column:count"`
+}
+
+// TagsResponse 标签列表响应（含总数）
+type TagsResponse struct {
+	Items []TagWithCount `json:"items"`
+	Total int64          `json:"total"`
+}
+
 // PhotoCountsResponse 照片按状态计数响应
 type PhotoCountsResponse struct {
 	ActiveCount   int64 `json:"active_count"`

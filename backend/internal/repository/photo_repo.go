@@ -52,7 +52,8 @@ type PhotoRepository interface {
 
 	// 分类和标签
 	GetCategories() ([]string, error)
-	GetTags() ([]string, error)
+	GetTags(query string, limit int) ([]model.TagWithCount, error)
+	CountTags() (int64, error)
 
 	// 批量操作
 	BatchCreate(photos []*model.Photo, batchSize int) error
@@ -600,16 +601,34 @@ func (r *photoRepository) GetCategories() ([]string, error) {
 	return categories, err
 }
 
-// GetTags 获取所有标签（从 photo_tags 表查询）
-func (r *photoRepository) GetTags() ([]string, error) {
-	var tags []string
-	err := r.db.Model(&model.PhotoTag{}).
-		Select("DISTINCT tag").
-		Where("photo_id IN (?)",
-			r.db.Model(&model.Photo{}).Select("id").Where("status = ? AND deleted_at IS NULL", model.PhotoStatusActive)).
-		Order("tag").
-		Pluck("tag", &tags).Error
-	return tags, err
+// GetTags 获取热门标签（从 photo_tags 表查询，支持搜索和限制数量）
+func (r *photoRepository) GetTags(query string, limit int) ([]model.TagWithCount, error) {
+	var results []model.TagWithCount
+	db := r.db.Table("photo_tags").
+		Select("tag, COUNT(*) as count").
+		Where("photo_id IN (SELECT id FROM photos WHERE status = ? AND deleted_at IS NULL)", model.PhotoStatusActive).
+		Group("tag").
+		Order("count DESC, tag ASC")
+
+	if query != "" {
+		db = db.Where("tag LIKE ?", "%"+query+"%")
+	}
+	if limit > 0 {
+		db = db.Limit(limit)
+	}
+
+	err := db.Scan(&results).Error
+	return results, err
+}
+
+// CountTags 统计活跃照片的不同标签总数
+func (r *photoRepository) CountTags() (int64, error) {
+	var count int64
+	err := r.db.Table("photo_tags").
+		Where("photo_id IN (SELECT id FROM photos WHERE status = ? AND deleted_at IS NULL)", model.PhotoStatusActive).
+		Distinct("tag").
+		Count(&count).Error
+	return count, err
 }
 
 // ListWithGPS 获取所有有GPS坐标的照片

@@ -74,7 +74,8 @@ func (r *stubPhotoRepo) GetTopScoredCandidates(minBeauty, minMemory int, exclude
 func (r *stubPhotoRepo) Count() (int64, error)                                  { return 0, nil }
 func (r *stubPhotoRepo) CountByLocation() (map[string]int64, error)             { return nil, nil }
 func (r *stubPhotoRepo) GetCategories() ([]string, error)                       { return nil, nil }
-func (r *stubPhotoRepo) GetTags() ([]string, error)                             { return nil, nil }
+func (r *stubPhotoRepo) GetTags(_ string, _ int) ([]model.TagWithCount, error)    { return nil, nil }
+func (r *stubPhotoRepo) CountTags() (int64, error)                                { return 0, nil }
 func (r *stubPhotoRepo) BatchCreate(photos []*model.Photo, batchSize int) error { return nil }
 func (r *stubPhotoRepo) BatchUpdate(photos []*model.Photo, batchSize int) error { return nil }
 func (r *stubPhotoRepo) UpdateLocation(id uint, location string) error               { return nil }

@@ -1,5 +1,5 @@
 import http from '@/utils/request'
-import type { Photo, PhotoListParams, PhotoStats, ScanPhotosRequest, RebuildPhotosRequest, CleanupPhotosResponse, CountPhotosByPathsRequest, CountPhotosByPathsResponse, CountDerivedStatusByPathsRequest, CountDerivedStatusByPathsResponse, PhotoCountsResponse } from '@/types/photo'
+import type { Photo, PhotoListParams, PhotoStats, ScanPhotosRequest, RebuildPhotosRequest, CleanupPhotosResponse, CountPhotosByPathsRequest, CountPhotosByPathsResponse, CountDerivedStatusByPathsRequest, CountDerivedStatusByPathsResponse, PhotoCountsResponse, TagsResponse } from '@/types/photo'
 import type { ApiResponse, PagedResponse } from '@/types/api'
 
 export const photoApi = {
@@ -53,9 +53,9 @@ export const photoApi = {
     return http.get<ApiResponse<string[]>>('/photos/categories')
   },
 
-  // 获取所有标签
-  getTags() {
-    return http.get<ApiResponse<string[]>>('/photos/tags')
+  // 获取热门标签（支持搜索）
+  getTags(params?: { q?: string; limit?: number }) {
+    return http.get<ApiResponse<TagsResponse>>('/photos/tags', { params })
   },
 
   // 按路径统计照片数量

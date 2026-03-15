@@ -437,13 +437,29 @@ func TestPhotoService_GetTags(t *testing.T) {
 	tagRepo.SyncTags(1, "nature,sky")
 	tagRepo.SyncTags(2, "city,night")
 
-	tags, err := svc.GetTags()
+	tags, total, err := svc.GetTags("", 50)
 	require.NoError(t, err)
 	assert.Len(t, tags, 4)
-	assert.Contains(t, tags, "nature")
-	assert.Contains(t, tags, "sky")
-	assert.Contains(t, tags, "city")
-	assert.Contains(t, tags, "night")
+	assert.Equal(t, int64(4), total)
+	tagNames := make([]string, len(tags))
+	for i, tc := range tags {
+		tagNames[i] = tc.Tag
+	}
+	assert.Contains(t, tagNames, "nature")
+	assert.Contains(t, tagNames, "sky")
+	assert.Contains(t, tagNames, "city")
+	assert.Contains(t, tagNames, "night")
+
+	// Test search
+	filtered, _, err := svc.GetTags("nat", 50)
+	require.NoError(t, err)
+	assert.Len(t, filtered, 1)
+	assert.Equal(t, "nature", filtered[0].Tag)
+
+	// Test limit
+	limited, _, err := svc.GetTags("", 2)
+	require.NoError(t, err)
+	assert.Len(t, limited, 2)
 }
 
 func TestPhotoService_GetPathDerivedStatus(t *testing.T) {
