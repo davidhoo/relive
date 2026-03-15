@@ -233,13 +233,11 @@ import { photoApi } from '@/api/photo'
 import { aiApi } from '@/api/ai'
 import type { Photo } from '@/types/photo'
 import type { AIAnalyzeProgress } from '@/types/ai'
-import { useUserStore } from '@/stores/user'
 import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 
 const router = useRouter()
 const systemStore = useSystemStore()
-const userStore = useUserStore()
 
 const recentPhotos = ref<Photo[]>([])
 const aiProgress = ref<AIAnalyzeProgress | null>(null)
@@ -326,9 +324,7 @@ const startedAtText = computed(() => {
 
 const getPhotoThumbnailUrl = (photoId: number, version?: string) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
-  const token = userStore.token
   const params = new URLSearchParams()
-  if (token) params.set('token', token)
   if (version) params.set('v', version)
   const query = params.toString()
   return `${baseUrl}/photos/${photoId}/thumbnail${query ? `?${query}` : ''}`
@@ -336,8 +332,7 @@ const getPhotoThumbnailUrl = (photoId: number, version?: string) => {
 
 const getPhotoUrl = (photoId: number) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
-  const token = userStore.token
-  return `${baseUrl}/photos/${photoId}/image${token ? `?token=${token}` : ''}`
+  return `${baseUrl}/photos/${photoId}/image`
 }
 
 

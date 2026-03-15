@@ -172,9 +172,9 @@ func PhotoAuth(authService service.AuthService, deviceService service.DeviceServ
 			}
 		}
 
-		// 尝试 ?token= 查询参数（用于 <img> 标签直接加载，无法附加 header）
-		if token := c.Query("token"); token != "" {
-			if claims, err := authService.ValidateToken(token); err == nil {
+		// 尝试 HttpOnly Cookie（浏览器 <img> 标签自动发送）
+		if cookie, err := c.Cookie("relive_session"); err == nil && cookie != "" {
+			if claims, err := authService.ValidateToken(cookie); err == nil {
 				c.Set(ContextUserIDKey, claims.UserID)
 				c.Set(ContextUsernameKey, claims.Username)
 				c.Next()

@@ -327,9 +327,7 @@ import { displayStrategyApi, defaultDisplayStrategyConfig } from '@/api/config'
 import type { DisplayPreviewResponse, DisplayStrategyConfig } from '@/api/config'
 import { dailyDisplayApi, type DailyDisplayBatch, type RenderProfileOption } from '@/api/display'
 import type { Photo } from '@/types/photo'
-import { useUserStore } from '@/stores/user'
 
-const userStore = useUserStore()
 
 type CalendarControlAction = 'prev-month' | 'today' | 'next-month'
 
@@ -416,9 +414,7 @@ const currentPreviewHeaderUrl = computed(() => {
 
 const getPhotoAssetUrl = (photoId: number, asset: 'thumbnail' | 'frame-preview', version?: string) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
-  const token = userStore.token
   const params = new URLSearchParams()
-  if (token) params.set('token', token)
   if (version) params.set('v', version)
   const query = params.toString()
   return `${baseUrl}/photos/${photoId}/${asset}${query ? `?${query}` : ''}`
@@ -429,10 +425,8 @@ const getPhotoThumbnailUrl = (photoId: number, version?: string) => getPhotoAsse
 const getPhotoFramePreviewUrl = (photoId: number, version?: string) => getPhotoAssetUrl(photoId, 'frame-preview', version)
 const getPhotoDevicePreviewUrl = (photoId: number, profileName: string, version?: string) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
-  const token = userStore.token
   const params = new URLSearchParams()
   params.set('profile', profileName)
-  if (token) params.set('token', token)
   if (version) params.set('v', version)
   return `${baseUrl}/photos/${photoId}/device-preview?${params.toString()}`
 }
@@ -460,10 +454,8 @@ const getDisplaySubtitle = (photo?: Photo | null) => {
 const resolveProtectedUrl = (path: string) => {
   if (!path) return ''
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
-  const token = userStore.token
   const normalized = path.startsWith('/api/v1') ? path : `/api/v1${path.startsWith('/') ? path : `/${path}`}`
-  const query = token ? `?token=${token}` : ''
-  return `${baseUrl.replace(/\/api\/v1$/, '')}${normalized}${query}`
+  return `${baseUrl.replace(/\/api\/v1$/, '')}${normalized}`
 }
 
 const openDitherPreview = (item: DailyDisplayBatch['items'][number]) => {

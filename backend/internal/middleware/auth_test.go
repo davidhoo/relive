@@ -309,17 +309,18 @@ func TestPhotoAuth_XAPIKey_Success(t *testing.T) {
 	assert.Equal(t, http.StatusOK, res.recorder.Code)
 }
 
-func TestPhotoAuth_QueryToken_Success(t *testing.T) {
+func TestPhotoAuth_Cookie_Success(t *testing.T) {
 	auth := &testutil.StubAuthService{
 		ValidateTokenFunc: func(token string) (*service.JWTClaims, error) {
-			if token == "query-jwt" {
+			if token == "cookie-jwt" {
 				return &service.JWTClaims{UserID: 5, Username: "bob"}, nil
 			}
 			return nil, service.ErrInvalidToken
 		},
 	}
 	deviceSvc := &testutil.StubDeviceService{}
-	req := newGetReq("/photo/1.jpg?token=query-jwt")
+	req := newGetReq("/photo/1.jpg")
+	req.AddCookie(&http.Cookie{Name: "relive_session", Value: "cookie-jwt"})
 
 	res := runMW(t, req, PhotoAuth(auth, deviceSvc))
 
@@ -327,6 +328,26 @@ func TestPhotoAuth_QueryToken_Success(t *testing.T) {
 	assert.Equal(t, http.StatusOK, res.recorder.Code)
 	uid, _ := res.ctx.Get(ContextUserIDKey)
 	assert.Equal(t, uint(5), uid)
+}
+
+func TestPhotoAuth_Cookie_Invalid_Returns401(t *testing.T) {
+	auth := &testutil.StubAuthService{
+		ValidateTokenFunc: func(token string) (*service.JWTClaims, error) {
+			return nil, service.ErrInvalidToken
+		},
+	}
+	deviceSvc := &testutil.StubDeviceService{
+		GetByAPIKeyFunc: func(apiKey string) (*model.Device, error) {
+			return nil, testutil.ErrStubNotFound
+		},
+	}
+	req := newGetReq("/photo/1.jpg")
+	req.AddCookie(&http.Cookie{Name: "relive_session", Value: "bad-cookie"})
+
+	res := runMW(t, req, PhotoAuth(auth, deviceSvc))
+
+	assert.False(t, res.passed)
+	assert.Equal(t, http.StatusUnauthorized, res.recorder.Code)
 }
 
 func TestPhotoAuth_AllFail_Unauthorized(t *testing.T) {

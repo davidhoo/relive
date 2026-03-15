@@ -589,11 +589,9 @@ import LocationPicker from '@/components/LocationPicker.vue'
 import { photoApi } from '@/api/photo'
 import { configApi, type ScanPathConfig, type AutoScanConfig } from '@/api/config'
 import type { Photo, TagInfo } from '@/types/photo'
-import { useUserStore } from '@/stores/user'
 import { v4 as uuidv4 } from 'uuid'
 
 const router = useRouter()
-const userStore = useUserStore()
 
 const photos = ref<Photo[]>([])
 const loading = ref(false)
@@ -816,9 +814,7 @@ const getPathGeocodeDerivedTooltip = (path: string) => {
 // 获取照片缩略图 URL
 const getPhotoThumbnailUrl = (photoId: number, version?: string) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
-  const token = userStore.token
   const params = new URLSearchParams()
-  if (token) params.set('token', token)
   if (version) params.set('v', version)
   const query = params.toString()
   return `${baseUrl}/photos/${photoId}/thumbnail${query ? `?${query}` : ''}`
@@ -827,8 +823,7 @@ const getPhotoThumbnailUrl = (photoId: number, version?: string) => {
 // 获取照片原图 URL（用于预览）
 const getPhotoUrl = (photoId: number) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
-  const token = userStore.token
-  return `${baseUrl}/photos/${photoId}/image${token ? `?token=${token}` : ''}`
+  return `${baseUrl}/photos/${photoId}/image`
 }
 
 // 获取文件名

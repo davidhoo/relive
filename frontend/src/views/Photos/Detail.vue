@@ -237,12 +237,10 @@ import { thumbnailApi } from '@/api/thumbnail'
 import type { Photo } from '@/types/photo'
 import LocationPicker from '@/components/LocationPicker.vue'
 import dayjs from 'dayjs'
-import { useUserStore } from '@/stores/user'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const route = useRoute()
 const router = useRouter()
-const userStore = useUserStore()
 
 const photo = ref<Photo | null>(null)
 const loading = ref(false)
@@ -277,9 +275,7 @@ onBeforeUnmount(() => {
 // 获取照片缩略图 URL
 const getPhotoThumbnailUrl = (photoId: number, version?: string) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
-  const token = userStore.token
   const params = new URLSearchParams()
-  if (token) params.set('token', token)
   if (version) params.set('v', version)
   const query = params.toString()
   return `${baseUrl}/photos/${photoId}/thumbnail${query ? `?${query}` : ''}`
@@ -288,8 +284,7 @@ const getPhotoThumbnailUrl = (photoId: number, version?: string) => {
 // 获取照片原图 URL（用于预览）
 const getPhotoUrl = (photoId: number) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
-  const token = userStore.token
-  return `${baseUrl}/photos/${photoId}/image${token ? `?token=${token}` : ''}`
+  return `${baseUrl}/photos/${photoId}/image`
 }
 
 // 格式化时间
