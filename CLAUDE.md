@@ -302,7 +302,8 @@ Docker 构建时通过 build-args 注入额外信息：
 - 标签按照片数量降序排列，支持关键词搜索（LIKE），默认返回 Top 15，上限 50
 - 标签筛选从 `LIKE '%tag%'` 改为精确子查询匹配
 - 前端 `tags` 类型从 `string` 改为 `string[]`，后端 `Photo.TagList` 字段批量填充
-- 前端标签区域：热门标签带数量、搜索框（300ms debounce）、已选非热门标签单独高亮、末尾显示总标签数
+- 前端标签区域：热门标签带数量、"查看所有标签（N）"链接打开标签云弹窗（前 100 热门 + 搜索 300ms debounce）
+- 标签云弹窗选中非热门标签 → 临时添加到热门区域末尾（选中态），刷新/导航后消失
 - 启动自动迁移：从 `photos.tags` 批量拆分写入 `photo_tags`（手动分页，避免 GORM FindInBatches + SQLite 反引号不兼容）
 - 注意：GORM 自定义结构体查询需用 `db.Table("photo_tags").Scan()` 而非 `db.Model(&PhotoTag{}).Find()`
 
