@@ -34,6 +34,7 @@ type GeocodeTaskService interface {
 	EnqueuePhoto(photoID uint, source string, priority int, force bool) error
 	EnqueueByPath(path string, source string, priority int) (int, error)
 	GeocodePhoto(photoID uint) error
+	SetManualLocation(photoID uint, lat, lon float64) (string, error)
 	HandleShutdown() error
 }
 
@@ -235,6 +236,48 @@ func (s *geocodeTaskService) GeocodePhoto(photoID uint) error {
 	updates["geocoded_at"] = &now
 
 	return s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(updates).Error
+}
+
+// SetManualLocation 手动设置照片 GPS 坐标并反向解析位置
+func (s *geocodeTaskService) SetManualLocation(photoID uint, lat, lon float64) (string, error) {
+	photo, err := s.photoRepo.GetByID(photoID)
+	if err != nil {
+		return "", err
+	}
+	if photo == nil {
+		return "", fmt.Errorf("photo %d not found", photoID)
+	}
+	if photo.Status == model.PhotoStatusExcluded {
+		return "", fmt.Errorf("photo %d is excluded", photoID)
+	}
+
+	// 反向解析位置
+	var loc *internalgeocode.Location
+	if s.geocodeService != nil {
+		loc, err = s.geocodeService.ReverseGeocode(lat, lon)
+		if err != nil {
+			logger.Warnf("manual location reverse geocode failed for photo %d: %v", photoID, err)
+			// 即使反向解析失败，也保存 GPS 坐标
+		}
+	}
+
+	now := time.Now()
+	updates := geocodeLocationFields(loc)
+	updates["gps_latitude"] = lat
+	updates["gps_longitude"] = lon
+	updates["geocode_status"] = "ready"
+	updates["geocode_provider"] = "manual"
+	updates["geocoded_at"] = &now
+
+	if err := s.db.Model(&model.Photo{}).Where("id = ?", photoID).Updates(updates).Error; err != nil {
+		return "", fmt.Errorf("update photo location failed: %w", err)
+	}
+
+	location := ""
+	if loc != nil {
+		location = loc.FormatDisplay()
+	}
+	return location, nil
 }
 
 func (s *geocodeTaskService) enqueuePhotoModel(photo *model.Photo, source string, priority int, force bool) error {

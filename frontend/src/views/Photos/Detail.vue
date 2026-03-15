@@ -32,6 +32,9 @@
             <el-button @click="handleGeocode" :loading="geocoding" :disabled="!photo?.gps_latitude || !photo?.gps_longitude">
               {{ geocoding ? '解析中...' : (photo?.location ? '重新解析 GPS' : '解析 GPS') }}
             </el-button>
+            <el-button @click="showLocationPicker = true">
+              {{ photo?.gps_latitude && photo?.gps_longitude ? '修改位置' : '设置位置' }}
+            </el-button>
             <el-tooltip
               content="需要先配置 AI Provider 才能使用分析功能"
               placement="left"
@@ -212,6 +215,14 @@
         </el-col>
       </el-row>
     </el-card>
+
+    <!-- 位置选择器 -->
+    <LocationPicker
+      v-model:visible="showLocationPicker"
+      :initial-lat="photo?.gps_latitude"
+      :initial-lng="photo?.gps_longitude"
+      @confirm="handleLocationConfirm"
+    />
   </div>
 </template>
 
@@ -224,6 +235,7 @@ import { aiApi } from '@/api/ai'
 import { geocodeApi } from '@/api/geocode'
 import { thumbnailApi } from '@/api/thumbnail'
 import type { Photo } from '@/types/photo'
+import LocationPicker from '@/components/LocationPicker.vue'
 import dayjs from 'dayjs'
 import { useUserStore } from '@/stores/user'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -238,6 +250,7 @@ const analyzing = ref(false)
 const geocoding = ref(false)
 const thumbnailing = ref(false)
 const statusUpdating = ref(false)
+const showLocationPicker = ref(false)
 
 // 分类编辑状态
 const categoryEditing = ref(false)
@@ -362,6 +375,18 @@ const handleGeocode = async () => {
     ElMessage.error(error.response?.data?.error?.message || error.message || 'GPS 解析失败')
   } finally {
     geocoding.value = false
+  }
+}
+
+// 手动设置位置确认回调
+const handleLocationConfirm = async (coords: { latitude: number; longitude: number }) => {
+  if (!photo.value) return
+  try {
+    await photoApi.setLocation(photo.value.id, coords)
+    await loadPhoto()
+    ElMessage.success('位置已更新')
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || error.message || '设置位置失败')
   }
 }
 

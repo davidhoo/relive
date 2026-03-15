@@ -77,4 +77,9 @@ export const photoApi = {
   updateCategory(id: number, category: string) {
     return http.patch<ApiResponse<any>>(`/photos/${id}/category`, { category })
   },
+
+  // 手动设置照片位置
+  setLocation(id: number, data: { latitude: number; longitude: number }) {
+    return http.patch<ApiResponse<{ location: string }>>(`/photos/${id}/location`, data)
+  },
 }

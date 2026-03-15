@@ -17,6 +17,12 @@ export interface Photo {
   gps_latitude?: number
   gps_longitude?: number
   location?: string
+  country?: string
+  province?: string
+  city?: string
+  district?: string
+  street?: string
+  poi?: string
   geocode_status?: string
   geocode_provider?: string
   geocoded_at?: string

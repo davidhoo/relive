@@ -172,6 +172,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				photos.GET("", handlers.Photo.GetPhotos)
 				photos.GET("/:id", handlers.Photo.GetPhotoByID)
 				photos.PATCH("/:id/category", handlers.Photo.UpdateCategory)
+				photos.PATCH("/:id/location", handlers.Photo.SetManualLocation)
 			}
 
 			thumbnails := authorized.Group("/thumbnails")

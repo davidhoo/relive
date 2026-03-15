@@ -83,6 +83,12 @@ type UpdateCategoryRequest struct {
 	Category string `json:"category"`
 }
 
+// SetManualLocationRequest 手动设置照片位置请求
+type SetManualLocationRequest struct {
+	Latitude  float64 `json:"latitude" binding:"required"`
+	Longitude float64 `json:"longitude" binding:"required"`
+}
+
 // TableName 指定表名
 func (Photo) TableName() string {
 	return "photos"
