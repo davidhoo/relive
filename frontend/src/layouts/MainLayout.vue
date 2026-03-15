@@ -4,7 +4,7 @@
     <el-aside :width="isCollapsed ? '64px' : '240px'" class="sidebar">
       <div class="logo">
         <div class="logo-icon">
-          <el-icon><PictureFilled /></el-icon>
+          <img src="/logo-192.png" alt="Relive" class="logo-img" />
         </div>
         <h2 v-show="!isCollapsed" class="logo-text">Relive</h2>
       </div>
@@ -114,7 +114,6 @@ import {
   Picture,
   Files,
   Location,
-  PictureFilled,
   Setting,
   SwitchButton,
   User,
@@ -278,11 +277,15 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 28px;
-  background: var(--color-primary);
   border-radius: var(--radius-md);
-  color: white;
+  overflow: hidden;
   transition: transform var(--transition-base);
+}
+
+.logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .logo:hover .logo-icon {
