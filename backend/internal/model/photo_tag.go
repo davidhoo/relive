@@ -19,12 +19,18 @@ func SplitTags(s string) []string {
 		return nil
 	}
 	parts := strings.Split(s, ",")
+	seen := make(map[string]struct{}, len(parts))
 	var result []string
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
-		if p != "" {
-			result = append(result, p)
+		if p == "" {
+			continue
 		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		result = append(result, p)
 	}
 	return result
 }

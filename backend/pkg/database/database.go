@@ -10,6 +10,7 @@ import (
 	"github.com/davidhoo/relive/pkg/geodata"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	gormlogger "gorm.io/gorm/logger"
 )
 
@@ -184,17 +185,6 @@ func migratePhotoTagsTable(db *gorm.DB) error {
 		return nil // 已迁移
 	}
 
-	// 检查 photo_tags 表是否已有数据
-	var count int64
-	if err := db.Model(&model.PhotoTag{}).Count(&count).Error; err != nil {
-		return err
-	}
-	if count > 0 {
-		// 表已有数据，标记为已迁移
-		db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
-		return nil
-	}
-
 	// 批量迁移：从 photos.tags 拆分写入 photo_tags
 	log.Printf("[database] migrating photo tags to photo_tags table...")
 
@@ -224,7 +214,7 @@ func migratePhotoTagsTable(db *gorm.DB) error {
 			lastID = p.ID
 		}
 		if len(records) > 0 {
-			if err := db.Create(&records).Error; err != nil {
+			if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&records).Error; err != nil {
 				return err
 			}
 			total += int64(len(records))
