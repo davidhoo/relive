@@ -322,7 +322,7 @@
         </div>
 
         <!-- 标签筛选 -->
-        <div class="filter-section" v-if="hotTags.length > 0 || filterTag">
+        <div class="filter-section" v-if="tagsLoaded && (hotTags.length > 0 || filterTag)">
           <div class="filter-label">
             <el-icon><PriceTag /></el-icon>
             <span>标签</span>
@@ -690,6 +690,7 @@ const excludedCount = ref(0)
 const categories = ref<string[]>([])
 const hotTags = ref<TagInfo[]>([])
 const totalTagCount = ref(0)
+const tagsLoaded = ref(false)
 const tagSearchQuery = ref('')
 const tagSearchResults = ref<TagInfo[]>([])
 let tagSearchTimer: ReturnType<typeof setTimeout> | null = null
@@ -1153,6 +1154,7 @@ const loadCategoriesAndTags = async () => {
     const tagsData = tagsRes.data?.data
     hotTags.value = tagsData?.items || []
     totalTagCount.value = tagsData?.total || 0
+    tagsLoaded.value = true
   } catch (error: any) {
     console.error('Failed to load categories and tags:', error)
   }
