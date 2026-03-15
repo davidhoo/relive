@@ -296,6 +296,15 @@ Docker 构建时通过 build-args 注入额外信息：
 
 ## Recent Features
 
+### FTS5 Full-Text Search (2026-03-15)
+- 照片搜索从 7 字段 `LIKE '%keyword%'` 全表扫描改为 FTS5 全文索引
+- `photos_fts` 虚拟表（external content 模式）索引 file_name/description/caption/location 4 字段
+- INSERT/UPDATE/DELETE 触发器自动同步 FTS5 索引
+- `database.FTS5Available` 全局标志，SQLite 未编译 FTS5 时自动降级为 LIKE
+- `buildFTSQuery`：空格分词 + 双引号包裹，防止 FTS5 语法冲突
+- 前端筛选并存：search + category + tag 三者 AND 并存（不再互相清除）
+- 迁移用 `app_config` 幂等标记 `migration.photos_fts5_v1`
+
 ### Photo Tags Optimization (2026-03-15)
 - 标签存储从 `photos.tags` 逗号分隔文本迁移到独立 `photo_tags` 表（双写保留回滚安全）
 - `GetTags()` 改为热门标签 + 搜索模式：`GET /photos/tags?q=&limit=15` 返回 `TagsResponse{items: TagWithCount[], total}`
