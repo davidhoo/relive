@@ -3,7 +3,7 @@
     <PageHeader title="照片管理" subtitle="浏览和管理您的照片集合" :gradient="true" />
 
     <!-- 扫描路径列表 -->
-    <el-card shadow="never" class="scan-paths-card animate-fade-in" v-loading="scanPathLoading">
+    <el-card shadow="never" class="scan-paths-card animate-fade-in" :class="{ 'is-collapsed': scanPathsCollapsed }" v-loading="scanPathLoading">
       <template #header>
         <SectionHeader :icon="FolderOpened" :title="`扫描路径 (${scanPaths.length})`">
         <template #actions>
@@ -40,19 +40,24 @@
               @click="handleCleanup"
               class="cleanup-btn"
               title="清理数据库中所有文件已不存在的照片记录"
+              v-show="!scanPathsCollapsed"
             >
               <el-icon><Delete /></el-icon>
               清理
             </el-button>
-            <el-button type="primary" size="small" @click="handleAddPath" class="manage-btn">
+            <el-button type="primary" size="small" @click="handleAddPath" class="manage-btn" v-show="!scanPathsCollapsed">
               <el-icon><Plus /></el-icon>
               添加路径
+            </el-button>
+            <el-button text size="small" @click="toggleScanPaths" class="collapse-btn">
+              <el-icon :class="{ 'is-collapsed': scanPathsCollapsed }"><ArrowUp /></el-icon>
             </el-button>
           </div>
         </template>
       </SectionHeader>
       </template>
 
+      <div v-show="!scanPathsCollapsed">
       <el-table
         :data="scanPaths"
         class="full-width-table scan-path-table"
@@ -235,6 +240,7 @@
           添加路径
         </el-button>
       </el-empty>
+      </div>
     </el-card>
 
     <!-- 照片列表 -->
@@ -573,7 +579,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { CircleCheck, CircleClose, Clock, Close, Collection, Delete, Files, Filter, Folder, FolderOpened, FullScreen, Loading, Location, MagicStick, Picture, PictureFilled, Plus, PriceTag, QuestionFilled, Refresh, RefreshLeft, Search, Select, Star, SwitchButton, Timer } from '@element-plus/icons-vue'
+import { ArrowUp, CircleCheck, CircleClose, Clock, Close, Collection, Delete, Files, Filter, Folder, FolderOpened, FullScreen, Loading, Location, MagicStick, Picture, PictureFilled, Plus, PriceTag, QuestionFilled, Refresh, RefreshLeft, Search, Select, Star, SwitchButton, Timer } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
@@ -604,6 +610,7 @@ const filterGPS = ref('')
 const filterStatus = ref('') // '': active(默认), 'excluded': 回收站
 const scanPaths = ref<ScanPathConfig[]>([])
 const scanPathLoading = ref(false)
+const scanPathsCollapsed = ref(localStorage.getItem('photos_scanPaths_collapsed') === 'true')
 const scanningPathId = ref<string>('')
 const rebuildingPathId = ref<string>('')
 const currentTaskId = ref<string>('')
@@ -1248,6 +1255,12 @@ const handleTagClick = (value: string) => {
   loadPhotos()
 }
 
+// 折叠/展开扫描路径
+const toggleScanPaths = () => {
+  scanPathsCollapsed.value = !scanPathsCollapsed.value
+  localStorage.setItem('photos_scanPaths_collapsed', String(scanPathsCollapsed.value))
+}
+
 // 点击路径名称搜索
 const handlePathClick = (row: ScanPathConfig) => {
   // 退出回收站模式
@@ -1671,6 +1684,10 @@ defineExpose({
   padding: var(--spacing-md);
 }
 
+.scan-paths-card.is-collapsed :deep(.el-card__body) {
+  display: none;
+}
+
 .scan-paths-card > :deep(.section-header) {
   margin-bottom: var(--spacing-md);
 }
@@ -1680,6 +1697,19 @@ defineExpose({
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.collapse-btn {
+  padding: 4px !important;
+  margin-left: -4px;
+}
+
+.collapse-btn .el-icon {
+  transition: transform 0.2s ease;
+}
+
+.collapse-btn .el-icon.is-collapsed {
+  transform: rotate(180deg);
 }
 
 .auto-scan-inline {
