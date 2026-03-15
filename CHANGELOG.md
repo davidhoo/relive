@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.0] - 2026-03-15
+
+### Added
+- **FTS5 全文搜索** - 照片搜索从 7 字段 LIKE 全表扫描改为 SQLite FTS5 索引（file_name/description/caption/location），自动触发器同步，不可用时自动降级为 LIKE
+- **标签独立存储（photo_tags 表）** - 标签从 photos.tags 逗号文本迁移到独立表，查询性能大幅提升，双写保留回滚安全
+- **标签云弹窗** - 热门标签 Top 15 展示 + "查看所有标签"弹窗（前 100 热门 + 搜索 300ms debounce），解决万级标签渲染崩溃
+- **照片手动设置位置** - Leaflet 地图选点设置照片位置，支持批量设置
+- **扫描路径折叠** - 扫描路径区域支持折叠/展开，localStorage 记住状态
+- **ESP32 双击 Reset 重新配网** - 双击 Reset 按钮重新进入 AP 配网模式
+
+### Changed
+- **筛选条件并存** - 搜索 + 分类 + 标签三者 AND 并存，不再互相清除
+- **标签筛选精确匹配** - 从 `LIKE '%tag%'` 改为 photo_tags 表精确子查询
+
+### Fixed
+- ESP32 深度睡眠后时区丢失导致时间偏移 8 小时
+- photo_tags 迁移唯一约束冲突导致启动失败
+- 标签区域等待热门标签加载完成后再渲染，避免布局跳动
+- 预创建 /app/photos 目录支持嵌套只读挂载
+- 禁用照片列表和 Dashboard 的 el-image 大图预览误触
+
+---
+
 ## [1.1.0] - 2026-03-14
 
 ### Added
