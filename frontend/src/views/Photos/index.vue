@@ -326,7 +326,6 @@
           <div class="filter-label">
             <el-icon><PriceTag /></el-icon>
             <span>标签</span>
-            <el-tag type="info" size="small" effect="plain" class="count-tag" v-if="totalTagCount > 0">{{ totalTagCount }}</el-tag>
           </div>
           <div class="filter-tags-area">
             <!-- 已选标签（不在当前显示列表时单独展示） -->
@@ -363,6 +362,7 @@
                 {{ item.tag }}<span class="tag-count">({{ item.count }})</span>
               </el-tag>
               <span v-if="tagSearchQuery.trim() && displayedTagList.length === 0" class="tag-no-result">无匹配标签</span>
+              <span v-if="!tagSearchQuery.trim() && totalTagCount > 0" class="tag-total">共 {{ totalTagCount }} 个标签</span>
             </div>
           </div>
         </div>
@@ -2392,6 +2392,13 @@ defineExpose({
 .tag-no-result {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
+  padding: 4px 0;
+}
+
+.tag-total {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
   padding: 4px 0;
 }
 
