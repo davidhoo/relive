@@ -601,7 +601,7 @@ func (r *photoRepository) GetDerivedStatusByPathPrefix(prefix string) (*model.Pa
 // GetCategories 获取所有分类
 func (r *photoRepository) GetCategories() ([]string, error) {
 	var categories []string
-	err := r.db.Model(&model.Photo{}).Scopes(activeScope).
+	err := r.db.Model(&model.Photo{}).
 		Where("main_category != ? AND main_category IS NOT NULL", "").
 		Distinct("main_category").
 		Pluck("main_category", &categories).Error
@@ -613,7 +613,6 @@ func (r *photoRepository) GetTags(query string, limit int) ([]model.TagWithCount
 	var results []model.TagWithCount
 	db := r.db.Table("photo_tags").
 		Select("tag, COUNT(*) as count").
-		Where("photo_id IN (SELECT id FROM photos WHERE status = ? AND deleted_at IS NULL)", model.PhotoStatusActive).
 		Group("tag").
 		Order("count DESC, tag ASC")
 
@@ -628,11 +627,10 @@ func (r *photoRepository) GetTags(query string, limit int) ([]model.TagWithCount
 	return results, err
 }
 
-// CountTags 统计活跃照片的不同标签总数
+// CountTags 统计不同标签总数
 func (r *photoRepository) CountTags() (int64, error) {
 	var count int64
 	err := r.db.Table("photo_tags").
-		Where("photo_id IN (SELECT id FROM photos WHERE status = ? AND deleted_at IS NULL)", model.PhotoStatusActive).
 		Distinct("tag").
 		Count(&count).Error
 	return count, err

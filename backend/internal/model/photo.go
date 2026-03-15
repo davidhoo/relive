@@ -17,10 +17,10 @@ type Photo struct {
 	ID        uint           `gorm:"primarykey" json:"id"`
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	DeletedAt gorm.DeletedAt `gorm:"index;index:idx_status_deleted_taken,priority:2" json:"-"`
 
 	// 状态
-	Status string `gorm:"type:varchar(20);default:'active';index:idx_status" json:"status"` // active/excluded
+	Status string `gorm:"type:varchar(20);default:'active';index:idx_status;index:idx_status_deleted_taken,priority:1" json:"status"` // active/excluded
 
 	// 文件信息
 	FilePath       string     `gorm:"type:text;not null;uniqueIndex:idx_file_path" json:"file_path"` // 文件路径
@@ -36,7 +36,7 @@ type Photo struct {
 	ThumbnailGeneratedAt *time.Time `json:"thumbnail_generated_at"`
 
 	// EXIF 信息
-	TakenAt         *time.Time `gorm:"index:idx_taken_at" json:"taken_at"`                   // 拍摄时间
+	TakenAt         *time.Time `gorm:"index:idx_taken_at;index:idx_status_deleted_taken,priority:3,sort:desc" json:"taken_at"` // 拍摄时间
 	CameraModel     string     `gorm:"type:varchar(100)" json:"camera_model"`                // 相机型号
 	Width           int        `gorm:"not null" json:"width"`                                // 宽度
 	Height          int        `gorm:"not null" json:"height"`                               // 高度
