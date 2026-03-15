@@ -24,13 +24,13 @@ func TestAIService_GetTaskStatus_Nil(t *testing.T) {
 
 func TestAIService_GetTaskStatus_WithTask(t *testing.T) {
 	svc := &aiService{
-		currentTask: &AnalyzeTask{ID: "task-1", Status: "running", TotalCount: 10},
+		currentTask: &AnalyzeTask{ID: "task-1", Status: AnalyzeTaskStatusRunning, TotalCount: 10},
 	}
 
 	status := svc.GetTaskStatus()
 	require.NotNil(t, status)
 	assert.Equal(t, "task-1", status.ID)
-	assert.Equal(t, "running", status.Status)
+	assert.Equal(t, AnalyzeTaskStatusRunning, status.Status)
 }
 
 func TestAIService_GetBackgroundLogs_Empty(t *testing.T) {
@@ -63,12 +63,12 @@ func TestAnalyzeTask_IsRunning(t *testing.T) {
 		status   string
 		expected bool
 	}{
-		{"running", true},
-		{"sleeping", true},
-		{"stopping", true},
-		{"completed", false},
-		{"failed", false},
-		{"pending", false},
+		{AnalyzeTaskStatusRunning, true},
+		{AnalyzeTaskStatusSleeping, true},
+		{AnalyzeTaskStatusStopping, true},
+		{AnalyzeTaskStatusCompleted, false},
+		{AnalyzeTaskStatusFailed, false},
+		{AnalyzeTaskStatusPending, false},
 	}
 
 	for _, tt := range tests {

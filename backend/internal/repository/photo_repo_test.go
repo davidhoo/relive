@@ -185,8 +185,8 @@ func TestPhotoRepository_GetUnanalyzed(t *testing.T) {
 			FileHash:        "hash" + string(rune(i)),
 			Width:           1920,
 			Height:          1080,
-			ThumbnailStatus: "ready",
-			GeocodeStatus:   "none",
+			ThumbnailStatus: model.ThumbnailStatusReady,
+			GeocodeStatus:   model.GeocodeStatusNone,
 			AIAnalyzed:      i >= 5, // 前 5 个未分析
 		}
 		repo.Create(photo)

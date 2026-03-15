@@ -432,7 +432,7 @@ func (h *DeviceHandler) GetDeviceStats(c *gin.Context) {
 
 	// 按设备类型统计
 	byType := make(map[string]int64)
-	deviceTypes := []string{"embedded", "mobile", "web", "offline", "service"}
+	deviceTypes := model.DeviceTypes
 	for _, dt := range deviceTypes {
 		count, err := h.deviceService.CountByDeviceType(dt)
 		if err == nil && count > 0 {

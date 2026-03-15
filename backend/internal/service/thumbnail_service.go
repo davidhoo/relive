@@ -16,10 +16,6 @@ import (
 )
 
 const (
-	thumbnailSourceScan    = "scan"
-	thumbnailSourcePassive = "passive"
-	thumbnailSourceManual  = "manual"
-
 	thumbnailPriorityScan    = 50
 	thumbnailPriorityManual  = 80
 	thumbnailPriorityPassive = 100
@@ -75,7 +71,7 @@ func (s *thumbnailService) StartBackground() (*model.ThumbnailTask, error) {
 		return nil, fmt.Errorf("thumbnail task already running")
 	}
 	now := time.Now()
-	task := &model.ThumbnailTask{Status: "running", StartedAt: &now}
+	task := &model.ThumbnailTask{Status: model.TaskStatusRunning, StartedAt: &now}
 	active := &activeThumbnailTask{stopCh: make(chan struct{}), done: make(chan struct{})}
 	s.task = task
 	s.active = active
@@ -97,8 +93,8 @@ func (s *thumbnailService) StopBackground() error {
 		close(s.active.stopCh)
 	}
 	s.active.mu.Unlock()
-	if s.task != nil && s.task.Status == "running" {
-		s.task.Status = "stopping"
+	if s.task != nil && s.task.Status == model.TaskStatusRunning {
+		s.task.Status = model.TaskStatusStopping
 		s.appendBackgroundLog("收到停止请求，等待当前任务处理完成")
 	}
 	return nil
@@ -196,7 +192,7 @@ func (s *thumbnailService) GeneratePhoto(photoID uint, force bool) error {
 			now := time.Now()
 			return s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
 				"thumbnail_path":         thumbnailPath,
-				"thumbnail_status":       "ready",
+				"thumbnail_status":       model.ThumbnailStatusReady,
 				"thumbnail_generated_at": &now,
 			}).Error
 		}
@@ -214,14 +210,14 @@ func (s *thumbnailService) GeneratePhoto(photoID uint, force bool) error {
 	now := time.Now()
 	if err != nil {
 		_ = s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
-			"thumbnail_status": "failed",
+			"thumbnail_status": model.ThumbnailStatusFailed,
 		}).Error
 		return fmt.Errorf("生成缩略图失败: %w", err)
 	}
 
 	return s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
 		"thumbnail_path":         relPath,
-		"thumbnail_status":       "ready",
+		"thumbnail_status":       model.ThumbnailStatusReady,
 		"thumbnail_generated_at": &now,
 	}).Error
 }
@@ -234,7 +230,7 @@ func (s *thumbnailService) enqueuePhotoModel(photo *model.Photo, source string, 
 		return nil
 	}
 	if source == "" {
-		source = thumbnailSourceManual
+		source = model.ThumbnailJobSourceManual
 	}
 	if priority <= 0 {
 		priority = thumbnailPriorityManual
@@ -251,7 +247,7 @@ func (s *thumbnailService) enqueuePhotoModel(photo *model.Photo, source string, 
 			generatedAt := time.Now()
 			updateErr := s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
 				"thumbnail_path":         thumbnailPath,
-				"thumbnail_status":       "ready",
+				"thumbnail_status":       model.ThumbnailStatusReady,
 				"thumbnail_generated_at": &generatedAt,
 			}).Error
 			if updateErr != nil {
@@ -273,7 +269,7 @@ func (s *thumbnailService) enqueuePhotoModel(photo *model.Photo, source string, 
 	now := time.Now()
 	if err := s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
 		"thumbnail_path":         thumbnailPath,
-		"thumbnail_status":       "pending",
+		"thumbnail_status":       model.ThumbnailStatusPending,
 		"thumbnail_generated_at": nil,
 	}).Error; err != nil {
 		return err
@@ -289,8 +285,8 @@ func (s *thumbnailService) enqueuePhotoModel(photo *model.Photo, source string, 
 			"source":            source,
 			"last_requested_at": &now,
 		}
-		if activeJob.Status == "pending" {
-			updates["status"] = "queued"
+		if activeJob.Status == model.ThumbnailJobStatusPending {
+			updates["status"] = model.ThumbnailJobStatusQueued
 		}
 		return s.jobRepo.UpdateFields(activeJob.ID, updates)
 	}
@@ -298,7 +294,7 @@ func (s *thumbnailService) enqueuePhotoModel(photo *model.Photo, source string, 
 	job := &model.ThumbnailJob{
 		PhotoID:         photo.ID,
 		FilePath:        photo.FilePath,
-		Status:          "queued",
+		Status:          model.ThumbnailJobStatusQueued,
 		Priority:        priority,
 		Source:          source,
 		QueuedAt:        now,
@@ -318,8 +314,8 @@ func (s *thumbnailService) runBackground(active *activeThumbnailTask) {
 		}
 		now := time.Now()
 		s.taskMutex.Lock()
-		if s.task != nil && (s.task.Status == "running" || s.task.Status == "stopping") {
-			s.task.Status = "stopped"
+		if s.task != nil && (s.task.Status == model.TaskStatusRunning || s.task.Status == model.TaskStatusStopping) {
+			s.task.Status = model.TaskStatusStopped
 			s.task.StoppedAt = &now
 		}
 		s.appendBackgroundLog("缩略图后台生成已停止")
@@ -411,12 +407,12 @@ func (s *thumbnailService) processJob(job *model.ThumbnailJob) error {
 	photo, err := s.photoRepo.GetByID(job.PhotoID)
 	if err != nil {
 		now := time.Now()
-		_ = s.jobRepo.UpdateFields(job.ID, map[string]interface{}{"status": "failed", "last_error": err.Error(), "completed_at": &now})
+		_ = s.jobRepo.UpdateFields(job.ID, map[string]interface{}{"status": model.ThumbnailJobStatusFailed, "last_error": err.Error(), "completed_at": &now})
 		return err
 	}
 	if photo.Status == model.PhotoStatusExcluded {
 		now := time.Now()
-		_ = s.jobRepo.UpdateFields(job.ID, map[string]interface{}{"status": "cancelled", "completed_at": &now})
+		_ = s.jobRepo.UpdateFields(job.ID, map[string]interface{}{"status": model.ThumbnailJobStatusCancelled, "completed_at": &now})
 		s.updateTaskProgress(func(task *model.ThumbnailTask) { task.ProcessedJobs++ })
 		return nil
 	}
@@ -425,9 +421,9 @@ func (s *thumbnailService) processJob(job *model.ThumbnailJob) error {
 	if err != nil {
 		// 使用带重试的更新
 		_ = s.updatePhotoWithRetry(photo.ID, map[string]interface{}{
-			"thumbnail_status": "failed",
+			"thumbnail_status": model.ThumbnailStatusFailed,
 		})
-		_ = s.updateJobWithRetry(job.ID, map[string]interface{}{"status": "failed", "last_error": err.Error(), "completed_at": &now})
+		_ = s.updateJobWithRetry(job.ID, map[string]interface{}{"status": model.ThumbnailJobStatusFailed, "last_error": err.Error(), "completed_at": &now})
 		s.updateTaskProgress(func(task *model.ThumbnailTask) {
 			task.ProcessedJobs++
 		})
@@ -437,12 +433,12 @@ func (s *thumbnailService) processJob(job *model.ThumbnailJob) error {
 	// 批量更新 photo 和 job，减少数据库操作次数
 	if err := s.updatePhotoWithRetry(photo.ID, map[string]interface{}{
 		"thumbnail_path":         relPath,
-		"thumbnail_status":       "ready",
+		"thumbnail_status":       model.ThumbnailStatusReady,
 		"thumbnail_generated_at": &now,
 	}); err != nil {
 		logger.Warnf("update photo %d after thumbnail success failed: %v", photo.ID, err)
 	}
-	if err := s.updateJobWithRetry(job.ID, map[string]interface{}{"status": "completed", "completed_at": &now, "last_error": ""}); err != nil {
+	if err := s.updateJobWithRetry(job.ID, map[string]interface{}{"status": model.ThumbnailJobStatusCompleted, "completed_at": &now, "last_error": ""}); err != nil {
 		logger.Warnf("update thumbnail job %d status failed: %v", job.ID, err)
 	}
 	s.updateTaskProgress(func(task *model.ThumbnailTask) {
@@ -536,7 +532,7 @@ func (s *thumbnailService) seedPendingJobs() error {
 	if err := s.db.Model(&model.Photo{}).Where("status = ?", model.PhotoStatusActive).Count(&totalPhotos).Error; err != nil {
 		logger.Warnf("Failed to count total photos: %v", err)
 	}
-	if err := s.db.Model(&model.Photo{}).Where("status = ?", model.PhotoStatusActive).Where("thumbnail_status = ?", "ready").Count(&readyPhotos).Error; err != nil {
+	if err := s.db.Model(&model.Photo{}).Where("status = ?", model.PhotoStatusActive).Where("thumbnail_status = ?", model.ThumbnailStatusReady).Count(&readyPhotos).Error; err != nil {
 		logger.Warnf("Failed to count ready photos: %v", err)
 	}
 	if totalPhotos > 0 && totalPhotos == readyPhotos {
@@ -553,7 +549,7 @@ func (s *thumbnailService) seedPendingJobs() error {
 	err = s.db.Model(&model.Photo{}).
 		Select("id").
 		Where("status = ?", model.PhotoStatusActive).
-		Where("thumbnail_status != ? OR thumbnail_status IS NULL OR thumbnail_path = ''", "ready").
+		Where("thumbnail_status != ? OR thumbnail_status IS NULL OR thumbnail_path = ''", model.ThumbnailStatusReady).
 		FindInBatches(&photoIDs, 500, func(tx *gorm.DB, batch int) error {
 			logger.Debugf("Collecting batch %d, IDs in batch: %d", batch, len(photoIDs))
 			return nil
@@ -613,7 +609,7 @@ func (s *thumbnailService) enqueuePhotoWithRetry(photoID uint) error {
 		if photo == nil {
 			return fmt.Errorf("photo %d not found", photoID)
 		}
-		err = s.enqueuePhotoModel(photo, thumbnailSourceManual, thumbnailPriorityManual, false)
+		err = s.enqueuePhotoModel(photo, model.ThumbnailJobSourceManual, thumbnailPriorityManual, false)
 		if err == nil {
 			return nil
 		}

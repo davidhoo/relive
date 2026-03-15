@@ -21,7 +21,7 @@ type DailyDisplayBatch struct {
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 
 	BatchDate        string     `gorm:"type:date;not null;uniqueIndex:idx_batch_date" json:"batch_date"`
-	Status           string     `gorm:"type:varchar(20);not null;index:idx_batch_status" json:"status"`
+	Status           string     `gorm:"type:varchar(20);not null;index:idx_batch_status;check:chk_batch_status,status IN ('pending','running','ready','failed')" json:"status"`
 	ItemCount        int        `gorm:"default:0" json:"item_count"`
 	CanvasTemplate   string     `gorm:"type:varchar(100);not null" json:"canvas_template"`
 	StrategySnapshot string     `gorm:"type:text" json:"strategy_snapshot"`

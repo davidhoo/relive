@@ -45,12 +45,12 @@ func newDeviceServiceForTest(t *testing.T) (DeviceService, *gorm.DB) {
 func TestDeviceService_Create_Success(t *testing.T) {
 	svc, _ := newDeviceServiceForTest(t)
 
-	resp, err := svc.Create(&model.CreateDeviceRequest{Name: "My Frame", DeviceType: "embedded"})
+	resp, err := svc.Create(&model.CreateDeviceRequest{Name: "My Frame", DeviceType: model.DeviceTypeEmbedded})
 	require.NoError(t, err)
 	assert.NotZero(t, resp.ID)
 	assert.NotEmpty(t, resp.DeviceID)
 	assert.True(t, strings.HasPrefix(resp.APIKey, "sk-test-"))
-	assert.Equal(t, "embedded", resp.DeviceType)
+	assert.Equal(t, model.DeviceTypeEmbedded, resp.DeviceType)
 	assert.Equal(t, util.DefaultRenderProfile(), resp.RenderProfile)
 }
 
@@ -59,13 +59,13 @@ func TestDeviceService_Create_DefaultType(t *testing.T) {
 
 	resp, err := svc.Create(&model.CreateDeviceRequest{Name: "Frame"})
 	require.NoError(t, err)
-	assert.Equal(t, "embedded", resp.DeviceType)
+	assert.Equal(t, model.DeviceTypeEmbedded, resp.DeviceType)
 }
 
 func TestDeviceService_Create_NonEmbedded_NoRenderProfile(t *testing.T) {
 	svc, _ := newDeviceServiceForTest(t)
 
-	resp, err := svc.Create(&model.CreateDeviceRequest{Name: "Analyzer", DeviceType: "offline"})
+	resp, err := svc.Create(&model.CreateDeviceRequest{Name: "Analyzer", DeviceType: model.DeviceTypeOffline})
 	require.NoError(t, err)
 	assert.Empty(t, resp.RenderProfile)
 }
@@ -115,7 +115,7 @@ func TestDeviceService_UpdateEnabled(t *testing.T) {
 func TestDeviceService_UpdateRenderProfile_Embedded(t *testing.T) {
 	svc, _ := newDeviceServiceForTest(t)
 
-	created, _ := svc.Create(&model.CreateDeviceRequest{Name: "Frame", DeviceType: "embedded"})
+	created, _ := svc.Create(&model.CreateDeviceRequest{Name: "Frame", DeviceType: model.DeviceTypeEmbedded})
 	require.NoError(t, svc.UpdateRenderProfile(created.ID, "waveshare_7in3e"))
 
 	got, _ := svc.GetByID(created.ID)
@@ -125,7 +125,7 @@ func TestDeviceService_UpdateRenderProfile_Embedded(t *testing.T) {
 func TestDeviceService_UpdateRenderProfile_NonEmbedded(t *testing.T) {
 	svc, _ := newDeviceServiceForTest(t)
 
-	created, _ := svc.Create(&model.CreateDeviceRequest{Name: "Mobile", DeviceType: "mobile"})
+	created, _ := svc.Create(&model.CreateDeviceRequest{Name: "Mobile", DeviceType: model.DeviceTypeMobile})
 	require.NoError(t, svc.UpdateRenderProfile(created.ID, "any_profile"))
 
 	got, _ := svc.GetByID(created.ID)

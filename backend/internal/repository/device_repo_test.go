@@ -16,7 +16,7 @@ func TestDeviceRepo_Create(t *testing.T) {
 	defer teardownTestDB(db)
 	repo := NewDeviceRepository(db)
 
-	d := &model.Device{DeviceID: "D001", Name: "Frame", APIKey: "sk-1", DeviceType: "embedded", IsEnabled: true}
+	d := &model.Device{DeviceID: "D001", Name: "Frame", APIKey: "sk-1", DeviceType: model.DeviceTypeEmbedded, IsEnabled: true}
 	require.NoError(t, repo.Create(d))
 	assert.NotZero(t, d.ID)
 }
@@ -26,7 +26,7 @@ func TestDeviceRepo_GetByID(t *testing.T) {
 	defer teardownTestDB(db)
 	repo := NewDeviceRepository(db)
 
-	d := &model.Device{DeviceID: "D001", Name: "Frame", APIKey: "sk-1", DeviceType: "embedded"}
+	d := &model.Device{DeviceID: "D001", Name: "Frame", APIKey: "sk-1", DeviceType: model.DeviceTypeEmbedded}
 	require.NoError(t, repo.Create(d))
 
 	got, err := repo.GetByID(d.ID)
@@ -48,7 +48,7 @@ func TestDeviceRepo_GetByDeviceID(t *testing.T) {
 	defer teardownTestDB(db)
 	repo := NewDeviceRepository(db)
 
-	d := &model.Device{DeviceID: "FRAME-X", Name: "X", APIKey: "sk-x", DeviceType: "embedded"}
+	d := &model.Device{DeviceID: "FRAME-X", Name: "X", APIKey: "sk-x", DeviceType: model.DeviceTypeEmbedded}
 	require.NoError(t, repo.Create(d))
 
 	got, err := repo.GetByDeviceID("FRAME-X")
@@ -61,7 +61,7 @@ func TestDeviceRepo_GetByAPIKey(t *testing.T) {
 	defer teardownTestDB(db)
 	repo := NewDeviceRepository(db)
 
-	d := &model.Device{DeviceID: "D001", Name: "Frame", APIKey: "sk-test-key", DeviceType: "embedded"}
+	d := &model.Device{DeviceID: "D001", Name: "Frame", APIKey: "sk-test-key", DeviceType: model.DeviceTypeEmbedded}
 	require.NoError(t, repo.Create(d))
 
 	got, err := repo.GetByAPIKey("sk-test-key")
@@ -74,7 +74,7 @@ func TestDeviceRepo_Update(t *testing.T) {
 	defer teardownTestDB(db)
 	repo := NewDeviceRepository(db)
 
-	d := &model.Device{DeviceID: "D001", Name: "Old", APIKey: "sk-1", DeviceType: "embedded"}
+	d := &model.Device{DeviceID: "D001", Name: "Old", APIKey: "sk-1", DeviceType: model.DeviceTypeEmbedded}
 	require.NoError(t, repo.Create(d))
 
 	d.Name = "New"
@@ -90,7 +90,7 @@ func TestDeviceRepo_Delete(t *testing.T) {
 	defer teardownTestDB(db)
 	repo := NewDeviceRepository(db)
 
-	d := &model.Device{DeviceID: "D001", Name: "Frame", APIKey: "sk-1", DeviceType: "embedded"}
+	d := &model.Device{DeviceID: "D001", Name: "Frame", APIKey: "sk-1", DeviceType: model.DeviceTypeEmbedded}
 	require.NoError(t, repo.Create(d))
 	require.NoError(t, repo.Delete(d.ID))
 
@@ -110,7 +110,7 @@ func TestDeviceRepo_List_Pagination(t *testing.T) {
 			DeviceID:   "D" + string(rune('A'+i)),
 			Name:       "Device" + string(rune('A'+i)),
 			APIKey:     "sk-" + string(rune('A'+i)),
-			DeviceType: "embedded",
+			DeviceType: model.DeviceTypeEmbedded,
 		}
 		require.NoError(t, repo.Create(d))
 	}
@@ -132,7 +132,7 @@ func TestDeviceRepo_ListAll(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		d := &model.Device{
-			DeviceID: "D" + string(rune('0'+i)), Name: "N", APIKey: "sk-" + string(rune('0'+i)), DeviceType: "embedded",
+			DeviceID: "D" + string(rune('0'+i)), Name: "N", APIKey: "sk-" + string(rune('0'+i)), DeviceType: model.DeviceTypeEmbedded,
 		}
 		require.NoError(t, repo.Create(d))
 	}
@@ -147,11 +147,11 @@ func TestDeviceRepo_ListByDeviceType(t *testing.T) {
 	defer teardownTestDB(db)
 	repo := NewDeviceRepository(db)
 
-	require.NoError(t, repo.Create(&model.Device{DeviceID: "D1", Name: "N1", APIKey: "sk-1", DeviceType: "embedded"}))
-	require.NoError(t, repo.Create(&model.Device{DeviceID: "D2", Name: "N2", APIKey: "sk-2", DeviceType: "offline"}))
-	require.NoError(t, repo.Create(&model.Device{DeviceID: "D3", Name: "N3", APIKey: "sk-3", DeviceType: "embedded"}))
+	require.NoError(t, repo.Create(&model.Device{DeviceID: "D1", Name: "N1", APIKey: "sk-1", DeviceType: model.DeviceTypeEmbedded}))
+	require.NoError(t, repo.Create(&model.Device{DeviceID: "D2", Name: "N2", APIKey: "sk-2", DeviceType: model.DeviceTypeOffline}))
+	require.NoError(t, repo.Create(&model.Device{DeviceID: "D3", Name: "N3", APIKey: "sk-3", DeviceType: model.DeviceTypeEmbedded}))
 
-	embedded, err := repo.ListByDeviceType("embedded")
+	embedded, err := repo.ListByDeviceType(model.DeviceTypeEmbedded)
 	require.NoError(t, err)
 	assert.Len(t, embedded, 2)
 }
@@ -163,7 +163,7 @@ func TestDeviceRepo_Exists(t *testing.T) {
 	defer teardownTestDB(db)
 	repo := NewDeviceRepository(db)
 
-	d := &model.Device{DeviceID: "D1", Name: "N", APIKey: "sk-1", DeviceType: "embedded"}
+	d := &model.Device{DeviceID: "D1", Name: "N", APIKey: "sk-1", DeviceType: model.DeviceTypeEmbedded}
 	require.NoError(t, repo.Create(d))
 
 	exists, err := repo.Exists(d.ID)
@@ -234,14 +234,14 @@ func TestDeviceRepo_Count(t *testing.T) {
 	defer teardownTestDB(db)
 	repo := NewDeviceRepository(db)
 
-	require.NoError(t, repo.Create(&model.Device{DeviceID: "D1", Name: "N1", APIKey: "sk-1", DeviceType: "embedded"}))
-	require.NoError(t, repo.Create(&model.Device{DeviceID: "D2", Name: "N2", APIKey: "sk-2", DeviceType: "offline"}))
+	require.NoError(t, repo.Create(&model.Device{DeviceID: "D1", Name: "N1", APIKey: "sk-1", DeviceType: model.DeviceTypeEmbedded}))
+	require.NoError(t, repo.Create(&model.Device{DeviceID: "D2", Name: "N2", APIKey: "sk-2", DeviceType: model.DeviceTypeOffline}))
 
 	total, err := repo.Count()
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), total)
 
-	byType, err := repo.CountByDeviceType("embedded")
+	byType, err := repo.CountByDeviceType(model.DeviceTypeEmbedded)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), byType)
 }

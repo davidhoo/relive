@@ -65,7 +65,7 @@ func (h *GeocodeHandler) Enqueue(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: err.Error()}})
 		return
 	}
-	if err := h.service.EnqueuePhoto(req.PhotoID, "manual", 80, req.Force); err != nil {
+	if err := h.service.EnqueuePhoto(req.PhotoID, model.GeocodeJobSourceManual, 80, req.Force); err != nil {
 		c.JSON(http.StatusInternalServerError, model.Response{Success: false, Error: &model.ErrorInfo{Code: "ENQUEUE_FAILED", Message: err.Error()}})
 		return
 	}
@@ -78,7 +78,7 @@ func (h *GeocodeHandler) EnqueueByPath(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: err.Error()}})
 		return
 	}
-	count, err := h.service.EnqueueByPath(req.Path, "manual", 80)
+	count, err := h.service.EnqueueByPath(req.Path, model.GeocodeJobSourceManual, 80)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, model.Response{Success: false, Error: &model.ErrorInfo{Code: "ENQUEUE_FAILED", Message: err.Error()}})
 		return

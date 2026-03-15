@@ -46,7 +46,7 @@ func (r *geocodeJobRepository) UpdateFields(id uint, fields map[string]interface
 
 func (r *geocodeJobRepository) GetActiveByPhotoID(photoID uint) (*model.GeocodeJob, error) {
 	var job model.GeocodeJob
-	err := r.db.Where("photo_id = ? AND status IN ?", photoID, []string{"pending", "queued", "processing"}).
+	err := r.db.Where("photo_id = ? AND status IN ?", photoID, []string{model.GeocodeJobStatusPending, model.GeocodeJobStatusQueued, model.GeocodeJobStatusProcessing}).
 		Order("priority DESC").Order("queued_at ASC").First(&job).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -60,7 +60,7 @@ func (r *geocodeJobRepository) GetActiveByPhotoID(photoID uint) (*model.GeocodeJ
 func (r *geocodeJobRepository) ClaimNextJob() (*model.GeocodeJob, error) {
 	// 使用原子更新避免事务锁竞争
 	var job model.GeocodeJob
-	result := r.db.Where("status IN ?", []string{"pending", "queued"}).
+	result := r.db.Where("status IN ?", []string{model.GeocodeJobStatusPending, model.GeocodeJobStatusQueued}).
 		Order("priority DESC").Order("COALESCE(last_requested_at, queued_at) DESC").Order("queued_at ASC").
 		Limit(1).Find(&job)
 	if result.Error != nil {
@@ -72,12 +72,12 @@ func (r *geocodeJobRepository) ClaimNextJob() (*model.GeocodeJob, error) {
 	// 使用乐观锁方式原子更新状态
 	now := time.Now()
 	updates := map[string]interface{}{
-		"status":        "processing",
+		"status":        model.GeocodeJobStatusProcessing,
 		"started_at":    &now,
 		"attempt_count": gorm.Expr("attempt_count + 1"),
 	}
 	result = r.db.Model(&model.GeocodeJob{}).
-		Where("id = ? AND status IN ?", job.ID, []string{"pending", "queued"}).
+		Where("id = ? AND status IN ?", job.ID, []string{model.GeocodeJobStatusPending, model.GeocodeJobStatusQueued}).
 		Updates(updates)
 	if result.Error != nil {
 		return nil, result.Error
@@ -86,7 +86,7 @@ func (r *geocodeJobRepository) ClaimNextJob() (*model.GeocodeJob, error) {
 		// 其他进程已经认领了这个任务
 		return nil, nil
 	}
-	job.Status = "processing"
+	job.Status = model.GeocodeJobStatusProcessing
 	job.StartedAt = &now
 	job.AttemptCount++
 	return &job, nil
@@ -94,8 +94,8 @@ func (r *geocodeJobRepository) ClaimNextJob() (*model.GeocodeJob, error) {
 
 func (r *geocodeJobRepository) CancelPendingJobs() (int64, error) {
 	now := time.Now()
-	result := r.db.Model(&model.GeocodeJob{}).Where("status IN ?", []string{"pending", "queued"}).
-		Updates(map[string]interface{}{"status": "cancelled", "completed_at": &now})
+	result := r.db.Model(&model.GeocodeJob{}).Where("status IN ?", []string{model.GeocodeJobStatusPending, model.GeocodeJobStatusQueued}).
+		Updates(map[string]interface{}{"status": model.GeocodeJobStatusCancelled, "completed_at": &now})
 	if result.Error != nil {
 		return 0, result.Error
 	}
@@ -119,17 +119,17 @@ func (r *geocodeJobRepository) GetStats() (*GeocodeJobStats, error) {
 			return nil, err
 		}
 		switch status {
-		case "pending":
+		case model.GeocodeJobStatusPending:
 			stats.Pending = count
-		case "queued":
+		case model.GeocodeJobStatusQueued:
 			stats.Queued = count
-		case "processing":
+		case model.GeocodeJobStatusProcessing:
 			stats.Processing = count
-		case "completed":
+		case model.GeocodeJobStatusCompleted:
 			stats.Completed = count
-		case "failed":
+		case model.GeocodeJobStatusFailed:
 			stats.Failed = count
-		case "cancelled":
+		case model.GeocodeJobStatusCancelled:
 			stats.Cancelled = count
 		}
 	}
@@ -137,7 +137,7 @@ func (r *geocodeJobRepository) GetStats() (*GeocodeJobStats, error) {
 }
 
 func (r *geocodeJobRepository) DeleteTerminalBefore(cutoff time.Time) (int64, error) {
-	result := r.db.Where("status IN ? AND updated_at < ?", []string{"completed", "failed", "cancelled"}, cutoff).
+	result := r.db.Where("status IN ? AND updated_at < ?", []string{model.GeocodeJobStatusCompleted, model.GeocodeJobStatusFailed, model.GeocodeJobStatusCancelled}, cutoff).
 		Delete(&model.GeocodeJob{})
 	if result.Error != nil {
 		return 0, result.Error

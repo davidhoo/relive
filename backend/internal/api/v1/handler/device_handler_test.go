@@ -127,7 +127,7 @@ func TestDeviceHandlerUpdateRenderProfile(t *testing.T) {
 		DeviceID:      "FRAME001",
 		Name:          "Frame",
 		APIKey:        "sk-relive-test",
-		DeviceType:    "embedded",
+		DeviceType:    model.DeviceTypeEmbedded,
 		IsEnabled:     true,
 		RenderProfile: util.DefaultRenderProfile(),
 	}
@@ -164,8 +164,8 @@ func TestDeviceHandlerGetDeviceStats(t *testing.T) {
 	recent := time.Now().Add(-2 * time.Minute)
 	old := time.Now().Add(-10 * time.Minute)
 	devices := []*model.Device{
-		{DeviceID: "EMBED001", Name: "Embedded", APIKey: "sk-relive-1", DeviceType: "embedded", IsEnabled: true, LastSeen: &recent},
-		{DeviceID: "OFF001", Name: "Analyzer", APIKey: "sk-relive-2", DeviceType: "offline", IsEnabled: true, LastSeen: &old},
+		{DeviceID: "EMBED001", Name: "Embedded", APIKey: "sk-relive-1", DeviceType: model.DeviceTypeEmbedded, IsEnabled: true, LastSeen: &recent},
+		{DeviceID: "OFF001", Name: "Analyzer", APIKey: "sk-relive-2", DeviceType: model.DeviceTypeOffline, IsEnabled: true, LastSeen: &old},
 	}
 	for _, device := range devices {
 		if err := db.Create(device).Error; err != nil {
@@ -186,11 +186,11 @@ func TestDeviceHandlerGetDeviceStats(t *testing.T) {
 	if stats.Online != 1 {
 		t.Fatalf("expected online 1, got %d", stats.Online)
 	}
-	if stats.ByType["embedded"] != 1 {
-		t.Fatalf("expected embedded count 1, got %d", stats.ByType["embedded"])
+	if stats.ByType[model.DeviceTypeEmbedded] != 1 {
+		t.Fatalf("expected embedded count 1, got %d", stats.ByType[model.DeviceTypeEmbedded])
 	}
-	if stats.ByType["offline"] != 1 {
-		t.Fatalf("expected offline count 1, got %d", stats.ByType["offline"])
+	if stats.ByType[model.DeviceTypeOffline] != 1 {
+		t.Fatalf("expected offline count 1, got %d", stats.ByType[model.DeviceTypeOffline])
 	}
 }
 
@@ -198,8 +198,8 @@ func TestDeviceHandlerGetDevices(t *testing.T) {
 	handler, db := newDeviceHandlerForTest(t)
 
 	recent := time.Now()
-	db.Create(&model.Device{DeviceID: "D1", Name: "Frame1", APIKey: "sk-relive-1", DeviceType: "embedded", IsEnabled: true, LastSeen: &recent})
-	db.Create(&model.Device{DeviceID: "D2", Name: "Frame2", APIKey: "sk-relive-2", DeviceType: "mobile", IsEnabled: true})
+	db.Create(&model.Device{DeviceID: "D1", Name: "Frame1", APIKey: "sk-relive-1", DeviceType: model.DeviceTypeEmbedded, IsEnabled: true, LastSeen: &recent})
+	db.Create(&model.Device{DeviceID: "D2", Name: "Frame2", APIKey: "sk-relive-2", DeviceType: model.DeviceTypeMobile, IsEnabled: true})
 
 	recorder := performJSONRequest(t, http.MethodGet, "/api/v1/devices?page=1&page_size=10", nil, nil, handler.GetDevices)
 	if recorder.Code != http.StatusOK {
@@ -214,7 +214,7 @@ func TestDeviceHandlerGetDevices(t *testing.T) {
 func TestDeviceHandlerGetDeviceByID(t *testing.T) {
 	handler, db := newDeviceHandlerForTest(t)
 
-	db.Create(&model.Device{DeviceID: "FRAME001", Name: "Frame1", APIKey: "sk-relive-1", DeviceType: "embedded", IsEnabled: true})
+	db.Create(&model.Device{DeviceID: "FRAME001", Name: "Frame1", APIKey: "sk-relive-1", DeviceType: model.DeviceTypeEmbedded, IsEnabled: true})
 
 	recorder := performJSONRequest(t, http.MethodGet, "/api/v1/devices/FRAME001", nil,
 		gin.Params{{Key: "device_id", Value: "FRAME001"}}, handler.GetDeviceByID)
@@ -236,7 +236,7 @@ func TestDeviceHandlerGetDeviceByID_NotFound(t *testing.T) {
 func TestDeviceHandlerDeleteDevice(t *testing.T) {
 	handler, db := newDeviceHandlerForTest(t)
 
-	db.Create(&model.Device{DeviceID: "D1", Name: "Frame1", APIKey: "sk-relive-1", DeviceType: "embedded", IsEnabled: true})
+	db.Create(&model.Device{DeviceID: "D1", Name: "Frame1", APIKey: "sk-relive-1", DeviceType: model.DeviceTypeEmbedded, IsEnabled: true})
 
 	recorder := performJSONRequest(t, http.MethodDelete, "/api/v1/devices/1", nil,
 		gin.Params{{Key: "id", Value: "1"}}, handler.DeleteDevice)
@@ -265,7 +265,7 @@ func TestDeviceHandlerDeleteDevice_InvalidID(t *testing.T) {
 func TestDeviceHandlerUpdateDeviceEnabled(t *testing.T) {
 	handler, db := newDeviceHandlerForTest(t)
 
-	db.Create(&model.Device{DeviceID: "D1", Name: "Frame1", APIKey: "sk-relive-1", DeviceType: "embedded", IsEnabled: true})
+	db.Create(&model.Device{DeviceID: "D1", Name: "Frame1", APIKey: "sk-relive-1", DeviceType: model.DeviceTypeEmbedded, IsEnabled: true})
 
 	body := []byte(`{"is_enabled":false}`)
 	recorder := performJSONRequest(t, http.MethodPut, "/api/v1/devices/1/enabled", body,

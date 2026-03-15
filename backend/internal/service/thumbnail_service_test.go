@@ -59,8 +59,8 @@ func TestThumbnailService_GetStats_WithJobs(t *testing.T) {
 	svc, db := newThumbnailServiceForTest(t)
 
 	now := time.Now()
-	db.Create(&model.ThumbnailJob{PhotoID: 1, FilePath: "/p/1.jpg", Status: "completed", Source: "scan", QueuedAt: now})
-	db.Create(&model.ThumbnailJob{PhotoID: 2, FilePath: "/p/2.jpg", Status: "pending", Source: "scan", QueuedAt: now})
+	db.Create(&model.ThumbnailJob{PhotoID: 1, FilePath: "/p/1.jpg", Status: model.ThumbnailJobStatusCompleted, Source: model.ThumbnailJobSourceScan, QueuedAt: now})
+	db.Create(&model.ThumbnailJob{PhotoID: 2, FilePath: "/p/2.jpg", Status: model.ThumbnailJobStatusPending, Source: model.ThumbnailJobSourceScan, QueuedAt: now})
 
 	stats, err := svc.GetStats()
 	require.NoError(t, err)

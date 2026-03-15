@@ -128,7 +128,7 @@ func (s *analysisRuntimeService) ReleaseGlobal(ownerType, ownerID string) error 
 		Where("resource_key = ? AND owner_type = ? AND owner_id = ?",
 			model.GlobalAnalysisResourceKey, ownerType, ownerID).
 		Updates(map[string]interface{}{
-			"owner_type":        "",
+			"owner_type":        model.AnalysisRuntimeStatusIdle,
 			"owner_id":          "",
 			"status":            model.AnalysisRuntimeStatusIdle,
 			"message":           "",

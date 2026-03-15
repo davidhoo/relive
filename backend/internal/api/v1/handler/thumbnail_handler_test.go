@@ -24,7 +24,7 @@ func (s *stubThumbnailService) StartBackground() (*model.ThumbnailTask, error) {
 	if s.startBackgroundFunc != nil {
 		return s.startBackgroundFunc()
 	}
-	return &model.ThumbnailTask{Status: "running"}, nil
+	return &model.ThumbnailTask{Status: model.TaskStatusRunning}, nil
 }
 func (s *stubThumbnailService) StopBackground() error {
 	if s.stopBackgroundFunc != nil {

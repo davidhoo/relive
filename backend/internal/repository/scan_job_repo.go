@@ -66,7 +66,7 @@ func (r *scanJobRepository) GetByID(id string) (*model.ScanJob, error) {
 
 func (r *scanJobRepository) GetActive() (*model.ScanJob, error) {
 	var job model.ScanJob
-	err := r.db.Where("status IN ?", []string{"pending", "running", "stopping"}).
+	err := r.db.Where("status IN ?", []string{model.ScanJobStatusPending, model.ScanJobStatusRunning, model.ScanJobStatusStopping}).
 		Order("started_at DESC").Order("created_at DESC").First(&job).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -79,10 +79,10 @@ func (r *scanJobRepository) GetActive() (*model.ScanJob, error) {
 
 func (r *scanJobRepository) InterruptNonTerminal(message string) error {
 	result := r.db.Model(&model.ScanJob{}).
-		Where("status IN ?", []string{"pending", "running", "stopping"}).
+		Where("status IN ?", []string{model.ScanJobStatusPending, model.ScanJobStatusRunning, model.ScanJobStatusStopping}).
 		Updates(map[string]interface{}{
-			"status":            "interrupted",
-			"phase":             "stopping",
+			"status":            model.ScanJobStatusInterrupted,
+			"phase":             model.ScanJobPhaseStopping,
 			"error_message":     message,
 			"completed_at":      gorm.Expr("CURRENT_TIMESTAMP"),
 			"last_heartbeat_at": gorm.Expr("CURRENT_TIMESTAMP"),

@@ -199,8 +199,8 @@ func TestPhotoService_StopScanTask_PersistsStoppedStatus(t *testing.T) {
 		t.Fatalf("stop scan: %v", err)
 	}
 
-	stopped := waitForTaskStatus(t, service, map[string]bool{"stopped": true}, 3*time.Second)
-	if stopped.Status != "stopped" {
+	stopped := waitForTaskStatus(t, service, map[string]bool{model.ScanJobStatusStopped: true}, 3*time.Second)
+	if stopped.Status != model.ScanJobStatusStopped {
 		t.Fatalf("expected stopped status, got %s", stopped.Status)
 	}
 	if stopped.StopRequestedAt == nil {
@@ -244,8 +244,8 @@ func TestPhotoService_HandleShutdown_MarksInterrupted(t *testing.T) {
 		t.Fatalf("handle shutdown: %v", err)
 	}
 
-	interrupted := waitForTaskStatus(t, service, map[string]bool{"interrupted": true}, 3*time.Second)
-	if interrupted.Status != "interrupted" {
+	interrupted := waitForTaskStatus(t, service, map[string]bool{model.ScanJobStatusInterrupted: true}, 3*time.Second)
+	if interrupted.Status != model.ScanJobStatusInterrupted {
 		t.Fatalf("expected interrupted status, got %s", interrupted.Status)
 	}
 	if interrupted.ErrorMessage == "" {
@@ -294,7 +294,7 @@ func TestPhotoService_StartScan_SkipsUnchangedExistingPhotoProcessing(t *testing
 		t.Fatalf("start scan: %v", err)
 	}
 
-	completed := waitForTaskStatus(t, service, map[string]bool{"completed": true}, 3*time.Second)
+	completed := waitForTaskStatus(t, service, map[string]bool{model.ScanJobStatusCompleted: true}, 3*time.Second)
 	if completed.ProcessedFiles != 1 {
 		t.Fatalf("expected 1 processed file, got %d", completed.ProcessedFiles)
 	}
@@ -467,12 +467,12 @@ func TestPhotoService_GetPathDerivedStatus(t *testing.T) {
 	lat, lon := 39.9, 116.4
 	repo.Create(&model.Photo{
 		FilePath: "/photos/a.jpg", FileHash: "h1",
-		AIAnalyzed: true, ThumbnailStatus: "ready",
-		GPSLatitude: &lat, GPSLongitude: &lon, GeocodeStatus: "ready",
+		AIAnalyzed: true, ThumbnailStatus: model.ThumbnailStatusReady,
+		GPSLatitude: &lat, GPSLongitude: &lon, GeocodeStatus: model.GeocodeStatusReady,
 	})
 	repo.Create(&model.Photo{
 		FilePath: "/photos/b.jpg", FileHash: "h2",
-		AIAnalyzed: false, ThumbnailStatus: "pending",
+		AIAnalyzed: false, ThumbnailStatus: model.ThumbnailStatusPending,
 	})
 
 	status, err := svc.GetPathDerivedStatus("/photos/")

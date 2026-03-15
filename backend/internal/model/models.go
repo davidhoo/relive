@@ -6,6 +6,25 @@ import (
 	"gorm.io/gorm"
 )
 
+// 设备类型常量
+const (
+	DeviceTypeEmbedded = "embedded" // 嵌入式设备（电子相框等）
+	DeviceTypeMobile   = "mobile"   // 移动端（手机、平板）
+	DeviceTypeWeb      = "web"      // Web 浏览器
+	DeviceTypeOffline  = "offline"  // 离线分析程序
+	DeviceTypeService  = "service"  // 后台服务
+)
+
+// DeviceTypes 所有合法设备类型
+var DeviceTypes = []string{DeviceTypeEmbedded, DeviceTypeMobile, DeviceTypeWeb, DeviceTypeOffline, DeviceTypeService}
+
+// 触发类型常量
+const (
+	TriggerTypeScheduled = "scheduled" // 定时触发
+	TriggerTypeManual    = "manual"    // 手动触发
+	TriggerTypeBoot      = "boot"      // 启动触发
+)
+
 // DisplayRecord 展示记录
 type DisplayRecord struct {
 	ID        uint           `gorm:"primarykey" json:"id"`
@@ -20,7 +39,7 @@ type DisplayRecord struct {
 	// 展示信息
 	DisplayedAt     time.Time `gorm:"not null;index;index:idx_display_record_lookup,priority:3" json:"displayed_at"`            // 展示时间
 	DisplayDuration int       `gorm:"default:0" json:"display_duration"`             // 展示时长（秒）
-	TriggerType     string    `gorm:"type:varchar(20);not null" json:"trigger_type"` // 触发类型（scheduled/manual/boot）
+	TriggerType     string    `gorm:"type:varchar(20);not null;check:chk_trigger_type,trigger_type IN ('scheduled','manual','boot')" json:"trigger_type"`
 }
 
 // TableName 指定表名
@@ -42,7 +61,7 @@ type Device struct {
 	IPAddress string `gorm:"type:varchar(50)" json:"ip_address"`                                   // IP 地址
 
 	// 设备类型：embedded/mobile/web/offline/service
-	DeviceType string `gorm:"type:varchar(20);default:'embedded';index:idx_device_type" json:"device_type"`
+	DeviceType string `gorm:"type:varchar(20);default:'embedded';index:idx_device_type;check:chk_device_type,device_type IN ('embedded','mobile','web','offline','service')" json:"device_type"`
 
 	// 描述/备注
 	Description string `gorm:"type:varchar(500)" json:"description"`

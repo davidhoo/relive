@@ -12,6 +12,22 @@ const (
 	PhotoStatusExcluded = "excluded" // 已排除
 )
 
+// 缩略图状态常量
+const (
+	ThumbnailStatusNone    = "none"
+	ThumbnailStatusPending = "pending"
+	ThumbnailStatusReady   = "ready"
+	ThumbnailStatusFailed  = "failed"
+)
+
+// Geocode 状态常量
+const (
+	GeocodeStatusNone    = "none"
+	GeocodeStatusPending = "pending"
+	GeocodeStatusReady   = "ready"
+	GeocodeStatusFailed  = "failed"
+)
+
 // Photo 照片模型
 type Photo struct {
 	ID        uint           `gorm:"primarykey" json:"id"`
@@ -20,7 +36,7 @@ type Photo struct {
 	DeletedAt gorm.DeletedAt `gorm:"index;index:idx_status_deleted_taken,priority:2" json:"-"`
 
 	// 状态
-	Status string `gorm:"type:varchar(20);default:'active';index:idx_status;index:idx_status_deleted_taken,priority:1" json:"status"` // active/excluded
+	Status string `gorm:"type:varchar(20);default:'active';index:idx_status;index:idx_status_deleted_taken,priority:1;check:chk_photo_status,status IN ('active','excluded')" json:"status"`
 
 	// 文件信息
 	FilePath       string     `gorm:"type:text;not null;uniqueIndex:idx_file_path" json:"file_path"` // 文件路径
@@ -32,7 +48,7 @@ type Photo struct {
 
 	// 缩略图
 	ThumbnailPath        string     `gorm:"type:varchar(500)" json:"thumbnail_path"` // 缩略图路径（相对于缩略图根目录）
-	ThumbnailStatus      string     `gorm:"type:varchar(20);default:none;index:idx_thumbnail_status" json:"thumbnail_status"`
+	ThumbnailStatus      string     `gorm:"type:varchar(20);default:none;index:idx_thumbnail_status;check:chk_thumbnail_status,thumbnail_status IN ('none','pending','ready','failed')" json:"thumbnail_status"`
 	ThumbnailGeneratedAt *time.Time `json:"thumbnail_generated_at"`
 
 	// EXIF 信息
@@ -50,7 +66,7 @@ type Photo struct {
 	District        string     `gorm:"type:varchar(100)" json:"district"`                   // 区/县
 	Street          string     `gorm:"type:varchar(200)" json:"street"`                     // 街道
 	POI             string     `gorm:"type:varchar(200)" json:"poi"`                        // 商圈/地标
-	GeocodeStatus   string     `gorm:"type:varchar(20);default:none;index:idx_geocode_status" json:"geocode_status"`
+	GeocodeStatus   string     `gorm:"type:varchar(20);default:none;index:idx_geocode_status;check:chk_geocode_status,geocode_status IN ('none','pending','ready','failed')" json:"geocode_status"`
 	GeocodeProvider string     `gorm:"column:geocode_provider;type:varchar(50)" json:"geocode_provider"`
 	GeocodedAt      *time.Time `json:"geocoded_at"`
 

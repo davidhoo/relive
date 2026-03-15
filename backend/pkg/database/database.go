@@ -127,6 +127,15 @@ func AutoMigrate(db *gorm.DB) error {
 		return err
 	}
 
+	// SQLite 不支持 ALTER TABLE ADD CHECK，GORM 会用临时表重建方式迁移，
+	// DROP 原表时会触发外键约束失败，因此迁移期间临时关闭外键检查。
+	db.Exec("PRAGMA foreign_keys=OFF")
+	defer db.Exec("PRAGMA foreign_keys=ON")
+
+	// 在 AutoMigrate 之前修复枚举字段无效值，
+	// 否则 GORM 重建表复制数据时会违反新的 CHECK 约束。
+	fixEnumBeforeMigrate(db)
+
 	if err := db.AutoMigrate(models...); err != nil {
 		return err
 	}
@@ -146,6 +155,10 @@ func AutoMigrate(db *gorm.DB) error {
 	if err := migrateFTS5Table(db); err != nil {
 		// FTS5 迁移失败不阻塞启动，降级为 LIKE 搜索
 		log.Printf("[database] warning: FTS5 migration failed: %v, falling back to LIKE search", err)
+	}
+
+	if err := migrateEnumValidation(db); err != nil {
+		return err
 	}
 
 	return nil
@@ -303,6 +316,58 @@ func migrateFTS5Table(db *gorm.DB) error {
 	log.Printf("[database] FTS5 migration completed")
 
 	// 标记已迁移
+	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
+	return nil
+}
+
+// fixEnumBeforeMigrate 在 AutoMigrate 之前修复所有枚举字段的无效值，
+// 确保 GORM 重建表（添加 CHECK 约束）时复制的数据合法。
+// 静默执行，表不存在时跳过。
+func fixEnumBeforeMigrate(db *gorm.DB) {
+	migrator := db.Migrator()
+
+	// photos
+	if migrator.HasTable("photos") {
+		db.Exec("UPDATE photos SET status = ? WHERE status IS NULL OR status = ''", model.PhotoStatusActive)
+		db.Exec("UPDATE photos SET thumbnail_status = ? WHERE thumbnail_status IS NULL OR thumbnail_status = ''", model.ThumbnailStatusNone)
+		db.Exec("UPDATE photos SET geocode_status = ? WHERE geocode_status IS NULL OR geocode_status = ''", model.GeocodeStatusNone)
+	}
+
+	// analysis_runtime_leases
+	if migrator.HasTable("analysis_runtime_leases") {
+		db.Exec("UPDATE analysis_runtime_leases SET owner_type = ? WHERE owner_type IS NULL OR owner_type = ''", model.AnalysisRuntimeStatusIdle)
+		db.Exec("UPDATE analysis_runtime_leases SET status = ? WHERE status IS NULL OR status = ''", model.AnalysisRuntimeStatusIdle)
+	}
+
+	// devices
+	if migrator.HasTable("devices") {
+		db.Exec("UPDATE devices SET device_type = ? WHERE device_type IS NULL OR device_type = ''", model.DeviceTypeEmbedded)
+	}
+}
+
+// migrateEnumValidation 修复枚举字段空值
+func migrateEnumValidation(db *gorm.DB) error {
+	const migrationKey = "migration.enum_validation_v1"
+
+	// 检查是否已迁移
+	var cfg model.AppConfig
+	if err := db.Where("key = ?", migrationKey).First(&cfg).Error; err == nil {
+		return nil
+	}
+
+	log.Printf("[database] running enum validation migration...")
+
+	// 修复 thumbnail_status 空值
+	if err := db.Exec("UPDATE photos SET thumbnail_status = ? WHERE thumbnail_status IS NULL OR thumbnail_status = ''", model.ThumbnailStatusNone).Error; err != nil {
+		return fmt.Errorf("fix thumbnail_status: %w", err)
+	}
+
+	// 修复 geocode_status 空值
+	if err := db.Exec("UPDATE photos SET geocode_status = ? WHERE geocode_status IS NULL OR geocode_status = ''", model.GeocodeStatusNone).Error; err != nil {
+		return fmt.Errorf("fix geocode_status: %w", err)
+	}
+
+	log.Printf("[database] enum validation migration completed")
 	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
 	return nil
 }

@@ -165,7 +165,7 @@ func (r *photoRepository) List(page, pageSize int, analyzed *bool, hasThumbnail 
 
 	// status 过滤：默认只查 active，支持 excluded 和 all
 	switch status {
-	case "excluded":
+	case model.PhotoStatusExcluded:
 		query = query.Where("status = ?", model.PhotoStatusExcluded)
 	case "all":
 		// 不加过滤
@@ -316,7 +316,7 @@ func (r *photoRepository) GetUnanalyzed(limit int) ([]*model.Photo, error) {
 	var photos []*model.Photo
 	err := r.db.Scopes(activeScope).Where(`ai_analyzed = ?
 		AND thumbnail_status = ?
-		AND (gps_latitude IS NULL OR gps_longitude IS NULL OR geocode_status = ?)`, false, "ready", "ready").
+		AND (gps_latitude IS NULL OR gps_longitude IS NULL OR geocode_status = ?)`, false, model.ThumbnailStatusReady, model.GeocodeStatusReady).
 		Order("taken_at DESC").
 		Limit(limit).
 		Find(&photos).Error

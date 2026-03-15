@@ -86,7 +86,7 @@ func (h *DisplayHandler) GetDisplayPhoto(c *gin.Context) {
 		PhotoID:     photo.ID,
 		DeviceID:    device.ID,
 		DisplayedAt: time.Now(),
-		TriggerType: "scheduled",
+		TriggerType: model.TriggerTypeScheduled,
 	}
 	if err := h.displayService.RecordDisplay(record); err != nil {
 		logger.Errorf("Record display failed: %v", err)
@@ -222,7 +222,7 @@ func (h *DisplayHandler) RecordDisplay(c *gin.Context) {
 		PhotoID:     req.PhotoID,
 		DeviceID:    device.ID,
 		DisplayedAt: time.Now(),
-		TriggerType: "manual", // API 手动上报
+		TriggerType: model.TriggerTypeManual, // API 手动上报
 	}
 
 	if err := h.displayService.RecordDisplay(record); err != nil {

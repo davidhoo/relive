@@ -14,10 +14,6 @@ import (
 )
 
 const (
-	geocodeSourceScan    = "scan"
-	geocodeSourcePassive = "passive"
-	geocodeSourceManual  = "manual"
-
 	geocodePriorityScan    = 50
 	geocodePriorityManual  = 80
 	geocodePriorityPassive = 100
@@ -72,7 +68,7 @@ func (s *geocodeTaskService) StartBackground() (*model.GeocodeTask, error) {
 		return nil, fmt.Errorf("geocode task already running")
 	}
 	now := time.Now()
-	task := &model.GeocodeTask{Status: "running", StartedAt: &now}
+	task := &model.GeocodeTask{Status: model.TaskStatusRunning, StartedAt: &now}
 	active := &activeGeocodeTask{stopCh: make(chan struct{}), done: make(chan struct{})}
 	s.task = task
 	s.active = active
@@ -92,7 +88,7 @@ func (s *geocodeTaskService) StartRegeocodeAll() (*model.GeocodeTask, error) {
 		return nil, fmt.Errorf("geocode task already running")
 	}
 	now := time.Now()
-	task := &model.GeocodeTask{Status: "running", StartedAt: &now}
+	task := &model.GeocodeTask{Status: model.TaskStatusRunning, StartedAt: &now}
 	active := &activeGeocodeTask{stopCh: make(chan struct{}), done: make(chan struct{})}
 	s.task = task
 	s.active = active
@@ -114,8 +110,8 @@ func (s *geocodeTaskService) StopBackground() error {
 		close(s.active.stopCh)
 	}
 	s.active.mu.Unlock()
-	if s.task != nil && s.task.Status == "running" {
-		s.task.Status = "stopping"
+	if s.task != nil && s.task.Status == model.TaskStatusRunning {
+		s.task.Status = model.TaskStatusStopping
 		s.appendBackgroundLog("收到停止请求，等待当前任务处理完成")
 	}
 	return nil
@@ -133,7 +129,7 @@ func (s *geocodeTaskService) RepairLegacyStatus() (int64, error) {
 		Where("status = ?", model.PhotoStatusActive).
 		Where("location != '' AND (geocode_status IS NULL OR geocode_status = '' OR geocode_status = 'none')").
 		Updates(map[string]interface{}{
-			"geocode_status":   "ready",
+			"geocode_status":   model.GeocodeStatusReady,
 			"geocode_provider": gorm.Expr("COALESCE(NULLIF(geocode_provider, ''), ?)", "legacy"),
 			"geocoded_at":      gorm.Expr("COALESCE(geocoded_at, updated_at, created_at, ?)", now),
 		})
@@ -220,7 +216,7 @@ func (s *geocodeTaskService) GeocodePhoto(photoID uint) error {
 	now := time.Now()
 	if err != nil {
 		_ = s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
-			"geocode_status": "failed",
+			"geocode_status": model.GeocodeStatusFailed,
 		}).Error
 		return fmt.Errorf("GPS 解析失败: %w", err)
 	}
@@ -231,7 +227,7 @@ func (s *geocodeTaskService) GeocodePhoto(photoID uint) error {
 	}
 
 	updates := geocodeLocationFields(loc)
-	updates["geocode_status"] = "ready"
+	updates["geocode_status"] = model.GeocodeStatusReady
 	updates["geocode_provider"] = provider
 	updates["geocoded_at"] = &now
 
@@ -265,7 +261,7 @@ func (s *geocodeTaskService) SetManualLocation(photoID uint, lat, lon float64) (
 	updates := geocodeLocationFields(loc)
 	updates["gps_latitude"] = lat
 	updates["gps_longitude"] = lon
-	updates["geocode_status"] = "ready"
+	updates["geocode_status"] = model.GeocodeStatusReady
 	updates["geocode_provider"] = "manual"
 	updates["geocoded_at"] = &now
 
@@ -295,21 +291,21 @@ func (s *geocodeTaskService) enqueuePhotoModel(photo *model.Photo, source string
 		return nil
 	}
 	if source == "" {
-		source = geocodeSourceManual
+		source = model.GeocodeJobSourceManual
 	}
 	if priority <= 0 {
 		priority = geocodePriorityManual
 	}
-	if !force && strings.TrimSpace(photo.Location) != "" && (photo.GeocodeStatus == "ready" || photo.GeocodeStatus == "" || photo.GeocodeStatus == "none") {
+	if !force && strings.TrimSpace(photo.Location) != "" && (photo.GeocodeStatus == model.GeocodeStatusReady || photo.GeocodeStatus == "" || photo.GeocodeStatus == model.GeocodeStatusNone) {
 		now := time.Now()
 		return s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
-			"geocode_status": "ready",
+			"geocode_status": model.GeocodeStatusReady,
 			"geocoded_at":    gorm.Expr("COALESCE(geocoded_at, ?)", &now),
 		}).Error
 	}
 	now := time.Now()
 	if err := s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
-		"geocode_status": "pending",
+		"geocode_status": model.GeocodeStatusPending,
 		"geocoded_at":    nil,
 	}).Error; err != nil {
 		return err
@@ -319,9 +315,9 @@ func (s *geocodeTaskService) enqueuePhotoModel(photo *model.Photo, source string
 		return err
 	}
 	if activeJob != nil {
-		return s.jobRepo.UpdateFields(activeJob.ID, map[string]interface{}{"priority": priority, "source": source, "last_requested_at": &now, "status": "queued"})
+		return s.jobRepo.UpdateFields(activeJob.ID, map[string]interface{}{"priority": priority, "source": source, "last_requested_at": &now, "status": model.GeocodeJobStatusQueued})
 	}
-	job := &model.GeocodeJob{PhotoID: photo.ID, Status: "queued", Priority: priority, Source: source, QueuedAt: now, LastRequestedAt: &now}
+	job := &model.GeocodeJob{PhotoID: photo.ID, Status: model.GeocodeJobStatusQueued, Priority: priority, Source: source, QueuedAt: now, LastRequestedAt: &now}
 	return s.jobRepo.Create(job)
 }
 
@@ -329,8 +325,8 @@ func (s *geocodeTaskService) runBackground(active *activeGeocodeTask) {
 	defer func() {
 		now := time.Now()
 		s.taskMutex.Lock()
-		if s.task != nil && (s.task.Status == "running" || s.task.Status == "stopping") {
-			s.task.Status = "stopped"
+		if s.task != nil && (s.task.Status == model.TaskStatusRunning || s.task.Status == model.TaskStatusStopping) {
+			s.task.Status = model.TaskStatusStopped
 			s.task.StoppedAt = &now
 		}
 		s.appendBackgroundLog("GPS 逆地理编码后台任务已停止")
@@ -371,13 +367,13 @@ func (s *geocodeTaskService) runBackground(active *activeGeocodeTask) {
 		if photo.GPSLatitude == nil || photo.GPSLongitude == nil ||
 			(*photo.GPSLatitude == 0 && *photo.GPSLongitude == 0) {
 			now := time.Now()
-			_ = s.updateJobWithRetry(job.ID, map[string]interface{}{"status": "cancelled", "completed_at": &now})
+			_ = s.updateJobWithRetry(job.ID, map[string]interface{}{"status": model.GeocodeJobStatusCancelled, "completed_at": &now})
 			s.updateTaskProgress(func(task *model.GeocodeTask) { task.ProcessedJobs++ })
 			continue
 		}
 		if photo.Status == model.PhotoStatusExcluded {
 			now := time.Now()
-			_ = s.updateJobWithRetry(job.ID, map[string]interface{}{"status": "cancelled", "completed_at": &now})
+			_ = s.updateJobWithRetry(job.ID, map[string]interface{}{"status": model.GeocodeJobStatusCancelled, "completed_at": &now})
 			s.updateTaskProgress(func(task *model.GeocodeTask) { task.ProcessedJobs++ })
 			continue
 		}
@@ -395,8 +391,8 @@ func (s *geocodeTaskService) processJob(job *model.GeocodeJob, photo *model.Phot
 	loc, err := s.geocodeService.ReverseGeocode(*photo.GPSLatitude, *photo.GPSLongitude)
 	now := time.Now()
 	if err != nil {
-		_ = s.updatePhotoWithRetry(photo.ID, map[string]interface{}{"geocode_status": "failed"})
-		_ = s.updateJobWithRetry(job.ID, map[string]interface{}{"status": "failed", "last_error": err.Error(), "completed_at": &now})
+		_ = s.updatePhotoWithRetry(photo.ID, map[string]interface{}{"geocode_status": model.GeocodeStatusFailed})
+		_ = s.updateJobWithRetry(job.ID, map[string]interface{}{"status": model.GeocodeJobStatusFailed, "last_error": err.Error(), "completed_at": &now})
 		s.updateTaskProgress(func(task *model.GeocodeTask) { task.ProcessedJobs++ })
 		s.appendBackgroundLog(fmt.Sprintf("解析照片 #%d 位置失败：%v", photo.ID, err))
 		return err
@@ -406,13 +402,13 @@ func (s *geocodeTaskService) processJob(job *model.GeocodeJob, photo *model.Phot
 		provider = loc.Provider
 	}
 	updates := geocodeLocationFields(loc)
-	updates["geocode_status"] = "ready"
+	updates["geocode_status"] = model.GeocodeStatusReady
 	updates["geocode_provider"] = provider
 	updates["geocoded_at"] = &now
 	if err := s.updatePhotoWithRetry(photo.ID, updates); err != nil {
 		logger.Warnf("update photo %d after geocode success failed: %v", photo.ID, err)
 	}
-	if err := s.updateJobWithRetry(job.ID, map[string]interface{}{"status": "completed", "completed_at": &now, "last_error": ""}); err != nil {
+	if err := s.updateJobWithRetry(job.ID, map[string]interface{}{"status": model.GeocodeJobStatusCompleted, "completed_at": &now, "last_error": ""}); err != nil {
 		logger.Warnf("update geocode job %d status failed: %v", job.ID, err)
 	}
 	s.updateTaskProgress(func(task *model.GeocodeTask) { task.ProcessedJobs++ })
@@ -424,8 +420,8 @@ func (s *geocodeTaskService) runRegeocodeAll(active *activeGeocodeTask) {
 	defer func() {
 		now := time.Now()
 		s.taskMutex.Lock()
-		if s.task != nil && (s.task.Status == "running" || s.task.Status == "stopping") {
-			s.task.Status = "stopped"
+		if s.task != nil && (s.task.Status == model.TaskStatusRunning || s.task.Status == model.TaskStatusStopping) {
+			s.task.Status = model.TaskStatusStopped
 			s.task.StoppedAt = &now
 		}
 		s.appendBackgroundLog("全量重建 GPS 位置解析已完成")
@@ -489,7 +485,7 @@ func (s *geocodeTaskService) runRegeocodeAll(active *activeGeocodeTask) {
 			provider = loc.Provider
 		}
 		fields := geocodeLocationFields(loc)
-		fields["geocode_status"] = "ready"
+		fields["geocode_status"] = model.GeocodeStatusReady
 		fields["geocode_provider"] = provider
 		fields["geocoded_at"] = &now
 
@@ -559,10 +555,10 @@ func (s *geocodeTaskService) seedPendingJobs() error {
 		Where("status = ?", model.PhotoStatusActive).
 		Where("gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL").
 		Where("gps_latitude != 0 OR gps_longitude != 0").
-		Where("(geocode_status != ? OR geocode_status IS NULL)", "ready").
+		Where("(geocode_status != ? OR geocode_status IS NULL)", model.GeocodeStatusReady).
 		FindInBatches(&photos, 200, func(tx *gorm.DB, batch int) error {
 			for i := range photos {
-				if err := s.enqueuePhotoModel(&photos[i], geocodeSourceManual, geocodePriorityManual, false); err != nil {
+				if err := s.enqueuePhotoModel(&photos[i], model.GeocodeJobSourceManual, geocodePriorityManual, false); err != nil {
 					if !isSQLiteLockError(err) {
 						logger.Warnf("seed geocode job failed for photo %d: %v", photos[i].ID, err)
 					}

@@ -14,7 +14,7 @@ func TestScanJobRepo_Create(t *testing.T) {
 	defer teardownTestDB(db)
 	repo := NewScanJobRepository(db)
 
-	job := &model.ScanJob{ID: "job-001", Type: "scan", Status: "pending", Path: "/photos", StartedAt: time.Now()}
+	job := &model.ScanJob{ID: "job-001", Type: model.ScanJobTypeScan, Status: model.ScanJobStatusPending, Phase: model.ScanJobPhasePending, Path: "/photos", StartedAt: time.Now()}
 	require.NoError(t, repo.Create(job))
 }
 
@@ -23,13 +23,13 @@ func TestScanJobRepo_GetByID(t *testing.T) {
 	defer teardownTestDB(db)
 	repo := NewScanJobRepository(db)
 
-	job := &model.ScanJob{ID: "job-002", Type: "scan", Status: "running", Path: "/photos", StartedAt: time.Now()}
+	job := &model.ScanJob{ID: "job-002", Type: model.ScanJobTypeScan, Status: model.ScanJobStatusRunning, Phase: model.ScanJobPhaseDiscovering, Path: "/photos", StartedAt: time.Now()}
 	require.NoError(t, repo.Create(job))
 
 	got, err := repo.GetByID("job-002")
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	assert.Equal(t, "running", got.Status)
+	assert.Equal(t, model.ScanJobStatusRunning, got.Status)
 }
 
 func TestScanJobRepo_GetByID_NotFound(t *testing.T) {
@@ -47,16 +47,16 @@ func TestScanJobRepo_Update(t *testing.T) {
 	defer teardownTestDB(db)
 	repo := NewScanJobRepository(db)
 
-	job := &model.ScanJob{ID: "job-003", Type: "scan", Status: "running", Path: "/photos", StartedAt: time.Now()}
+	job := &model.ScanJob{ID: "job-003", Type: model.ScanJobTypeScan, Status: model.ScanJobStatusRunning, Phase: model.ScanJobPhaseProcessing, Path: "/photos", StartedAt: time.Now()}
 	require.NoError(t, repo.Create(job))
 
-	job.Status = "completed"
+	job.Status = model.ScanJobStatusCompleted
 	now := time.Now()
 	job.CompletedAt = &now
 	require.NoError(t, repo.Update(job))
 
 	got, _ := repo.GetByID("job-003")
-	assert.Equal(t, "completed", got.Status)
+	assert.Equal(t, model.ScanJobStatusCompleted, got.Status)
 }
 
 func TestScanJobRepo_UpdateFields(t *testing.T) {
@@ -64,7 +64,7 @@ func TestScanJobRepo_UpdateFields(t *testing.T) {
 	defer teardownTestDB(db)
 	repo := NewScanJobRepository(db)
 
-	job := &model.ScanJob{ID: "job-004", Type: "scan", Status: "running", Path: "/photos", StartedAt: time.Now()}
+	job := &model.ScanJob{ID: "job-004", Type: model.ScanJobTypeScan, Status: model.ScanJobStatusRunning, Phase: model.ScanJobPhaseProcessing, Path: "/photos", StartedAt: time.Now()}
 	require.NoError(t, repo.Create(job))
 
 	require.NoError(t, repo.UpdateFields("job-004", map[string]interface{}{
@@ -83,8 +83,8 @@ func TestScanJobRepo_GetLatest(t *testing.T) {
 	repo := NewScanJobRepository(db)
 
 	now := time.Now()
-	require.NoError(t, repo.Create(&model.ScanJob{ID: "old", Type: "scan", Status: "completed", Path: "/a", StartedAt: now.Add(-time.Hour)}))
-	require.NoError(t, repo.Create(&model.ScanJob{ID: "new", Type: "scan", Status: "running", Path: "/b", StartedAt: now}))
+	require.NoError(t, repo.Create(&model.ScanJob{ID: "old", Type: model.ScanJobTypeScan, Status: model.ScanJobStatusCompleted, Phase: model.ScanJobPhasePending, Path: "/a", StartedAt: now.Add(-time.Hour)}))
+	require.NoError(t, repo.Create(&model.ScanJob{ID: "new", Type: model.ScanJobTypeScan, Status: model.ScanJobStatusRunning, Phase: model.ScanJobPhaseDiscovering, Path: "/b", StartedAt: now}))
 
 	got, err := repo.GetLatest()
 	require.NoError(t, err)
@@ -107,8 +107,8 @@ func TestScanJobRepo_GetActive(t *testing.T) {
 	defer teardownTestDB(db)
 	repo := NewScanJobRepository(db)
 
-	require.NoError(t, repo.Create(&model.ScanJob{ID: "done", Type: "scan", Status: "completed", Path: "/a", StartedAt: time.Now()}))
-	require.NoError(t, repo.Create(&model.ScanJob{ID: "active", Type: "scan", Status: "running", Path: "/b", StartedAt: time.Now()}))
+	require.NoError(t, repo.Create(&model.ScanJob{ID: "done", Type: model.ScanJobTypeScan, Status: model.ScanJobStatusCompleted, Phase: model.ScanJobPhasePending, Path: "/a", StartedAt: time.Now()}))
+	require.NoError(t, repo.Create(&model.ScanJob{ID: "active", Type: model.ScanJobTypeScan, Status: model.ScanJobStatusRunning, Phase: model.ScanJobPhaseDiscovering, Path: "/b", StartedAt: time.Now()}))
 
 	got, err := repo.GetActive()
 	require.NoError(t, err)
@@ -121,7 +121,7 @@ func TestScanJobRepo_GetActive_None(t *testing.T) {
 	defer teardownTestDB(db)
 	repo := NewScanJobRepository(db)
 
-	require.NoError(t, repo.Create(&model.ScanJob{ID: "done", Type: "scan", Status: "completed", Path: "/a", StartedAt: time.Now()}))
+	require.NoError(t, repo.Create(&model.ScanJob{ID: "done", Type: model.ScanJobTypeScan, Status: model.ScanJobStatusCompleted, Phase: model.ScanJobPhasePending, Path: "/a", StartedAt: time.Now()}))
 
 	got, err := repo.GetActive()
 	require.NoError(t, err)
@@ -133,18 +133,18 @@ func TestScanJobRepo_InterruptNonTerminal(t *testing.T) {
 	defer teardownTestDB(db)
 	repo := NewScanJobRepository(db)
 
-	require.NoError(t, repo.Create(&model.ScanJob{ID: "j1", Type: "scan", Status: "running", Path: "/a", StartedAt: time.Now()}))
-	require.NoError(t, repo.Create(&model.ScanJob{ID: "j2", Type: "scan", Status: "pending", Path: "/b", StartedAt: time.Now()}))
-	require.NoError(t, repo.Create(&model.ScanJob{ID: "j3", Type: "scan", Status: "completed", Path: "/c", StartedAt: time.Now()}))
+	require.NoError(t, repo.Create(&model.ScanJob{ID: "j1", Type: model.ScanJobTypeScan, Status: model.ScanJobStatusRunning, Phase: model.ScanJobPhaseProcessing, Path: "/a", StartedAt: time.Now()}))
+	require.NoError(t, repo.Create(&model.ScanJob{ID: "j2", Type: model.ScanJobTypeScan, Status: model.ScanJobStatusPending, Phase: model.ScanJobPhasePending, Path: "/b", StartedAt: time.Now()}))
+	require.NoError(t, repo.Create(&model.ScanJob{ID: "j3", Type: model.ScanJobTypeScan, Status: model.ScanJobStatusCompleted, Phase: model.ScanJobPhasePending, Path: "/c", StartedAt: time.Now()}))
 
 	require.NoError(t, repo.InterruptNonTerminal("server restart"))
 
 	j1, _ := repo.GetByID("j1")
-	assert.Equal(t, "interrupted", j1.Status)
+	assert.Equal(t, model.ScanJobStatusInterrupted, j1.Status)
 
 	j2, _ := repo.GetByID("j2")
-	assert.Equal(t, "interrupted", j2.Status)
+	assert.Equal(t, model.ScanJobStatusInterrupted, j2.Status)
 
 	j3, _ := repo.GetByID("j3")
-	assert.Equal(t, "completed", j3.Status)
+	assert.Equal(t, model.ScanJobStatusCompleted, j3.Status)
 }

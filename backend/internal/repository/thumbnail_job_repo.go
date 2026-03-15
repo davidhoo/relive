@@ -63,7 +63,7 @@ func (r *thumbnailJobRepository) GetByID(id uint) (*model.ThumbnailJob, error) {
 
 func (r *thumbnailJobRepository) GetActiveByPhotoID(photoID uint) (*model.ThumbnailJob, error) {
 	var job model.ThumbnailJob
-	err := r.db.Where("photo_id = ? AND status IN ?", photoID, []string{"pending", "queued", "processing"}).
+	err := r.db.Where("photo_id = ? AND status IN ?", photoID, []string{model.ThumbnailJobStatusPending, model.ThumbnailJobStatusQueued, model.ThumbnailJobStatusProcessing}).
 		Order("priority DESC").Order("queued_at ASC").First(&job).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -78,7 +78,7 @@ func (r *thumbnailJobRepository) ClaimNextJob() (*model.ThumbnailJob, error) {
 	// 使用原子更新避免事务锁竞争
 	// 先找到下一个可执行的任务（不使用事务，减少锁持有时间）
 	var job model.ThumbnailJob
-	result := r.db.Where("status IN ?", []string{"pending", "queued"}).
+	result := r.db.Where("status IN ?", []string{model.ThumbnailJobStatusPending, model.ThumbnailJobStatusQueued}).
 		Order("priority DESC").Order("COALESCE(last_requested_at, queued_at) DESC").Order("queued_at ASC").
 		Limit(1).Find(&job)
 	if result.Error != nil {
@@ -91,13 +91,13 @@ func (r *thumbnailJobRepository) ClaimNextJob() (*model.ThumbnailJob, error) {
 	// 使用乐观锁方式原子更新状态
 	now := time.Now()
 	updates := map[string]interface{}{
-		"status":        "processing",
+		"status":        model.ThumbnailJobStatusProcessing,
 		"started_at":    &now,
 		"attempt_count": gorm.Expr("attempt_count + 1"),
 	}
 
 	result = r.db.Model(&model.ThumbnailJob{}).
-		Where("id = ? AND status IN ?", job.ID, []string{"pending", "queued"}).
+		Where("id = ? AND status IN ?", job.ID, []string{model.ThumbnailJobStatusPending, model.ThumbnailJobStatusQueued}).
 		Updates(updates)
 
 	if result.Error != nil {
@@ -108,7 +108,7 @@ func (r *thumbnailJobRepository) ClaimNextJob() (*model.ThumbnailJob, error) {
 		return nil, nil
 	}
 
-	job.Status = "processing"
+	job.Status = model.ThumbnailJobStatusProcessing
 	job.StartedAt = &now
 	job.AttemptCount++
 	return &job, nil
@@ -117,8 +117,8 @@ func (r *thumbnailJobRepository) ClaimNextJob() (*model.ThumbnailJob, error) {
 func (r *thumbnailJobRepository) CancelPendingJobs() (int64, error) {
 	now := time.Now()
 	result := r.db.Model(&model.ThumbnailJob{}).
-		Where("status IN ?", []string{"pending", "queued"}).
-		Updates(map[string]interface{}{"status": "cancelled", "completed_at": &now})
+		Where("status IN ?", []string{model.ThumbnailJobStatusPending, model.ThumbnailJobStatusQueued}).
+		Updates(map[string]interface{}{"status": model.ThumbnailJobStatusCancelled, "completed_at": &now})
 	if result.Error != nil {
 		return 0, result.Error
 	}
@@ -144,17 +144,17 @@ func (r *thumbnailJobRepository) GetStats() (*ThumbnailJobStats, error) {
 			return nil, err
 		}
 		switch status {
-		case "pending":
+		case model.ThumbnailJobStatusPending:
 			stats.Pending = count
-		case "queued":
+		case model.ThumbnailJobStatusQueued:
 			stats.Queued = count
-		case "processing":
+		case model.ThumbnailJobStatusProcessing:
 			stats.Processing = count
-		case "completed":
+		case model.ThumbnailJobStatusCompleted:
 			stats.Completed = count
-		case "failed":
+		case model.ThumbnailJobStatusFailed:
 			stats.Failed = count
-		case "cancelled":
+		case model.ThumbnailJobStatusCancelled:
 			stats.Cancelled = count
 		}
 	}
@@ -162,7 +162,7 @@ func (r *thumbnailJobRepository) GetStats() (*ThumbnailJobStats, error) {
 }
 
 func (r *thumbnailJobRepository) DeleteTerminalBefore(cutoff time.Time) (int64, error) {
-	result := r.db.Where("status IN ? AND updated_at < ?", []string{"completed", "failed", "cancelled"}, cutoff).
+	result := r.db.Where("status IN ? AND updated_at < ?", []string{model.ThumbnailJobStatusCompleted, model.ThumbnailJobStatusFailed, model.ThumbnailJobStatusCancelled}, cutoff).
 		Delete(&model.ThumbnailJob{})
 	if result.Error != nil {
 		return 0, result.Error

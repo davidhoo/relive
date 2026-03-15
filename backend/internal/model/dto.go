@@ -316,6 +316,13 @@ type CountDerivedStatusByPathsResponse struct {
 	Stats map[string]PathDerivedStatus `json:"stats"`
 }
 
+// In-memory 任务状态常量（ThumbnailTask / GeocodeTask 共用）
+const (
+	TaskStatusRunning  = "running"
+	TaskStatusStopping = "stopping"
+	TaskStatusStopped  = "stopped"
+)
+
 // ScanTask 扫描任务状态
 type ScanTask struct {
 	ID              string     `json:"id"`
@@ -339,7 +346,7 @@ type ScanTask struct {
 
 // IsRunning 检查任务是否运行中
 func (t *ScanTask) IsRunning() bool {
-	return t.Status == "running" || t.Status == "stopping"
+	return t.Status == ScanJobStatusRunning || t.Status == ScanJobStatusStopping
 }
 
 // StartScanRequest 开始扫描请求

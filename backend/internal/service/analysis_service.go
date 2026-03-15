@@ -69,7 +69,7 @@ func (s *analysisService) GetPendingTasks(limit int, analyzerID string) ([]model
 			AND (gps_latitude IS NULL OR gps_longitude IS NULL OR geocode_status = ?)
 			AND (analysis_lock_expired_at IS NULL OR analysis_lock_expired_at < ?)
 			AND analysis_retry_count < ?`,
-			model.PhotoStatusActive, false, "ready", "ready", time.Now(), 10).
+			model.PhotoStatusActive, false, model.ThumbnailStatusReady, model.GeocodeStatusReady, time.Now(), 10).
 		Count(&totalRemaining).Error
 	if err != nil {
 		return nil, 0, err
@@ -92,7 +92,7 @@ func (s *analysisService) GetPendingTasks(limit int, analyzerID string) ([]model
 			  AND deleted_at IS NULL
 			ORDER BY id ASC
 			LIMIT ?
-		)`, model.PhotoStatusActive, false, "ready", "ready", time.Now(), 10, limit).
+		)`, model.PhotoStatusActive, false, model.ThumbnailStatusReady, model.GeocodeStatusReady, time.Now(), 10, limit).
 		Updates(map[string]interface{}{
 			"analysis_lock_id":         analyzerID,
 			"analysis_lock_expired_at": lockExpiredAt,

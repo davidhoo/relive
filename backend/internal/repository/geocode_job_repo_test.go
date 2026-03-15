@@ -14,7 +14,7 @@ func TestGeocodeJobRepo_Create(t *testing.T) {
 	defer teardownTestDB(db)
 	repo := NewGeocodeJobRepository(db)
 
-	job := &model.GeocodeJob{PhotoID: 1, Status: "pending", Source: "scan", QueuedAt: time.Now()}
+	job := &model.GeocodeJob{PhotoID: 1, Status: model.GeocodeJobStatusPending, Source: model.GeocodeJobSourceScan, QueuedAt: time.Now()}
 	require.NoError(t, repo.Create(job))
 	assert.NotZero(t, job.ID)
 }
@@ -25,7 +25,7 @@ func TestGeocodeJobRepo_GetActiveByPhotoID(t *testing.T) {
 	repo := NewGeocodeJobRepository(db)
 
 	now := time.Now()
-	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 1, Status: "pending", Source: "scan", QueuedAt: now}))
+	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 1, Status: model.GeocodeJobStatusPending, Source: model.GeocodeJobSourceScan, QueuedAt: now}))
 
 	got, err := repo.GetActiveByPhotoID(1)
 	require.NoError(t, err)
@@ -49,12 +49,12 @@ func TestGeocodeJobRepo_ClaimNextJob(t *testing.T) {
 	repo := NewGeocodeJobRepository(db)
 
 	now := time.Now()
-	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 1, Status: "pending", Source: "scan", QueuedAt: now}))
+	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 1, Status: model.GeocodeJobStatusPending, Source: model.GeocodeJobSourceScan, QueuedAt: now}))
 
 	claimed, err := repo.ClaimNextJob()
 	require.NoError(t, err)
 	require.NotNil(t, claimed)
-	assert.Equal(t, "processing", claimed.Status)
+	assert.Equal(t, model.GeocodeJobStatusProcessing, claimed.Status)
 }
 
 func TestGeocodeJobRepo_ClaimNextJob_Empty(t *testing.T) {
@@ -73,9 +73,9 @@ func TestGeocodeJobRepo_CancelPendingJobs(t *testing.T) {
 	repo := NewGeocodeJobRepository(db)
 
 	now := time.Now()
-	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 1, Status: "pending", Source: "scan", QueuedAt: now}))
-	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 2, Status: "queued", Source: "scan", QueuedAt: now}))
-	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 3, Status: "processing", Source: "scan", QueuedAt: now}))
+	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 1, Status: model.GeocodeJobStatusPending, Source: model.GeocodeJobSourceScan, QueuedAt: now}))
+	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 2, Status: model.GeocodeJobStatusQueued, Source: model.GeocodeJobSourceScan, QueuedAt: now}))
+	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 3, Status: model.GeocodeJobStatusProcessing, Source: model.GeocodeJobSourceScan, QueuedAt: now}))
 
 	count, err := repo.CancelPendingJobs()
 	require.NoError(t, err)
@@ -88,9 +88,9 @@ func TestGeocodeJobRepo_GetStats(t *testing.T) {
 	repo := NewGeocodeJobRepository(db)
 
 	now := time.Now()
-	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 1, Status: "pending", Source: "scan", QueuedAt: now}))
-	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 2, Status: "completed", Source: "scan", QueuedAt: now}))
-	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 3, Status: "completed", Source: "scan", QueuedAt: now}))
+	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 1, Status: model.GeocodeJobStatusPending, Source: model.GeocodeJobSourceScan, QueuedAt: now}))
+	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 2, Status: model.GeocodeJobStatusCompleted, Source: model.GeocodeJobSourceScan, QueuedAt: now}))
+	require.NoError(t, repo.Create(&model.GeocodeJob{PhotoID: 3, Status: model.GeocodeJobStatusCompleted, Source: model.GeocodeJobSourceScan, QueuedAt: now}))
 
 	stats, err := repo.GetStats()
 	require.NoError(t, err)

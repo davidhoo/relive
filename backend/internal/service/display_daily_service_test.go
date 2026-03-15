@@ -33,8 +33,8 @@ func TestDisplayService_GenerateDailyBatchAndServeIndependently(t *testing.T) {
 	require.Equal(t, 3, batch.ItemCount)
 	require.Len(t, batch.Items, 3)
 
-	deviceA := &model.Device{DeviceID: "DEV-A", Name: "Device A", APIKey: "key-a", DeviceType: "embedded", RenderProfile: "gdem075f52_480x800_4color", IsEnabled: true}
-	deviceB := &model.Device{DeviceID: "DEV-B", Name: "Device B", APIKey: "key-b", DeviceType: "embedded", RenderProfile: "gdem075f52_480x800_4color", IsEnabled: true}
+	deviceA := &model.Device{DeviceID: "DEV-A", Name: "Device A", APIKey: "key-a", DeviceType: model.DeviceTypeEmbedded, RenderProfile: "gdem075f52_480x800_4color", IsEnabled: true}
+	deviceB := &model.Device{DeviceID: "DEV-B", Name: "Device B", APIKey: "key-b", DeviceType: model.DeviceTypeEmbedded, RenderProfile: "gdem075f52_480x800_4color", IsEnabled: true}
 	require.NoError(t, deviceRepo.Create(deviceA))
 	require.NoError(t, deviceRepo.Create(deviceB))
 
@@ -79,7 +79,7 @@ func TestDisplayService_ForceRegenerateResetsPlaybackState(t *testing.T) {
 	_, err := displayService.GenerateDailyBatch(targetDate, true)
 	require.NoError(t, err)
 
-	device := &model.Device{DeviceID: "DEV-RESET", Name: "Device Reset", APIKey: "key-reset", DeviceType: "embedded", RenderProfile: "gdem075f52_480x800_4color", IsEnabled: true}
+	device := &model.Device{DeviceID: "DEV-RESET", Name: "Device Reset", APIKey: "key-reset", DeviceType: model.DeviceTypeEmbedded, RenderProfile: "gdem075f52_480x800_4color", IsEnabled: true}
 	require.NoError(t, deviceRepo.Create(device))
 
 	first, err := displayService.GetDeviceDisplay(device.ID, device.RenderProfile)
@@ -180,7 +180,7 @@ func TestDisplayService_GenerateDailyBatchAvoidsRecentlyDisplayedPhotos(t *testi
 	createBatchPhotos(t, photoRepo, tempDir, targetDate, 4)
 	setDisplayStrategy(t, configService, model.DisplayStrategyConfig{Algorithm: "random", MinBeautyScore: 60, MinMemoryScore: 60, DailyCount: 3})
 
-	device := &model.Device{DeviceID: "DEV-HISTORY", Name: "History Device", APIKey: "key-history", DeviceType: "embedded", RenderProfile: "gdem075f52_480x800_4color", IsEnabled: true}
+	device := &model.Device{DeviceID: "DEV-HISTORY", Name: "History Device", APIKey: "key-history", DeviceType: model.DeviceTypeEmbedded, RenderProfile: "gdem075f52_480x800_4color", IsEnabled: true}
 	require.NoError(t, deviceRepo.Create(device))
 
 	allPhotos, err := photoRepo.ListAll()
@@ -191,7 +191,7 @@ func TestDisplayService_GenerateDailyBatchAvoidsRecentlyDisplayedPhotos(t *testi
 		PhotoID:     allPhotos[0].ID,
 		DeviceID:    device.ID,
 		DisplayedAt: time.Now().AddDate(0, 0, -1),
-		TriggerType: "scheduled",
+		TriggerType: model.TriggerTypeScheduled,
 	}
 	require.NoError(t, db.Create(recentRecord).Error)
 

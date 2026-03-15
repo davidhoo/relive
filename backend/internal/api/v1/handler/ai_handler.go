@@ -312,7 +312,7 @@ func (h *AIHandler) GetProgress(c *gin.Context) {
 		"current_photo_id": nil,
 		"started_at":       nil,
 		"mode":             "",
-		"status":           "idle",
+		"status":           model.AnalysisRuntimeStatusIdle,
 		"current_message":  "",
 		"provider":         progress.Provider,
 	}

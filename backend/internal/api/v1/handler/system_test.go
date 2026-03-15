@@ -107,7 +107,7 @@ func TestSystemHandlerResetDatabaseState(t *testing.T) {
 	if err := db.Create(state).Error; err != nil {
 		t.Fatalf("create playback state: %v", err)
 	}
-	if err := db.Create(&model.DisplayRecord{PhotoID: photo.ID, DeviceID: device.ID, DisplayedAt: batch.CreatedAt, TriggerType: "scheduled"}).Error; err != nil {
+	if err := db.Create(&model.DisplayRecord{PhotoID: photo.ID, DeviceID: device.ID, DisplayedAt: batch.CreatedAt, TriggerType: model.TriggerTypeScheduled}).Error; err != nil {
 		t.Fatalf("create display record: %v", err)
 	}
 	if err := db.Create(&model.AnalysisRuntimeLease{ResourceKey: model.GlobalAnalysisResourceKey, OwnerType: model.AnalysisOwnerTypeAnalyzer, Status: model.AnalysisRuntimeStatusRunning}).Error; err != nil {

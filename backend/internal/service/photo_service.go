@@ -588,15 +588,15 @@ func (s *photoService) processPhoto(filePath string, info os.FileInfo) (*model.P
 	}
 
 	if photo.GPSLatitude != nil && photo.GPSLongitude != nil {
-		photo.GeocodeStatus = "pending"
+		photo.GeocodeStatus = model.GeocodeStatusPending
 	} else {
-		photo.GeocodeStatus = "none"
+		photo.GeocodeStatus = model.GeocodeStatusNone
 	}
 	photo.GeocodeProvider = ""
 	photo.GeocodedAt = nil
 
 	photo.ThumbnailPath = util.GenerateDerivedImagePath(filePath)
-	photo.ThumbnailStatus = "pending"
+	photo.ThumbnailStatus = model.ThumbnailStatusPending
 	photo.ThumbnailGeneratedAt = nil
 
 	return photo, nil
@@ -912,11 +912,11 @@ type scanFileTask struct {
 }
 
 func (s *photoService) StartScan(path string) (*model.ScanTask, error) {
-	return s.startScanJob(path, "scan", false)
+	return s.startScanJob(path, model.ScanJobTypeScan, false)
 }
 
 func (s *photoService) StartRebuild(path string) (*model.ScanTask, error) {
-	return s.startScanJob(path, "rebuild", true)
+	return s.startScanJob(path, model.ScanJobTypeRebuild, true)
 }
 
 func (s *photoService) StopScanTask(id string) (*model.ScanTask, error) {
@@ -932,10 +932,10 @@ func (s *photoService) StopScanTask(id string) (*model.ScanTask, error) {
 	}
 
 	now := time.Now()
-	active.setTerminal("stopped", "task stopped by user")
+	active.setTerminal(model.ScanJobStatusStopped, "task stopped by user")
 	if err := s.scanJobRepo.UpdateFields(active.id, map[string]interface{}{
-		"status":            "stopping",
-		"phase":             "stopping",
+		"status":            model.ScanJobStatusStopping,
+		"phase":             model.ScanJobPhaseStopping,
 		"stop_requested_at": &now,
 		"last_heartbeat_at": &now,
 	}); err != nil {
@@ -974,10 +974,10 @@ func (s *photoService) HandleShutdown() error {
 	}
 
 	now := time.Now()
-	active.setTerminal("interrupted", "task interrupted by service shutdown")
+	active.setTerminal(model.ScanJobStatusInterrupted, "task interrupted by service shutdown")
 	if err := s.scanJobRepo.UpdateFields(active.id, map[string]interface{}{
-		"status":            "interrupted",
-		"phase":             "stopping",
+		"status":            model.ScanJobStatusInterrupted,
+		"phase":             model.ScanJobPhaseStopping,
 		"error_message":     "task interrupted by service shutdown",
 		"completed_at":      &now,
 		"last_heartbeat_at": &now,
@@ -1004,9 +1004,9 @@ func (s *photoService) startScanJob(path string, taskType string, rebuild bool) 
 	job := &model.ScanJob{
 		ID:              fmt.Sprintf("%s_%d", taskType, now.UnixNano()),
 		Type:            taskType,
-		Status:          "pending",
+		Status:          model.ScanJobStatusPending,
 		Path:            path,
-		Phase:           "pending",
+		Phase:           model.ScanJobPhasePending,
 		StartedAt:       now,
 		LastHeartbeatAt: &now,
 	}
@@ -1023,7 +1023,7 @@ func (s *photoService) startScanJob(path string, taskType string, rebuild bool) 
 		ctx:            ctx,
 		cancel:         cancel,
 		done:           make(chan struct{}),
-		terminalStatus: "completed",
+		terminalStatus: model.ScanJobStatusCompleted,
 	}
 	s.activeJob = runtime
 	s.taskMutex.Unlock()
@@ -1042,8 +1042,8 @@ func (s *photoService) runScanTask(runtime *activeScanJob, path string, rebuild 
 
 	now := time.Now()
 	if err := s.scanJobRepo.UpdateFields(runtime.id, map[string]interface{}{
-		"status":            "running",
-		"phase":             "discovering",
+		"status":            model.ScanJobStatusRunning,
+		"phase":             model.ScanJobPhaseDiscovering,
 		"last_heartbeat_at": &now,
 	}); err != nil {
 		logger.Errorf("[Task %s] Update start status failed: %v", runtime.id, err)
@@ -1070,7 +1070,7 @@ func (s *photoService) runScanTask(runtime *activeScanJob, path string, rebuild 
 		items map[string]struct{}
 	}{items: make(map[string]struct{}, workers*2)}
 
-	progress := &scanProgress{phase: "discovering", dirty: true}
+	progress := &scanProgress{phase: model.ScanJobPhaseDiscovering, dirty: true}
 	flushStop := make(chan struct{})
 	flushDone := make(chan struct{})
 	go s.flushScanProgressLoop(runtime.id, progress, flushStop, flushDone)
@@ -1118,7 +1118,7 @@ func (s *photoService) runScanTask(runtime *activeScanJob, path string, rebuild 
 	})
 
 	if walkErr == nil {
-		progress.setPhase("processing")
+		progress.setPhase(model.ScanJobPhaseProcessing)
 	}
 
 	pool.Wait()
@@ -1127,21 +1127,21 @@ func (s *photoService) runScanTask(runtime *activeScanJob, path string, rebuild 
 
 	if walkErr != nil && !errors.Is(walkErr, context.Canceled) {
 		logger.Errorf("[Task %s] Walk scan path failed: %v", runtime.id, walkErr)
-		s.finishScanTask(runtime, progress, "failed", walkErr.Error(), false, nil)
+		s.finishScanTask(runtime, progress, model.ScanJobStatusFailed, walkErr.Error(), false, nil)
 		return
 	}
 
 	if errors.Is(runtime.ctx.Err(), context.Canceled) {
 		status, message := runtime.terminal()
 		if status == "" {
-			status = "stopped"
+			status = model.ScanJobStatusStopped
 			message = "task cancelled"
 		}
 		s.finishScanTask(runtime, progress, status, message, false, nil)
 		return
 	}
 
-	progress.setPhase("finalizing")
+	progress.setPhase(model.ScanJobPhaseFinalizing)
 	if len(existingPhotos) > 0 {
 		for _, existing := range existingPhotos {
 			seenFiles.Lock()
@@ -1169,7 +1169,7 @@ func (s *photoService) runScanTask(runtime *activeScanJob, path string, rebuild 
 		runtime.id, progress.totalFilesSnapshot(), progress.newPhotosSnapshot(), progress.updatedPhotosSnapshot(), progress.deletedPhotosSnapshot(), progress.skippedFilesSnapshot())
 
 	if s.thumbnailService != nil {
-		if task := s.thumbnailService.GetTaskStatus(); task == nil || (task.Status != "running" && task.Status != "stopping") {
+		if task := s.thumbnailService.GetTaskStatus(); task == nil || (task.Status != model.ScanJobStatusRunning && task.Status != model.ScanJobStatusStopping) {
 			if _, err := s.thumbnailService.StartBackground(); err != nil {
 				logger.Warnf("[Task %s] Auto start thumbnail background failed: %v", runtime.id, err)
 			} else {
@@ -1178,7 +1178,7 @@ func (s *photoService) runScanTask(runtime *activeScanJob, path string, rebuild 
 		}
 	}
 	if s.geocodeTaskService != nil {
-		if task := s.geocodeTaskService.GetTaskStatus(); task == nil || (task.Status != "running" && task.Status != "stopping") {
+		if task := s.geocodeTaskService.GetTaskStatus(); task == nil || (task.Status != model.ScanJobStatusRunning && task.Status != model.ScanJobStatusStopping) {
 			if _, err := s.geocodeTaskService.StartBackground(); err != nil {
 				logger.Warnf("[Task %s] Auto start geocode background failed: %v", runtime.id, err)
 			} else {
@@ -1187,7 +1187,7 @@ func (s *photoService) runScanTask(runtime *activeScanJob, path string, rebuild 
 		}
 	}
 
-	s.finishScanTask(runtime, progress, "completed", "", true, nil)
+	s.finishScanTask(runtime, progress, model.ScanJobStatusCompleted, "", true, nil)
 }
 
 func (s *photoService) processScanFile(ctx context.Context, jobID string, task scanFileTask, rebuild bool, existingByPath map[string]*model.Photo, seenFiles *struct {
@@ -1239,8 +1239,8 @@ func (s *photoService) processScanFile(ctx context.Context, jobID string, task s
 			progress.incrementSkipped(1)
 		} else {
 			progress.incrementNew(1)
-			s.enqueueThumbnailForPhoto(photo, thumbnailSourceScan, thumbnailPriorityScan)
-			s.enqueueGeocodeForPhoto(photo, geocodeSourceScan, geocodePriorityScan)
+			s.enqueueThumbnailForPhoto(photo, model.ThumbnailJobSourceScan, thumbnailPriorityScan)
+			s.enqueueGeocodeForPhoto(photo, model.GeocodeJobSourceScan, geocodePriorityScan)
 		}
 		progress.incrementProcessed(1)
 		return nil
@@ -1254,8 +1254,8 @@ func (s *photoService) processScanFile(ctx context.Context, jobID string, task s
 			progress.incrementSkipped(1)
 		} else {
 			progress.incrementUpdated(1)
-			s.enqueueThumbnailForPhoto(photo, thumbnailSourceScan, thumbnailPriorityScan)
-			s.enqueueGeocodeForPhoto(photo, geocodeSourceScan, geocodePriorityScan)
+			s.enqueueThumbnailForPhoto(photo, model.ThumbnailJobSourceScan, thumbnailPriorityScan)
+			s.enqueueGeocodeForPhoto(photo, model.GeocodeJobSourceScan, geocodePriorityScan)
 		}
 		progress.incrementProcessed(1)
 		return nil
@@ -1269,8 +1269,8 @@ func (s *photoService) processScanFile(ctx context.Context, jobID string, task s
 			progress.incrementSkipped(1)
 		} else {
 			progress.incrementUpdated(1)
-			s.enqueueThumbnailForPhoto(photo, thumbnailSourceScan, thumbnailPriorityScan)
-			s.enqueueGeocodeForPhoto(photo, geocodeSourceScan, geocodePriorityScan)
+			s.enqueueThumbnailForPhoto(photo, model.ThumbnailJobSourceScan, thumbnailPriorityScan)
+			s.enqueueGeocodeForPhoto(photo, model.GeocodeJobSourceScan, geocodePriorityScan)
 		}
 	}
 
@@ -1377,7 +1377,7 @@ func (s *photoService) finishScanTask(runtime *activeScanJob, progress *scanProg
 	} else if message != "" {
 		fields["error_message"] = message
 	}
-	if status == "stopped" {
+	if status == model.ScanJobStatusStopped {
 		fields["stop_requested_at"] = completedAt
 	}
 	if err := s.scanJobRepo.UpdateFields(runtime.id, fields); err != nil {

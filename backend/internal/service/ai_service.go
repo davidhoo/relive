@@ -18,6 +18,16 @@ import (
 	"github.com/davidhoo/relive/pkg/logger"
 )
 
+// 分析任务状态常量（非 DB 模型，仅内存态）
+const (
+	AnalyzeTaskStatusPending   = "pending"
+	AnalyzeTaskStatusRunning   = "running"
+	AnalyzeTaskStatusSleeping  = "sleeping"
+	AnalyzeTaskStatusStopping  = "stopping"
+	AnalyzeTaskStatusCompleted = "completed"
+	AnalyzeTaskStatusFailed    = "failed"
+)
+
 // AnalyzeTask 分析任务状态
 type AnalyzeTask struct {
 	ID             string     `json:"id"`
@@ -36,7 +46,7 @@ type AnalyzeTask struct {
 
 // IsRunning 检查任务是否运行中
 func (t *AnalyzeTask) IsRunning() bool {
-	return t.Status == "running" || t.Status == "sleeping" || t.Status == "stopping"
+	return t.Status == AnalyzeTaskStatusRunning || t.Status == AnalyzeTaskStatusSleeping || t.Status == AnalyzeTaskStatusStopping
 }
 
 // AIService AI 分析服务接口
@@ -473,13 +483,13 @@ func isPhotoReadyForAI(photo *model.Photo) bool {
 	if photo == nil {
 		return false
 	}
-	if photo.ThumbnailStatus != "ready" {
+	if photo.ThumbnailStatus != model.ThumbnailStatusReady {
 		return false
 	}
 	// 有有效 GPS 坐标但还没 geocode 完成，等待 geocode
 	if photo.GPSLatitude != nil && photo.GPSLongitude != nil &&
 		(*photo.GPSLatitude != 0 || *photo.GPSLongitude != 0) &&
-		photo.GeocodeStatus != "ready" {
+		photo.GeocodeStatus != model.GeocodeStatusReady {
 		return false
 	}
 	return true
@@ -489,13 +499,13 @@ func photoNotReadyReason(photo *model.Photo) string {
 	if photo == nil {
 		return "photo not found"
 	}
-	if photo.ThumbnailStatus != "ready" {
+	if photo.ThumbnailStatus != model.ThumbnailStatusReady {
 		return "thumbnail not ready"
 	}
 	// 有有效 GPS 坐标但还没 geocode 完成
 	if photo.GPSLatitude != nil && photo.GPSLongitude != nil &&
 		(*photo.GPSLatitude != 0 || *photo.GPSLongitude != 0) &&
-		photo.GeocodeStatus != "ready" {
+		photo.GeocodeStatus != model.GeocodeStatusReady {
 		return "geocode not ready"
 	}
 	return "photo not ready for ai analysis"
@@ -674,7 +684,7 @@ func (s *aiService) AnalyzeBatch(limit int) (*AnalyzeTask, error) {
 	task := &AnalyzeTask{
 		ID:             fmt.Sprintf("task_%d", time.Now().Unix()),
 		Mode:           model.AnalysisOwnerTypeBatch,
-		Status:         "running",
+		Status:         AnalyzeTaskStatusRunning,
 		TotalCount:     len(photos),
 		SuccessCount:   0,
 		FailedCount:    0,
@@ -716,7 +726,7 @@ func (s *aiService) StartBackgroundAnalyze() (*AnalyzeTask, error) {
 	task := &AnalyzeTask{
 		ID:             fmt.Sprintf("background_%d", time.Now().Unix()),
 		Mode:           model.AnalysisOwnerTypeBackground,
-		Status:         "running",
+		Status:         AnalyzeTaskStatusRunning,
 		StartedAt:      time.Now(),
 		CurrentMessage: "后台分析已启动",
 	}
@@ -747,8 +757,8 @@ func (s *aiService) StopBackgroundAnalyze() error {
 		return fmt.Errorf("background analysis is not running")
 	}
 
-	if s.currentTask.Status != "stopping" {
-		s.currentTask.Status = "stopping"
+	if s.currentTask.Status != AnalyzeTaskStatusStopping {
+		s.currentTask.Status = AnalyzeTaskStatusStopping
 		s.currentTask.CurrentMessage = "正在停止后台分析，等待当前批次完成"
 		s.appendBackgroundLog("收到停止请求，等待当前批次完成")
 	}
@@ -792,7 +802,7 @@ func (s *aiService) runBatchAnalysis(task *AnalyzeTask, photos []*model.Photo) {
 
 	// 更新任务完成状态
 	s.taskMutex.Lock()
-	task.Status = "completed"
+	task.Status = AnalyzeTaskStatusCompleted
 	task.SuccessCount = successCount
 	task.FailedCount = failedCount
 	now := time.Now()
@@ -823,11 +833,11 @@ func (s *aiService) runBackgroundAnalysis(task *AnalyzeTask) {
 		s.taskMutex.Lock()
 		now := time.Now()
 		task.CompletedAt = &now
-		if task.Status == "stopping" {
-			task.Status = "completed"
+		if task.Status == AnalyzeTaskStatusStopping {
+			task.Status = AnalyzeTaskStatusCompleted
 			task.CurrentMessage = "后台分析已停止"
-		} else if task.Status != "failed" {
-			task.Status = "completed"
+		} else if task.Status != AnalyzeTaskStatusFailed {
+			task.Status = AnalyzeTaskStatusCompleted
 			task.CurrentMessage = "后台分析已结束"
 		}
 		s.taskMutex.Unlock()
@@ -842,7 +852,7 @@ func (s *aiService) runBackgroundAnalysis(task *AnalyzeTask) {
 		limit := s.backgroundBatchSize()
 		photos, err := s.photoRepo.GetUnanalyzed(limit)
 		if err != nil {
-			s.setTaskState(task, "running", 0, nil, fmt.Sprintf("获取待分析照片失败：%v", err))
+			s.setTaskState(task, AnalyzeTaskStatusRunning, 0, nil, fmt.Sprintf("获取待分析照片失败：%v", err))
 			s.appendBackgroundLog(fmt.Sprintf("获取待分析照片失败：%v", err))
 			if s.waitForBackgroundNextCycle(5 * time.Second) {
 				return
@@ -851,7 +861,7 @@ func (s *aiService) runBackgroundAnalysis(task *AnalyzeTask) {
 		}
 
 		if len(photos) == 0 {
-			s.setTaskState(task, "sleeping", 0, nil, "没有新的未分析照片，后台分析等待中")
+			s.setTaskState(task, AnalyzeTaskStatusSleeping, 0, nil, "没有新的未分析照片，后台分析等待中")
 			s.appendBackgroundLog("没有新的未分析照片，5 秒后重试")
 			if s.waitForBackgroundNextCycle(5 * time.Second) {
 				return
@@ -859,7 +869,7 @@ func (s *aiService) runBackgroundAnalysis(task *AnalyzeTask) {
 			continue
 		}
 
-		s.setTaskState(task, "running", len(photos), nil, fmt.Sprintf("本轮准备分析 %d 张照片", len(photos)))
+		s.setTaskState(task, AnalyzeTaskStatusRunning, len(photos), nil, fmt.Sprintf("本轮准备分析 %d 张照片", len(photos)))
 		s.appendBackgroundLog(fmt.Sprintf("开始新一轮后台分析：%d 张照片", len(photos)))
 
 		prevSuccess, prevFailed := 0, 0
@@ -945,7 +955,7 @@ func (s *aiService) waitForBackgroundNextCycle(delay time.Duration) bool {
 func (s *aiService) isBackgroundStopRequested() bool {
 	s.taskMutex.RLock()
 	defer s.taskMutex.RUnlock()
-	return s.currentTask != nil && s.currentTask.Mode == model.AnalysisOwnerTypeBackground && s.currentTask.Status == "stopping"
+	return s.currentTask != nil && s.currentTask.Mode == model.AnalysisOwnerTypeBackground && s.currentTask.Status == AnalyzeTaskStatusStopping
 }
 
 func (s *aiService) setTaskState(task *AnalyzeTask, status string, totalCount int, currentPhotoID *uint, message string) {

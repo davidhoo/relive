@@ -115,7 +115,7 @@ func (h *DisplayHandler) resolveDeviceDisplaySelection(c *gin.Context) (*model.D
 	}
 
 	renderProfile := device.RenderProfile
-	if device.DeviceType == "embedded" && renderProfile == "" {
+	if device.DeviceType == model.DeviceTypeEmbedded && renderProfile == "" {
 		renderProfile = util.DefaultRenderProfile()
 	}
 	selection, err := h.displayService.GetDeviceDisplay(deviceID, renderProfile)

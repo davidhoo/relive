@@ -11,7 +11,7 @@ import (
 
 func createTestDisplayRecord(t *testing.T, repo DisplayRecordRepository, photoID, deviceID uint, displayedAt time.Time) *model.DisplayRecord {
 	t.Helper()
-	r := &model.DisplayRecord{PhotoID: photoID, DeviceID: deviceID, DisplayedAt: displayedAt, TriggerType: "scheduled"}
+	r := &model.DisplayRecord{PhotoID: photoID, DeviceID: deviceID, DisplayedAt: displayedAt, TriggerType: model.TriggerTypeScheduled}
 	require.NoError(t, repo.Create(r))
 	return r
 }
@@ -21,7 +21,7 @@ func TestDisplayRecordRepo_Create(t *testing.T) {
 	defer teardownTestDB(db)
 	repo := NewDisplayRecordRepository(db)
 
-	r := &model.DisplayRecord{PhotoID: 1, DeviceID: 1, DisplayedAt: time.Now(), TriggerType: "manual"}
+	r := &model.DisplayRecord{PhotoID: 1, DeviceID: 1, DisplayedAt: time.Now(), TriggerType: model.TriggerTypeManual}
 	require.NoError(t, repo.Create(r))
 	assert.NotZero(t, r.ID)
 }

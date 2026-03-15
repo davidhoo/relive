@@ -71,12 +71,12 @@ func (s *deviceService) Create(req *model.CreateDeviceRequest) (*model.CreateDev
 	// 设置默认值
 	deviceType := req.DeviceType
 	if deviceType == "" {
-		deviceType = "embedded"
+		deviceType = model.DeviceTypeEmbedded
 	}
 
 	// 创建设备记录
 	renderProfile := ""
-	if deviceType == "embedded" {
+	if deviceType == model.DeviceTypeEmbedded {
 		renderProfile = req.RenderProfile
 		if renderProfile == "" {
 			renderProfile = util.DefaultRenderProfile()
@@ -145,7 +145,7 @@ func (s *deviceService) UpdateRenderProfile(id uint, renderProfile string) error
 	if err != nil {
 		return fmt.Errorf("device not found: %w", err)
 	}
-	if device.DeviceType != "embedded" {
+	if device.DeviceType != model.DeviceTypeEmbedded {
 		device.RenderProfile = ""
 	} else {
 		if renderProfile == "" {
