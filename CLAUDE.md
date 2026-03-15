@@ -123,7 +123,8 @@ src/
 
 - Development: `backend/data/relive.db`
 - Auto-migration enabled in dev mode (`auto_migrate: true`)
-- Key tables: photos, devices, display_records, app_config, users, cities
+- Key tables: photos, photo_tags, devices, display_records, app_config, users, cities
+- `photo_tags` table stores normalized tags (one row per photo-tag pair), dual-written with `photos.tags` for rollback safety
 
 ### AI Provider System
 
@@ -294,6 +295,13 @@ Docker 构建时通过 build-args 注入额外信息：
 这些信息通过 `-ldflags` 注入到 `version.BuildTime` 和 `version.GitCommit`。
 
 ## Recent Features
+
+### Photo Tags Optimization (2026-03-15)
+- 标签存储从 `photos.tags` 逗号分隔文本迁移到独立 `photo_tags` 表（双写保留回滚安全）
+- `GetTags()` 从全表扫描 + 内存去重改为 `SELECT DISTINCT tag FROM photo_tags`
+- 标签筛选从 `LIKE '%tag%'` 改为精确子查询匹配
+- 前端 `tags` 类型从 `string` 改为 `string[]`，后端 `Photo.TagList` 字段批量填充
+- 启动自动迁移：从 `photos.tags` 批量拆分写入 `photo_tags`（手动分页，避免 GORM FindInBatches + SQLite 反引号不兼容）
 
 ### v1.1.0 (2026-03-14)
 - 城市数据内嵌二进制：离线 geocoding 开箱即用，启动自动导入，无需手动下载外部数据
