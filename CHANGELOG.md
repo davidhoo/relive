@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.1] - 2026-03-16
+
+### Security
+- **HttpOnly Cookie 认证照片资源** - `<img>` 标签不再通过 URL `?token=xxx` 暴露 JWT，改为浏览器自动发送 HttpOnly Cookie（`relive_session`），前端 axios 启用 `withCredentials`
+
+### Added
+- **自定义 Logo 和 Favicon** - 替换 Vite 默认图标，新增全套品牌资源（logo.png、logo-192/512、favicon.ico/16x16/32x32、apple-touch-icon）
+- **登录页品牌美化** - 使用自定义 logo，更新 slogan，背景渐变色适配品牌绿色调
+- **弱 JWT 密钥启动警告** - 启动时检测默认/弱密钥并输出 WARN 日志
+
+### Changed
+- **枚举字段常量化 + CHECK 约束** - 8 张表 18 个枚举字段定义 Go 常量，15 个字段添加 SQLite CHECK 约束，启动自动修复空值
+- **分层架构修复** - 新建 `SystemService` 替代 `SystemHandler` 直接持有 `*gorm.DB`；`PhotoRepository.UpdateFields()` 替换 service 层 ~12 处直接 DB 调用
+- **合并扫描/重建重复代码** - 提取 `startScanTask()` 公共方法
+- **代码质量清理** - 删除自定义 min/max/contains 函数、CORS 仅 debug 模式启用、前端 401 重定向改用 Vue Router、移除未实现的 postgres 配置
+
+### Fixed
+- 生产环境 CORS 中间件 panic（`gin-contrib/cors` v1.7.6 要求 AllowOrigins 非空）
+- 生产环境图片不显示（Cookie `Secure=true` 在 HTTP 下不发送，改为 `Secure=false` 兼容双协议）
+- 生产环境 Logo/Favicon 不显示（静态文件路由改为 NoRoute 中先查找文件再 SPA fallback）
+
+---
+
 ## [1.2.0] - 2026-03-15
 
 ### Added
