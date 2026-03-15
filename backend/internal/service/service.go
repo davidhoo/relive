@@ -21,6 +21,7 @@ type Services struct {
 	Geocode         GeocodeService
 	Auth            AuthService
 	Analysis        AnalysisService
+	System          SystemService
 	Scheduler       *TaskScheduler
 	ResultQueue     *ResultQueue // 结果队列服务
 }
@@ -98,6 +99,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		Geocode:         geocodeService,
 		Auth:            authService,
 		Analysis:        analysisService,
+		System:          NewSystemService(db),
 		Scheduler:       scheduler,
 		ResultQueue:     resultQueue,
 	}

@@ -215,9 +215,9 @@ func (s *geocodeTaskService) GeocodePhoto(photoID uint) error {
 	loc, err := s.geocodeService.ReverseGeocode(*photo.GPSLatitude, *photo.GPSLongitude)
 	now := time.Now()
 	if err != nil {
-		_ = s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+		_ = s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
 			"geocode_status": model.GeocodeStatusFailed,
-		}).Error
+		})
 		return fmt.Errorf("GPS 解析失败: %w", err)
 	}
 
@@ -231,7 +231,7 @@ func (s *geocodeTaskService) GeocodePhoto(photoID uint) error {
 	updates["geocode_provider"] = provider
 	updates["geocoded_at"] = &now
 
-	return s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(updates).Error
+	return s.photoRepo.UpdateFields(photo.ID, updates)
 }
 
 // SetManualLocation 手动设置照片 GPS 坐标并反向解析位置
@@ -265,7 +265,7 @@ func (s *geocodeTaskService) SetManualLocation(photoID uint, lat, lon float64) (
 	updates["geocode_provider"] = "manual"
 	updates["geocoded_at"] = &now
 
-	if err := s.db.Model(&model.Photo{}).Where("id = ?", photoID).Updates(updates).Error; err != nil {
+	if err := s.photoRepo.UpdateFields(photoID, updates); err != nil {
 		return "", fmt.Errorf("update photo location failed: %w", err)
 	}
 
@@ -298,16 +298,16 @@ func (s *geocodeTaskService) enqueuePhotoModel(photo *model.Photo, source string
 	}
 	if !force && strings.TrimSpace(photo.Location) != "" && (photo.GeocodeStatus == model.GeocodeStatusReady || photo.GeocodeStatus == "" || photo.GeocodeStatus == model.GeocodeStatusNone) {
 		now := time.Now()
-		return s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+		return s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
 			"geocode_status": model.GeocodeStatusReady,
 			"geocoded_at":    gorm.Expr("COALESCE(geocoded_at, ?)", &now),
-		}).Error
+		})
 	}
 	now := time.Now()
-	if err := s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+	if err := s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
 		"geocode_status": model.GeocodeStatusPending,
 		"geocoded_at":    nil,
-	}).Error; err != nil {
+	}); err != nil {
 		return err
 	}
 	activeJob, err := s.jobRepo.GetActiveByPhotoID(photo.ID)
@@ -505,7 +505,7 @@ func (s *geocodeTaskService) runRegeocodeAll(active *activeGeocodeTask) {
 func (s *geocodeTaskService) updatePhotoWithRetry(photoID uint, updates map[string]interface{}) error {
 	var lastErr error
 	for i := 0; i < 3; i++ {
-		err := s.db.Model(&model.Photo{}).Where("id = ?", photoID).Updates(updates).Error
+		err := s.photoRepo.UpdateFields(photoID, updates)
 		if err == nil {
 			return nil
 		}

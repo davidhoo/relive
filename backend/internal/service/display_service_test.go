@@ -25,9 +25,10 @@ type stubPhotoRepo struct {
 	getTopScoredCandidatesFunc func(minBeauty, minMemory int, excludeIDs []uint, limit int) ([]*model.Photo, error)
 }
 
-func (r *stubPhotoRepo) Create(photo *model.Photo) error                     { return nil }
-func (r *stubPhotoRepo) Update(photo *model.Photo) error                     { return nil }
-func (r *stubPhotoRepo) Delete(id uint) error                                { return nil }
+func (r *stubPhotoRepo) Create(photo *model.Photo) error                       { return nil }
+func (r *stubPhotoRepo) Update(photo *model.Photo) error                       { return nil }
+func (r *stubPhotoRepo) UpdateFields(id uint, fields map[string]interface{}) error { return nil }
+func (r *stubPhotoRepo) Delete(id uint) error                                  { return nil }
 func (r *stubPhotoRepo) GetByID(id uint) (*model.Photo, error)               { return nil, nil }
 func (r *stubPhotoRepo) GetByFilePath(filePath string) (*model.Photo, error) { return nil, nil }
 func (r *stubPhotoRepo) GetByFileHash(fileHash string) (*model.Photo, error) { return nil, nil }
@@ -82,7 +83,6 @@ func (r *stubPhotoRepo) UpdateLocation(id uint, location string) error          
 func (r *stubPhotoRepo) UpdateLocationFull(id uint, loc *model.LocationFields) error { return nil }
 func (r *stubPhotoRepo) ListWithGPS() ([]*model.Photo, error)                        { return nil, nil }
 func (r *stubPhotoRepo) ListByPathPrefix(prefix string) ([]*model.Photo, error) { return nil, nil }
-func (r *stubPhotoRepo) SoftDeleteByPathPrefix(prefix string) error             { return nil }
 func (r *stubPhotoRepo) CountByPathPrefix(prefix string) (int64, error)         { return 0, nil }
 func (r *stubPhotoRepo) GetDerivedStatusByPathPrefix(prefix string) (*model.PathDerivedStatus, error) {
 	return &model.PathDerivedStatus{}, nil

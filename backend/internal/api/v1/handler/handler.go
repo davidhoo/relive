@@ -27,7 +27,7 @@ func NewHandlers(db *gorm.DB, services *service.Services, repos *repository.Repo
 	deviceHandler := NewDeviceHandler(services.Device)
 
 	handlers := &Handlers{
-		System:    NewSystemHandler(db, cfg, services),
+		System:    NewSystemHandler(services.System, cfg),
 		Photo:     NewPhotoHandler(services.Photo, services.Thumbnail, services.GeocodeTask, services.Config, cfg),
 		Thumbnail: NewThumbnailHandler(services.Thumbnail),
 		Geocode:   NewGeocodeHandler(services.GeocodeTask),

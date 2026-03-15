@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/davidhoo/relive/internal/model"
+	"github.com/davidhoo/relive/internal/service"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/logger"
 	"github.com/stretchr/testify/assert"
@@ -58,7 +59,7 @@ func TestSystemHandlerGetDatabaseSizeNonSQLite(t *testing.T) {
 	}
 }
 
-func TestSystemHandlerResetDatabaseState(t *testing.T) {
+func TestSystemServiceResetSystem(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
@@ -126,13 +127,10 @@ func TestSystemHandlerResetDatabaseState(t *testing.T) {
 		t.Fatalf("create result queue item: %v", err)
 	}
 
-	h := &SystemHandler{
-		db:  db,
-		cfg: &config.Config{Database: config.DatabaseConfig{Type: "sqlite", Path: "/tmp/test.db"}},
-	}
+	svc := service.NewSystemService(db)
 
-	if err := h.resetDatabaseState(); err != nil {
-		t.Fatalf("resetDatabaseState: %v", err)
+	if err := svc.ResetSystem(); err != nil {
+		t.Fatalf("ResetSystem: %v", err)
 	}
 
 	assertCount := func(table string, expected int64) {
@@ -172,7 +170,8 @@ func TestSystemHandler_Health_Success(t *testing.T) {
 	sqlDB, _ := db.DB()
 	defer sqlDB.Close()
 
-	h := NewSystemHandler(db, &config.Config{}, nil)
+	svc := service.NewSystemService(db)
+	h := NewSystemHandler(svc, &config.Config{})
 	rec := performJSONRequest(t, http.MethodGet, "/api/v1/system/health", nil, nil, h.Health)
 	assert.Equal(t, http.StatusOK, rec.Code)
 	resp := decodeAPIResponse(t, rec)

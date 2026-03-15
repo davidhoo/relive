@@ -21,6 +21,7 @@ type PhotoRepository interface {
 	// 基础 CRUD
 	Create(photo *model.Photo) error
 	Update(photo *model.Photo) error
+	UpdateFields(id uint, fields map[string]interface{}) error
 	Delete(id uint) error
 	GetByID(id uint) (*model.Photo, error)
 	GetByFilePath(filePath string) (*model.Photo, error)
@@ -67,7 +68,6 @@ type PhotoRepository interface {
 
 	// 重建相关
 	ListByPathPrefix(prefix string) ([]*model.Photo, error)
-	SoftDeleteByPathPrefix(prefix string) error
 
 	// 路径统计
 	CountByPathPrefix(prefix string) (int64, error)
@@ -106,7 +106,13 @@ func (r *photoRepository) Update(photo *model.Photo) error {
 	return r.db.Save(photo).Error
 }
 
-// Delete 删除照片（硬删除）
+// UpdateFields 按字段更新照片
+func (r *photoRepository) UpdateFields(id uint, fields map[string]interface{}) error {
+	return r.db.Model(&model.Photo{}).Where("id = ?", id).Updates(fields).Error
+}
+
+// Delete 硬删除照片（永久移除数据）
+// 设计意图：排除照片使用 status=excluded（可恢复），Delete 用于真正的数据清理
 func (r *photoRepository) Delete(id uint) error {
 	return r.db.Unscoped().Delete(&model.Photo{}, "id = ?", id).Error
 }
@@ -547,16 +553,6 @@ func (r *photoRepository) ListByPathPrefix(prefix string) ([]*model.Photo, error
 
 	err := r.db.Where(condition, values...).Find(&photos).Error
 	return photos, err
-}
-
-// SoftDeleteByPathPrefix 软删除指定路径前缀的所有照片
-func (r *photoRepository) SoftDeleteByPathPrefix(prefix string) error {
-	condition, values := buildPathPrefixCondition(prefix)
-	if condition == "" {
-		return nil
-	}
-
-	return r.db.Where(condition, values...).Delete(&model.Photo{}).Error
 }
 
 // CountByPathPrefix 统计指定路径前缀的照片数量

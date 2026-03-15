@@ -150,8 +150,7 @@ func (s *analysisService) ExtendTaskLock(taskID, analyzerID string) (time.Time, 
 		return time.Time{}, ErrTaskNotFound
 	}
 
-	var photo model.Photo
-	err = s.db.First(&photo, photoID).Error
+	photo, err := s.photoRepo.GetByID(photoID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return time.Time{}, ErrTaskNotFound
@@ -171,9 +170,9 @@ func (s *analysisService) ExtendTaskLock(taskID, analyzerID string) (time.Time, 
 
 	// 续期锁
 	newExpiredAt := time.Now().Add(5 * time.Minute)
-	err = s.db.Model(&photo).Updates(map[string]interface{}{
+	err = s.photoRepo.UpdateFields(photoID, map[string]interface{}{
 		"analysis_lock_expired_at": newExpiredAt,
-	}).Error
+	})
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -190,8 +189,7 @@ func (s *analysisService) ReleaseTask(taskID, analyzerID, reason, errorMsg strin
 		return ErrTaskNotFound
 	}
 
-	var photo model.Photo
-	err = s.db.First(&photo, photoID).Error
+	photo, err := s.photoRepo.GetByID(photoID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrTaskNotFound
@@ -214,7 +212,7 @@ func (s *analysisService) ReleaseTask(taskID, analyzerID, reason, errorMsg strin
 		updates["analysis_retry_count"] = gorm.Expr("analysis_retry_count + 1")
 	}
 
-	err = s.db.Model(&photo).Updates(updates).Error
+	err = s.photoRepo.UpdateFields(photoID, updates)
 	if err != nil {
 		return err
 	}

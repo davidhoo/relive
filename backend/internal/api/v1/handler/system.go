@@ -11,28 +11,27 @@ import (
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
+	"github.com/davidhoo/relive/internal/service"
 	"github.com/davidhoo/relive/internal/util"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/logger"
 	"github.com/davidhoo/relive/pkg/version"
 	"github.com/gin-gonic/gin"
-	"golang.org/x/crypto/bcrypt"
-	"gorm.io/gorm"
 )
 
 // SystemHandler 系统处理器
 type SystemHandler struct {
-	db        *gorm.DB
-	cfg       *config.Config
-	startTime time.Time
+	systemService service.SystemService
+	cfg           *config.Config
+	startTime     time.Time
 }
 
 // NewSystemHandler 创建系统处理器
-func NewSystemHandler(db *gorm.DB, cfg *config.Config, services interface{}) *SystemHandler {
+func NewSystemHandler(systemService service.SystemService, cfg *config.Config) *SystemHandler {
 	return &SystemHandler{
-		db:        db,
-		cfg:       cfg,
-		startTime: time.Now(),
+		systemService: systemService,
+		cfg:           cfg,
+		startTime:     time.Now(),
 	}
 }
 
@@ -44,20 +43,7 @@ func NewSystemHandler(db *gorm.DB, cfg *config.Config, services interface{}) *Sy
 // @Success 200 {object} model.Response{data=model.SystemHealthResponse}
 // @Router /api/v1/system/health [get]
 func (h *SystemHandler) Health(c *gin.Context) {
-	// 检查数据库连接
-	sqlDB, err := h.db.DB()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, model.Response{
-			Success: false,
-			Error: &model.ErrorInfo{
-				Code:    "DATABASE_ERROR",
-				Message: "Failed to get database connection",
-			},
-		})
-		return
-	}
-
-	if err := sqlDB.Ping(); err != nil {
+	if err := h.systemService.Ping(); err != nil {
 		c.JSON(http.StatusInternalServerError, model.Response{
 			Success: false,
 			Error: &model.ErrorInfo{
@@ -68,7 +54,6 @@ func (h *SystemHandler) Health(c *gin.Context) {
 		return
 	}
 
-	// 计算运行时间
 	uptime := int64(time.Since(h.startTime).Seconds())
 
 	c.JSON(http.StatusOK, model.Response{
@@ -91,63 +76,14 @@ func (h *SystemHandler) Health(c *gin.Context) {
 // @Success 200 {object} model.Response{data=model.SystemStatsResponse}
 // @Router /api/v1/system/stats [get]
 func (h *SystemHandler) Stats(c *gin.Context) {
-	var stats model.SystemStatsResponse
-
-	// 照片统计：一条 SQL 同时获取总数、已分析数、存储空间
-	var photoStats struct {
-		Total    int64 `gorm:"column:total"`
-		Analyzed int64 `gorm:"column:analyzed"`
-		Size     int64 `gorm:"column:size"`
-	}
-	if err := h.db.Model(&model.Photo{}).
-		Where("status = ?", model.PhotoStatusActive).
-		Select("COUNT(*) as total, SUM(CASE WHEN ai_analyzed = 1 THEN 1 ELSE 0 END) as analyzed, COALESCE(SUM(file_size), 0) as size").
-		Scan(&photoStats).Error; err != nil {
-		logger.Errorf("Failed to query photo stats: %v", err)
+	stats, _, err := h.systemService.GetStats()
+	if err != nil {
+		logger.Errorf("Failed to query stats: %v", err)
 		c.JSON(http.StatusInternalServerError, model.Response{
 			Success: false,
 			Error: &model.ErrorInfo{
 				Code:    "DATABASE_ERROR",
-				Message: "Failed to query photo statistics",
-			},
-		})
-		return
-	}
-	stats.TotalPhotos = photoStats.Total
-	stats.AnalyzedPhotos = photoStats.Analyzed
-	stats.UnanalyzedPhotos = photoStats.Total - photoStats.Analyzed
-	stats.StorageSize = photoStats.Size
-
-	// 设备统计：一条 SQL 同时获取总数和在线数
-	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
-	var deviceStats struct {
-		Total  int64 `gorm:"column:total"`
-		Online int64 `gorm:"column:online"`
-	}
-	if err := h.db.Model(&model.Device{}).
-		Select("COUNT(*) as total, SUM(CASE WHEN last_seen > ? THEN 1 ELSE 0 END) as online", fiveMinutesAgo).
-		Scan(&deviceStats).Error; err != nil {
-		logger.Errorf("Failed to query device stats: %v", err)
-		c.JSON(http.StatusInternalServerError, model.Response{
-			Success: false,
-			Error: &model.ErrorInfo{
-				Code:    "DATABASE_ERROR",
-				Message: "Failed to query device statistics",
-			},
-		})
-		return
-	}
-	stats.TotalDevices = deviceStats.Total
-	stats.OnlineDevices = deviceStats.Online
-
-	// 展示记录总数
-	if err := h.db.Model(&model.DisplayRecord{}).Count(&stats.TotalDisplays).Error; err != nil {
-		logger.Errorf("Failed to query display record count: %v", err)
-		c.JSON(http.StatusInternalServerError, model.Response{
-			Success: false,
-			Error: &model.ErrorInfo{
-				Code:    "DATABASE_ERROR",
-				Message: "Failed to query display statistics",
+				Message: "Failed to query statistics",
 			},
 		})
 		return
@@ -265,12 +201,10 @@ func (h *SystemHandler) Environment(c *gin.Context) {
 
 // checkIsDocker 检查是否在 Docker 容器中运行
 func checkIsDocker() bool {
-	// 方法1: 检查 /.dockerenv 文件是否存在
 	if _, err := os.Stat("/.dockerenv"); err == nil {
 		return true
 	}
 
-	// 方法2: 检查 /proc/1/cgroup 是否包含 "docker"
 	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
 		if strings.Contains(string(data), "docker") {
 			return true
@@ -302,7 +236,6 @@ func (h *SystemHandler) Reset(c *gin.Context) {
 		return
 	}
 
-	// 验证确认文本
 	if req.ConfirmText != "RESET" {
 		c.JSON(http.StatusBadRequest, model.Response{
 			Success: false,
@@ -319,7 +252,7 @@ func (h *SystemHandler) Reset(c *gin.Context) {
 	}
 	generatedFilesCleared := true
 
-	if err := h.resetDatabaseState(); err != nil {
+	if err := h.systemService.ResetSystem(); err != nil {
 		logger.Errorf("Failed to reset database state: %v", err)
 		response.DatabaseCleared = false
 		c.JSON(http.StatusInternalServerError, model.Response{
@@ -333,9 +266,9 @@ func (h *SystemHandler) Reset(c *gin.Context) {
 	}
 	response.DatabaseCleared = true
 
-	// 2. 清除缩略图
+	// 清除缩略图
 	if h.cfg.Photos.ThumbnailPath != "" {
-		if err := h.clearDirectoryContents(h.cfg.Photos.ThumbnailPath); err != nil {
+		if err := clearDirectoryContents(h.cfg.Photos.ThumbnailPath); err != nil {
 			logger.Errorf("Failed to clear thumbnails: %v", err)
 			response.ThumbnailsCleared = false
 		} else {
@@ -344,18 +277,18 @@ func (h *SystemHandler) Reset(c *gin.Context) {
 		}
 	}
 
-	// 3. 清除展示批次文件
+	// 清除展示批次文件
 	displayBatchPath := util.DisplayBatchRoot(h.cfg.Photos.ThumbnailPath)
-	if err := h.clearDirectoryContents(displayBatchPath); err != nil {
+	if err := clearDirectoryContents(displayBatchPath); err != nil {
 		logger.Errorf("Failed to clear display batch assets: %v", err)
 		generatedFilesCleared = false
 	} else {
 		logger.Info("Display batch assets cleared")
 	}
 
-	// 4. 清除缓存目录（如果有）
+	// 清除缓存目录
 	cachePath := h.getCachePath()
-	if err := h.clearDirectoryContents(cachePath); err != nil {
+	if err := clearDirectoryContents(cachePath); err != nil {
 		logger.Errorf("Failed to clear cache: %v", err)
 		response.CacheCleared = false
 	} else {
@@ -378,105 +311,21 @@ func (h *SystemHandler) Reset(c *gin.Context) {
 	})
 }
 
-func (h *SystemHandler) resetDatabaseState() error {
-	return h.db.Transaction(func(tx *gorm.DB) error {
-		for _, table := range h.resettableNames() {
-			exists, err := h.tableExists(tx, table)
-			if err != nil {
-				return fmt.Errorf("check table %s exists: %w", table, err)
-			}
-			if !exists {
-				continue
-			}
-
-			if err := tx.Exec(fmt.Sprintf("DELETE FROM %s", table)).Error; err != nil {
-				return fmt.Errorf("clear table %s: %w", table, err)
-			}
-			logger.Infof("Table %s cleared", table)
-		}
-
-		if err := h.resetSQLiteSequences(tx); err != nil {
-			return err
-		}
-
-		if err := h.resetUserPasswordTx(tx); err != nil {
-			return err
-		}
-
-		return nil
-	})
-}
-
-func (h *SystemHandler) resettableNames() []string {
-	return []string{
-		"result_queue",
-		"display_records",
-		"daily_display_assets",
-		"daily_display_items",
-		"device_playback_states",
-		"daily_display_batches",
-		"analysis_runtime_leases",
-		"devices",
-		"photos",
-		"app_config",
-		"api_keys",
-	}
-}
-
-func (h *SystemHandler) tableExists(tx *gorm.DB, table string) (bool, error) {
-	var count int64
-	typeCheckQuery := "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?"
-	if err := tx.Raw(typeCheckQuery, table).Scan(&count).Error; err != nil {
-		return false, err
-	}
-	return count > 0, nil
-}
-
-func (h *SystemHandler) resetSQLiteSequences(tx *gorm.DB) error {
-	if h.cfg == nil || strings.ToLower(strings.TrimSpace(h.cfg.Database.Type)) != "sqlite" {
-		return nil
-	}
-
-	exists, err := h.tableExists(tx, "sqlite_sequence")
-	if err != nil || !exists {
-		return err
-	}
-
-	tableNames := append(h.resettableNames(), "users")
-	placeholders := make([]string, 0, len(tableNames))
-	args := make([]interface{}, 0, len(tableNames))
-	for _, tableName := range tableNames {
-		placeholders = append(placeholders, "?")
-		args = append(args, tableName)
-	}
-
-	query := fmt.Sprintf("DELETE FROM sqlite_sequence WHERE name IN (%s)", strings.Join(placeholders, ","))
-	if err := tx.Exec(query, args...).Error; err != nil {
-		return fmt.Errorf("reset sqlite sequences: %w", err)
-	}
-
-	return nil
-}
-
 // clearDirectoryContents 清除目录内所有文件和子目录，但保留目录本身
-func (h *SystemHandler) clearDirectoryContents(dirPath string) error {
-	// 检查目录是否存在
+func clearDirectoryContents(dirPath string) error {
 	if dirPath == "" {
 		return nil
 	}
 	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
-		// 目录不存在，无需清理
 		return nil
 	}
 
-	// 读取目录内容
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
 		return fmt.Errorf("read directory: %w", err)
 	}
 
 	var removeErrs []error
-	// 删除所有子目录和文件
 	for _, entry := range entries {
 		fullPath := filepath.Join(dirPath, entry.Name())
 		if err := os.RemoveAll(fullPath); err != nil {
@@ -499,33 +348,4 @@ func (h *SystemHandler) getCachePath() string {
 	}
 
 	return filepath.Join(filepath.Dir(filepath.Clean(dbPath)), "cache")
-}
-
-// resetUserPasswordTx 重置用户密码为 admin/admin
-func (h *SystemHandler) resetUserPasswordTx(tx *gorm.DB) error {
-	// 生成默认密码哈希（admin）
-	PasswordHash, err := bcrypt.GenerateFromPassword([]byte("admin"), bcrypt.DefaultCost)
-	if err != nil {
-		return fmt.Errorf("failed to hash default Password: %w", err)
-	}
-
-	// 删除所有现有用户
-	if err := tx.Exec("DELETE FROM users").Error; err != nil {
-		return fmt.Errorf("failed to clear users table: %w", err)
-	}
-
-	// 创建新的默认用户
-	defaultUser := &model.User{
-		Username:     "admin",
-		PasswordHash: string(PasswordHash),
-		IsFirstLogin: true,
-	}
-
-	if err := tx.Create(defaultUser).Error; err != nil {
-		return fmt.Errorf("failed to create default user: %w", err)
-	}
-
-	logger.Info("User password reset to admin/admin")
-
-	return nil
 }

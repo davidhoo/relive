@@ -190,11 +190,11 @@ func (s *thumbnailService) GeneratePhoto(photoID uint, force bool) error {
 		fullPath := filepath.Join(s.config.Photos.ThumbnailPath, thumbnailPath)
 		if _, err := os.Stat(fullPath); err == nil {
 			now := time.Now()
-			return s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+			return s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
 				"thumbnail_path":         thumbnailPath,
 				"thumbnail_status":       model.ThumbnailStatusReady,
 				"thumbnail_generated_at": &now,
-			}).Error
+			})
 		}
 	} else {
 		// 强制模式：删除旧文件
@@ -209,17 +209,17 @@ func (s *thumbnailService) GeneratePhoto(photoID uint, force bool) error {
 	relPath, err := s.generator.GenerateThumbnail(photo.FilePath)
 	now := time.Now()
 	if err != nil {
-		_ = s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+		_ = s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
 			"thumbnail_status": model.ThumbnailStatusFailed,
-		}).Error
+		})
 		return fmt.Errorf("生成缩略图失败: %w", err)
 	}
 
-	return s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+	return s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
 		"thumbnail_path":         relPath,
 		"thumbnail_status":       model.ThumbnailStatusReady,
 		"thumbnail_generated_at": &now,
-	}).Error
+	})
 }
 
 func (s *thumbnailService) enqueuePhotoModel(photo *model.Photo, source string, priority int, force bool) error {
@@ -245,11 +245,11 @@ func (s *thumbnailService) enqueuePhotoModel(photo *model.Photo, source string, 
 		if _, err := os.Stat(fullPath); err == nil {
 			// 文件已存在，更新数据库状态为 ready
 			generatedAt := time.Now()
-			updateErr := s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+			updateErr := s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
 				"thumbnail_path":         thumbnailPath,
 				"thumbnail_status":       model.ThumbnailStatusReady,
 				"thumbnail_generated_at": &generatedAt,
-			}).Error
+			})
 			if updateErr != nil {
 				logger.Warnf("Update photo %d thumbnail status to ready failed: %v", photo.ID, updateErr)
 				return updateErr
@@ -267,11 +267,11 @@ func (s *thumbnailService) enqueuePhotoModel(photo *model.Photo, source string, 
 	}
 
 	now := time.Now()
-	if err := s.db.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+	if err := s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
 		"thumbnail_path":         thumbnailPath,
 		"thumbnail_status":       model.ThumbnailStatusPending,
 		"thumbnail_generated_at": nil,
-	}).Error; err != nil {
+	}); err != nil {
 		return err
 	}
 
@@ -452,7 +452,7 @@ func (s *thumbnailService) processJob(job *model.ThumbnailJob) error {
 func (s *thumbnailService) updatePhotoWithRetry(photoID uint, updates map[string]interface{}) error {
 	var lastErr error
 	for i := 0; i < 3; i++ {
-		err := s.db.Model(&model.Photo{}).Where("id = ?", photoID).Updates(updates).Error
+		err := s.photoRepo.UpdateFields(photoID, updates)
 		if err == nil {
 			return nil
 		}
