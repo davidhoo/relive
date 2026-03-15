@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"path/filepath"
 	"strconv"
 
@@ -362,4 +363,20 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// IsWeakJWTSecret 检测 JWT 密钥是否为弱密钥（默认值、未解析的环境变量占位符等）
+func (c *Config) IsWeakJWTSecret() bool {
+	s := c.Security.JWTSecret
+	if len(s) < 16 {
+		return true
+	}
+	if strings.Contains(s, "change-me") || strings.Contains(s, "default") {
+		return true
+	}
+	// 未解析的 shell 变量占位符（如 ${JWT_SECRET:-...}）
+	if strings.HasPrefix(s, "${") && strings.Contains(s, "}") {
+		return true
+	}
+	return false
 }

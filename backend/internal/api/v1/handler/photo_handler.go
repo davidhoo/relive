@@ -1272,62 +1272,7 @@ func (h *PhotoHandler) UpdateCategory(c *gin.Context) {
 // @Failure 500 {object} model.Response
 // @Router /api/v1/photos/scan/async [post]
 func (h *PhotoHandler) StartScan(c *gin.Context) {
-	var req model.StartScanRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, model.Response{
-			Success: false,
-			Error: &model.ErrorInfo{
-				Code:    "INVALID_REQUEST",
-				Message: err.Error(),
-			},
-		})
-		return
-	}
-
-	scanPath, _, err := h.resolveScanPath(req.Path)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, model.Response{
-			Success: false,
-			Error: &model.ErrorInfo{
-				Code:    "INVALID_PATH",
-				Message: err.Error(),
-			},
-		})
-		return
-	}
-
-	task, err := h.photoService.StartScan(scanPath)
-	if err != nil {
-		if err.Error() == "scan task already running" {
-			c.JSON(http.StatusConflict, model.Response{
-				Success: false,
-				Error: &model.ErrorInfo{
-					Code:    "TASK_RUNNING",
-					Message: "扫描任务正在运行中",
-				},
-			})
-			return
-		}
-		logger.Errorf("Start scan failed: %v", err)
-		c.JSON(http.StatusInternalServerError, model.Response{
-			Success: false,
-			Error: &model.ErrorInfo{
-				Code:    "START_FAILED",
-				Message: err.Error(),
-			},
-		})
-		return
-	}
-
-	resp := model.StartScanResponse{
-		TaskID: task.ID,
-	}
-
-	c.JSON(http.StatusOK, model.Response{
-		Success: true,
-		Message: "扫描任务已启动",
-		Data:    resp,
-	})
+	h.startScanTask(c, h.photoService.StartScan, "扫描")
 }
 
 // StartRebuild 启动异步重建任务
@@ -1343,6 +1288,11 @@ func (h *PhotoHandler) StartScan(c *gin.Context) {
 // @Failure 500 {object} model.Response
 // @Router /api/v1/photos/rebuild/async [post]
 func (h *PhotoHandler) StartRebuild(c *gin.Context) {
+	h.startScanTask(c, h.photoService.StartRebuild, "重建")
+}
+
+// startScanTask 扫描/重建任务的公共逻辑
+func (h *PhotoHandler) startScanTask(c *gin.Context, startFn func(string) (*model.ScanTask, error), taskName string) {
 	var req model.StartScanRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, model.Response{
@@ -1367,19 +1317,19 @@ func (h *PhotoHandler) StartRebuild(c *gin.Context) {
 		return
 	}
 
-	task, err := h.photoService.StartRebuild(scanPath)
+	task, err := startFn(scanPath)
 	if err != nil {
 		if err.Error() == "scan task already running" {
 			c.JSON(http.StatusConflict, model.Response{
 				Success: false,
 				Error: &model.ErrorInfo{
 					Code:    "TASK_RUNNING",
-					Message: "重建任务正在运行中",
+					Message: taskName + "任务正在运行中",
 				},
 			})
 			return
 		}
-		logger.Errorf("Start rebuild failed: %v", err)
+		logger.Errorf("Start %s failed: %v", taskName, err)
 		c.JSON(http.StatusInternalServerError, model.Response{
 			Success: false,
 			Error: &model.ErrorInfo{
@@ -1390,14 +1340,10 @@ func (h *PhotoHandler) StartRebuild(c *gin.Context) {
 		return
 	}
 
-	resp := model.StartScanResponse{
-		TaskID: task.ID,
-	}
-
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
-		Message: "重建任务已启动",
-		Data:    resp,
+		Message: taskName + "任务已启动",
+		Data:    model.StartScanResponse{TaskID: task.ID},
 	})
 }
 

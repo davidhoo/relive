@@ -48,6 +48,11 @@ func main() {
 	logger.Info("Starting Relive Backend...")
 	logger.Infof("Version: %s, Build Time: %s", version.Version, version.BuildTime)
 
+	// 检测弱 JWT 密钥
+	if cfg.IsWeakJWTSecret() {
+		logger.Warn("WARNING: JWT secret appears to be a weak default value. Set the JWT_SECRET environment variable to a strong random secret for production use.")
+	}
+
 	// 初始化数据库
 	db, err := database.Init(cfg.Database)
 	if err != nil {
