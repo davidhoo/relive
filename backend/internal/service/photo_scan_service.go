@@ -492,6 +492,9 @@ func (s *photoService) runScanTask(runtime *activeScanJob, path string, rebuild 
 			}
 		}
 	}
+	if s.eventClusteringService != nil {
+		go s.eventClusteringService.RunIncremental()
+	}
 
 	s.finishScanTask(runtime, progress, model.ScanJobStatusCompleted, "", true, nil)
 }

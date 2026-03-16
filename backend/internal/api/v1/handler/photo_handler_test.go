@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/davidhoo/relive/internal/model"
+	"github.com/davidhoo/relive/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -73,6 +74,7 @@ func (s *stubPhotoService) GetPathDerivedStatusBatch(_ []string) (map[string]*mo
 func (s *stubPhotoService) CountByStatus() (*model.PhotoCountsResponse, error) { return &model.PhotoCountsResponse{}, nil }
 func (s *stubPhotoService) BatchUpdateStatus(_ *model.BatchUpdateStatusRequest) (int64, error) { return 0, nil }
 func (s *stubPhotoService) UpdateCategory(_ uint, _ string) error { return nil }
+func (s *stubPhotoService) SetEventClusteringService(_ service.EventClusteringService) {}
 
 func TestPhotoHandler_GetPhotoStats_Success(t *testing.T) {
 	svc := &stubPhotoService{

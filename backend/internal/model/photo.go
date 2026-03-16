@@ -91,6 +91,9 @@ type Photo struct {
 	Tags         string   `gorm:"type:text" json:"-"`                                            // 标签（逗号分隔，保留双写）
 	TagList      []string `gorm:"-" json:"tags"`                                                 // 标签列表（仅 JSON 输出）
 
+	// 事件聚类
+	EventID *uint `gorm:"index:idx_photos_event_id" json:"event_id,omitempty"` // 所属事件 ID
+
 	// 关联
 	DisplayRecords []DisplayRecord `gorm:"foreignKey:PhotoID" json:"-"` // 展示记录
 }

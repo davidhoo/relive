@@ -22,6 +22,7 @@ type Services struct {
 	Auth            AuthService
 	Analysis        AnalysisService
 	System          SystemService
+	EventClustering EventClusteringService
 	Scheduler       *TaskScheduler
 	ResultQueue     *ResultQueue // 结果队列服务
 }
@@ -60,6 +61,10 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	geocodeTaskService := NewGeocodeTaskService(db, repos.Photo, repos.GeocodeJob, geocodeService)
 	photoService := NewPhotoService(repos.Photo, repos.PhotoTag, repos.ScanJob, cfg, configService, geocodeService, thumbnailService, geocodeTaskService)
 	displayService := NewDisplayService(db, repos.Photo, repos.DisplayRecord, repos.Device, configService, cfg)
+
+	// 创建事件聚类服务并注入到 photoService
+	eventClusteringService := NewEventClusteringService(db, repos.Photo, repos.Event, repos.PhotoTag)
+	photoService.SetEventClusteringService(eventClusteringService)
 
 	// 创建定时任务调度器
 	scheduler := NewTaskScheduler(analysisService, displayService, photoService, repos.ThumbnailJob, repos.GeocodeJob)
@@ -100,6 +105,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		Auth:            authService,
 		Analysis:        analysisService,
 		System:          NewSystemService(db),
+		EventClustering: eventClusteringService,
 		Scheduler:       scheduler,
 		ResultQueue:     resultQueue,
 	}

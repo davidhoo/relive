@@ -230,6 +230,17 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				ai.GET("/provider", handlers.AI.GetProviderInfo)
 			}
 
+			// 事件聚类相关
+			events := authorized.Group("/events")
+			{
+				events.GET("", handlers.Event.ListEvents)
+				events.GET("/:id", handlers.Event.GetEvent)
+				events.POST("/cluster", handlers.Event.StartClustering)
+				events.POST("/rebuild", handlers.Event.StartRebuild)
+				events.GET("/cluster/task", handlers.Event.GetClusteringTask)
+				events.POST("/cluster/stop", handlers.Event.StopClustering)
+			}
+
 			// 配置管理相关
 			configGroup := authorized.Group("/config")
 			{

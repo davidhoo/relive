@@ -64,24 +64,28 @@ type PhotoService interface {
 
 	// 分类更新
 	UpdateCategory(id uint, category string) error
+
+	// 事件聚类服务注入（解决循环初始化）
+	SetEventClusteringService(EventClusteringService)
 }
 
 // photoService 照片服务实现
 type photoService struct {
-	repo               repository.PhotoRepository
-	photoTagRepo       repository.PhotoTagRepository
-	scanJobRepo        repository.ScanJobRepository
-	config             *config.Config
-	configService      ConfigService
-	geocodeService     GeocodeService
-	thumbnailGenerator *util.ThumbnailGenerator
-	thumbnailService   ThumbnailService
-	geocodeTaskService GeocodeTaskService
-	processPhotoFunc   func(string, os.FileInfo) (*model.Photo, error)
-	activeJob          *activeScanJob
-	taskMutex          sync.RWMutex
-	autoScanMutex      sync.Mutex
-	lastAutoScanCheck  time.Time
+	repo                    repository.PhotoRepository
+	photoTagRepo            repository.PhotoTagRepository
+	scanJobRepo             repository.ScanJobRepository
+	config                  *config.Config
+	configService           ConfigService
+	geocodeService          GeocodeService
+	thumbnailGenerator      *util.ThumbnailGenerator
+	thumbnailService        ThumbnailService
+	geocodeTaskService      GeocodeTaskService
+	eventClusteringService  EventClusteringService
+	processPhotoFunc        func(string, os.FileInfo) (*model.Photo, error)
+	activeJob               *activeScanJob
+	taskMutex               sync.RWMutex
+	autoScanMutex           sync.Mutex
+	lastAutoScanCheck       time.Time
 }
 
 // NewPhotoService 创建照片服务
@@ -283,6 +287,11 @@ func (s *photoService) BatchUpdateStatus(req *model.BatchUpdateStatusRequest) (i
 // UpdateCategory 更新照片分类
 func (s *photoService) UpdateCategory(id uint, category string) error {
 	return s.repo.UpdateCategory(id, category)
+}
+
+// SetEventClusteringService 注入事件聚类服务（避免循环初始化）
+func (s *photoService) SetEventClusteringService(svc EventClusteringService) {
+	s.eventClusteringService = svc
 }
 
 // getEnabledScanPaths 获取启用的扫描路径列表

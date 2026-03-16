@@ -13,6 +13,7 @@ type Repositories struct {
 	Device        DeviceRepository
 	Config        ConfigRepository
 	User          UserRepository
+	Event         EventRepository
 }
 
 // NewRepositories 创建所有仓库
@@ -28,5 +29,6 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		Device:        deviceRepo,
 		Config:        NewConfigRepository(db),
 		User:          NewUserRepository(db),
+		Event:         NewEventRepository(db),
 	}
 }
