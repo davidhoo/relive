@@ -30,6 +30,8 @@ const routes: RouteRecordRaw[] = [
       { path: 'geocode', name: 'Geocode', component: () => import('@/views/Geocode/index.vue'), meta: { title: 'GPS 位置解析', icon: 'Location' } },
       { path: 'devices', name: 'Devices', component: () => import('@/views/Devices/index.vue'), meta: { title: '设备管理', icon: 'Monitor' } },
       { path: 'display', name: 'Display', component: () => import('@/views/Display/index.vue'), meta: { title: '展示策略', icon: 'View' } },
+      { path: 'events', name: 'Events', component: () => import('@/views/Events/index.vue'), meta: { title: '事件浏览', icon: 'Collection' } },
+      { path: 'events/:id', name: 'EventDetail', component: () => import('@/views/Events/Detail.vue'), meta: { title: '事件详情', hidden: true } },
       { path: 'config', name: 'Config', component: () => import('@/views/Config/index.vue'), meta: { title: '配置管理', icon: 'Setting' } },
       { path: 'system', name: 'System', component: () => import('@/views/System/index.vue'), meta: { title: '系统管理', icon: 'Cpu' } },
     ],

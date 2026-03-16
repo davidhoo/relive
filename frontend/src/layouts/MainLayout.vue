@@ -105,6 +105,7 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowRight,
+  Collection,
   Cpu,
   DataLine,
   HomeFilled,
@@ -134,6 +135,7 @@ const menuIconMap = {
   MagicStick,
   Monitor,
   View,
+  Collection,
   Setting,
   Cpu,
 } as const
@@ -156,6 +158,9 @@ const activeMenu = computed(() => {
   const path = route.path
   if (path.startsWith('/photos/')) {
     return '/photos'
+  }
+  if (path.startsWith('/events/')) {
+    return '/events'
   }
   return path
 })
