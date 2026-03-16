@@ -178,9 +178,9 @@ func (s *eventClusteringService) runTask(runtime *clusteringRuntime) {
 	}
 	runtime.mu.Unlock()
 
-	logger.Infof("[EventClustering] Task %s (%s) finished: status=%s, created=%d, updated=%d",
+	logger.Infof("[EventClustering] Task %s (%s) finished: status=%s, created=%d, updated=%d, skipped_photos=%d",
 		runtime.id, runtime.taskType, runtime.status,
-		runtime.progress.EventsCreated, runtime.progress.EventsUpdated)
+		runtime.progress.EventsCreated, runtime.progress.EventsUpdated, runtime.progress.PhotosSkipped)
 }
 
 // runRebuild 全量重建
@@ -240,6 +240,17 @@ func (s *eventClusteringService) runRebuild(ctx context.Context, runtime *cluste
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
+		}
+
+		// 簇照片数不足，跳过（照片保持 event_id=NULL，由 hidden_gem 兜底）
+		if s.config.MinPhotosPerEvent > 0 && len(cluster.photos) < s.config.MinPhotosPerEvent {
+			if runtime != nil {
+				runtime.mu.Lock()
+				runtime.progress.PhotosSkipped += len(cluster.photos)
+				runtime.progress.ProcessedPhotos += len(cluster.photos)
+				runtime.mu.Unlock()
+			}
+			continue
 		}
 
 		event, err := s.createEventFromCluster(cluster)
@@ -354,7 +365,18 @@ func (s *eventClusteringService) runIncremental(ctx context.Context, runtime *cl
 			}
 		}
 
-		// 创建新事件
+		// 创建新事件（需满足最小照片数）
+		if s.config.MinPhotosPerEvent > 0 && len(cluster.photos) < s.config.MinPhotosPerEvent {
+			// 簇太小，跳过（照片保持 event_id=NULL，由 hidden_gem 兜底）
+			if runtime != nil {
+				runtime.mu.Lock()
+				runtime.progress.PhotosSkipped += len(cluster.photos)
+				runtime.progress.ProcessedPhotos += len(cluster.photos)
+				runtime.mu.Unlock()
+			}
+			continue
+		}
+
 		event, err := s.createEventFromCluster(cluster)
 		if err != nil {
 			logger.Warnf("[EventClustering] Failed to create event: %v", err)
