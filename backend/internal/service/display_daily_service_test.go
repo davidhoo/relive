@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"image/color"
 	"os"
 	"path/filepath"
@@ -24,7 +25,7 @@ func TestDisplayService_GenerateDailyBatchAndServeIndependently(t *testing.T) {
 
 	tempDir := t.TempDir()
 	displayService, photoRepo, deviceRepo, configService := buildTestDisplayService(t, db, tempDir)
-	targetDate := time.Date(2026, 3, 7, 9, 0, 0, 0, time.Local)
+	targetDate := time.Now()
 	createBatchPhotos(t, photoRepo, tempDir, targetDate, 3)
 	setDisplayStrategy(t, configService, model.DisplayStrategyConfig{Algorithm: "random", MinBeautyScore: 60, MinMemoryScore: 60, DailyCount: 3})
 
@@ -72,8 +73,8 @@ func TestDisplayService_ForceRegenerateResetsPlaybackState(t *testing.T) {
 
 	tempDir := t.TempDir()
 	displayService, photoRepo, deviceRepo, configService := buildTestDisplayService(t, db, tempDir)
-	targetDate := time.Date(2026, 3, 7, 9, 0, 0, 0, time.Local)
-	createBatchPhotos(t, photoRepo, tempDir, targetDate, 4)
+	targetDate := time.Now()
+	createBatchPhotos(t, photoRepo, tempDir, targetDate, 6)
 	setDisplayStrategy(t, configService, model.DisplayStrategyConfig{Algorithm: "random", MinBeautyScore: 60, MinMemoryScore: 60, DailyCount: 2})
 
 	_, err := displayService.GenerateDailyBatch(targetDate, true)
@@ -150,7 +151,7 @@ func setDisplayStrategy(t *testing.T, configService ConfigService, cfg model.Dis
 func createBatchPhotos(t *testing.T, photoRepo repository.PhotoRepository, tempDir string, targetDate time.Time, count int) {
 	t.Helper()
 	for index := 0; index < count; index++ {
-		filePath := filepath.Join(tempDir, "photos", targetDate.Format("2006-01-02"), "photo-"+time.Date(2026, 3, 7, 0, 0, index, 0, time.UTC).Format("150405")+".jpg")
+		filePath := filepath.Join(tempDir, "photos", targetDate.Format("2006-01-02"), fmt.Sprintf("photo-%d.jpg", index))
 		require.NoError(t, os.MkdirAll(filepath.Dir(filePath), 0o755))
 		img := imaging.New(1200, 1600, color.NRGBA{R: uint8(40 * index), G: uint8(80 + 20*index), B: uint8(120 + 10*index), A: 255})
 		require.NoError(t, imaging.Save(img, filePath))
@@ -178,7 +179,7 @@ func TestDisplayService_GenerateDailyBatchAvoidsRecentlyDisplayedPhotos(t *testi
 
 	tempDir := t.TempDir()
 	displayService, photoRepo, deviceRepo, configService := buildTestDisplayService(t, db, tempDir)
-	targetDate := time.Date(2026, 3, 7, 9, 0, 0, 0, time.Local)
+	targetDate := time.Now()
 	createBatchPhotos(t, photoRepo, tempDir, targetDate, 4)
 	setDisplayStrategy(t, configService, model.DisplayStrategyConfig{Algorithm: "random", MinBeautyScore: 60, MinMemoryScore: 60, DailyCount: 3})
 

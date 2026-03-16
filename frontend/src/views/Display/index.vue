@@ -516,6 +516,8 @@ const supportedAlgorithms = ['random', 'on_this_day', 'event_curated']
 const previewPhotos = computed<Photo[]>(() => previewResult.value?.photos || [])
 const previewDateValue = computed(() => toPreviewDateValue(previewCalendarDate.value))
 const previewDateLabel = computed(() => formatDisplayDate(previewCalendarDate.value))
+// 会话级预览排除列表：每次预览结果的照片 ID 加入，离开页面自动失效
+const previewSessionExcludes = ref<Set<number>>(new Set())
 const previewHint = computed(() => {
   switch (form.value.algorithm) {
     case 'random':
@@ -841,7 +843,12 @@ const handlePreview = async () => {
 
   previewLoading.value = true
   try {
-    previewResult.value = await displayStrategyApi.previewConfig(form.value, previewDateValue.value)
+    const excludeIds = previewSessionExcludes.value.size > 0 ? [...previewSessionExcludes.value] : undefined
+    previewResult.value = await displayStrategyApi.previewConfig(form.value, previewDateValue.value, excludeIds)
+    // 将本次预览返回的照片 ID 加入会话排除列表
+    for (const photo of previewResult.value?.photos || []) {
+      previewSessionExcludes.value.add(photo.id)
+    }
   } catch (error: any) {
     previewResult.value = {
       algorithm: form.value.algorithm,
@@ -875,6 +882,8 @@ watch(
   ],
   () => {
     if (loading.value) return
+    // 策略参数变化时清空会话排除列表
+    previewSessionExcludes.value = new Set()
     schedulePreview()
   }
 )

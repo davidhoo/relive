@@ -155,7 +155,7 @@ func (h *DisplayHandler) PreviewPhotos(c *gin.Context) {
 		previewDate = &parsedDate
 	}
 
-	photos, err := h.displayService.PreviewPhotos(cfg, previewDate)
+	photos, err := h.displayService.PreviewPhotos(cfg, previewDate, req.ExcludeIDs)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, model.Response{
 			Success: false,

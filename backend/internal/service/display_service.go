@@ -18,7 +18,7 @@ type DisplayService interface {
 	GetDisplayPhoto(deviceID string) (*model.Photo, error)
 
 	// 预览展示策略结果
-	PreviewPhotos(cfg *model.DisplayStrategyConfig, previewDate *time.Time) ([]*model.Photo, error)
+	PreviewPhotos(cfg *model.DisplayStrategyConfig, previewDate *time.Time, sessionExcludeIDs []uint) ([]*model.Photo, error)
 
 	// 记录展示
 	RecordDisplay(record *model.DisplayRecord) error
@@ -106,8 +106,19 @@ func (s *displayService) GetDisplayPhoto(deviceIDStr string) (*model.Photo, erro
 }
 
 // PreviewPhotos 预览展示策略结果
-func (s *displayService) PreviewPhotos(cfg *model.DisplayStrategyConfig, previewDate *time.Time) ([]*model.Photo, error) {
-	return s.previewPhotosWithExcludes(cfg, previewDate, nil)
+func (s *displayService) PreviewPhotos(cfg *model.DisplayStrategyConfig, previewDate *time.Time, sessionExcludeIDs []uint) ([]*model.Photo, error) {
+	// 合并 DisplayRecord 历史排除 + 前端会话级排除
+	var excludeIDs []uint
+	if s.config.Display.AvoidRepeatDays > 0 {
+		historicIDs, err := s.displayRecordRepo.GetDisplayedPhotoIDsAll(s.config.Display.AvoidRepeatDays)
+		if err != nil {
+			logger.Warnf("Get displayed photo IDs for preview failed: %v", err)
+		} else {
+			excludeIDs = historicIDs
+		}
+	}
+	excludeIDs = append(excludeIDs, sessionExcludeIDs...)
+	return s.previewPhotosWithExcludes(cfg, previewDate, excludeIDs)
 }
 
 func (s *displayService) previewPhotosWithExcludes(cfg *model.DisplayStrategyConfig, previewDate *time.Time, excludePhotoIDs []uint) ([]*model.Photo, error) {

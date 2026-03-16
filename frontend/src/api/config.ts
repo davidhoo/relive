@@ -106,6 +106,7 @@ export interface DisplayPreviewResponse {
 
 interface DisplayPreviewRequest extends DisplayStrategyConfig {
   previewDate?: string
+  excludeIds?: number[]
 }
 
 const shufflePhotos = (photos: Photo[]) => {
@@ -594,11 +595,13 @@ export const displayStrategyApi = {
   // Preview strategy with current form data
   previewConfig: async (
     config: DisplayStrategyConfig,
-    previewDate?: string
+    previewDate?: string,
+    excludeIds?: number[]
   ): Promise<DisplayPreviewResponse> => {
     const request: DisplayPreviewRequest = {
       ...config,
       previewDate,
+      excludeIds,
     }
 
     try {

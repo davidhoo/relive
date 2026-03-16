@@ -181,6 +181,9 @@ func (s *displayService) GenerateDailyBatch(date time.Time, force bool) (*model.
 	// 更新事件展示计数（所有算法都会触发）
 	s.updateEventDisplayCounts(photos)
 
+	// 批量写入 DisplayRecord（正式每日选图记录，供 AvoidRepeatDays 排除）
+	s.recordBatchDisplayHistory(photos, time.Now())
+
 	return saved, nil
 }
 
@@ -364,23 +367,6 @@ func (s *displayService) GetDeviceDisplay(deviceID uint, renderProfile string) (
 		return nil, err
 	}
 
-	// 记录展示历史，供 AvoidRepeatDays 排除（同设备同照片当日只记一次）
-	if selection.Item != nil && selection.Item.PhotoID > 0 {
-		today := time.Now().Truncate(24 * time.Hour)
-		var count int64
-		s.db.Model(&model.DisplayRecord{}).
-			Where("photo_id = ? AND device_id = ? AND displayed_at >= ?", selection.Item.PhotoID, deviceID, today).
-			Count(&count)
-		if count == 0 {
-			_ = s.displayRecordRepo.Create(&model.DisplayRecord{
-				PhotoID:     selection.Item.PhotoID,
-				DeviceID:    deviceID,
-				DisplayedAt: time.Now(),
-				TriggerType: model.TriggerTypeScheduled,
-			})
-		}
-	}
-
 	return selection, nil
 }
 
@@ -542,5 +528,42 @@ func (s *displayService) updateEventDisplayCounts(photos []*model.Photo) {
 		if err := s.eventRepo.IncrementDisplayCount(eventID); err != nil {
 			logger.Warnf("Failed to increment display count for event %d: %v", eventID, err)
 		}
+	}
+}
+
+const systemBatchDeviceID = "SYSTEM-BATCH"
+
+// getOrCreateSystemDevice 获取或创建用于批次记录的系统设备
+func (s *displayService) getOrCreateSystemDevice() (*model.Device, error) {
+	device, err := s.deviceRepo.GetByDeviceID(systemBatchDeviceID)
+	if err == nil {
+		return device, nil
+	}
+	device = &model.Device{
+		DeviceID:   systemBatchDeviceID,
+		Name:       "系统批次",
+		DeviceType: model.DeviceTypeService,
+		IsEnabled:  true,
+	}
+	if err := s.deviceRepo.Create(device); err != nil {
+		return nil, err
+	}
+	return device, nil
+}
+
+// recordBatchDisplayHistory 批次生成后批量写入 DisplayRecord
+func (s *displayService) recordBatchDisplayHistory(photos []*model.Photo, displayedAt time.Time) {
+	device, err := s.getOrCreateSystemDevice()
+	if err != nil {
+		logger.Warnf("Failed to get/create system device for batch records: %v", err)
+		return
+	}
+	for _, photo := range photos {
+		_ = s.displayRecordRepo.Create(&model.DisplayRecord{
+			PhotoID:     photo.ID,
+			DeviceID:    device.ID,
+			DisplayedAt: displayedAt,
+			TriggerType: model.TriggerTypeScheduled,
+		})
 	}
 }

@@ -104,6 +104,7 @@ type PreviewDisplayPhotosRequest struct {
 	MinMemoryScore int    `json:"minMemoryScore"`
 	DailyCount     int    `json:"dailyCount"`
 	PreviewDate    string `json:"previewDate"`
+	ExcludeIDs     []uint `json:"excludeIds,omitempty"` // 前端会话级临时排除（预览过的照片 ID）
 }
 
 // PreviewDisplayPhotosResponse 展示策略预览响应
