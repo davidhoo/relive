@@ -296,6 +296,14 @@ Docker 构建时通过 build-args 注入额外信息：
 
 ## Recent Features
 
+### Event Curation Phase 2c: People & Season Channels (2026-03-16)
+- 策展引擎新增 `people_spotlight` / `season_match` 两个提名通道（共 6 通道）
+- 人物专题：主动提名 PrimaryTag 含人物关键词的事件（EventRepo.GetPeopleEvents）
+- 季节专题：主动提名照片 tags/caption 含当季关键词的事件（EventRepo.GetSeasonEvents，JOIN photo_tags）
+- `seasonKeywords(month)` 提取为共享函数，`matchesCurrentSeason` 复用
+- DisplayStrategyConfig 新增 `CurationPeopleEventsLimit` / `CurationSeasonEventsLimit`（默认 10）
+- 前端展示策略页新增两个提名数配置项 + 批次详情新增通道标签
+
 ### FTS5 Full-Text Search (2026-03-15)
 - 照片搜索从 7 字段 `LIKE '%keyword%'` 全表扫描改为 FTS5 全文索引
 - `photos_fts` 虚拟表（external content 模式）索引 file_name/description/caption/location 4 字段
