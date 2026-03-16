@@ -14,7 +14,7 @@ import (
 type curationCandidate struct {
 	photo    *model.Photo
 	event    *model.Event // nil for scattered photos
-	channel  string       // "time_tunnel" / "peak_memory" / "geo_drift" / "hidden_gem"
+	channel  string       // "time_tunnel" / "peak_memory" / "geo_drift" / "hidden_gem" / "people_spotlight" / "season_match"
 	rawScore float64
 	adjScore float64 // 修正后得分
 }
@@ -35,7 +35,7 @@ func (s *displayService) curateEventPhotos(
 		}
 	}
 
-	// 3. 四通道提名
+	// 3. 多通道提名
 	var candidates []curationCandidate
 
 	timeTunnelCandidates, err := s.nominateTimeTunnel(targetDate, recentEventIDs, excludePhotoIDs, cfg)
@@ -66,6 +66,20 @@ func (s *displayService) curateEventPhotos(
 		logger.Warnf("Hidden gems nomination failed: %v", err)
 	} else {
 		candidates = append(candidates, gemCandidates...)
+	}
+
+	peopleCandidates, err := s.nominatePeopleSpotlight(recentEventIDs, excludePhotoIDs, cfg)
+	if err != nil {
+		logger.Warnf("People spotlight nomination failed: %v", err)
+	} else {
+		candidates = append(candidates, peopleCandidates...)
+	}
+
+	seasonCandidates, err := s.nominateSeasonMatch(targetDate, recentEventIDs, excludePhotoIDs, cfg)
+	if err != nil {
+		logger.Warnf("Season match nomination failed: %v", err)
+	} else {
+		candidates = append(candidates, seasonCandidates...)
 	}
 
 	// 若完全没有候选，fallback 到 on_this_day
@@ -99,7 +113,7 @@ func (s *displayService) curateEventPhotos(
 	return photos, nil
 }
 
-// --- 四通道提名 ---
+// --- 多通道提名 ---
 
 // nominateTimeTunnel 时光隧道：往年同月日 ±N 天事件
 func (s *displayService) nominateTimeTunnel(targetDate time.Time, recentEventIDs map[uint]bool, excludePhotoIDs []uint, cfg model.DisplayStrategyConfig) ([]curationCandidate, error) {
@@ -173,6 +187,31 @@ func (s *displayService) nominateHiddenGems(recentEventIDs map[uint]bool, exclud
 	}
 
 	return candidates, nil
+}
+
+// nominatePeopleSpotlight 人物专题：PrimaryTag 含人物关键词的事件
+func (s *displayService) nominatePeopleSpotlight(recentEventIDs map[uint]bool, excludePhotoIDs []uint, cfg model.DisplayStrategyConfig) ([]curationCandidate, error) {
+	excludeIDs := mapKeysToSlice(recentEventIDs)
+
+	events, err := s.eventRepo.GetPeopleEvents(excludeIDs, cfg.CurationPeopleEventsLimit)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.eventsToCandidates(events, "people_spotlight", excludePhotoIDs)
+}
+
+// nominateSeasonMatch 季节专题：照片含当季关键词的事件
+func (s *displayService) nominateSeasonMatch(targetDate time.Time, recentEventIDs map[uint]bool, excludePhotoIDs []uint, cfg model.DisplayStrategyConfig) ([]curationCandidate, error) {
+	excludeIDs := mapKeysToSlice(recentEventIDs)
+	keywords := seasonKeywords(targetDate.Month())
+
+	events, err := s.eventRepo.GetSeasonEvents(keywords, excludeIDs, cfg.CurationSeasonEventsLimit)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.eventsToCandidates(events, "season_match", excludePhotoIDs)
 }
 
 // eventsToCandidates 将事件列表转为候选（批量加载 cover photo）
@@ -347,27 +386,30 @@ func isPeopleRelated(tag string) bool {
 
 // matchesCurrentSeason 判断照片标签是否匹配当前季节
 func matchesCurrentSeason(photo *model.Photo, date time.Time) bool {
-	month := date.Month()
-	var seasonKeywords []string
-	switch {
-	case month >= 3 && month <= 5:
-		seasonKeywords = []string{"春", "花", "spring", "blossom", "cherry"}
-	case month >= 6 && month <= 8:
-		seasonKeywords = []string{"夏", "海", "summer", "beach", "pool"}
-	case month >= 9 && month <= 11:
-		seasonKeywords = []string{"秋", "枫", "autumn", "fall", "harvest"}
-	default:
-		seasonKeywords = []string{"冬", "雪", "winter", "snow", "christmas"}
-	}
+	keywords := seasonKeywords(date.Month())
 
 	tags := strings.ToLower(photo.Tags)
 	caption := strings.ToLower(photo.Caption)
-	for _, kw := range seasonKeywords {
+	for _, kw := range keywords {
 		if strings.Contains(tags, kw) || strings.Contains(caption, kw) {
 			return true
 		}
 	}
 	return false
+}
+
+// seasonKeywords 返回指定月份对应的季节关键词
+func seasonKeywords(month time.Month) []string {
+	switch {
+	case month >= 3 && month <= 5:
+		return []string{"春", "花", "spring", "blossom", "cherry"}
+	case month >= 6 && month <= 8:
+		return []string{"夏", "海", "summer", "beach", "pool"}
+	case month >= 9 && month <= 11:
+		return []string{"秋", "枫", "autumn", "fall", "harvest"}
+	default:
+		return []string{"冬", "雪", "winter", "snow", "christmas"}
+	}
 }
 
 // --- 多样性选择 ---

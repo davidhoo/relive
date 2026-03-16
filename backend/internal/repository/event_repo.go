@@ -2,6 +2,7 @@ package repository
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
@@ -26,6 +27,8 @@ type EventRepository interface {
 	GetNeverDisplayedEvents(minScore float64, excludeIDs []uint, limit int) ([]*model.Event, error)
 	GetRecentlyDisplayedEventIDs(days int) ([]uint, error)
 	IncrementDisplayCount(eventID uint) error
+	GetPeopleEvents(excludeIDs []uint, limit int) ([]*model.Event, error)
+	GetSeasonEvents(keywords []string, excludeIDs []uint, limit int) ([]*model.Event, error)
 }
 
 type eventRepository struct {
@@ -200,4 +203,75 @@ func (r *eventRepository) IncrementDisplayCount(eventID uint) error {
 			"display_count":    gorm.Expr("display_count + 1"),
 			"last_displayed_at": now,
 		}).Error
+}
+
+// peopleKeywords 人物相关关键词（与 isPeopleRelated 保持一致）
+var peopleKeywords = []string{
+	"人物", "人像", "合影", "家人", "朋友", "孩子", "婚礼", "聚会",
+	"portrait", "people", "family", "friend", "wedding", "group",
+}
+
+// GetPeopleEvents 人物专题：PrimaryTag 含人物关键词的事件
+func (r *eventRepository) GetPeopleEvents(excludeIDs []uint, limit int) ([]*model.Event, error) {
+	var events []*model.Event
+	query := r.db.Model(&model.Event{}).Scopes(validEventScope)
+
+	// 构建 OR 条件：primary_tag LIKE '%keyword%'
+	conditions := make([]string, 0, len(peopleKeywords))
+	args := make([]interface{}, 0, len(peopleKeywords))
+	for _, kw := range peopleKeywords {
+		conditions = append(conditions, "LOWER(primary_tag) LIKE ?")
+		args = append(args, "%"+kw+"%")
+	}
+	query = query.Where(strings.Join(conditions, " OR "), args...)
+
+	if len(excludeIDs) > 0 {
+		query = query.Where("id NOT IN ?", excludeIDs)
+	}
+
+	err := query.Order("event_score DESC").Limit(limit).Find(&events).Error
+	return events, err
+}
+
+// GetSeasonEvents 季节专题：事件中照片的 tags/caption 含指定季节关键词
+func (r *eventRepository) GetSeasonEvents(keywords []string, excludeIDs []uint, limit int) ([]*model.Event, error) {
+	if len(keywords) == 0 {
+		return nil, nil
+	}
+
+	var events []*model.Event
+
+	// 通过 photo_tags + photos JOIN 找到含当季关键词的照片所属事件
+	subConditions := make([]string, 0, len(keywords)*2)
+	subArgs := make([]interface{}, 0, len(keywords)*2)
+
+	// photo_tags 精确匹配
+	tagPlaceholders := make([]string, len(keywords))
+	for i, kw := range keywords {
+		tagPlaceholders[i] = "?"
+		subArgs = append(subArgs, kw)
+	}
+	subConditions = append(subConditions, "pt.tag IN ("+strings.Join(tagPlaceholders, ",")+")")
+
+	// caption LIKE 模糊匹配
+	for _, kw := range keywords {
+		subConditions = append(subConditions, "LOWER(p.caption) LIKE ?")
+		subArgs = append(subArgs, "%"+kw+"%")
+	}
+
+	whereClause := "(" + strings.Join(subConditions, " OR ") + ")"
+
+	query := r.db.Table("events e").
+		Select("DISTINCT e.*").
+		Joins("JOIN photos p ON p.event_id = e.id AND p.status = 'active'").
+		Joins("LEFT JOIN photo_tags pt ON pt.photo_id = p.id").
+		Where(whereClause, subArgs...).
+		Where("e.photo_count > 0 AND e.cover_photo_id IS NOT NULL")
+
+	if len(excludeIDs) > 0 {
+		query = query.Where("e.id NOT IN ?", excludeIDs)
+	}
+
+	err := query.Order("e.event_score DESC").Limit(limit).Find(&events).Error
+	return events, err
 }

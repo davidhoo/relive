@@ -95,6 +95,12 @@ func normalizeDisplayStrategyConfig(cfg *model.DisplayStrategyConfig) {
 	if cfg.CurationFreshnessDays <= 0 {
 		cfg.CurationFreshnessDays = 30
 	}
+	if cfg.CurationPeopleEventsLimit <= 0 {
+		cfg.CurationPeopleEventsLimit = 10
+	}
+	if cfg.CurationSeasonEventsLimit <= 0 {
+		cfg.CurationSeasonEventsLimit = 10
+	}
 }
 
 func (s *displayService) getDisplayStrategyConfig() model.DisplayStrategyConfig {

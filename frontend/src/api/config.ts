@@ -534,6 +534,8 @@ export interface DisplayStrategyConfig {
   curationPeopleBonus?: number         // 人物偏好加分，默认 20
   curationDisplayDecayFactor?: number  // 展示衰减因子，默认 0.1
   curationFreshnessDays?: number       // 新鲜度窗口天数，默认 30
+  curationPeopleEventsLimit?: number   // 人物专题提名数，默认 10
+  curationSeasonEventsLimit?: number   // 季节专题提名数，默认 10
 }
 
 export const defaultDisplayStrategyConfig: DisplayStrategyConfig = {
@@ -550,6 +552,8 @@ export const defaultDisplayStrategyConfig: DisplayStrategyConfig = {
   curationPeopleBonus: 20,
   curationDisplayDecayFactor: 0.1,
   curationFreshnessDays: 30,
+  curationPeopleEventsLimit: 10,
+  curationSeasonEventsLimit: 10,
 }
 
 const normalizeDisplayStrategyConfig = (config?: Partial<DisplayStrategyConfig>): DisplayStrategyConfig => {

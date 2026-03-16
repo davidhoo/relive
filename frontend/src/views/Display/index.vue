@@ -107,6 +107,28 @@
             />
           </el-form-item>
 
+          <el-form-item label="人物专题提名数">
+            <el-input-number
+              v-model="form.curationPeopleEventsLimit"
+              :min="3"
+              :max="30"
+              :step="1"
+              class="input-number-width-lg"
+            />
+            <span class="help-text">含人物关键词事件候选数量</span>
+          </el-form-item>
+
+          <el-form-item label="季节专题提名数">
+            <el-input-number
+              v-model="form.curationSeasonEventsLimit"
+              :min="3"
+              :max="30"
+              :step="1"
+              class="input-number-width-lg"
+            />
+            <span class="help-text">含当季关键词事件候选数量</span>
+          </el-form-item>
+
           <el-divider content-position="left">评分修正</el-divider>
 
           <el-form-item label="季节对齐加权">
@@ -561,6 +583,8 @@ const curationChannelLabel = (channel: string): string => {
     peak_memory: '巅峰回忆',
     geo_drift: '地理漂移',
     hidden_gem: '角落遗珠',
+    people_spotlight: '人物专题',
+    season_match: '季节专题',
   }
   return map[channel] || channel
 }
@@ -571,6 +595,8 @@ const curationChannelType = (channel: string): '' | 'success' | 'warning' | 'dan
     peak_memory: 'warning',
     geo_drift: 'success',
     hidden_gem: 'info',
+    people_spotlight: 'danger',
+    season_match: 'success',
   }
   return map[channel] || 'info'
 }

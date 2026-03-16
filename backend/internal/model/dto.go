@@ -93,6 +93,8 @@ type DisplayStrategyConfig struct {
 	CurationPeopleBonus         float64 `json:"curationPeopleBonus,omitempty"`         // 人物偏好加分，默认 20
 	CurationDisplayDecayFactor  float64 `json:"curationDisplayDecayFactor,omitempty"`  // 展示衰减因子，默认 0.1
 	CurationFreshnessDays       int     `json:"curationFreshnessDays,omitempty"`       // 新鲜度窗口天数，默认 30
+	CurationPeopleEventsLimit   int     `json:"curationPeopleEventsLimit,omitempty"`   // 人物专题提名数，默认 10
+	CurationSeasonEventsLimit   int     `json:"curationSeasonEventsLimit,omitempty"`   // 季节专题提名数，默认 10
 }
 
 // PreviewDisplayPhotosRequest 展示策略预览请求
