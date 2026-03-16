@@ -648,7 +648,8 @@ const toggleSelectPhoto = (id: number, event?: MouseEvent) => {
     const start = Math.min(lastSelectedIndex.value, currentIndex)
     const end = Math.max(lastSelectedIndex.value, currentIndex)
     for (let i = start; i <= end; i++) {
-      next.add(photos.value[i].id)
+      const p = photos.value[i]
+      if (p) next.add(p.id)
     }
   } else {
     // 普通点击：切换单张
