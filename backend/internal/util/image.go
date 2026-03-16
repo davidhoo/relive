@@ -348,9 +348,22 @@ func GetDisplayImageSize(filePath string) (width, height int, err error) {
 }
 
 func ShouldRefreshThumbnailCache(sourcePath, cachePath string) bool {
-	sourceWidth, sourceHeight, err := GetDisplayImageSize(sourcePath)
+	return ShouldRefreshThumbnailCacheWithOrientation(sourcePath, cachePath, 0)
+}
+
+// ShouldRefreshThumbnailCacheWithOrientation 检查缩略图是否需要重新生成。
+// dbOrientation > 0 时使用 DB 方向（手动覆盖），否则从 EXIF 读取。
+func ShouldRefreshThumbnailCacheWithOrientation(sourcePath, cachePath string, dbOrientation int) bool {
+	sourceWidth, sourceHeight, err := GetImageSize(sourcePath)
 	if err != nil || sourceWidth <= 0 || sourceHeight <= 0 {
 		return false
+	}
+
+	// 使用 DB orientation 或 EXIF orientation 来推算源图的显示方向
+	if dbOrientation > 0 {
+		sourceWidth, sourceHeight = normalizeDimensionsForOrientation(sourceWidth, sourceHeight, dbOrientation)
+	} else {
+		sourceWidth, sourceHeight, _ = GetDisplayImageSize(sourcePath)
 	}
 
 	cacheWidth, cacheHeight, err := GetImageSize(cachePath)

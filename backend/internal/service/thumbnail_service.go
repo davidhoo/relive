@@ -206,6 +206,7 @@ func (s *thumbnailService) GeneratePhoto(photoID uint, force bool) error {
 		}
 	}
 
+	logger.Infof("GeneratePhoto: photo=%d orientation=%d oldPath=%s", photo.ID, photo.Orientation, thumbnailPath)
 	relPath, err := s.generator.GenerateThumbnailWithOrientation(photo.FilePath, photo.Orientation)
 	now := time.Now()
 	if err != nil {

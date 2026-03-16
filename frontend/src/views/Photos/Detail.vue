@@ -61,7 +61,8 @@
         <!-- 左侧：照片预览 -->
         <el-col :span="12">
           <el-image
-            :src="getPhotoThumbnailUrl(photo.id, photo.updated_at)"
+            :key="imageVersion"
+            :src="getPhotoThumbnailUrl(photo.id, String(imageVersion))"
             :preview-src-list="[getPhotoUrl(photo.id)]"
             fit="contain"
             class="preview-image"
@@ -261,6 +262,7 @@ const geocoding = ref(false)
 const thumbnailing = ref(false)
 const statusUpdating = ref(false)
 const orientationUpdating = ref(false)
+const imageVersion = ref(Date.now())
 const showLocationPicker = ref(false)
 
 // 分类编辑状态
@@ -542,8 +544,9 @@ const handleRotate = async (direction: 'left' | 'right') => {
   try {
     const { data: res } = await photoApi.updateOrientation(photo.value.id, newOrientation)
     if (res.success) {
-      ElMessage.success('方向已更新，缩略图重新生成中')
+      ElMessage.success('方向已更新')
       await loadPhoto()
+      imageVersion.value = Date.now()
     } else {
       ElMessage.error(res.error?.message || '更新失败')
     }

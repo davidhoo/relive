@@ -742,8 +742,9 @@ func (h *PhotoHandler) GetPhotoThumbnail(c *gin.Context) {
 	if photo.ThumbnailPath != "" {
 		thumbnailFullPath := filepath.Join(h.cfg.Photos.ThumbnailPath, photo.ThumbnailPath)
 		if _, err := os.Stat(thumbnailFullPath); err == nil {
-			if !util.ShouldRefreshThumbnailCache(photo.FilePath, thumbnailFullPath) {
+			if !util.ShouldRefreshThumbnailCacheWithOrientation(photo.FilePath, thumbnailFullPath, photo.Orientation) {
 				c.Header("Content-Type", "image/jpeg")
+				c.Header("Cache-Control", "no-cache")
 				c.File(thumbnailFullPath)
 				return
 			}

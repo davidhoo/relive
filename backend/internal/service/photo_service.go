@@ -297,12 +297,11 @@ func (s *photoService) UpdateOrientation(id uint, orientation int) error {
 	if err := s.repo.UpdateOrientation(id, orientation); err != nil {
 		return err
 	}
-	// 异步重新生成缩略图（force=true 强制覆盖）
-	go func() {
-		if err := s.thumbnailService.GeneratePhoto(id, true); err != nil {
-			logger.Warnf("Regenerate thumbnail after orientation update (photo %d): %v", id, err)
-		}
-	}()
+	logger.Infof("Photo %d orientation updated to %d, regenerating thumbnail", id, orientation)
+	// 同步重新生成缩略图（force=true 强制覆盖），确保 API 返回前缩略图已就绪
+	if err := s.thumbnailService.GeneratePhoto(id, true); err != nil {
+		logger.Warnf("Regenerate thumbnail after orientation update (photo %d): %v", id, err)
+	}
 	return nil
 }
 
