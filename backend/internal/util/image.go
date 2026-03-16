@@ -348,22 +348,21 @@ func GetDisplayImageSize(filePath string) (width, height int, err error) {
 }
 
 func ShouldRefreshThumbnailCache(sourcePath, cachePath string) bool {
-	return ShouldRefreshThumbnailCacheWithOrientation(sourcePath, cachePath, 0)
+	return ShouldRefreshThumbnailCacheWithRotation(sourcePath, cachePath, 0)
 }
 
-// ShouldRefreshThumbnailCacheWithOrientation 检查缩略图是否需要重新生成。
-// dbOrientation > 0 时使用 DB 方向（手动覆盖），否则从 EXIF 读取。
-func ShouldRefreshThumbnailCacheWithOrientation(sourcePath, cachePath string, dbOrientation int) bool {
-	sourceWidth, sourceHeight, err := GetImageSize(sourcePath)
+// ShouldRefreshThumbnailCacheWithRotation 检查缩略图是否需要重新生成。
+// manualRotation: 用户手动旋转角度（0/90/180/270）
+func ShouldRefreshThumbnailCacheWithRotation(sourcePath, cachePath string, manualRotation int) bool {
+	// 获取自动校正后的 display 尺寸
+	sourceWidth, sourceHeight, err := GetDisplayImageSize(sourcePath)
 	if err != nil || sourceWidth <= 0 || sourceHeight <= 0 {
 		return false
 	}
 
-	// 使用 DB orientation 或 EXIF orientation 来推算源图的显示方向
-	if dbOrientation > 0 {
-		sourceWidth, sourceHeight = normalizeDimensionsForOrientation(sourceWidth, sourceHeight, dbOrientation)
-	} else {
-		sourceWidth, sourceHeight, _ = GetDisplayImageSize(sourcePath)
+	// 叠加手动旋转对尺寸的影响
+	if manualRotation == 90 || manualRotation == 270 {
+		sourceWidth, sourceHeight = sourceHeight, sourceWidth
 	}
 
 	cacheWidth, cacheHeight, err := GetImageSize(cachePath)
@@ -410,6 +409,21 @@ func NormalizeOrientation(img image.Image, orientation int) image.Image {
 		return imaging.Transverse(img)
 	case 8:
 		return imaging.Rotate90(img)
+	default:
+		return img
+	}
+}
+
+// ApplyManualRotation 叠加用户手动旋转（顺时针 0/90/180/270 度）。
+// 在自动方向校正之后调用，所有格式统一处理。
+func ApplyManualRotation(img image.Image, degrees int) image.Image {
+	switch degrees {
+	case 90:
+		return imaging.Rotate270(img) // Rotate270 = 顺时针 90°
+	case 180:
+		return imaging.Rotate180(img)
+	case 270:
+		return imaging.Rotate90(img) // Rotate90 = 顺时针 270° = 逆时针 90°
 	default:
 		return img
 	}
@@ -645,22 +659,23 @@ func NewThumbnailGenerator(maxWidth, maxHeight, jpegQuality int, outputDir strin
 // GenerateThumbnail 生成缩略图
 // 返回缩略图的相对路径和错误
 func (g *ThumbnailGenerator) GenerateThumbnail(filePath string) (string, error) {
-	return g.GenerateThumbnailWithOrientation(filePath, 0)
+	return g.GenerateThumbnailWithRotation(filePath, 0)
 }
 
-// GenerateThumbnailWithOrientation 生成缩略图，使用指定的方向覆盖 EXIF
-// orientation <= 0 表示从 EXIF 读取方向
-func (g *ThumbnailGenerator) GenerateThumbnailWithOrientation(filePath string, orientation int) (string, error) {
+// GenerateThumbnailWithRotation 生成缩略图，先自动校正方向，再叠加手动旋转
+// manualRotation: 0/90/180/270，用户手动旋转角度
+func (g *ThumbnailGenerator) GenerateThumbnailWithRotation(filePath string, manualRotation int) (string, error) {
 	// 打开原图（支持 HEIC 等格式）
 	img, err := OpenImage(filePath)
 	if err != nil {
 		return "", err
 	}
-	if orientation > 0 {
-		img = NormalizeOrientation(img, orientation)
-	} else {
-		img = normalizeImageForDisplay(filePath, img)
-	}
+
+	// 自动校正方向（非 HEIC 从 EXIF 读取，HEIC 由解码器自动处理）
+	img = normalizeImageForDisplay(filePath, img)
+
+	// 叠加手动旋转（所有格式统一）
+	img = ApplyManualRotation(img, manualRotation)
 
 	// 获取原始尺寸
 	bounds := img.Bounds()

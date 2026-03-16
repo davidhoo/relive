@@ -179,21 +179,20 @@ func DisplayBatchRoot(thumbnailRoot string) string {
 
 // BuildDisplayCanvas 从原始照片构建竖屏 canvas（480×800），在内存中返回，不经过 JPEG 中转
 func BuildDisplayCanvas(filePath string, width, height int, title, subtitle string) (image.Image, error) {
-	return BuildDisplayCanvasWithOrientation(filePath, width, height, title, subtitle, 0)
+	return BuildDisplayCanvasWithRotation(filePath, width, height, title, subtitle, 0)
 }
 
-// BuildDisplayCanvasWithOrientation 构建展示画布，使用指定方向覆盖 EXIF
-// orientation <= 0 表示从 EXIF 读取方向
-func BuildDisplayCanvasWithOrientation(filePath string, width, height int, title, subtitle string, orientation int) (image.Image, error) {
+// BuildDisplayCanvasWithRotation 构建展示画布，先自动校正方向再叠加手动旋转
+// manualRotation: 用户手动旋转角度（0/90/180/270）
+func BuildDisplayCanvasWithRotation(filePath string, width, height int, title, subtitle string, manualRotation int) (image.Image, error) {
 	img, err := OpenImage(filePath)
 	if err != nil {
 		return nil, err
 	}
-	if orientation > 0 {
-		img = NormalizeOrientation(img, orientation)
-	} else {
-		img = normalizeImageForDisplay(filePath, img)
-	}
+	// 自动校正方向（非 HEIC 从 EXIF 读取，HEIC 由解码器自动处理）
+	img = normalizeImageForDisplay(filePath, img)
+	// 叠加手动旋转（所有格式统一）
+	img = ApplyManualRotation(img, manualRotation)
 	return buildDisplayCanvas(img, width, height, title, subtitle), nil
 }
 

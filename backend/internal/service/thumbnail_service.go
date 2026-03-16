@@ -206,8 +206,8 @@ func (s *thumbnailService) GeneratePhoto(photoID uint, force bool) error {
 		}
 	}
 
-	logger.Infof("GeneratePhoto: photo=%d orientation=%d oldPath=%s", photo.ID, photo.Orientation, thumbnailPath)
-	relPath, err := s.generator.GenerateThumbnailWithOrientation(photo.FilePath, photo.Orientation)
+	logger.Infof("GeneratePhoto: photo=%d manualRotation=%d oldPath=%s", photo.ID, photo.ManualRotation, thumbnailPath)
+	relPath, err := s.generator.GenerateThumbnailWithRotation(photo.FilePath, photo.ManualRotation)
 	now := time.Now()
 	if err != nil {
 		_ = s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
@@ -417,7 +417,7 @@ func (s *thumbnailService) processJob(job *model.ThumbnailJob) error {
 		s.updateTaskProgress(func(task *model.ThumbnailTask) { task.ProcessedJobs++ })
 		return nil
 	}
-	relPath, err := s.generator.GenerateThumbnailWithOrientation(photo.FilePath, photo.Orientation)
+	relPath, err := s.generator.GenerateThumbnailWithRotation(photo.FilePath, photo.ManualRotation)
 	now := time.Now()
 	if err != nil {
 		// 使用带重试的更新

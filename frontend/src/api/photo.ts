@@ -78,9 +78,9 @@ export const photoApi = {
     return http.patch<ApiResponse<any>>(`/photos/${id}/category`, { category })
   },
 
-  // 手动覆盖照片方向
-  updateOrientation(id: number, orientation: number) {
-    return http.patch<ApiResponse<any>>(`/photos/${id}/orientation`, { orientation })
+  // 手动旋转照片
+  updateRotation(id: number, rotation: number) {
+    return http.patch<ApiResponse<any>>(`/photos/${id}/rotation`, { rotation })
   },
 
   // 手动设置照片位置

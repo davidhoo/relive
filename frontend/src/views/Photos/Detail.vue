@@ -93,7 +93,7 @@
             </el-descriptions-item>
             <el-descriptions-item label="方向">
               <div class="orientation-cell">
-                <span>{{ photo.orientation || '-' }}</span>
+                <span>{{ photo.manual_rotation ? photo.manual_rotation + '°' : '0°' }}</span>
                 <el-button-group size="small" class="orientation-actions">
                   <el-button :loading="orientationUpdating" @click="handleRotate('left')" title="逆时针旋转 90°">
                     <el-icon><RefreshLeft /></el-icon>
@@ -532,26 +532,25 @@ const handleTagClick = (tag: string) => {
 
 // 排除照片
 
-// 手动旋转方向
-const rotateRight: Record<number, number> = { 1: 6, 2: 7, 3: 8, 4: 5, 5: 2, 6: 3, 7: 4, 8: 1 }
-const rotateLeft: Record<number, number> = { 1: 8, 2: 5, 3: 6, 4: 7, 5: 4, 6: 1, 7: 2, 8: 3 }
+// 手动旋转
 const handleRotate = async (direction: 'left' | 'right') => {
   if (!photo.value) return
-  const current = photo.value.orientation || 1
-  const map = direction === 'right' ? rotateRight : rotateLeft
-  const newOrientation = map[current] || 1
+  const current = photo.value.manual_rotation || 0
+  const newRotation = direction === 'right'
+    ? (current + 90) % 360
+    : (current + 270) % 360
   orientationUpdating.value = true
   try {
-    const { data: res } = await photoApi.updateOrientation(photo.value.id, newOrientation)
+    const { data: res } = await photoApi.updateRotation(photo.value.id, newRotation)
     if (res.success) {
-      ElMessage.success('方向已更新')
+      ElMessage.success('旋转已更新')
       await loadPhoto()
       imageVersion.value = Date.now()
     } else {
       ElMessage.error(res.error?.message || '更新失败')
     }
   } catch {
-    ElMessage.error('更新方向失败')
+    ElMessage.error('更新旋转失败')
   } finally {
     orientationUpdating.value = false
   }

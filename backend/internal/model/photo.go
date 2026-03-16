@@ -56,7 +56,8 @@ type Photo struct {
 	CameraModel     string     `gorm:"type:varchar(100)" json:"camera_model"`                // 相机型号
 	Width           int        `gorm:"not null" json:"width"`                                // 宽度
 	Height          int        `gorm:"not null" json:"height"`                               // 高度
-	Orientation     int        `gorm:"default:1" json:"orientation"`                         // 方向（1-8）
+	Orientation     int        `gorm:"default:1" json:"orientation"`                         // 方向（1-8，EXIF 只读）
+	ManualRotation  int        `gorm:"default:0" json:"manual_rotation"`                    // 手动旋转角度（0/90/180/270）
 	GPSLatitude     *float64   `json:"gps_latitude"`                                         // GPS 纬度
 	GPSLongitude    *float64   `json:"gps_longitude"`                                        // GPS 经度
 	Location        string     `gorm:"type:varchar(200);index:idx_location" json:"location"` // 位置（城市）
@@ -106,9 +107,9 @@ type UpdateCategoryRequest struct {
 	Category string `json:"category"`
 }
 
-// UpdateOrientationRequest 手动覆盖方向请求
-type UpdateOrientationRequest struct {
-	Orientation int `json:"orientation" binding:"required,min=1,max=8"`
+// UpdateRotationRequest 手动旋转请求
+type UpdateRotationRequest struct {
+	Rotation int `json:"rotation" binding:"oneof=0 90 180 270"`
 }
 
 // SetManualLocationRequest 手动设置照片位置请求

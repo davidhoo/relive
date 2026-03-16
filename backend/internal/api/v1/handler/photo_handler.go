@@ -742,7 +742,7 @@ func (h *PhotoHandler) GetPhotoThumbnail(c *gin.Context) {
 	if photo.ThumbnailPath != "" {
 		thumbnailFullPath := filepath.Join(h.cfg.Photos.ThumbnailPath, photo.ThumbnailPath)
 		if _, err := os.Stat(thumbnailFullPath); err == nil {
-			if !util.ShouldRefreshThumbnailCacheWithOrientation(photo.FilePath, thumbnailFullPath, photo.Orientation) {
+			if !util.ShouldRefreshThumbnailCacheWithRotation(photo.FilePath, thumbnailFullPath, photo.ManualRotation) {
 				c.Header("Content-Type", "image/jpeg")
 				c.Header("Cache-Control", "no-cache")
 				c.File(thumbnailFullPath)
@@ -769,12 +769,13 @@ func (h *PhotoHandler) generateFramePreviewFile(photo *model.Photo, targetWidth,
 	}
 
 	cacheKey := fmt.Sprintf(
-		"frame-preview:v3:%s:%d:%d:%dx%d",
+		"frame-preview:v4:%s:%d:%d:%dx%d:%d",
 		photo.FilePath,
 		fileInfo.Size(),
 		fileInfo.ModTime().UnixNano(),
 		targetWidth,
 		targetHeight,
+		photo.ManualRotation,
 	)
 	cachePath := filepath.Join(
 		h.getThumbnailRoot(),
@@ -791,16 +792,14 @@ func (h *PhotoHandler) generateFramePreviewFile(photo *model.Photo, targetWidth,
 		return "", fmt.Errorf("open image: %w", err)
 	}
 
-	orientation := photo.Orientation
-	if exifData, exifErr := util.ExtractEXIF(photo.FilePath); exifErr != nil {
-		logger.Debugf("Extract orientation for frame preview failed: %v", exifErr)
-	} else if exifData != nil && exifData.Orientation > 0 {
-		orientation = exifData.Orientation
-	}
-
+	// 自动校正方向（非 HEIC 从 EXIF 读取，HEIC 由解码器自动处理）
 	if !util.IsHEIC(photo.FilePath) {
-		img = util.NormalizeOrientation(img, orientation)
+		if exifData, exifErr := util.ExtractEXIF(photo.FilePath); exifErr == nil && exifData != nil && exifData.Orientation > 0 {
+			img = util.NormalizeOrientation(img, exifData.Orientation)
+		}
 	}
+	// 叠加手动旋转
+	img = util.ApplyManualRotation(img, photo.ManualRotation)
 	framePreview := util.GenerateFramePreview(img, targetWidth, targetHeight)
 
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0755); err != nil {
@@ -826,11 +825,12 @@ func (h *PhotoHandler) generateDevicePreviewFile(photo *model.Photo, profileName
 
 	title, subtitle := buildPhotoDisplayText(photo)
 	cacheKey := fmt.Sprintf(
-		"device-preview:v2:%s:%d:%d:%d:%s:%s:%s",
+		"device-preview:v3:%s:%d:%d:%d:%d:%s:%s:%s",
 		photo.FilePath,
 		fileInfo.Size(),
 		fileInfo.ModTime().UnixNano(),
 		photo.UpdatedAt.UnixNano(),
+		photo.ManualRotation,
 		profile.Name,
 		title,
 		subtitle,
@@ -852,13 +852,12 @@ func (h *PhotoHandler) generateDevicePreviewFile(photo *model.Photo, profileName
 		return "", fmt.Errorf("create device preview directory: %w", err)
 	}
 
-	if err := util.GenerateDisplayPreview(photo.FilePath, previewPath, profile.Width, profile.Height, title, subtitle); err != nil {
-		return "", fmt.Errorf("generate display preview: %w", err)
-	}
-
-	canvas, err := util.BuildDisplayCanvas(photo.FilePath, profile.Width, profile.Height, title, subtitle)
+	canvas, err := util.BuildDisplayCanvasWithRotation(photo.FilePath, profile.Width, profile.Height, title, subtitle, photo.ManualRotation)
 	if err != nil {
 		return "", fmt.Errorf("build display canvas: %w", err)
+	}
+	if err := util.SaveDisplayPreview(canvas, previewPath); err != nil {
+		return "", fmt.Errorf("save display preview: %w", err)
 	}
 	if _, _, err := util.BuildRenderArtifacts(canvas, profile, ditherPreviewPath, binPath, headerPath); err != nil {
 		return "", fmt.Errorf("build render artifacts: %w", err)
@@ -1260,8 +1259,8 @@ func (h *PhotoHandler) UpdateCategory(c *gin.Context) {
 	})
 }
 
-// UpdateOrientation 手动覆盖照片方向
-func (h *PhotoHandler) UpdateOrientation(c *gin.Context) {
+// UpdateRotation 手动旋转照片
+func (h *PhotoHandler) UpdateRotation(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
@@ -1272,16 +1271,16 @@ func (h *PhotoHandler) UpdateOrientation(c *gin.Context) {
 		return
 	}
 
-	var req model.UpdateOrientationRequest
+	var req model.UpdateRotationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, model.Response{
 			Success: false,
-			Error:   &model.ErrorInfo{Code: "INVALID_REQUEST", Message: "orientation must be 1-8"},
+			Error:   &model.ErrorInfo{Code: "INVALID_REQUEST", Message: "rotation must be 0, 90, 180, or 270"},
 		})
 		return
 	}
 
-	if err := h.photoService.UpdateOrientation(uint(id), req.Orientation); err != nil {
+	if err := h.photoService.UpdateManualRotation(uint(id), req.Rotation); err != nil {
 		c.JSON(http.StatusInternalServerError, model.Response{
 			Success: false,
 			Error:   &model.ErrorInfo{Code: "UPDATE_FAILED", Message: err.Error()},
@@ -1291,7 +1290,7 @@ func (h *PhotoHandler) UpdateOrientation(c *gin.Context) {
 
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
-		Message: "Orientation updated, thumbnail regenerating",
+		Message: "Rotation updated, thumbnail regenerated",
 	})
 }
 

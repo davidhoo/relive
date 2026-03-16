@@ -14,6 +14,7 @@ export interface Photo {
   width?: number
   height?: number
   orientation?: number
+  manual_rotation?: number
   gps_latitude?: number
   gps_longitude?: number
   location?: string

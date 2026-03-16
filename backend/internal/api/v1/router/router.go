@@ -186,7 +186,8 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				photos.GET("/:id", handlers.Photo.GetPhotoByID)
 				photos.PATCH("/:id/category", handlers.Photo.UpdateCategory)
 				photos.PATCH("/:id/location", handlers.Photo.SetManualLocation)
-				photos.PATCH("/:id/orientation", handlers.Photo.UpdateOrientation)
+				photos.PATCH("/:id/rotation", handlers.Photo.UpdateRotation)
+				photos.PATCH("/:id/orientation", handlers.Photo.UpdateRotation) // 兼容旧路由
 			}
 
 			thumbnails := authorized.Group("/thumbnails")
