@@ -74,24 +74,30 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Location, Picture, PictureFilled, Star } from '@element-plus/icons-vue'
 import PageHeader from '@/components/PageHeader.vue'
 import { eventApi } from '@/api/event'
 import type { Event } from '@/types/event'
 
+const route = useRoute()
 const router = useRouter()
 
 const events = ref<Event[]>([])
 const loading = ref(false)
-const page = ref(1)
-const pageSize = ref(20)
+const page = ref(Number(route.query.page) || 1)
+const pageSize = ref(Number(route.query.pageSize) || 20)
 const total = ref(0)
+
+const syncQuery = () => {
+  router.replace({ query: { ...route.query, page: String(page.value), pageSize: String(pageSize.value) } })
+}
 
 const fetchEvents = async () => {
   loading.value = true
+  syncQuery()
   try {
     const { data: res } = await eventApi.getList(page.value, pageSize.value)
     if (res.success && res.data) {

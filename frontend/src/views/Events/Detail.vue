@@ -2,7 +2,7 @@
   <div class="event-detail" v-loading="loading">
     <template v-if="event">
       <div class="detail-header">
-        <el-button link @click="router.push('/events')" class="back-link">
+        <el-button link @click="goBack" class="back-link">
           <el-icon><ArrowLeft /></el-icon>
           返回事件列表
         </el-button>
@@ -91,6 +91,14 @@ const photos = ref<Photo[]>([])
 const photoPage = ref(1)
 const photoPageSize = 50
 const photoTotal = ref(0)
+
+const goBack = () => {
+  if (window.history.length > 1) {
+    router.back()
+  } else {
+    router.push('/events')
+  }
+}
 
 const fetchDetail = async () => {
   const id = Number(route.params.id)
