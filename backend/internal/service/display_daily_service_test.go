@@ -73,7 +73,7 @@ func TestDisplayService_ForceRegenerateResetsPlaybackState(t *testing.T) {
 	tempDir := t.TempDir()
 	displayService, photoRepo, deviceRepo, configService := buildTestDisplayService(t, db, tempDir)
 	targetDate := time.Date(2026, 3, 7, 9, 0, 0, 0, time.Local)
-	createBatchPhotos(t, photoRepo, tempDir, targetDate, 2)
+	createBatchPhotos(t, photoRepo, tempDir, targetDate, 4)
 	setDisplayStrategy(t, configService, model.DisplayStrategyConfig{Algorithm: "random", MinBeautyScore: 60, MinMemoryScore: 60, DailyCount: 2})
 
 	_, err := displayService.GenerateDailyBatch(targetDate, true)

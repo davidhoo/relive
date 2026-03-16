@@ -364,6 +364,23 @@ func (s *displayService) GetDeviceDisplay(deviceID uint, renderProfile string) (
 		return nil, err
 	}
 
+	// 记录展示历史，供 AvoidRepeatDays 排除（同设备同照片当日只记一次）
+	if selection.Item != nil && selection.Item.PhotoID > 0 {
+		today := time.Now().Truncate(24 * time.Hour)
+		var count int64
+		s.db.Model(&model.DisplayRecord{}).
+			Where("photo_id = ? AND device_id = ? AND displayed_at >= ?", selection.Item.PhotoID, deviceID, today).
+			Count(&count)
+		if count == 0 {
+			_ = s.displayRecordRepo.Create(&model.DisplayRecord{
+				PhotoID:     selection.Item.PhotoID,
+				DeviceID:    deviceID,
+				DisplayedAt: time.Now(),
+				TriggerType: model.TriggerTypeScheduled,
+			})
+		}
+	}
+
 	return selection, nil
 }
 
