@@ -188,6 +188,23 @@
             />
             <span class="help-text">近 N 天内展示过的事件受新鲜度惩罚</span>
           </el-form-item>
+
+          <el-divider content-position="left">事件聚类</el-divider>
+
+          <el-form-item label="聚类操作">
+            <el-button :loading="clusteringLoading" @click="handleStartClustering('incremental')">增量聚类</el-button>
+            <el-button :loading="clusteringLoading" type="danger" plain @click="handleStartClustering('rebuild')">全量重建</el-button>
+            <span class="help-text">照片扫描后会自动增量聚类；全量重建会删除所有事件重新聚类</span>
+          </el-form-item>
+
+          <div v-if="clusteringTask" class="clustering-status">
+            <el-tag :type="clusteringStatusType" effect="plain">{{ clusteringStatusText }}</el-tag>
+            <span v-if="clusteringTask.progress" class="help-text">
+              {{ clusteringTask.progress.processed_photos }}/{{ clusteringTask.progress.total_photos }} 照片，
+              {{ clusteringTask.progress.events_created }} 新建 / {{ clusteringTask.progress.events_updated }} 更新
+            </span>
+            <el-button v-if="clusteringTask.status === 'running'" size="small" text type="danger" @click="handleStopClustering">停止</el-button>
+          </div>
         </template>
 
       </el-form>
@@ -460,6 +477,9 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
+import http from '@/utils/request'
+import type { ApiResponse } from '@/types/api'
+
 import { Calendar, Clock, Files, Picture, View } from '@element-plus/icons-vue'
 import { displayStrategyApi, defaultDisplayStrategyConfig } from '@/api/config'
 import type { DisplayPreviewResponse, DisplayStrategyConfig } from '@/api/config'
@@ -867,16 +887,115 @@ const loadRenderProfiles = async () => {
   }
 }
 
+// --- 事件聚类 ---
+
+interface ClusteringProgress {
+  phase: string
+  total_photos: number
+  processed_photos: number
+  events_created: number
+  events_updated: number
+}
+
+interface ClusteringTask {
+  id: string
+  type: string
+  status: string
+  progress?: ClusteringProgress
+  error_message?: string
+  started_at: string
+  completed_at?: string
+}
+
+const clusteringLoading = ref(false)
+const clusteringTask = ref<ClusteringTask | null>(null)
+let clusteringPollTimer: number | undefined
+
+const clusteringStatusType = computed<'' | 'success' | 'warning' | 'danger' | 'info'>(() => {
+  switch (clusteringTask.value?.status) {
+    case 'running': return 'warning'
+    case 'completed': return 'success'
+    case 'failed': return 'danger'
+    default: return 'info'
+  }
+})
+
+const clusteringStatusText = computed(() => {
+  const task = clusteringTask.value
+  if (!task) return ''
+  const typeLabel = task.type === 'rebuild' ? '全量重建' : '增量聚类'
+  switch (task.status) {
+    case 'running': return `${typeLabel}运行中…`
+    case 'stopping': return `${typeLabel}停止中…`
+    case 'completed': return `${typeLabel}已完成`
+    case 'failed': return `${typeLabel}失败: ${task.error_message || '未知错误'}`
+    default: return `${typeLabel}: ${task.status}`
+  }
+})
+
+const pollClusteringTask = async () => {
+  try {
+    const res = await http.get<ApiResponse<ClusteringTask>>('/events/cluster/task')
+    clusteringTask.value = res.data?.data || null
+    if (clusteringTask.value?.status === 'running' || clusteringTask.value?.status === 'stopping') {
+      clusteringPollTimer = window.setTimeout(pollClusteringTask, 2000)
+    } else {
+      clusteringLoading.value = false
+    }
+  } catch {
+    clusteringLoading.value = false
+  }
+}
+
+const handleStartClustering = async (type: 'incremental' | 'rebuild') => {
+  if (type === 'rebuild') {
+    try {
+      await ElMessageBox.confirm(
+        '全量重建将删除所有现有事件并重新聚类，确定继续？',
+        '确认全量重建',
+        { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+      )
+    } catch {
+      return
+    }
+  }
+
+  clusteringLoading.value = true
+  try {
+    const endpoint = type === 'rebuild' ? '/events/rebuild' : '/events/cluster'
+    await http.post(endpoint)
+    ElMessage.success(type === 'rebuild' ? '全量重建任务已启动' : '增量聚类任务已启动')
+    await pollClusteringTask()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || error.message || '启动聚类失败')
+    clusteringLoading.value = false
+  }
+}
+
+const handleStopClustering = async () => {
+  try {
+    await http.post('/events/cluster/stop')
+    ElMessage.success('停止请求已发送')
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || '停止失败')
+  }
+}
+
 onMounted(() => {
   loadConfig()
   loadDailyBatch()
   loadBatchHistory()
   loadRenderProfiles()
+  // 加载聚类任务状态（仅当选择事件策展时可见，但提前加载无害）
+  pollClusteringTask()
 })
 
 onUnmounted(() => {
   if (previewTimer && typeof window !== 'undefined') {
     window.clearTimeout(previewTimer)
+  }
+  if (clusteringPollTimer && typeof window !== 'undefined') {
+    window.clearTimeout(clusteringPollTimer)
   }
 })
 </script>
@@ -892,6 +1011,15 @@ onUnmounted(() => {
   margin-left: 10px;
   color: #909399;
   font-size: 12px;
+}
+
+.clustering-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 0 150px;
+  margin-top: -8px;
+  margin-bottom: 12px;
 }
 
 .preview-layout {
