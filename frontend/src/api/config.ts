@@ -519,17 +519,37 @@ export const configApi = {
 // ==================== Display Strategy interfaces ====================
 
 export interface DisplayStrategyConfig {
-  algorithm: string       // 展示策略: random / on_this_day
+  algorithm: string       // 展示策略: random / on_this_day / event_curated
   minBeautyScore: number  // 最小美学评分阈值 (0-100)
   minMemoryScore: number  // 最小回忆价值评分阈值 (0-100)
   dailyCount: number      // 每日挑选数量 (1-20)
+
+  // 策展引擎参数（algorithm = "event_curated" 时使用）
+  curationTimeTunnelDays?: number      // 往年今日 ±N 天，默认 7
+  curationTopEventsLimit?: number      // 巅峰回忆提名数，默认 20
+  curationGeoEventsLimit?: number      // 地理漂移提名数，默认 10
+  curationHiddenGemsMinBeauty?: number // 角落遗珠最低美感分，默认 60
+  curationSeasonBoost?: number         // 季节对齐加权，默认 1.2
+  curationFreshnessPenalty?: number    // 近期展示惩罚，默认 0.1
+  curationPeopleBonus?: number         // 人物偏好加分，默认 20
+  curationDisplayDecayFactor?: number  // 展示衰减因子，默认 0.1
+  curationFreshnessDays?: number       // 新鲜度窗口天数，默认 30
 }
 
 export const defaultDisplayStrategyConfig: DisplayStrategyConfig = {
   algorithm: 'on_this_day',
   minBeautyScore: 70,
   minMemoryScore: 60,
-  dailyCount: 3
+  dailyCount: 3,
+  curationTimeTunnelDays: 7,
+  curationTopEventsLimit: 20,
+  curationGeoEventsLimit: 10,
+  curationHiddenGemsMinBeauty: 60,
+  curationSeasonBoost: 1.2,
+  curationFreshnessPenalty: 0.1,
+  curationPeopleBonus: 20,
+  curationDisplayDecayFactor: 0.1,
+  curationFreshnessDays: 30,
 }
 
 const normalizeDisplayStrategyConfig = (config?: Partial<DisplayStrategyConfig>): DisplayStrategyConfig => {

@@ -22,6 +22,7 @@
           <el-select v-model="form.algorithm" placeholder="请选择策略" class="full-width">
             <el-option label="随机选择" value="random" />
             <el-option label="往年今日" value="on_this_day" />
+            <el-option label="事件策展" value="event_curated" />
           </el-select>
         </el-form-item>
 
@@ -57,6 +58,115 @@
             show-input
           />
         </el-form-item>
+
+        <!-- 策展引擎参数（仅 event_curated 时显示） -->
+        <template v-if="form.algorithm === 'event_curated'">
+          <el-divider content-position="left">提名控制</el-divider>
+
+          <el-form-item label="时光隧道窗口">
+            <el-input-number
+              v-model="form.curationTimeTunnelDays"
+              :min="1"
+              :max="30"
+              :step="1"
+              class="input-number-width-lg"
+            />
+            <span class="help-text">往年今日 ±N 天范围</span>
+          </el-form-item>
+
+          <el-form-item label="巅峰回忆提名数">
+            <el-input-number
+              v-model="form.curationTopEventsLimit"
+              :min="5"
+              :max="50"
+              :step="5"
+              class="input-number-width-lg"
+            />
+            <span class="help-text">全库高分事件候选数量</span>
+          </el-form-item>
+
+          <el-form-item label="地理漂移提名数">
+            <el-input-number
+              v-model="form.curationGeoEventsLimit"
+              :min="3"
+              :max="30"
+              :step="1"
+              class="input-number-width-lg"
+            />
+            <span class="help-text">距常驻地最远的事件候选数量</span>
+          </el-form-item>
+
+          <el-form-item label="遗珠美感阈值">
+            <el-slider
+              v-model="form.curationHiddenGemsMinBeauty"
+              :min="0"
+              :max="100"
+              :step="5"
+              show-stops
+              show-input
+            />
+          </el-form-item>
+
+          <el-divider content-position="left">评分修正</el-divider>
+
+          <el-form-item label="季节对齐加权">
+            <el-input-number
+              v-model="form.curationSeasonBoost"
+              :min="1.0"
+              :max="3.0"
+              :step="0.1"
+              :precision="1"
+              class="input-number-width-lg"
+            />
+            <span class="help-text">拍摄月份与当前月份一致时的加权倍数</span>
+          </el-form-item>
+
+          <el-form-item label="新鲜度惩罚">
+            <el-input-number
+              v-model="form.curationFreshnessPenalty"
+              :min="0.01"
+              :max="1.0"
+              :step="0.05"
+              :precision="2"
+              class="input-number-width-lg"
+            />
+            <span class="help-text">近期展示过的事件评分衰减系数（越小惩罚越重）</span>
+          </el-form-item>
+
+          <el-form-item label="人物偏好加分">
+            <el-input-number
+              v-model="form.curationPeopleBonus"
+              :min="0"
+              :max="50"
+              :step="5"
+              class="input-number-width-lg"
+            />
+            <span class="help-text">包含人物的事件额外加分</span>
+          </el-form-item>
+
+          <el-form-item label="展示衰减因子">
+            <el-input-number
+              v-model="form.curationDisplayDecayFactor"
+              :min="0.01"
+              :max="1.0"
+              :step="0.05"
+              :precision="2"
+              class="input-number-width-lg"
+            />
+            <span class="help-text">展示次数越多评分越低，公式: 1/(1+次数×因子)</span>
+          </el-form-item>
+
+          <el-form-item label="新鲜度窗口">
+            <el-input-number
+              v-model="form.curationFreshnessDays"
+              :min="7"
+              :max="90"
+              :step="7"
+              class="input-number-width-lg"
+            />
+            <span class="help-text">近 N 天内展示过的事件受新鲜度惩罚</span>
+          </el-form-item>
+        </template>
 
       </el-form>
 
@@ -354,7 +464,7 @@ const previewProfileName = ref<string | null>(null)
 let previewTimer: number | undefined
 
 const previewSupported = computed(() => supportedAlgorithms.includes(form.value.algorithm))
-const supportedAlgorithms = ['random', 'on_this_day']
+const supportedAlgorithms = ['random', 'on_this_day', 'event_curated']
 const previewPhotos = computed<Photo[]>(() => previewResult.value?.photos || [])
 const previewDateValue = computed(() => toPreviewDateValue(previewCalendarDate.value))
 const previewDateLabel = computed(() => formatDisplayDate(previewCalendarDate.value))
@@ -364,6 +474,8 @@ const previewHint = computed(() => {
       return '随机策略会按当前参数抽取一组照片。'
     case 'on_this_day':
       return '优先匹配往年同日附近的历史照片。'
+    case 'event_curated':
+      return '基于事件聚类的多维策展：时光隧道、巅峰回忆、地理漂移、角落遗珠。'
     default:
       return '选择日期后查看该天的策略结果。'
   }
@@ -371,6 +483,9 @@ const previewHint = computed(() => {
 const emptyPreviewText = computed(() => {
   if (form.value.algorithm === 'on_this_day') {
     return '该日期附近及其智能兜底范围内没有找到可展示的照片'
+  }
+  if (form.value.algorithm === 'event_curated') {
+    return '没有找到策展候选（可能需要先运行事件聚类），已自动尝试降级到往年今日'
   }
   return '没有找到符合当前策略条件的照片'
 })
