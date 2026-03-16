@@ -872,21 +872,26 @@ const schedulePreview = () => {
   }, 250)
 }
 
+// 策略参数变化时清空会话排除列表并重新预览
 watch(
   () => [
     form.value.algorithm,
     form.value.dailyCount,
     form.value.minBeautyScore,
     form.value.minMemoryScore,
-    previewDateValue.value,
   ],
   () => {
     if (loading.value) return
-    // 策略参数变化时清空会话排除列表
     previewSessionExcludes.value = new Set()
     schedulePreview()
   }
 )
+
+// 日期变化时保留排除列表，仅重新预览
+watch(previewDateValue, () => {
+  if (loading.value) return
+  schedulePreview()
+})
 
 const loadRenderProfiles = async () => {
   try {
