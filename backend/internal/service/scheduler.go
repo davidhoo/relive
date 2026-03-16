@@ -102,16 +102,13 @@ func (s *TaskScheduler) cleanExpiredLocksTask() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
-	// 立即执行一次
+	// 立即执行一次（仅清理锁，其他任务由各自的 goroutine 负责）
 	s.cleanExpiredLocks()
-	s.ensureTodayDailyBatch()
-	s.runAutoScanCheck()
 
 	for {
 		select {
 		case <-ticker.C:
 			s.cleanExpiredLocks()
-			s.runAutoScanCheck()
 		case <-s.stopCh:
 			return
 		}
@@ -209,7 +206,13 @@ func (s *TaskScheduler) autoScanCheckTask() {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
-	s.runAutoScanCheck()
+	// 启动后延迟 15 秒再首次扫描，避免与其他启动任务（迁移、锁清理等）争用数据库
+	select {
+	case <-time.After(15 * time.Second):
+		s.runAutoScanCheck()
+	case <-s.stopCh:
+		return
+	}
 
 	for {
 		select {
