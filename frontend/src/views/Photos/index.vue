@@ -403,14 +403,14 @@
               class="photo-card photo-card-parallax animate-scale-in"
               :style="{ animationDelay: `${index * 30}ms` }"
               :class="{ 'is-selected': selectedPhotos.has(photo.id) }"
-              @click="selectedPhotos.size > 0 ? toggleSelectPhoto(photo.id) : gotoDetail(photo.id)"
+              @click="selectedPhotos.size > 0 ? toggleSelectPhoto(photo.id, $event) : gotoDetail(photo.id)"
             >
               <div class="photo-image-wrapper">
                 <!-- 选择按钮 -->
                 <div
                   class="photo-select-btn"
                   :class="{ selected: selectedPhotos.has(photo.id) }"
-                  @click.stop="toggleSelectPhoto(photo.id)"
+                  @click.stop="toggleSelectPhoto(photo.id, $event)"
                 >
                   <el-icon v-if="selectedPhotos.has(photo.id)"><Select /></el-icon>
                 </div>
@@ -510,6 +510,22 @@
           title="取消选择"
         />
         <span class="selection-count">已选中 {{ selectedPhotos.size }} 张照片</span>
+        <el-tooltip content="全选当前页" placement="top">
+          <el-button
+            :icon="Files"
+            circle
+            size="small"
+            @click="selectAll"
+          />
+        </el-tooltip>
+        <el-tooltip content="反选" placement="top">
+          <el-button
+            :icon="SwitchButton"
+            circle
+            size="small"
+            @click="invertSelection"
+          />
+        </el-tooltip>
         <el-tooltip content="设置位置" placement="top">
           <el-button
             :icon="Location"
@@ -618,16 +634,51 @@ const currentScanType = ref<'scan' | 'rebuild' | ''>('') // 当前扫描类型
 const cleaningUp = ref(false)
 const autoScanConfig = ref<AutoScanConfig>(configApi.getDefaultAutoScanConfig())
 const selectedPhotos = ref<Set<number>>(new Set())
+const lastSelectedIndex = ref<number>(-1) // Shift 多选锚点
 const excludingPhotos = ref(false)
 const showBatchLocationPicker = ref(false)
 const batchLocationLoading = ref(false)
 
-const toggleSelectPhoto = (id: number) => {
+const toggleSelectPhoto = (id: number, event?: MouseEvent) => {
+  const currentIndex = photos.value.findIndex(p => p.id === id)
   const next = new Set(selectedPhotos.value)
-  if (next.has(id)) {
-    next.delete(id)
+
+  if (event?.shiftKey && lastSelectedIndex.value >= 0 && currentIndex >= 0) {
+    // Shift+点击：范围选择
+    const start = Math.min(lastSelectedIndex.value, currentIndex)
+    const end = Math.max(lastSelectedIndex.value, currentIndex)
+    for (let i = start; i <= end; i++) {
+      next.add(photos.value[i].id)
+    }
   } else {
-    next.add(id)
+    // 普通点击：切换单张
+    if (next.has(id)) {
+      next.delete(id)
+    } else {
+      next.add(id)
+    }
+  }
+
+  if (currentIndex >= 0) {
+    lastSelectedIndex.value = currentIndex
+  }
+  selectedPhotos.value = next
+}
+
+const selectAll = () => {
+  const next = new Set(selectedPhotos.value)
+  for (const photo of photos.value) {
+    next.add(photo.id)
+  }
+  selectedPhotos.value = next
+}
+
+const invertSelection = () => {
+  const next = new Set<number>()
+  for (const photo of photos.value) {
+    if (!selectedPhotos.value.has(photo.id)) {
+      next.add(photo.id)
+    }
   }
   selectedPhotos.value = next
 }
