@@ -288,7 +288,10 @@
           <div v-for="item in dailyBatch.items" :key="item.id" class="batch-item">
             <button type="button" class="batch-preview-trigger" @click="openDitherPreview(item)"><img class="batch-preview" :src="resolveProtectedUrl(item.preview_url)" :alt="item.photo?.caption || getFileName(item.photo?.file_path || '')"></button>
             <div class="batch-item-meta">
-              <div class="batch-item-title">#{{ item.sequence }} {{ item.photo?.caption || getFileName(item.photo?.file_path || '') }}</div>
+              <div class="batch-item-title">
+                #{{ item.sequence }} {{ item.photo?.caption || getFileName(item.photo?.file_path || '') }}
+                <el-tag v-if="item.curation_channel" size="small" :type="curationChannelType(item.curation_channel)" effect="plain" class="curation-tag">{{ curationChannelLabel(item.curation_channel) }}</el-tag>
+              </div>
               <div class="batch-item-subtitle">{{ formatPhotoDate(item.photo?.taken_at) || '未知时间' }}<span v-if="item.photo?.location"> · {{ item.photo.location }}</span></div>
               <div class="batch-asset-tags">
                 <el-tag v-for="asset in item.assets" :key="asset.id" size="small">{{ asset.render_profile }}</el-tag>
@@ -323,7 +326,10 @@
               <div v-for="item in batch.items" :key="item.id" class="batch-item compact">
                 <button type="button" class="batch-preview-trigger" @click="openDitherPreview(item)"><img class="batch-preview" :src="resolveProtectedUrl(item.preview_url)" :alt="item.photo?.caption || getFileName(item.photo?.file_path || '')"></button>
                 <div class="batch-item-meta">
-                  <div class="batch-item-title">#{{ item.sequence }} {{ item.photo?.caption || getFileName(item.photo?.file_path || '') }}</div>
+                  <div class="batch-item-title">
+                    #{{ item.sequence }} {{ item.photo?.caption || getFileName(item.photo?.file_path || '') }}
+                    <el-tag v-if="item.curation_channel" size="small" :type="curationChannelType(item.curation_channel)" effect="plain" class="curation-tag">{{ curationChannelLabel(item.curation_channel) }}</el-tag>
+                  </div>
                   <div class="batch-asset-links">
                     <a v-for="asset in item.assets" :key="asset.id" :href="resolveProtectedUrl(asset.bin_url || '')" target="_blank" rel="noreferrer">{{ asset.render_profile }}</a>
                   </div>
@@ -548,6 +554,26 @@ const getPhotoDevicePreviewUrl = (photoId: number, profileName: string, version?
 
 
 const getFileName = (filePath: string) => filePath.split('/').pop() || filePath
+
+const curationChannelLabel = (channel: string): string => {
+  const map: Record<string, string> = {
+    time_tunnel: '时光隧道',
+    peak_memory: '巅峰回忆',
+    geo_drift: '地理漂移',
+    hidden_gem: '角落遗珠',
+  }
+  return map[channel] || channel
+}
+
+const curationChannelType = (channel: string): '' | 'success' | 'warning' | 'danger' | 'info' => {
+  const map: Record<string, '' | 'success' | 'warning' | 'danger' | 'info'> = {
+    time_tunnel: '',
+    peak_memory: 'warning',
+    geo_drift: 'success',
+    hidden_gem: 'info',
+  }
+  return map[channel] || 'info'
+}
 
 const getDisplayTitle = (photo?: Photo | null) => {
   if (!photo) return ''
@@ -1095,6 +1121,11 @@ onUnmounted(() => {
   font-weight: 600;
   color: #303133;
   line-height: 1.5;
+
+  .curation-tag {
+    margin-left: 6px;
+    vertical-align: middle;
+  }
 }
 
 .batch-item-subtitle {

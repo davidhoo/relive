@@ -76,12 +76,13 @@ func (s *displayService) GenerateDailyBatch(date time.Time, force bool) (*model.
 		}
 
 		item := &model.DailyDisplayItem{
-			Sequence:       sequence,
-			PhotoID:        photo.ID,
-			PreviewJPGPath: previewRelPath,
-			PreviewWidth:   480,
-			PreviewHeight:  800,
-			CanvasTemplate: util.DefaultCanvasTemplate,
+			Sequence:        sequence,
+			PhotoID:         photo.ID,
+			PreviewJPGPath:  previewRelPath,
+			PreviewWidth:    480,
+			PreviewHeight:   800,
+			CanvasTemplate:  util.DefaultCanvasTemplate,
+			CurationChannel: photo.CurationChannel,
 		}
 		items = append(items, item)
 

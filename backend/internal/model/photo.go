@@ -94,6 +94,9 @@ type Photo struct {
 	// 事件聚类
 	EventID *uint `gorm:"index:idx_photos_event_id" json:"event_id,omitempty"` // 所属事件 ID
 
+	// 瞬态字段（不持久化）
+	CurationChannel string `gorm:"-" json:"-"` // 策展来源通道（仅批次生成时传递）
+
 	// 关联
 	DisplayRecords []DisplayRecord `gorm:"foreignKey:PhotoID" json:"-"` // 展示记录
 }

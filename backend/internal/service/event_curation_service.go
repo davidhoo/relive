@@ -85,6 +85,7 @@ func (s *displayService) curateEventPhotos(
 	// 6. 序列编排
 	photos := make([]*model.Photo, 0, len(selected))
 	for _, c := range selected {
+		c.photo.CurationChannel = c.channel
 		photos = append(photos, c.photo)
 	}
 

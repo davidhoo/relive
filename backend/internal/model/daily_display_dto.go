@@ -18,12 +18,13 @@ type DailyDisplayAssetResponse struct {
 }
 
 type DailyDisplayItemResponse struct {
-	ID         uint                        `json:"id"`
-	Sequence   int                         `json:"sequence"`
-	PhotoID    uint                        `json:"photo_id"`
-	PreviewURL string                      `json:"preview_url"`
-	Photo      *Photo                      `json:"photo,omitempty"`
-	Assets     []DailyDisplayAssetResponse `json:"assets,omitempty"`
+	ID              uint                        `json:"id"`
+	Sequence        int                         `json:"sequence"`
+	PhotoID         uint                        `json:"photo_id"`
+	PreviewURL      string                      `json:"preview_url"`
+	CurationChannel string                      `json:"curation_channel,omitempty"`
+	Photo           *Photo                      `json:"photo,omitempty"`
+	Assets          []DailyDisplayAssetResponse `json:"assets,omitempty"`
 }
 
 type DailyDisplayBatchResponse struct {

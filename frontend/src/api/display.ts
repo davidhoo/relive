@@ -28,6 +28,7 @@ export interface DailyDisplayItem {
   sequence: number
   photo_id: number
   preview_url: string
+  curation_channel?: string
   photo?: Photo
   assets: DailyDisplayAsset[]
 }

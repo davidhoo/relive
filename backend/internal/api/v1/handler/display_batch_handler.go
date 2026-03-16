@@ -303,11 +303,12 @@ func (h *DisplayHandler) toDailyBatchResponse(batch *model.DailyDisplayBatch) mo
 	resp.Items = make([]model.DailyDisplayItemResponse, 0, len(batch.Items))
 	for _, item := range batch.Items {
 		itemResp := model.DailyDisplayItemResponse{
-			ID:         item.ID,
-			Sequence:   item.Sequence,
-			PhotoID:    item.PhotoID,
-			PreviewURL: fmt.Sprintf("/api/v1/display/items/%d/preview", item.ID),
-			Photo:      &item.Photo,
+			ID:              item.ID,
+			Sequence:        item.Sequence,
+			PhotoID:         item.PhotoID,
+			PreviewURL:      fmt.Sprintf("/api/v1/display/items/%d/preview", item.ID),
+			CurationChannel: item.CurationChannel,
+			Photo:           &item.Photo,
 		}
 		if len(item.Assets) > 0 {
 			itemResp.Assets = make([]model.DailyDisplayAssetResponse, 0, len(item.Assets))

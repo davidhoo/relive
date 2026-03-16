@@ -50,6 +50,9 @@ type DailyDisplayItem struct {
 	PreviewHeight  int    `gorm:"default:0" json:"preview_height"`
 	CanvasTemplate string `gorm:"type:varchar(100);not null" json:"canvas_template"`
 
+	// 策展来源通道（event_curated 算法时填充）
+	CurationChannel string `gorm:"type:varchar(50);default:''" json:"curation_channel,omitempty"`
+
 	Photo  Photo               `gorm:"foreignKey:PhotoID" json:"photo,omitempty"`
 	Assets []DailyDisplayAsset `gorm:"foreignKey:ItemID;constraint:OnDelete:CASCADE" json:"assets,omitempty"`
 }
