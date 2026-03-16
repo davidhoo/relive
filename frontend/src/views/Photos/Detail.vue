@@ -90,7 +90,19 @@
             <el-descriptions-item label="图片尺寸">
               {{ photo.width && photo.height ? `${photo.width} × ${photo.height}` : '-' }}
             </el-descriptions-item>
-            <el-descriptions-item label="方向">{{ photo.orientation || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="方向">
+              <div class="orientation-cell">
+                <span>{{ photo.orientation || '-' }}</span>
+                <el-button-group size="small" class="orientation-actions">
+                  <el-button :loading="orientationUpdating" @click="handleRotate('left')" title="逆时针旋转 90°">
+                    <el-icon><RefreshLeft /></el-icon>
+                  </el-button>
+                  <el-button :loading="orientationUpdating" @click="handleRotate('right')" title="顺时针旋转 90°">
+                    <el-icon><RefreshRight /></el-icon>
+                  </el-button>
+                </el-button-group>
+              </div>
+            </el-descriptions-item>
             <el-descriptions-item label="GPS 坐标">
               {{ photo.gps_latitude && photo.gps_longitude
                 ? `${photo.gps_latitude.toFixed(6)}, ${photo.gps_longitude.toFixed(6)}`
@@ -229,7 +241,7 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, InfoFilled, Delete, RefreshRight, Edit } from '@element-plus/icons-vue'
+import { ArrowLeft, InfoFilled, Delete, RefreshRight, RefreshLeft, Edit } from '@element-plus/icons-vue'
 import { photoApi } from '@/api/photo'
 import { aiApi } from '@/api/ai'
 import { geocodeApi } from '@/api/geocode'
@@ -248,6 +260,7 @@ const analyzing = ref(false)
 const geocoding = ref(false)
 const thumbnailing = ref(false)
 const statusUpdating = ref(false)
+const orientationUpdating = ref(false)
 const showLocationPicker = ref(false)
 
 // 分类编辑状态
@@ -516,6 +529,31 @@ const handleTagClick = (tag: string) => {
 }
 
 // 排除照片
+
+// 手动旋转方向
+const rotateRight: Record<number, number> = { 1: 6, 2: 7, 3: 8, 4: 5, 5: 2, 6: 3, 7: 4, 8: 1 }
+const rotateLeft: Record<number, number> = { 1: 8, 2: 5, 3: 6, 4: 7, 5: 4, 6: 1, 7: 2, 8: 3 }
+const handleRotate = async (direction: 'left' | 'right') => {
+  if (!photo.value) return
+  const current = photo.value.orientation || 1
+  const map = direction === 'right' ? rotateRight : rotateLeft
+  const newOrientation = map[current] || 1
+  orientationUpdating.value = true
+  try {
+    const { data: res } = await photoApi.updateOrientation(photo.value.id, newOrientation)
+    if (res.success) {
+      ElMessage.success('方向已更新，缩略图重新生成中')
+      await loadPhoto()
+    } else {
+      ElMessage.error(res.error?.message || '更新失败')
+    }
+  } catch {
+    ElMessage.error('更新方向失败')
+  } finally {
+    orientationUpdating.value = false
+  }
+}
+
 const handleExclude = async () => {
   if (!photo.value) return
   try {
@@ -683,6 +721,16 @@ h4 {
 
 .edit-icon-btn:hover {
   color: var(--el-color-primary);
+}
+
+.orientation-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.orientation-actions {
+  margin-left: auto;
 }
 
 </style>

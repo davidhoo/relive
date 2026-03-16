@@ -85,6 +85,9 @@ type PhotoRepository interface {
 	// 分类更新
 	UpdateCategory(id uint, category string) error
 
+	// 方向覆盖
+	UpdateOrientation(id uint, orientation int) error
+
 	// 策展引擎：无事件高颜值散片
 	GetScatteredHighQuality(minBeauty int, excludeIDs []uint, limit int) ([]*model.Photo, error)
 }
@@ -651,6 +654,11 @@ func (r *photoRepository) BatchUpdateStatus(ids []uint, status string) (int64, e
 // UpdateCategory 更新照片分类
 func (r *photoRepository) UpdateCategory(id uint, category string) error {
 	return r.db.Model(&model.Photo{}).Where("id = ?", id).Update("main_category", category).Error
+}
+
+// UpdateOrientation 更新照片方向
+func (r *photoRepository) UpdateOrientation(id uint, orientation int) error {
+	return r.db.Model(&model.Photo{}).Where("id = ?", id).Update("orientation", orientation).Error
 }
 
 // CountByStatus 按状态统计照片数量（单条 SQL）

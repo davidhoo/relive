@@ -65,6 +65,9 @@ type PhotoService interface {
 	// 分类更新
 	UpdateCategory(id uint, category string) error
 
+	// 方向覆盖（更新 orientation 并重新生成缩略图）
+	UpdateOrientation(id uint, orientation int) error
+
 	// 事件聚类服务注入（解决循环初始化）
 	SetEventClusteringService(EventClusteringService)
 }
@@ -287,6 +290,20 @@ func (s *photoService) BatchUpdateStatus(req *model.BatchUpdateStatusRequest) (i
 // UpdateCategory 更新照片分类
 func (s *photoService) UpdateCategory(id uint, category string) error {
 	return s.repo.UpdateCategory(id, category)
+}
+
+// UpdateOrientation 手动覆盖方向并重新生成缩略图
+func (s *photoService) UpdateOrientation(id uint, orientation int) error {
+	if err := s.repo.UpdateOrientation(id, orientation); err != nil {
+		return err
+	}
+	// 异步重新生成缩略图（force=true 强制覆盖）
+	go func() {
+		if err := s.thumbnailService.GeneratePhoto(id, true); err != nil {
+			logger.Warnf("Regenerate thumbnail after orientation update (photo %d): %v", id, err)
+		}
+	}()
+	return nil
 }
 
 // SetEventClusteringService 注入事件聚类服务（避免循环初始化）

@@ -106,6 +106,11 @@ type UpdateCategoryRequest struct {
 	Category string `json:"category"`
 }
 
+// UpdateOrientationRequest 手动覆盖方向请求
+type UpdateOrientationRequest struct {
+	Orientation int `json:"orientation" binding:"required,min=1,max=8"`
+}
+
 // SetManualLocationRequest 手动设置照片位置请求
 type SetManualLocationRequest struct {
 	Latitude  float64 `json:"latitude" binding:"required"`

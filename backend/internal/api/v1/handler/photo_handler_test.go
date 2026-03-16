@@ -73,7 +73,8 @@ func (s *stubPhotoService) GetPathDerivedStatus(_ string) (*model.PathDerivedSta
 func (s *stubPhotoService) GetPathDerivedStatusBatch(_ []string) (map[string]*model.PathDerivedStatus, error) { return nil, nil }
 func (s *stubPhotoService) CountByStatus() (*model.PhotoCountsResponse, error) { return &model.PhotoCountsResponse{}, nil }
 func (s *stubPhotoService) BatchUpdateStatus(_ *model.BatchUpdateStatusRequest) (int64, error) { return 0, nil }
-func (s *stubPhotoService) UpdateCategory(_ uint, _ string) error { return nil }
+func (s *stubPhotoService) UpdateCategory(_ uint, _ string) error       { return nil }
+func (s *stubPhotoService) UpdateOrientation(_ uint, _ int) error       { return nil }
 func (s *stubPhotoService) SetEventClusteringService(_ service.EventClusteringService) {}
 
 func TestPhotoHandler_GetPhotoStats_Success(t *testing.T) {

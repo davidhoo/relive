@@ -78,6 +78,11 @@ export const photoApi = {
     return http.patch<ApiResponse<any>>(`/photos/${id}/category`, { category })
   },
 
+  // 手动覆盖照片方向
+  updateOrientation(id: number, orientation: number) {
+    return http.patch<ApiResponse<any>>(`/photos/${id}/orientation`, { orientation })
+  },
+
   // 手动设置照片位置
   setLocation(id: number, data: { latitude: number; longitude: number }) {
     return http.patch<ApiResponse<{ location: string }>>(`/photos/${id}/location`, data)

@@ -1259,6 +1259,41 @@ func (h *PhotoHandler) UpdateCategory(c *gin.Context) {
 	})
 }
 
+// UpdateOrientation 手动覆盖照片方向
+func (h *PhotoHandler) UpdateOrientation(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "INVALID_REQUEST", Message: "Invalid photo ID"},
+		})
+		return
+	}
+
+	var req model.UpdateOrientationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "INVALID_REQUEST", Message: "orientation must be 1-8"},
+		})
+		return
+	}
+
+	if err := h.photoService.UpdateOrientation(uint(id), req.Orientation); err != nil {
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "UPDATE_FAILED", Message: err.Error()},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "Orientation updated, thumbnail regenerating",
+	})
+}
+
 // StartScan 启动异步扫描任务
 // @Summary 启动异步扫描任务
 // @Description 启动后台扫描任务，立即返回任务 ID，通过 GetScanTask 查询进度
