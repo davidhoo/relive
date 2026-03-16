@@ -43,6 +43,7 @@ type displayService struct {
 	photoRepo         repository.PhotoRepository
 	displayRecordRepo repository.DisplayRecordRepository
 	deviceRepo        repository.DeviceRepository
+	eventRepo         repository.EventRepository
 	configService     ConfigService
 	config            *config.Config
 
@@ -56,6 +57,7 @@ func NewDisplayService(
 	photoRepo repository.PhotoRepository,
 	displayRecordRepo repository.DisplayRecordRepository,
 	deviceRepo repository.DeviceRepository,
+	eventRepo repository.EventRepository,
 	configService ConfigService,
 	cfg *config.Config,
 ) DisplayService {
@@ -64,6 +66,7 @@ func NewDisplayService(
 		photoRepo:         photoRepo,
 		displayRecordRepo: displayRecordRepo,
 		deviceRepo:        deviceRepo,
+		eventRepo:         eventRepo,
 		configService:     configService,
 		config:            cfg,
 	}
@@ -85,6 +88,8 @@ func (s *displayService) GetDisplayPhoto(deviceIDStr string) (*model.Photo, erro
 		photo, err = s.getRandomPhoto(deviceIDStr, strategyConfig)
 	case "on_this_day":
 		photo, err = s.GetOnThisDayPhoto(deviceIDStr)
+	case "event_curated":
+		photo, err = s.getEventCuratedPhoto(deviceIDStr, strategyConfig)
 	case "smart":
 		logger.Infof("Display algorithm smart is merged into on_this_day, using unified on_this_day flow")
 		photo, err = s.GetOnThisDayPhoto(deviceIDStr)
@@ -119,6 +124,8 @@ func (s *displayService) previewPhotosWithExcludes(cfg *model.DisplayStrategyCon
 		return s.photoRepo.GetRandom(cfg.DailyCount, cfg.MinBeautyScore, cfg.MinMemoryScore, excludePhotoIDs)
 	case "on_this_day":
 		return s.getOnThisDayPhotos(targetDate, excludePhotoIDs, *cfg, cfg.DailyCount)
+	case "event_curated":
+		return s.curateEventPhotos(targetDate, excludePhotoIDs, *cfg, cfg.DailyCount)
 	case "smart":
 		return s.getOnThisDayPhotos(targetDate, excludePhotoIDs, *cfg, cfg.DailyCount)
 	default:
@@ -144,6 +151,30 @@ func (s *displayService) GetOnThisDayPhoto(deviceIDStr string) (*model.Photo, er
 	strategyConfig := s.getDisplayStrategyConfig()
 
 	photos, err := s.getOnThisDayPhotos(time.Now(), excludePhotoIDs, strategyConfig, 1)
+	if err != nil {
+		return nil, err
+	}
+	if len(photos) == 0 {
+		return nil, fmt.Errorf("no photos available")
+	}
+
+	return photos[0], nil
+}
+
+// getEventCuratedPhoto 策展引擎获取单张展示照片
+func (s *displayService) getEventCuratedPhoto(deviceIDStr string, cfg model.DisplayStrategyConfig) (*model.Photo, error) {
+	device, err := s.deviceRepo.GetByDeviceID(deviceIDStr)
+	if err != nil {
+		return nil, fmt.Errorf("get device: %w", err)
+	}
+
+	excludePhotoIDs, err := s.displayRecordRepo.GetDisplayedPhotoIDs(device.ID, s.config.Display.AvoidRepeatDays)
+	if err != nil {
+		logger.Warnf("Get displayed photo IDs failed: %v", err)
+		excludePhotoIDs = []uint{}
+	}
+
+	photos, err := s.curateEventPhotos(time.Now(), excludePhotoIDs, cfg, 1)
 	if err != nil {
 		return nil, err
 	}

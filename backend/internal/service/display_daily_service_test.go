@@ -104,11 +104,12 @@ func buildTestDisplayService(t *testing.T, db *gorm.DB, tempDir string) (Display
 	deviceRepo := repository.NewDeviceRepository(db)
 	configRepo := repository.NewConfigRepository(db)
 	configService := NewConfigService(configRepo)
+	eventRepo := repository.NewEventRepository(db)
 	cfg := &config.Config{}
 	cfg.Photos.ThumbnailPath = filepath.Join(tempDir, "thumbnails")
 	cfg.Display.FallbackDays = []int{3, 7, 30, 365}
 	cfg.Display.AvoidRepeatDays = 7
-	return NewDisplayService(db, photoRepo, displayRecordRepo, deviceRepo, configService, cfg), photoRepo, deviceRepo, configService
+	return NewDisplayService(db, photoRepo, displayRecordRepo, deviceRepo, eventRepo, configService, cfg), photoRepo, deviceRepo, configService
 }
 
 func setupDisplayServiceTestDB(t *testing.T) *gorm.DB {
@@ -127,6 +128,7 @@ func setupDisplayServiceTestDB(t *testing.T) *gorm.DB {
 		&model.AppConfig{},
 		&model.City{},
 		&model.User{},
+		&model.Event{},
 	))
 	return db
 }

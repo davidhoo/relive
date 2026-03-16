@@ -60,7 +60,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	thumbnailService := NewThumbnailService(db, repos.Photo, repos.ThumbnailJob, cfg)
 	geocodeTaskService := NewGeocodeTaskService(db, repos.Photo, repos.GeocodeJob, geocodeService)
 	photoService := NewPhotoService(repos.Photo, repos.PhotoTag, repos.ScanJob, cfg, configService, geocodeService, thumbnailService, geocodeTaskService)
-	displayService := NewDisplayService(db, repos.Photo, repos.DisplayRecord, repos.Device, configService, cfg)
+	displayService := NewDisplayService(db, repos.Photo, repos.DisplayRecord, repos.Device, repos.Event, configService, cfg)
 
 	// 创建事件聚类服务并注入到 photoService
 	eventClusteringService := NewEventClusteringService(db, repos.Photo, repos.Event, repos.PhotoTag)

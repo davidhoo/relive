@@ -84,6 +84,9 @@ type PhotoRepository interface {
 
 	// 分类更新
 	UpdateCategory(id uint, category string) error
+
+	// 策展引擎：无事件高颜值散片
+	GetScatteredHighQuality(minBeauty int, excludeIDs []uint, limit int) ([]*model.Photo, error)
 }
 
 // photoRepository 照片仓库实现
@@ -782,4 +785,21 @@ func buildFTSQuery(search string) string {
 		quoted[i] = `"` + w + `"`
 	}
 	return strings.Join(quoted, " ")
+}
+
+// GetScatteredHighQuality 获取无事件、高颜值、从未展示的散片（角落遗珠）
+func (r *photoRepository) GetScatteredHighQuality(minBeauty int, excludeIDs []uint, limit int) ([]*model.Photo, error) {
+	var photos []*model.Photo
+	query := r.db.Scopes(activeScope).
+		Where("event_id IS NULL").
+		Where("ai_analyzed = ?", true).
+		Where("beauty_score >= ?", minBeauty).
+		Where("id NOT IN (SELECT DISTINCT photo_id FROM display_records)")
+
+	if len(excludeIDs) > 0 {
+		query = query.Where("id NOT IN ?", excludeIDs)
+	}
+
+	err := query.Order("beauty_score DESC").Limit(limit).Find(&photos).Error
+	return photos, err
 }

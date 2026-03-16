@@ -67,6 +67,34 @@ func normalizeDisplayStrategyConfig(cfg *model.DisplayStrategyConfig) {
 	if cfg.LocationBucketKM <= 0 {
 		cfg.LocationBucketKM = 3
 	}
+	// 策展引擎参数默认值
+	if cfg.CurationTimeTunnelDays <= 0 {
+		cfg.CurationTimeTunnelDays = 7
+	}
+	if cfg.CurationTopEventsLimit <= 0 {
+		cfg.CurationTopEventsLimit = 20
+	}
+	if cfg.CurationGeoEventsLimit <= 0 {
+		cfg.CurationGeoEventsLimit = 10
+	}
+	if cfg.CurationHiddenGemsMinBeauty <= 0 {
+		cfg.CurationHiddenGemsMinBeauty = 60
+	}
+	if cfg.CurationSeasonBoost <= 0 {
+		cfg.CurationSeasonBoost = 1.2
+	}
+	if cfg.CurationFreshnessPenalty <= 0 {
+		cfg.CurationFreshnessPenalty = 0.1
+	}
+	if cfg.CurationPeopleBonus <= 0 {
+		cfg.CurationPeopleBonus = 20
+	}
+	if cfg.CurationDisplayDecayFactor <= 0 {
+		cfg.CurationDisplayDecayFactor = 0.1
+	}
+	if cfg.CurationFreshnessDays <= 0 {
+		cfg.CurationFreshnessDays = 30
+	}
 }
 
 func (s *displayService) getDisplayStrategyConfig() model.DisplayStrategyConfig {

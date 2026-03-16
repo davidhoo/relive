@@ -176,6 +176,10 @@ func (s *displayService) GenerateDailyBatch(date time.Time, force bool) (*model.
 	}
 
 	logger.Infof("Generated daily display batch for %s with %d items", batchDate, len(items))
+
+	// 更新事件展示计数（所有算法都会触发）
+	s.updateEventDisplayCounts(photos)
+
 	return saved, nil
 }
 
@@ -499,4 +503,26 @@ func buildDisplayText(photo *model.Photo) (string, string) {
 	}
 
 	return title, strings.Join(parts, " · ")
+}
+
+// updateEventDisplayCounts 更新选中照片所属事件的展示计数
+func (s *displayService) updateEventDisplayCounts(photos []*model.Photo) {
+	if s.eventRepo == nil {
+		return
+	}
+
+	seen := make(map[uint]bool)
+	for _, photo := range photos {
+		if photo.EventID == nil {
+			continue
+		}
+		eventID := *photo.EventID
+		if seen[eventID] {
+			continue
+		}
+		seen[eventID] = true
+		if err := s.eventRepo.IncrementDisplayCount(eventID); err != nil {
+			logger.Warnf("Failed to increment display count for event %d: %v", eventID, err)
+		}
+	}
 }

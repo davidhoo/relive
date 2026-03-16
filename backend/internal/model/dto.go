@@ -82,6 +82,17 @@ type DisplayStrategyConfig struct {
 	MaxPhotosPerEvent    int     `json:"maxPhotosPerEvent,omitempty"`
 	MaxPhotosPerLocation int     `json:"maxPhotosPerLocation,omitempty"`
 	LocationBucketKM     float64 `json:"locationBucketKm,omitempty"`
+
+	// 策展引擎参数（Algorithm = "event_curated" 时使用）
+	CurationTimeTunnelDays      int     `json:"curationTimeTunnelDays,omitempty"`      // 往年今日 ±N 天，默认 7
+	CurationTopEventsLimit      int     `json:"curationTopEventsLimit,omitempty"`      // 巅峰回忆提名数，默认 20
+	CurationGeoEventsLimit      int     `json:"curationGeoEventsLimit,omitempty"`      // 地理漂移提名数，默认 10
+	CurationHiddenGemsMinBeauty int     `json:"curationHiddenGemsMinBeauty,omitempty"` // 角落遗珠最低美感分，默认 60
+	CurationSeasonBoost         float64 `json:"curationSeasonBoost,omitempty"`         // 季节对齐加权，默认 1.2
+	CurationFreshnessPenalty    float64 `json:"curationFreshnessPenalty,omitempty"`     // 近期展示惩罚，默认 0.1
+	CurationPeopleBonus         float64 `json:"curationPeopleBonus,omitempty"`         // 人物偏好加分，默认 20
+	CurationDisplayDecayFactor  float64 `json:"curationDisplayDecayFactor,omitempty"`  // 展示衰减因子，默认 0.1
+	CurationFreshnessDays       int     `json:"curationFreshnessDays,omitempty"`       // 新鲜度窗口天数，默认 30
 }
 
 // PreviewDisplayPhotosRequest 展示策略预览请求
