@@ -437,9 +437,9 @@ func (a *APIAnalyzer) processLoop() {
 				}
 				if !shouldRetry {
 					logger.Debugf("Photo %d failed too many times locally, skipping", task.PhotoID)
-					// 释放任务，但不递增服务器 retry_count（retryLater=true）
+					// 释放任务并递增服务器 retry_count，避免无限重试
 					ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
-					a.taskManager.ReleaseTask(ctx, task.ID, "local_retry_exhausted", "", true)
+					a.taskManager.ReleaseTask(ctx, task.ID, "local_retry_exhausted", "", false)
 					cancel()
 					continue
 				}
@@ -569,7 +569,7 @@ func (a *APIAnalyzer) handleTaskError(task *model.AnalysisTask, err error, reaso
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if releaseErr := a.taskManager.ReleaseTask(ctx, task.ID, reason, err.Error(), true); releaseErr != nil {
+	if releaseErr := a.taskManager.ReleaseTask(ctx, task.ID, reason, err.Error(), false); releaseErr != nil {
 		logger.Warnf("Failed to release task: %v", releaseErr)
 	}
 

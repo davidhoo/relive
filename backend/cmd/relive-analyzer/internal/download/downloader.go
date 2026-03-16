@@ -150,8 +150,16 @@ func (d *Downloader) Download(ctx context.Context, photoID uint, downloadURL str
 	var lastErr error
 	for attempt := 0; attempt <= d.retryCount; attempt++ {
 		if attempt > 0 {
+			// 检查 context 是否已取消（优雅退出时不再重试）
+			if ctx.Err() != nil {
+				return "", fmt.Errorf("download failed after %d attempts: %w", attempt, ctx.Err())
+			}
 			logger.Infof("Retrying download for photo %d (attempt %d/%d)", photoID, attempt, d.retryCount)
-			time.Sleep(time.Second * time.Duration(attempt))
+			select {
+			case <-time.After(time.Second * time.Duration(attempt)):
+			case <-ctx.Done():
+				return "", fmt.Errorf("download failed after %d attempts: %w", attempt, ctx.Err())
+			}
 		}
 
 		err := d.downloadOnce(ctx, downloadURL, tempFile)
