@@ -389,9 +389,9 @@ func (s *analysisService) batchUpdatePhotos(tx *gorm.DB, results []struct {
 			return fmt.Errorf("update photo %d: %w", vr.result.PhotoID, err)
 		}
 
-		// 双写 photo_tags 表
+		// 双写 photo_tags 表（使用事务内版本，避免嵌套事务导致 SQLite 自死锁）
 		if s.photoTagRepo != nil {
-			if err := s.photoTagRepo.SyncTags(vr.result.PhotoID, vr.result.Tags); err != nil {
+			if err := s.photoTagRepo.SyncTagsTx(tx, vr.result.PhotoID, vr.result.Tags); err != nil {
 				logger.Warnf("Failed to sync tags for photo %d: %v", vr.result.PhotoID, err)
 			}
 		}
