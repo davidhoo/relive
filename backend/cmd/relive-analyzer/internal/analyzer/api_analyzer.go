@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -44,6 +45,10 @@ type APIAnalyzer struct {
 
 	// 统计
 	stats *analyzer.Stats
+
+	// 会话级永久失败记录：记录本次运行中遇到不可恢复错误的照片 ID，不再重试
+	sessionPermanentFailures map[uint]string // photoID → error reason
+	sessionFailMu            sync.Mutex
 }
 
 // NewAPIAnalyzer 创建 API 模式分析器
@@ -120,11 +125,12 @@ func NewAPIAnalyzer(cfg *analyzerConfig.Config) (*APIAnalyzer, error) {
 		aiProvider:     aiProvider,
 		imageProcessor: imageProcessor,
 		analyzerID:     analyzerID,
-		workerPool:     workerPool,
-		ctx:            ctx,
-		cancel:         cancel,
-		stopCh:         make(chan struct{}),
-		stats:          analyzer.NewStats(0),
+		workerPool:               workerPool,
+		ctx:                     ctx,
+		cancel:                  cancel,
+		stopCh:                  make(chan struct{}),
+		stats:                   analyzer.NewStats(0),
+		sessionPermanentFailures: make(map[uint]string),
 	}, nil
 }
 
@@ -414,6 +420,18 @@ func (a *APIAnalyzer) processLoop() {
 			continue
 		}
 
+		// 检查本次会话中是否已标记为永久失败（不可恢复错误，如损坏的 JPEG）
+		a.sessionFailMu.Lock()
+		if reason, failed := a.sessionPermanentFailures[task.PhotoID]; failed {
+			a.sessionFailMu.Unlock()
+			logger.Debugf("Photo %d permanently failed in this session (%s), skipping", task.PhotoID, reason)
+			ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
+			a.taskManager.ReleaseTask(ctx, task.ID, "permanent_error", reason, false)
+			cancel()
+			continue
+		}
+		a.sessionFailMu.Unlock()
+
 		// 检查本地 checkpoint 状态
 		// 核心原则：服务器是 source of truth。如果服务器分配了任务（ai_analyzed=false），
 		// 说明服务器没有收到分析结果，本地 checkpoint 的 analyzed/submitted 状态是过期的。
@@ -560,6 +578,14 @@ func (a *APIAnalyzer) processTask(ctx context.Context, task *model.AnalysisTask)
 func (a *APIAnalyzer) handleTaskError(task *model.AnalysisTask, err error, reason string) {
 	logger.Errorf("Task %s failed: %v", task.ID, err)
 
+	// 检测不可恢复的永久错误，标记为会话级永久失败
+	if isPermanentError(err) {
+		a.sessionFailMu.Lock()
+		a.sessionPermanentFailures[task.PhotoID] = err.Error()
+		a.sessionFailMu.Unlock()
+		logger.Warnf("Photo %d marked as permanent failure for this session: %v", task.PhotoID, err)
+	}
+
 	// 更新检查点
 	if cpErr := a.checkpoint.MarkFailed(task.PhotoID, err.Error()); cpErr != nil {
 		logger.Warnf("Failed to mark failed: %v", cpErr)
@@ -578,6 +604,32 @@ func (a *APIAnalyzer) handleTaskError(task *model.AnalysisTask, err error, reaso
 
 	// 更新统计
 	a.stats.RecordFailure(reason)
+}
+
+// isPermanentError 判断是否为不可恢复的永久错误
+// 这些错误重试也不会成功，应在本次会话中跳过
+func isPermanentError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	permanentPatterns := []string{
+		"invalid jpeg format",
+		"short huffman data",
+		"invalid jpeg",
+		"unknown image format",
+		"unsupported image format",
+		"image: unknown format",
+		"not a valid png",
+		"corrupt",
+		"unexpected eof",
+	}
+	for _, pattern := range permanentPatterns {
+		if strings.Contains(msg, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 // createAIProvider 创建 AI Provider
