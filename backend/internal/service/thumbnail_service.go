@@ -206,7 +206,7 @@ func (s *thumbnailService) GeneratePhoto(photoID uint, force bool) error {
 		}
 	}
 
-	relPath, err := s.generator.GenerateThumbnail(photo.FilePath)
+	relPath, err := s.generator.GenerateThumbnailWithOrientation(photo.FilePath, photo.Orientation)
 	now := time.Now()
 	if err != nil {
 		_ = s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
@@ -416,7 +416,7 @@ func (s *thumbnailService) processJob(job *model.ThumbnailJob) error {
 		s.updateTaskProgress(func(task *model.ThumbnailTask) { task.ProcessedJobs++ })
 		return nil
 	}
-	relPath, err := s.generator.GenerateThumbnail(photo.FilePath)
+	relPath, err := s.generator.GenerateThumbnailWithOrientation(photo.FilePath, photo.Orientation)
 	now := time.Now()
 	if err != nil {
 		// 使用带重试的更新

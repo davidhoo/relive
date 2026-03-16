@@ -179,11 +179,21 @@ func DisplayBatchRoot(thumbnailRoot string) string {
 
 // BuildDisplayCanvas 从原始照片构建竖屏 canvas（480×800），在内存中返回，不经过 JPEG 中转
 func BuildDisplayCanvas(filePath string, width, height int, title, subtitle string) (image.Image, error) {
+	return BuildDisplayCanvasWithOrientation(filePath, width, height, title, subtitle, 0)
+}
+
+// BuildDisplayCanvasWithOrientation 构建展示画布，使用指定方向覆盖 EXIF
+// orientation <= 0 表示从 EXIF 读取方向
+func BuildDisplayCanvasWithOrientation(filePath string, width, height int, title, subtitle string, orientation int) (image.Image, error) {
 	img, err := OpenImage(filePath)
 	if err != nil {
 		return nil, err
 	}
-	img = normalizeImageForDisplay(filePath, img)
+	if orientation > 0 {
+		img = NormalizeOrientation(img, orientation)
+	} else {
+		img = normalizeImageForDisplay(filePath, img)
+	}
 	return buildDisplayCanvas(img, width, height, title, subtitle), nil
 }
 

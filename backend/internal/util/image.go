@@ -632,12 +632,22 @@ func NewThumbnailGenerator(maxWidth, maxHeight, jpegQuality int, outputDir strin
 // GenerateThumbnail 生成缩略图
 // 返回缩略图的相对路径和错误
 func (g *ThumbnailGenerator) GenerateThumbnail(filePath string) (string, error) {
+	return g.GenerateThumbnailWithOrientation(filePath, 0)
+}
+
+// GenerateThumbnailWithOrientation 生成缩略图，使用指定的方向覆盖 EXIF
+// orientation <= 0 表示从 EXIF 读取方向
+func (g *ThumbnailGenerator) GenerateThumbnailWithOrientation(filePath string, orientation int) (string, error) {
 	// 打开原图（支持 HEIC 等格式）
 	img, err := OpenImage(filePath)
 	if err != nil {
 		return "", err
 	}
-	img = normalizeImageForDisplay(filePath, img)
+	if orientation > 0 {
+		img = NormalizeOrientation(img, orientation)
+	} else {
+		img = normalizeImageForDisplay(filePath, img)
+	}
 
 	// 获取原始尺寸
 	bounds := img.Bounds()

@@ -66,7 +66,7 @@ func (s *displayService) GenerateDailyBatch(date time.Time, force bool) (*model.
 		title, subtitle := buildDisplayText(photo)
 
 		// 在内存中构建 canvas，避免 JPEG 有损压缩影响 bin 生成质量
-		canvas, err := util.BuildDisplayCanvas(photo.FilePath, 480, 800, title, subtitle)
+		canvas, err := util.BuildDisplayCanvasWithOrientation(photo.FilePath, 480, 800, title, subtitle, photo.Orientation)
 		if err != nil {
 			return nil, fmt.Errorf("build display canvas for photo %d: %w", photo.ID, err)
 		}
