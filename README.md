@@ -73,6 +73,15 @@ Relive 是一个自部署的照片回忆系统 —— 扫描你 NAS 中的照片
 ### GPS 位置解析
 ![Geocoding](docs/images/geocoding.png)
 
+### 事件浏览
+![Events](docs/images/events.png)
+
+### 配置管理
+![Config](docs/images/config.png)
+
+### 系统管理
+![System](docs/images/system.png)
+
 </details>
 
 ---
