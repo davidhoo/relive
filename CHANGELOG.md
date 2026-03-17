@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.0] - 2026-03-17
+
+### Added
+- **事件聚类系统** - 基于时空连续性的照片事件聚合（Phase 0），同一时间/地点的照片自动归组为事件
+- **多维事件策展引擎** - 6 通道提名算法（time_tunnel/peak_memory/geo_drift/hidden_gem/people_spotlight/season_match），从事件维度智能选图
+- **策展效果可视化** - 批次详情标注来源通道，展示策略页可视化策展参数（Phase 2a/2b）
+- **人物专题 + 季节专题** - 策展引擎新增 people_spotlight / season_match 提名通道（Phase 2c）
+- **事件浏览页面** - 事件卡片列表 + 详情照片网格，支持手动触发聚类
+- **照片方向手动覆盖** - 新增 manual_rotation 字段，EXIF orientation 不正确时可手动旋转校正
+- **照片批量操作** - Shift 范围多选 + 全选/反选，提升批量管理效率
+- **批次展示记录** - 批次生成时写入展示记录 + 预览会话级排除，防止照片跨日重复
+- **事件聚类最小照片数阈值** - MinPhotosPerEvent=3，过滤噪声事件
+- **MIT License** - 添加开源许可证文件
+
+### Changed
+- **照片旋转重构** - manual_rotation 替代 orientation 覆写，缩略图和批次生成使用 DB orientation 覆盖 EXIF
+- **Service 大文件拆分** - display_service/photo_service 拆分为多个职责单一文件，删除死代码
+- **文档全面梳理** - 归档 20+ 历史文档到 docs/archive/，更新 API/状态/安全文档
+- **脚本清理** - deploy.sh 移除过时的 cities500 下载步骤，测试脚本移除无效引用
+
+### Fixed
+- **SQLite 并发锁竞争** - 解决 NAS 上 analyzer 运行时 database is locked
+- **SyncTags 嵌套事务自死锁** - 阻塞所有请求 60 秒的严重 bug
+- **照片旋转不生效** - 缩略图缓存判断 stale 逻辑修复
+- **展示策略页切换日期后预览不刷新**
+- **事件详情返回列表保留分页状态**
+- **analyzer 永久失败跳过** - 损坏图片不再反复重试
+- **analyzer 任务重试与优雅退出**
+- **Photos 页 Shift 范围选择数组越界**
+
+---
+
 ## [1.2.1] - 2026-03-16
 
 ### Security

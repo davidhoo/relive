@@ -430,6 +430,13 @@ fi
 
 ## 更新日志
 
+### v1.3.0 (2026-03-17)
+- ✅ 事件聚类 + 多维策展引擎（6 通道）
+- ✅ 照片旋转重构（manual_rotation）
+- ✅ SQLite 并发锁竞争优化
+- ✅ SyncTags 嵌套事务自死锁修复
+- ✅ MIT License
+
 ### v1.2.1 (2026-03-16)
 - ✅ HttpOnly Cookie 认证照片资源（替代 URL Token 暴露 JWT）
 - ✅ CORS 仅 debug 模式启用
