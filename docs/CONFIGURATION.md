@@ -227,8 +227,7 @@ Relive 的配置分为三层：
 ### 使用者
 1. `README.md`
 2. `QUICKSTART.md`
-3. `docs/QUICKSTART.md`
-4. 本文档
+3. 本文档
 5. `docs/ANALYZER_API_MODE.md`
 
 ### 开发者

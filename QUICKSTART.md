@@ -148,7 +148,7 @@ curl http://localhost:8080/api/v1/system/health
   "success": true,
   "data": {
     "status": "healthy",
-    "version": "1.0.0",
+    "version": "1.3.0",
     "uptime": 123,
     "timestamp": "2026-03-09T12:00:00+08:00"
   },

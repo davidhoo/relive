@@ -72,7 +72,7 @@ GET /api/v1/system/health
   "success": true,
   "data": {
     "status": "healthy",
-    "version": "1.0.0",
+    "version": "1.3.0",
     "uptime": 123,
     "timestamp": "2026-03-09T12:00:00+08:00"
   },
@@ -167,9 +167,14 @@ Authorization: Bearer <api_key>
 | POST | `/api/v1/photos/derived-status-by-paths` | 统计分析/缩略图/GPS 派生状态 |
 | GET | `/api/v1/photos/stats` | 照片统计 |
 | GET | `/api/v1/photos/categories` | 分类列表 |
-| GET | `/api/v1/photos/tags` | 标签列表 |
+| GET | `/api/v1/photos/tags` | 标签列表（支持 `?q=&limit=15`） |
 | GET | `/api/v1/photos` | 分页照片列表 |
 | GET | `/api/v1/photos/:id` | 照片详情 |
+| PATCH | `/api/v1/photos/:id/category` | 修改照片分类 |
+| PATCH | `/api/v1/photos/:id/location` | 手动设置照片位置 |
+| PATCH | `/api/v1/photos/:id/rotation` | 手动旋转照片 |
+| PATCH | `/api/v1/photos/:id/orientation` | 手动旋转照片（旧路由别名） |
+| PATCH | `/api/v1/photos/batch-status` | 批量修改照片状态（active/excluded） |
 
 异步扫描示例：
 
@@ -198,7 +203,10 @@ Authorization: Bearer <jwt>
 - `page_size`
 - `analyzed`
 - `location`
-- `search`
+- `search`（FTS5 全文搜索）
+- `category`（分类精确筛选）
+- `tag`（标签精确筛选）
+- `status`（`active` / `excluded`）
 - `sort_by`
 - `sort_desc`
 
@@ -213,6 +221,7 @@ Authorization: Bearer <jwt>
 | GET | `/api/v1/thumbnails/stats` | 缩略图统计 |
 | POST | `/api/v1/thumbnails/enqueue` | 入队指定照片 |
 | POST | `/api/v1/thumbnails/enqueue-by-path` | 按路径入队 |
+| POST | `/api/v1/thumbnails/generate` | 生成指定照片缩略图 |
 
 ### 4.5 GPS 地理编码
 
@@ -226,6 +235,8 @@ Authorization: Bearer <jwt>
 | POST | `/api/v1/geocode/repair-legacy-status` | 修复旧状态字段 |
 | POST | `/api/v1/geocode/enqueue` | 入队指定照片 |
 | POST | `/api/v1/geocode/enqueue-by-path` | 按路径入队 |
+| POST | `/api/v1/geocode/geocode` | 单次地理编码 |
+| POST | `/api/v1/geocode/regeocode-all` | 全量重建位置解析 |
 
 ### 4.6 AI 分析
 
@@ -242,7 +253,18 @@ Authorization: Bearer <jwt>
 | POST | `/api/v1/ai/reanalyze/:id` | 重分析单张照片 |
 | GET | `/api/v1/ai/provider` | 当前 Provider 信息 |
 
-### 4.7 设备管理
+### 4.7 事件聚类与浏览
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/events` | 事件列表（分页） |
+| GET | `/api/v1/events/:id` | 事件详情（含照片列表） |
+| POST | `/api/v1/events/cluster` | 启动增量聚类 |
+| POST | `/api/v1/events/rebuild` | 启动全量重建 |
+| GET | `/api/v1/events/cluster/task` | 聚类任务状态 |
+| POST | `/api/v1/events/cluster/stop` | 停止聚类任务 |
+
+### 4.8 设备管理
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -254,7 +276,7 @@ Authorization: Bearer <jwt>
 | GET | `/api/v1/devices` | 设备列表 |
 | GET | `/api/v1/devices/:device_id` | 设备详情 |
 
-### 4.8 配置管理
+### 4.9 配置管理
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -267,8 +289,7 @@ Authorization: Bearer <jwt>
 | GET | `/api/v1/config/prompts` | 获取提示词配置 |
 | PUT | `/api/v1/config/prompts` | 更新提示词配置 |
 | POST | `/api/v1/config/prompts/reset` | 重置提示词 |
-| GET | `/api/v1/config/cities-data/status` | 离线城市数据状态 |
-| POST | `/api/v1/config/cities-data/download` | 下载并导入城市数据 |
+| POST | `/api/v1/config/cities-data/reload` | 重新加载城市数据 |
 
 ---
 

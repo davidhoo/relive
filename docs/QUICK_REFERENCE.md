@@ -49,6 +49,7 @@ make build-analyzer
 - `/thumbnails`
 - `/geocode`
 - `/devices`
+- `/events`
 - `/display`
 - `/config`
 - `/system`

@@ -42,7 +42,8 @@ Relive 是一个自部署的照片回忆系统 —— 扫描你 NAS 中的照片
 - ✅ Web 管理后台可用
 - ✅ 后端 API 与任务系统可用
 - ✅ `relive-analyzer` API 模式可用
-- ✅ 当前推荐批量分析工作流是 **API 模式**
+- ✅ 事件驱动型智能策展引擎（6 通道提名）
+- ✅ 照片级排除与手动旋转
 - ✅ ESP32 墨水屏相框固件（AP 配网、定时睡眠、双配置源）
 
 如果你只关心”现在能不能用”，答案是：**可以先从 Web + Docker 跑起来，再按需要接入 analyzer 或设备端。**
@@ -137,8 +138,7 @@ make deploy
 5. 到“AI 分析”页面启动在线分析，或使用下方的 analyzer API 模式
 
 更详细的部署说明：
-- `QUICKSTART.md`
-- `docs/QUICKSTART.md`
+- `QUICKSTART.md`：快速启动与部署
 - `docs/CONFIGURATION.md`（配置职责与优先级）
 
 ---
@@ -190,8 +190,9 @@ make build-analyzer
 - 生成描述、短句、分类、标签与评分
 - 支持 Ollama / vLLM / Qwen / OpenAI / Hybrid
 
-### 往年今日
+### 往年今日 & 事件策展
 - 每天自动挑选历史上同一天或相近日期的照片
+- 事件驱动型智能策展：基于时空聚类的事件引擎，6 个提名通道（时光隧道 / 巅峰回忆 / 地理漂移 / 角落遗珠 / 人物专题 / 季节专题）
 - 没有往年今日时，智能回溯到最近的历史记忆，确保每天都有内容
 - 支持评分过滤，只展示值得回忆的照片
 
@@ -227,8 +228,7 @@ make build-analyzer
 ## 文档导航
 
 ### 当前使用
-- `QUICKSTART.md`：仓库根目录快速启动
-- `docs/QUICKSTART.md`：NAS / 服务器部署入口
+- `QUICKSTART.md`：快速启动与部署入口
 - `docs/BACKEND_API.md`：当前已实现 API
 - `docs/ANALYZER_API_MODE.md`：当前 analyzer API 模式
 - `docs/PROJECT_STATUS.md`：当前项目状态
@@ -237,7 +237,7 @@ make build-analyzer
 - `docs/QUICK_REFERENCE.md`：开发速查卡
 - `docs/CONFIGURATION.md`：配置职责与优先级
 - `docs/DEVICE_PROTOCOL.md`：设备协议设计
-- `CHANGELOG.md`：最近变更记录
+- `docs/plans/event-driven-curation.md`：事件策展方案
 
 ### 历史文档
 - `docs/INDEX.md`：完整文档导航
@@ -256,7 +256,7 @@ make build-analyzer
 ## Roadmap
 
 - 支持更多展示终端（Android、iOS）
-- 照片过滤与排除系统
+- 支持更多 AI Provider（Google Gemini 等）
 
 ## 致谢
 
