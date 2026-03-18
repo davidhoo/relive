@@ -210,9 +210,17 @@ func convertImageWithExternalTool(srcPath, dstPath string) error {
 		}
 	}
 
-	// Linux/Docker: 使用 vipsthumbnail（如果可用）
+	// Linux/Docker: 优先使用 vips copy（无损尺寸转换），避免 vipsthumbnail 默认缩小到 128x128
+	if _, err := exec.LookPath("vips"); err == nil {
+		cmd := exec.Command("vips", "jpegsave", srcPath, dstPath, "--Q", "85")
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+	}
+
+	// vips 不可用时尝试 vipsthumbnail，指定足够大的尺寸以保留原始分辨率
 	if _, err := exec.LookPath("vipsthumbnail"); err == nil {
-		cmd := exec.Command("vipsthumbnail", srcPath, "-o", dstPath+"[Q=85]")
+		cmd := exec.Command("vipsthumbnail", srcPath, "--size", "99999x99999", "-o", dstPath+"[Q=85]")
 		if err := cmd.Run(); err == nil {
 			return nil
 		}
