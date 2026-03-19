@@ -387,7 +387,7 @@ func (a *APIAnalyzer) fetchLoop() {
 				continue
 			}
 
-			ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+			ctx, cancel := context.WithTimeout(a.ctx, 60*time.Second)
 			_, err := a.taskManager.FetchTasks(ctx, need)
 			cancel()
 

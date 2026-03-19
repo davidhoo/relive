@@ -159,6 +159,14 @@ func AutoMigrate(db *gorm.DB) error {
 		return err
 	}
 
+	if err := migrateFTS5ConditionalTrigger(db); err != nil {
+		log.Printf("[database] warning: FTS5 conditional trigger migration failed: %v", err)
+	}
+
+	if err := migrateAnalysisPendingIndex(db); err != nil {
+		log.Printf("[database] warning: analysis pending index migration failed: %v", err)
+	}
+
 	return nil
 }
 
@@ -341,6 +349,75 @@ func fixEnumBeforeMigrate(db *gorm.DB) {
 	if migrator.HasTable("devices") {
 		db.Exec("UPDATE devices SET device_type = ? WHERE device_type IS NULL OR device_type = ''", model.DeviceTypeEmbedded)
 	}
+}
+
+// migrateFTS5ConditionalTrigger 将 FTS5 UPDATE 触发器改为条件触发
+// 只在 FTS 索引字段（file_name, description, caption, location）变化时触发，
+// 避免更新 analysis_lock_id 等非索引字段时产生不必要的 FTS5 写操作。
+func migrateFTS5ConditionalTrigger(db *gorm.DB) error {
+	if !FTS5Available {
+		return nil
+	}
+
+	const migrationKey = "migration.fts5_conditional_trigger_v1"
+
+	var cfg model.AppConfig
+	if err := db.Where("key = ?", migrationKey).First(&cfg).Error; err == nil {
+		return nil
+	}
+
+	log.Printf("[database] updating FTS5 trigger to conditional mode...")
+
+	// 删除旧的无条件触发器
+	if err := db.Exec("DROP TRIGGER IF EXISTS photos_fts_update").Error; err != nil {
+		return fmt.Errorf("drop old FTS5 trigger: %w", err)
+	}
+
+	// 创建新的条件触发器：只在 FTS 索引字段变化时触发
+	conditionalTrigger := `CREATE TRIGGER IF NOT EXISTS photos_fts_update AFTER UPDATE ON photos
+		WHEN old.file_name IS NOT new.file_name
+		  OR old.description IS NOT new.description
+		  OR old.caption IS NOT new.caption
+		  OR old.location IS NOT new.location
+		BEGIN
+			INSERT INTO photos_fts(photos_fts, rowid, file_name, description, caption, location)
+			VALUES ('delete', old.id, COALESCE(old.file_name,''), COALESCE(old.description,''), COALESCE(old.caption,''), COALESCE(old.location,''));
+			INSERT INTO photos_fts(rowid, file_name, description, caption, location)
+			VALUES (new.id, COALESCE(new.file_name,''), COALESCE(new.description,''), COALESCE(new.caption,''), COALESCE(new.location,''));
+		END`
+
+	if err := db.Exec(conditionalTrigger).Error; err != nil {
+		return fmt.Errorf("create conditional FTS5 trigger: %w", err)
+	}
+
+	log.Printf("[database] FTS5 conditional trigger migration completed")
+	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
+	return nil
+}
+
+// migrateAnalysisPendingIndex 为待分析查询添加复合索引
+// 加速 GetPendingTasks 中按 status + ai_analyzed + thumbnail_status 的过滤查询
+func migrateAnalysisPendingIndex(db *gorm.DB) error {
+	const migrationKey = "migration.analysis_pending_index_v1"
+
+	var cfg model.AppConfig
+	if err := db.Where("key = ?", migrationKey).First(&cfg).Error; err == nil {
+		return nil
+	}
+
+	log.Printf("[database] creating analysis pending compound index...")
+
+	indexSQL := `CREATE INDEX IF NOT EXISTS idx_photos_analysis_pending
+		ON photos(status, ai_analyzed, thumbnail_status, analysis_lock_expired_at)
+		WHERE deleted_at IS NULL`
+
+	if err := db.Exec(indexSQL).Error; err != nil {
+		return fmt.Errorf("create analysis pending index: %w", err)
+	}
+
+	log.Printf("[database] analysis pending index created")
+	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
+	return nil
 }
 
 // migrateEnumValidation 修复枚举字段空值

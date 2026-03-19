@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	defaultTimeout    = 30 * time.Second
+	defaultTimeout    = 60 * time.Second
 	defaultRetryCount = 3
 	defaultRetryDelay = 1 * time.Second
 )

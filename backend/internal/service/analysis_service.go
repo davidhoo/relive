@@ -62,14 +62,14 @@ func (s *analysisService) GetPendingTasks(limit int, analyzerID string) ([]model
 	var totalRemaining int64
 
 	// 1. 统计剩余待分析数量
+	// 注意：不再要求 geocode_status = ready，分析不应依赖地理编码完成
 	err := s.db.Model(&model.Photo{}).
 		Where(`status = ?
 			AND ai_analyzed = ?
 			AND thumbnail_status = ?
-			AND (gps_latitude IS NULL OR gps_longitude IS NULL OR geocode_status = ?)
 			AND (analysis_lock_expired_at IS NULL OR analysis_lock_expired_at < ?)
 			AND analysis_retry_count < ?`,
-			model.PhotoStatusActive, false, model.ThumbnailStatusReady, model.GeocodeStatusReady, time.Now(), 10).
+			model.PhotoStatusActive, false, model.ThumbnailStatusReady, time.Now(), 10).
 		Count(&totalRemaining).Error
 	if err != nil {
 		return nil, 0, err
@@ -86,13 +86,12 @@ func (s *analysisService) GetPendingTasks(limit int, analyzerID string) ([]model
 			WHERE status = ?
 			  AND ai_analyzed = ?
 			  AND thumbnail_status = ?
-			  AND (gps_latitude IS NULL OR gps_longitude IS NULL OR geocode_status = ?)
 			  AND (analysis_lock_expired_at IS NULL OR analysis_lock_expired_at < ?)
 			  AND analysis_retry_count < ?
 			  AND deleted_at IS NULL
 			ORDER BY id ASC
 			LIMIT ?
-		)`, model.PhotoStatusActive, false, model.ThumbnailStatusReady, model.GeocodeStatusReady, time.Now(), 10, limit).
+		)`, model.PhotoStatusActive, false, model.ThumbnailStatusReady, time.Now(), 10, limit).
 		Updates(map[string]interface{}{
 			"analysis_lock_id":         analyzerID,
 			"analysis_lock_expired_at": lockExpiredAt,

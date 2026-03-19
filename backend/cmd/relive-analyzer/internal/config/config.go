@@ -88,7 +88,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		Server: ServerConfig{
 			Endpoint: "http://localhost:8080",
-			Timeout:  30,
+			Timeout:  60,
 		},
 		Analyzer: AnalyzerConfig{
 			Workers:        4,

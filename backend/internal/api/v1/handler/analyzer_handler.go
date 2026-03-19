@@ -152,16 +152,17 @@ func (h *AnalyzerHandler) GetTasks(c *gin.Context) {
 
 	rewriteTaskDownloadURLs(c, tasks)
 
-	// 如果没有任务了
+	// 如果没有任务了，返回 200 + 空任务列表（不用 503，避免客户端当 server error 重试）
 	if len(tasks) == 0 {
-		c.JSON(http.StatusServiceUnavailable, model.Response{
-			Success: false,
-			Error: &model.ErrorInfo{
-				Code:    "NO_TASKS_AVAILABLE",
-				Message: "No tasks available",
-			},
-			Data: gin.H{
-				"total_remaining": totalRemaining,
+		c.JSON(http.StatusOK, model.Response{
+			Success: true,
+			Message: "No tasks available",
+			Data: model.AnalyzerTasksResponse{
+				Tasks:          []model.AnalysisTask{},
+				TotalRemaining: totalRemaining,
+				LockDuration:   300,
+				AnalyzerID:     analyzerID,
+				DeviceID:       deviceID.(uint),
 			},
 		})
 		return
