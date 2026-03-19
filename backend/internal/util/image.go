@@ -46,8 +46,8 @@ func NewImageProcessor(maxLongSide, jpegQuality int) *ImageProcessor {
 
 // ProcessForAI 为 AI 分析预处理图片
 func (p *ImageProcessor) ProcessForAI(filePath string) ([]byte, error) {
-	// 打开图片
-	img, err := imaging.Open(filePath)
+	// 打开图片（使用 OpenImage 支持非标准 JPEG 及外部工具 fallback）
+	img, err := OpenImage(filePath)
 	if err != nil {
 		return nil, err
 	}
