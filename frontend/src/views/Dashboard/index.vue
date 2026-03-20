@@ -212,7 +212,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
@@ -379,6 +379,12 @@ const loadAIProgress = async () => {
   }
 }
 
+const activeTimers: number[] = []
+onBeforeUnmount(() => {
+  activeTimers.forEach(id => clearInterval(id))
+  activeTimers.length = 0
+})
+
 const handleStartAnalysis = async () => {
   try {
     analyzing.value = true
@@ -390,11 +396,13 @@ const handleStartAnalysis = async () => {
       await loadAIProgress()
       if (!aiProgress.value?.is_running) {
         clearInterval(timer)
+        activeTimers.splice(activeTimers.indexOf(timer), 1)
         analyzing.value = false
         await systemStore.fetchStats()
         ElMessage.success('后台分析已停止')
       }
     }, 2000)
+    activeTimers.push(timer)
   } catch (error: any) {
     analyzing.value = false
     ElMessage.error(error.message || '启动后台分析失败')
@@ -412,14 +420,17 @@ const handleScan = async () => {
         const { task, is_running } = res.data?.data || {}
         if (!task || !is_running) {
           clearInterval(timer)
+          activeTimers.splice(activeTimers.indexOf(timer), 1)
           await loadRecentPhotos()
           await systemStore.fetchStats()
           ElMessage.success('扫描任务已完成')
         }
       } catch {
         clearInterval(timer)
+        activeTimers.splice(activeTimers.indexOf(timer), 1)
       }
     }, 2000)
+    activeTimers.push(timer)
   } catch (error: any) {
     ElMessage.error(error.message || '启动扫描任务失败')
   }

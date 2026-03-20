@@ -594,7 +594,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { ArrowUp, CircleCheck, CircleClose, Clock, Close, Collection, Delete, Files, Filter, Folder, FolderOpened, FullScreen, Loading, Location, MagicStick, Picture, PictureFilled, Plus, PriceTag, QuestionFilled, Refresh, RefreshLeft, Search, Select, Star, SwitchButton, Timer } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -1666,6 +1666,17 @@ onMounted(() => {
   }
 
   loadPhotos()
+})
+
+onBeforeUnmount(() => {
+  if (scanProgressTimer) {
+    clearInterval(scanProgressTimer)
+    scanProgressTimer = null
+  }
+  if (tagCloudSearchTimer) {
+    clearTimeout(tagCloudSearchTimer)
+    tagCloudSearchTimer = null
+  }
 })
 
 // 暴露刷新方法供外部调用
