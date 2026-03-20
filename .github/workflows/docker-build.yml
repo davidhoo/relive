@@ -89,12 +89,7 @@ jobs:
           docker pull davidhu/relive:${{ steps.version.outputs.version }}
           \`\`\`
 
-          ### Quick Deploy
-          \`\`\`bash
-          curl -fsSL https://raw.githubusercontent.com/davidhoo/relive/main/install.sh | bash
-          \`\`\`
-
-          ### Manual Deploy
+          ### Deploy
           \`\`\`bash
           docker run -d \
             -p 8080:8080 \

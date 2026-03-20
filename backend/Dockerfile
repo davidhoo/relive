@@ -32,7 +32,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
 WORKDIR /app
 
 # 运行阶段
-FROM alpine:latest
+FROM alpine:3.21
 
 WORKDIR /app
 
@@ -64,7 +64,7 @@ EXPOSE 8080
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/system/health || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/api/v1/system/health || exit 1
 
 # 设置入口点（自动导入 + 启动应用）
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

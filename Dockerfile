@@ -58,7 +58,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
 WORKDIR /app
 
 # Stage 3: 运行阶段
-FROM alpine:latest
+FROM alpine:3.21
 
 WORKDIR /app
 
