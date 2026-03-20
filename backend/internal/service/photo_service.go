@@ -137,8 +137,8 @@ func (s *photoService) GetPhotos(req *model.GetPhotosRequest) ([]*model.Photo, i
 	if req.PageSize < 1 {
 		req.PageSize = 20
 	}
-	if req.PageSize > 100 {
-		req.PageSize = 100
+	if req.PageSize > 1000 {
+		req.PageSize = 1000
 	}
 
 	// 获取启用的扫描路径
