@@ -114,7 +114,16 @@ func (h *AnalyzerHandler) GetTasks(c *gin.Context) {
 	}
 
 	// 获取设备信息
-	deviceID, _ := c.Get("device_id")
+	deviceIDValue, exists := c.Get("device_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, model.Response{Success: false, Error: &model.ErrorInfo{Code: "UNAUTHORIZED", Message: "Device context missing"}})
+		return
+	}
+	deviceID, ok := deviceIDValue.(uint)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, model.Response{Success: false, Error: &model.ErrorInfo{Code: "UNAUTHORIZED", Message: "Invalid device context"}})
+		return
+	}
 	deviceName, _ := c.Get("device_name")
 
 	if h.runtimeService != nil {
@@ -162,7 +171,7 @@ func (h *AnalyzerHandler) GetTasks(c *gin.Context) {
 				TotalRemaining: totalRemaining,
 				LockDuration:   300,
 				AnalyzerID:     analyzerID,
-				DeviceID:       deviceID.(uint),
+				DeviceID:       deviceID,
 			},
 		})
 		return
@@ -180,7 +189,7 @@ func (h *AnalyzerHandler) GetTasks(c *gin.Context) {
 			TotalRemaining: totalRemaining,
 			LockDuration:   300,
 			AnalyzerID:     analyzerID,
-			DeviceID:       deviceID.(uint),
+			DeviceID:       deviceID,
 		},
 	})
 }
@@ -426,13 +435,22 @@ func (h *AnalyzerHandler) SubmitResults(c *gin.Context) {
 	}
 
 	// 获取设备信息
-	deviceID, _ := c.Get("device_id")
+	deviceIDValue, exists := c.Get("device_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, model.Response{Success: false, Error: &model.ErrorInfo{Code: "UNAUTHORIZED", Message: "Device context missing"}})
+		return
+	}
+	deviceID, ok := deviceIDValue.(uint)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, model.Response{Success: false, Error: &model.ErrorInfo{Code: "UNAUTHORIZED", Message: "Invalid device context"}})
+		return
+	}
 	deviceName, _ := c.Get("device_name")
 
 	logger.Infof("Submitting %d results from analyzer (Device: %v)", len(req.Results), deviceName)
 
 	// 提交结果
-	resp, err := h.analysisService.SubmitResults(req.Results, deviceID.(uint))
+	resp, err := h.analysisService.SubmitResults(req.Results, deviceID)
 	if err != nil {
 		logger.Errorf("Failed to submit results: %v", err)
 		c.JSON(http.StatusInternalServerError, model.Response{
@@ -461,10 +479,11 @@ func (h *AnalyzerHandler) SubmitResults(c *gin.Context) {
 // @Router /api/v1/analyzer/stats [get]
 func (h *AnalyzerHandler) GetStats(c *gin.Context) {
 	// 获取设备信息
-	deviceID, deviceIDExists := c.Get("device_id")
 	var deviceIDUint uint
-	if deviceIDExists {
-		deviceIDUint = deviceID.(uint)
+	if deviceIDValue, exists := c.Get("device_id"); exists {
+		if id, ok := deviceIDValue.(uint); ok {
+			deviceIDUint = id
+		}
 	}
 
 	stats, err := h.analysisService.GetStats(deviceIDUint)
