@@ -260,8 +260,12 @@ func (r *photoRepository) List(page, pageSize int, analyzed *bool, hasThumbnail 
 		return nil, 0, err
 	}
 
-	// 排序
-	if sortBy == "" {
+	// 排序（白名单校验，防止 SQL 注入）
+	allowedSortFields := map[string]bool{
+		"taken_at": true, "overall_score": true, "beauty_score": true,
+		"memory_score": true, "created_at": true, "file_name": true,
+	}
+	if !allowedSortFields[sortBy] {
 		sortBy = "taken_at"
 	}
 	orderClause := sortBy
