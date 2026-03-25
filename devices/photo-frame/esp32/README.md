@@ -2,13 +2,20 @@
 
 基于 ESP32-S3 和 7.3 寸 E Ink Spectra 6 彩色墨水屏的智能相框。通过定时深度睡眠唤醒，从 Relive 服务器获取"往年今日"照片并显示。
 
+## 开源硬件
+
+硬件部分已在嘉立创开源硬件平台开源（包含原理图、PCB、BOM 等）：
+
+**https://oshwhub.com/davidhoo/relive**
+
 ## 硬件规格
 
-- **主控**: ESP32-S3 (4MB Flash, 8MB PSRAM OPI)
+- **主控**: ESP32-S3 (4MB/8MB Flash, 2MB/8MB PSRAM)
 - **屏幕**: Good Display GDEP073E01 (7.3 寸 E Ink Spectra 6)
   - 分辨率: 800x480
   - 颜色: 6 色 (黑、白、黄、红、蓝、绿)
   - 接口: SPI
+- **电源**: 锂电池供电，GPIO5 控制 ADC 采样电路测量电池电压
 - **连接**: WiFi 2.4GHz
 
 ## 功能特性
@@ -36,14 +43,25 @@ Response Headers: X-Checksum, X-Asset-ID, X-Server-Time
 
 ## 硬件连接
 
+### 墨水屏 SPI
+
 | 屏幕引脚 | ESP32-S3 GPIO |
 |---------|--------------|
-| BUSY    | GPIO 10      |
-| RST     | GPIO 11      |
-| DC      | GPIO 12      |
-| CS      | GPIO 13      |
-| MOSI    | GPIO 14      |
-| SCK     | GPIO 15      |
+| BUSY    | GPIO 40      |
+| RST     | GPIO 41      |
+| DC      | GPIO 39      |
+| CS      | GPIO 38      |
+| MOSI    | GPIO 47      |
+| SCK     | GPIO 48      |
+
+### 电池电压采样
+
+| 功能         | ESP32-S3 GPIO |
+|-------------|--------------|
+| ADC 采样使能 (NMOS Gate) | GPIO 5  |
+| ADC 采样输入             | GPIO 1  |
+
+> 电池通过两个 100KΩ 电阻分压后接入 ADC，分压比 2.0。GPIO5 控制 NMOS 开关，唤醒时导通采样电路，采样完毕后关断以降低待机功耗。电压低于 3.0V 时屏幕右上角显示红色低电量图标。
 
 ## 配置说明
 

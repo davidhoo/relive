@@ -71,6 +71,16 @@
 #define EINK_MOSI   47
 #define EINK_SCK    48
 
+// ===================== 电池电压采样配置 =====================
+// GPIO5 控制 NMOS 开关，导通 ADC 采样电路
+#define BAT_ADC_EN      5
+// ADC 采样引脚（需根据实际分压电路连接的 GPIO 修改）
+#define BAT_ADC_PIN     1
+// 分压比（R1+R2)/R2，根据实际电阻值调整。例如 R1=100K, R2=100K → 比值 2.0
+#define BAT_DIVIDER_RATIO  2.0
+// ADC 采样次数（取平均值）
+#define BAT_ADC_SAMPLES    5
+
 // ===================== 功能配置 =====================
 // 刷新间隔（毫秒）- 默认5分钟，DEBUG_MODE 和时间无效时使用
 #ifndef REFRESH_INTERVAL_MS

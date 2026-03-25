@@ -31,7 +31,149 @@ struct {
     int errorCount = 0;
 } stats;
 
+// 电池电压（setup 中测量，全局保存）
+float gBatteryVoltage = 0.0;
+
+// 低电量阈值
+#define BAT_LOW_VOLTAGE 3.0
+
 // ===================== 辅助函数 =====================
+
+// 测量电池电压：拉高 GPIO5 导通 NMOS 采样电路，ADC 多次采样取平均
+float measureBatteryVoltage() {
+    // 拉高 NMOS 栅极，导通 ADC 采样电路
+    pinMode(BAT_ADC_EN, OUTPUT);
+    digitalWrite(BAT_ADC_EN, HIGH);
+    delay(10);  // 等待电路稳定
+
+    // 配置 ADC 引脚
+    analogReadResolution(12);  // 12-bit: 0-4095
+    analogSetAttenuation(ADC_11db);  // 满量程 ~3.3V
+
+    // 多次采样取平均
+    uint32_t sum = 0;
+    for (int i = 0; i < BAT_ADC_SAMPLES; i++) {
+        sum += analogRead(BAT_ADC_PIN);
+        delay(10);
+    }
+    float avgRaw = (float)sum / BAT_ADC_SAMPLES;
+
+    // 关断 NMOS，断开采样电路
+    digitalWrite(BAT_ADC_EN, LOW);
+
+    // 计算实际电压：ADC 电压 × 分压比
+    float adcVoltage = avgRaw / 4095.0 * 3.3;
+    float batteryVoltage = adcVoltage * BAT_DIVIDER_RATIO;
+
+    LOG_INFO_F("[Battery] ADC raw avg: %.0f, ADC voltage: %.2fV, Battery: %.2fV\n",
+               avgRaw, adcVoltage, batteryVoltage);
+
+    return batteryVoltage;
+}
+
+// 在 4-bit 缓冲区中设置单个像素颜色
+// buffer: 4-bit packed (每字节2像素，高4位=偶数像素，低4位=奇数像素)
+static inline void setPixel4bit(uint8_t* buffer, int x, int y, uint8_t color) {
+    int idx = y * (SCREEN_WIDTH / 2) + x / 2;
+    if (x % 2 == 0) {
+        buffer[idx] = (color << 4) | (buffer[idx] & 0x0F);
+    } else {
+        buffer[idx] = (buffer[idx] & 0xF0) | (color & 0x0F);
+    }
+}
+
+// 在竖屏坐标系中设置像素，自动转换到 buffer 坐标系
+// 服务端将竖屏 canvas(480×800) 逆时针旋转 90° 输出 buffer(800×480)
+// 映射关系: portrait(px, py) → buffer(799-py, px)
+static inline void setPixelPortrait(uint8_t* buffer, int px, int py, uint8_t color) {
+    int bx = (SCREEN_WIDTH - 1) - py;
+    int by = px;
+    setPixel4bit(buffer, bx, by, color);
+}
+
+// 在竖屏视角右上角绘制横向红色低电量电池图标，正极在右侧
+static void drawLowBatteryIcon(uint8_t* buffer) {
+    // 竖屏尺寸: 宽=SCREEN_HEIGHT(480), 高=SCREEN_WIDTH(800)
+    const int portraitW = SCREEN_HEIGHT;  // 480
+    const int margin = 10;
+
+    const int bodyW = 44;    // 电池主体宽度
+    const int bodyH = 22;    // 电池主体高度
+    const int nubW  = 4;     // 正极凸起宽度
+    const int nubH  = 10;    // 正极凸起高度
+    const int bw    = 2;     // 边框粗细
+    const int r     = 3;     // 圆角半径
+
+    // 竖屏右上角定位
+    int x0 = portraitW - margin - bodyW - nubW;
+    int y0 = margin;
+
+    const uint8_t cBlack = EINK_BLACK;
+    const uint8_t cRed   = EINK_RED;
+    const uint8_t cWhite = EINK_WHITE;
+
+    // 判断像素是否在圆角矩形内部
+    // 四个角用半径 r 的圆弧裁切，其余区域为普通矩形
+    auto inRoundedRect = [&](int x, int y, int rx, int ry, int rw, int rh, int rad) -> bool {
+        if (x < rx || x >= rx + rw || y < ry || y >= ry + rh) return false;
+        // 检查四个角
+        int cx, cy;
+        if (x < rx + rad && y < ry + rad) {
+            cx = rx + rad; cy = ry + rad;
+        } else if (x >= rx + rw - rad && y < ry + rad) {
+            cx = rx + rw - rad - 1; cy = ry + rad;
+        } else if (x < rx + rad && y >= ry + rh - rad) {
+            cx = rx + rad; cy = ry + rh - rad - 1;
+        } else if (x >= rx + rw - rad && y >= ry + rh - rad) {
+            cx = rx + rw - rad - 1; cy = ry + rh - rad - 1;
+        } else {
+            return true;  // 非角落区域，直接在内
+        }
+        int dx = x - cx, dy = y - cy;
+        return (dx * dx + dy * dy) <= (rad * rad);
+    };
+
+    // 1. 电池主体：圆角矩形外框 + 白色内部
+    for (int y = y0; y < y0 + bodyH; y++) {
+        for (int x = x0; x < x0 + bodyW; x++) {
+            if (!inRoundedRect(x, y, x0, y0, bodyW, bodyH, r)) continue;
+            bool inner = inRoundedRect(x, y, x0 + bw, y0 + bw, bodyW - bw * 2, bodyH - bw * 2, r > bw ? r - bw : 0);
+            setPixelPortrait(buffer, x, y, inner ? cWhite : cBlack);
+        }
+    }
+
+    // 2. 内部红色填充（低电量，左侧约 1/4）
+    int fillW = (bodyW - bw * 2) / 4;
+    int innerR = r > bw ? r - bw : 0;
+    for (int y = y0 + bw; y < y0 + bodyH - bw; y++) {
+        for (int x = x0 + bw; x < x0 + bw + fillW; x++) {
+            if (inRoundedRect(x, y, x0 + bw, y0 + bw, bodyW - bw * 2, bodyH - bw * 2, innerR)) {
+                setPixelPortrait(buffer, x, y, cRed);
+            }
+        }
+    }
+
+    // 3. 正极凸起（黑色，右侧垂直居中，带右侧圆角）
+    int nubX0 = x0 + bodyW;
+    int nubY0 = y0 + (bodyH - nubH) / 2;
+    int nubR = 2;  // 凸起右侧小圆角
+    for (int y = nubY0; y < nubY0 + nubH; y++) {
+        for (int x = nubX0; x < nubX0 + nubW; x++) {
+            // 只对右侧两个角做圆角
+            bool skip = false;
+            if (x >= nubX0 + nubW - nubR && y < nubY0 + nubR) {
+                int dx = x - (nubX0 + nubW - nubR - 1), dy = y - (nubY0 + nubR);
+                if (dx * dx + dy * dy > nubR * nubR) skip = true;
+            } else if (x >= nubX0 + nubW - nubR && y >= nubY0 + nubH - nubR) {
+                int dx = x - (nubX0 + nubW - nubR - 1), dy = y - (nubY0 + nubH - nubR - 1);
+                if (dx * dx + dy * dy > nubR * nubR) skip = true;
+            }
+            if (!skip) setPixelPortrait(buffer, x, y, cBlack);
+        }
+    }
+
+    LOG_INFO("[Battery] 低电量图标已绘制");
+}
 
 // 深睡前统一关闭外围设备，最小化待机电流
 void prepareSleep() {
@@ -40,6 +182,9 @@ void prepareSleep() {
 
     // 2. 彻底关闭 WiFi radio
     wifiManager.disconnect();
+
+    // 3. 确保 ADC 采样电路关断
+    digitalWrite(BAT_ADC_EN, LOW);
 
     // 3. 关闭 NVS
     // NVS Preferences 在 begin() 时打开，睡前关闭释放 flash 控制器
@@ -208,6 +353,11 @@ bool downloadAndDisplay() {
 
     LOG_INFO_F("[Main] 下载成功: %d bytes\n", downloaded);
 
+    // 低电量时在右上角叠加红色电池图标
+    if (gBatteryVoltage > 0 && gBatteryVoltage < BAT_LOW_VOLTAGE) {
+        drawLowBatteryIcon(imageBuffer);
+    }
+
     display.display(imageBuffer, downloaded);
 
     stats.successCount++;
@@ -236,6 +386,9 @@ void setup() {
     delay(1000);
 
     showStartupScreen();
+
+    // 测量电池电压（唤醒后第一时间采样）
+    gBatteryVoltage = measureBatteryVoltage();
 
     // 检查唤醒原因
     esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
