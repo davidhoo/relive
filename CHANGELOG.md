@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.1] - 2026-03-25
+
+### Added
+- **ESP32 电池电压采样** — GPIO5 控制 NMOS 导通 ADC 采样电路，5 次平均采样测量电池电压
+- **低电量图标显示** — 电压低于 3.0V 时在屏幕右上角叠加红色圆角电池图标
+- **ESP32-S3-WROOM-1 N8R8 适配** — 新增板型配置（8MB Flash + 8MB OPI PSRAM, CH340 串口）
+- **照片管理页 1000 条/页选项** — 分页器新增大页选项
+
+### Fixed
+- **ESP32 深睡漏电** — GPIO5 未 gpio_hold_en 导致 NMOS 栅极浮空，待机电流异常 ~3mA
+- **SQL 注入漏洞** — sort_by 参数增加排序字段白名单校验
+- **前端 setInterval 内存泄漏** — Dashboard/Photos 页面组件卸载时清理定时器
+- **analyzer 类型断言 panic** — handler 裸断言改为 comma-ok 安全模式
+- **照片列表 pageSize 上限** — 从 100 放宽到 1000，匹配前端分页选项
+- **离线分析器非标准 JPEG** — ProcessForAI 增加 OpenImage fallback 链
+- **analyzer 503 重试风暴** — 移除 geocode_status 前置条件
+- **缩略图模糊** — 修复 vipsthumbnail 默认 128x128 尺寸问题
+- **基础设施修复** — 移除不存在的 install.sh 引用、固定 Alpine 3.21、修正健康检查路径
+
+### Docs
+- **ESP32 README 更新** — 嘉立创开源硬件链接、修正 GPIO 引脚表、电池采样说明
+
+---
+
 ## [1.3.0] - 2026-03-17
 
 ### Added

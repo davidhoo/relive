@@ -4,7 +4,7 @@
 [![Status](https://img.shields.io/badge/Status-Usable-brightgreen)]()
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go)]()
 [![Vue](https://img.shields.io/badge/Vue-3.5+-4FC08D?logo=vue.js)]()
-[![Version](https://img.shields.io/badge/Version-1.3.0-blue)]()
+[![Version](https://img.shields.io/badge/Version-1.3.1-blue)]()
 
 > 你的 NAS 里存了多少照片？它们上一次被翻看是什么时候？
 > Relive 通过 AI 理解每张照片，以”往年今日”为线索，每天把值得重温的记忆送到你的相框上。
