@@ -120,17 +120,14 @@ func (s *photoService) processPhoto(filePath string, info os.FileInfo) (*model.P
 		exifData = &util.EXIFData{}
 	}
 
-	// 获取图片尺寸（如果 EXIF 中没有）
-	width := exifData.Width
-	height := exifData.Height
-	if width == 0 || height == 0 {
-		width, height, err = util.GetImageSize(filePath)
-		if err != nil {
-			logger.Warnf("Get image size failed: %s, error: %v", filePath, err)
-			// 使用默认值
-			width = 0
-			height = 0
-		}
+	// 获取图片尺寸：优先从实际像素数据读取（JPEG SOF / HEIF container），
+	// 不信任 EXIF PixelXDimension/PixelYDimension（某些软件旋转像素后不更新这两个字段）
+	width, height, err := util.GetImageSize(filePath)
+	if err != nil {
+		logger.Warnf("Get image size failed: %s, error: %v", filePath, err)
+		// fallback 到 EXIF 尺寸
+		width = exifData.Width
+		height = exifData.Height
 	}
 
 	// 获取文件时间

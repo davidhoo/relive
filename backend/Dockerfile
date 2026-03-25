@@ -36,13 +36,14 @@ FROM alpine:3.21
 
 WORKDIR /app
 
-# 安装运行时依赖（包括 libstdc++ 用于 C++ 库，sqlite 用于 entrypoint 脚本）
+# 安装运行时依赖（包括 libstdc++ 用于 C++ 库，sqlite 用于 entrypoint 脚本，vips 用于非标准 JPEG 转换）
 RUN apk add --no-cache \
     ca-certificates \
     sqlite-libs \
     sqlite \
     tzdata \
-    libstdc++
+    libstdc++ \
+    vips
 
 # 从构建阶段复制二进制文件
 COPY --from=backend-builder /app/relive /app/relive

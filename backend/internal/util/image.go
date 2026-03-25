@@ -198,10 +198,12 @@ func openImageWithExternalTool(filePath string) (image.Image, error) {
 	return imaging.Open(tmpPath)
 }
 
-// convertImageWithExternalTool 使用系统可用的外部工具将图片转换为 JPEG
+// convertImageWithExternalTool 使用系统可用的外部工具将图片转换为 JPEG。
+// 重要：所有外部工具必须禁用自动旋转（--no-rotate 等），
+// 因为 normalizeImageForDisplay 会统一根据 EXIF Orientation 做旋转校正。
 func convertImageWithExternalTool(srcPath, dstPath string) error {
 	if runtime.GOOS == "darwin" {
-		// macOS: 使用 sips
+		// macOS: 使用 sips（sips 不会自动旋转，无需额外参数）
 		if _, err := exec.LookPath("sips"); err == nil {
 			cmd := exec.Command("sips", "-s", "format", "jpeg", "-s", "formatOptions", "85", srcPath, "--out", dstPath)
 			if err := cmd.Run(); err == nil {
@@ -210,23 +212,23 @@ func convertImageWithExternalTool(srcPath, dstPath string) error {
 		}
 	}
 
-	// Linux/Docker: 优先使用 vips copy（无损尺寸转换），避免 vipsthumbnail 默认缩小到 128x128
+	// Linux/Docker: 优先使用 vips jpegsave（--no-rotate 禁止自动旋转）
 	if _, err := exec.LookPath("vips"); err == nil {
-		cmd := exec.Command("vips", "jpegsave", srcPath, dstPath, "--Q", "85")
+		cmd := exec.Command("vips", "jpegsave", srcPath, dstPath, "--Q", "85", "--no-rotate")
 		if err := cmd.Run(); err == nil {
 			return nil
 		}
 	}
 
-	// vips 不可用时尝试 vipsthumbnail，指定足够大的尺寸以保留原始分辨率
+	// vips 不可用时尝试 vipsthumbnail（--no-rotate 禁止自动旋转）
 	if _, err := exec.LookPath("vipsthumbnail"); err == nil {
-		cmd := exec.Command("vipsthumbnail", srcPath, "--size", "99999x99999", "-o", dstPath+"[Q=85]")
+		cmd := exec.Command("vipsthumbnail", srcPath, "--size", "99999x99999", "--no-rotate", "-o", dstPath+"[Q=85]")
 		if err := cmd.Run(); err == nil {
 			return nil
 		}
 	}
 
-	// fallback: ImageMagick convert
+	// fallback: ImageMagick convert（-auto-orient 默认关闭，不需要额外参数）
 	if _, err := exec.LookPath("convert"); err == nil {
 		cmd := exec.Command("convert", srcPath, "-quality", "85", dstPath)
 		if err := cmd.Run(); err == nil {
@@ -234,7 +236,7 @@ func convertImageWithExternalTool(srcPath, dstPath string) error {
 		}
 	}
 
-	return fmt.Errorf("no external image conversion tool available (tried sips, vipsthumbnail, convert)")
+	return fmt.Errorf("no external image conversion tool available (tried sips, vips, vipsthumbnail, convert)")
 }
 
 // openHEIC 使用 goheif 解码 HEIC 文件并应用 HEIF 变换
