@@ -64,9 +64,14 @@ bool DisplayDriver::isBusy() {
     return digitalRead(EINK_BUSY) == LOW;
 }
 
-void DisplayDriver::waitUntilIdle() {
+void DisplayDriver::waitUntilIdle(unsigned long timeoutMs) {
     // 等待BUSY引脚变为高电平（空闲状态）
+    unsigned long start = millis();
     while (digitalRead(EINK_BUSY) == LOW) {
+        if (millis() - start > timeoutMs) {
+            LOG_ERROR_F("[Display] BUSY 超时 (%lu ms)，引脚状态: %d\n", timeoutMs, digitalRead(EINK_BUSY));
+            return;
+        }
         delay(10);
     }
 }

@@ -64,12 +64,12 @@
 #define SCREEN_HEIGHT 480
 
 // SPI 引脚配置 (根据 ESP32-S3 实际连接修改)
-#define EINK_BUSY   10
-#define EINK_RST    11
-#define EINK_DC     12
-#define EINK_CS     13
-#define EINK_MOSI   14
-#define EINK_SCK    15
+#define EINK_BUSY   40
+#define EINK_RST    41
+#define EINK_DC     39
+#define EINK_CS     38
+#define EINK_MOSI   47
+#define EINK_SCK    48
 
 // ===================== 功能配置 =====================
 // 刷新间隔（毫秒）- 默认5分钟，DEBUG_MODE 和时间无效时使用

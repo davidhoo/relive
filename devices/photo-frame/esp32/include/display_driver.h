@@ -74,7 +74,7 @@ private:
     void sendData(uint8_t data);
     void sendData(const uint8_t* data, size_t len);
     void reset();
-    void waitUntilIdle();
+    void waitUntilIdle(unsigned long timeoutMs = 30000);
     void initFast();
     void initNormal();
 
