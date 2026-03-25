@@ -26,6 +26,9 @@ http.interceptors.request.use(
   }
 )
 
+// 防止多个 401 响应同时触发重复跳转
+let isRedirectingToLogin = false
+
 // 响应拦截器
 http.interceptors.response.use(
   (response) => {
@@ -36,13 +39,20 @@ http.interceptors.response.use(
       const status = error.response.status
       const data = error.response.data as any
 
-      // 处理 401 未授权
+      // 处理 401 未授权：静默跳转登录页，不弹错误提示
       if (status === 401) {
         const userStore = useUserStore()
         userStore.clearUserState()
-        ElMessage.error('登录已过期，请重新登录')
-        import('@/router').then(({ default: router }) => router.push('/login'))
-        return Promise.reject(error)
+        if (!isRedirectingToLogin) {
+          isRedirectingToLogin = true
+          import('@/router').then(({ default: router }) => {
+            router.push('/login').finally(() => {
+              isRedirectingToLogin = false
+            })
+          })
+        }
+        // 返回一个永远 pending 的 Promise，阻止调用方的 catch 触发额外错误提示
+        return new Promise(() => {})
       }
 
       // 处理 403 首次登录需要修改密码
