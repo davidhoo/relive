@@ -186,11 +186,8 @@ void prepareSleep() {
     // 3. 确保 ADC 采样电路关断
     digitalWrite(BAT_ADC_EN, LOW);
 
-    // 3. 关闭 NVS
-    // NVS Preferences 在 begin() 时打开，睡前关闭释放 flash 控制器
-    // (NVSConfig::end() 不存在，直接用底层 API 无影响，深睡会断电)
-
-    // 4. 隔离 GPIO 引脚，防止 SPI 引脚悬浮漏电到墨水屏控制器
+    // 4. 隔离 GPIO 引脚，防止深睡期间引脚悬浮漏电
+    gpio_hold_en((gpio_num_t)BAT_ADC_EN);   // 保持 LOW，防止 NMOS 栅极浮空导通
     gpio_hold_en((gpio_num_t)EINK_RST);
     gpio_hold_en((gpio_num_t)EINK_DC);
     gpio_hold_en((gpio_num_t)EINK_CS);
@@ -395,6 +392,7 @@ void setup() {
     if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) {
         LOG_INFO("[Main] 从定时器唤醒");
         // 释放深睡期间的 GPIO hold，让引脚可以重新配置
+        gpio_hold_dis((gpio_num_t)BAT_ADC_EN);
         gpio_hold_dis((gpio_num_t)EINK_RST);
         gpio_hold_dis((gpio_num_t)EINK_DC);
         gpio_hold_dis((gpio_num_t)EINK_CS);
