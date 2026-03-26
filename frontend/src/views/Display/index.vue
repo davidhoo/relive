@@ -441,6 +441,11 @@
                   </div>
                 </div>
               </div>
+              <div class="frame-preview-action">
+                <el-button type="primary" link @click="router.push({ name: 'PhotoDetail', params: { id: previewPhoto.id } })">
+                  查看照片详情
+                </el-button>
+              </div>
             </div>
           </div>
         </div>
@@ -474,6 +479,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
@@ -489,6 +495,7 @@ import type { Photo } from '@/types/photo'
 
 type CalendarControlAction = 'prev-month' | 'today' | 'next-month'
 
+const router = useRouter()
 const form = ref<DisplayStrategyConfig>({ ...defaultDisplayStrategyConfig })
 const previewCalendarRef = ref<{ selectDate: (action: CalendarControlAction) => void } | null>(null)
 const previewCalendarDate = ref(new Date())
@@ -1486,8 +1493,9 @@ onUnmounted(() => {
   position: relative;
   z-index: 1;
   width: calc(var(--frame-canvas-width) + (var(--preview-stage-padding) * 2));
-  height: calc((var(--frame-canvas-width) * 5 / 3) + (var(--preview-stage-padding) * 2));
   display: flex;
+  flex-direction: column;
+  align-items: center;
   overflow: hidden;
   padding: var(--preview-stage-padding);
   border-radius: 24px;
@@ -1556,6 +1564,10 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   margin-top: 8px;
+}
+
+.frame-preview-action {
+  margin-top: 12px;
 }
 
 .preview-downloads {
