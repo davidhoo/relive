@@ -186,8 +186,18 @@ void prepareSleep() {
     // 3. 确保 ADC 采样电路关断
     digitalWrite(BAT_ADC_EN, LOW);
 
-    // 4. 隔离 GPIO 引脚，防止深睡期间引脚悬浮漏电
+    // 4. 复位 ADC 引脚：清除 analogRead() 遗留的模拟模式，避免模拟通路漏电
+    pinMode(BAT_ADC_PIN, INPUT);
+
+    // 5. 隔离 EINK_BUSY：输入引脚浮空会导致输入缓冲区灌电流
+    //    墨水屏 DSLP 后 BUSY 引脚状态不确定，改为输出 LOW 并 hold
+    pinMode(EINK_BUSY, OUTPUT);
+    digitalWrite(EINK_BUSY, LOW);
+
+    // 6. 隔离 GPIO 引脚，防止深睡期间引脚悬浮漏电
     gpio_hold_en((gpio_num_t)BAT_ADC_EN);   // 保持 LOW，防止 NMOS 栅极浮空导通
+    gpio_hold_en((gpio_num_t)BAT_ADC_PIN);  // 保持数字输入态，隔离模拟通路
+    gpio_hold_en((gpio_num_t)EINK_BUSY);    // 保持 LOW，防止浮空漏电
     gpio_hold_en((gpio_num_t)EINK_RST);
     gpio_hold_en((gpio_num_t)EINK_DC);
     gpio_hold_en((gpio_num_t)EINK_CS);
@@ -195,11 +205,12 @@ void prepareSleep() {
     gpio_hold_en((gpio_num_t)EINK_SCK);
     gpio_deep_sleep_hold_en();
 
-    // 5. 关闭不需要的 RTC 电源域
+    // 7. 关闭不需要的 RTC 电源域
     esp_sleep_pd_config(ESP_PD_DOMAIN_RC_FAST, ESP_PD_OPTION_OFF);
 
-    // 6. 刷新串口缓冲
+    // 8. 关闭串口（USB CDC 板子需要释放 USB PHY，否则 D+ 上拉漏电）
     DEBUG_SERIAL.flush();
+    DEBUG_SERIAL.end();
 }
 
 void showStartupScreen() {
@@ -393,6 +404,8 @@ void setup() {
         LOG_INFO("[Main] 从定时器唤醒");
         // 释放深睡期间的 GPIO hold，让引脚可以重新配置
         gpio_hold_dis((gpio_num_t)BAT_ADC_EN);
+        gpio_hold_dis((gpio_num_t)BAT_ADC_PIN);
+        gpio_hold_dis((gpio_num_t)EINK_BUSY);
         gpio_hold_dis((gpio_num_t)EINK_RST);
         gpio_hold_dis((gpio_num_t)EINK_DC);
         gpio_hold_dis((gpio_num_t)EINK_CS);
@@ -467,6 +480,11 @@ void setup() {
         }
 
         // ===== WiFi 扫描 + 模式判断 =====
+
+        // WiFi 扫描/发射瞬间电流峰值大，可能触发 Brownout 重启
+        // 必须在此之前清除 boot_flag，否则 Brownout 后重启会误判为双击进入 AP 死循环
+        nvsConfig.setBootFlag(false);
+        bootFlagSetTime = 0;  // 已清除，无需后续再等 15 秒
 
         if (wifiManager.begin()) {
             // 办公室模式：编译时凭据连接成功
