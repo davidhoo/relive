@@ -318,8 +318,10 @@ func (s *photoService) UpdateManualRotation(id uint, rotation int) error {
 }
 
 // BatchRotate 批量旋转照片（左转-90° / 右转+90°）
+// DB 更新同步完成，缩略图重建异步执行避免超时
 func (s *photoService) BatchRotate(req *model.BatchRotateRequest) (int64, error) {
 	var affected int64
+	var thumbnailIDs []uint
 	for _, id := range req.PhotoIDs {
 		photo, err := s.repo.GetByID(id)
 		if err != nil {
@@ -333,11 +335,23 @@ func (s *photoService) BatchRotate(req *model.BatchRotateRequest) (int64, error)
 		} else {
 			newRotation = (current + 270) % 360
 		}
-		if err := s.UpdateManualRotation(id, newRotation); err != nil {
+		if err := s.repo.UpdateManualRotation(id, newRotation); err != nil {
 			logger.Warnf("BatchRotate: failed to rotate photo %d: %v", id, err)
 			continue
 		}
+		thumbnailIDs = append(thumbnailIDs, id)
 		affected++
+	}
+	// 异步重建缩略图
+	if len(thumbnailIDs) > 0 {
+		go func(ids []uint) {
+			for _, id := range ids {
+				if err := s.thumbnailService.GeneratePhoto(id, true); err != nil {
+					logger.Warnf("BatchRotate: thumbnail regen failed (photo %d): %v", id, err)
+				}
+			}
+			logger.Infof("BatchRotate: thumbnail regen done for %d photos", len(ids))
+		}(thumbnailIDs)
 	}
 	return affected, nil
 }
