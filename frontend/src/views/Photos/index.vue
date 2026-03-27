@@ -403,7 +403,7 @@
               class="photo-card photo-card-parallax animate-scale-in"
               :style="{ animationDelay: `${index * 30}ms` }"
               :class="{ 'is-selected': selectedPhotos.has(photo.id) }"
-              @click="(selectedPhotos.size > 0 || batchSelectMode) ? toggleSelectPhoto(photo.id, $event) : gotoDetail(photo.id)"
+              @click="selectedPhotos.size > 0 ? toggleSelectPhoto(photo.id, $event) : gotoDetail(photo.id)"
             >
               <div class="photo-image-wrapper">
                 <!-- 选择按钮 -->
@@ -506,7 +506,7 @@
           :icon="Close"
           circle
           size="small"
-          @click="selectedPhotos = new Set(); batchSelectMode = false"
+          @click="selectedPhotos = new Set()"
           title="取消选择"
         />
         <span class="selection-count">已选中 {{ selectedPhotos.size }} 张照片</span>
@@ -524,6 +524,22 @@
             circle
             size="small"
             @click="invertSelection"
+          />
+        </el-tooltip>
+        <el-tooltip content="逆时针旋转 90°" placement="top">
+          <el-button
+            :icon="RefreshLeft"
+            circle
+            @click="handleBatchRotate('left')"
+            :loading="batchRotating"
+          />
+        </el-tooltip>
+        <el-tooltip content="顺时针旋转 90°" placement="top">
+          <el-button
+            :icon="RefreshRight"
+            circle
+            @click="handleBatchRotate('right')"
+            :loading="batchRotating"
           />
         </el-tooltip>
         <el-tooltip content="设置位置" placement="top">
@@ -544,39 +560,6 @@
           />
         </el-tooltip>
       </div>
-    </Transition>
-
-    <!-- 批量选择入口按钮 -->
-    <Transition name="float-toolbar">
-      <div
-        v-if="batchSelectMode && selectedPhotos.size === 0"
-        class="selection-toolbar"
-      >
-        <el-button
-          :icon="Close"
-          circle
-          size="small"
-          @click="batchSelectMode = false"
-          title="退出批量选择"
-        />
-        <span class="selection-count">点击照片进行选择</span>
-        <el-tooltip content="全选当前页" placement="top">
-          <el-button
-            :icon="Files"
-            circle
-            size="small"
-            @click="selectAll"
-          />
-        </el-tooltip>
-      </div>
-      <el-button
-        v-else-if="selectedPhotos.size === 0 && !batchSelectMode && photos.length > 0"
-        class="batch-select-fab"
-        :icon="Check"
-        circle
-        @click="batchSelectMode = true"
-        title="批量选择"
-      />
     </Transition>
 
     <!-- 添加/编辑扫描路径对话框 -->
@@ -628,7 +611,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
-import { ArrowUp, Check, CircleCheck, CircleClose, Clock, Close, Collection, Delete, Files, Filter, Folder, FolderOpened, FullScreen, Loading, Location, MagicStick, Picture, PictureFilled, Plus, PriceTag, QuestionFilled, Refresh, RefreshLeft, Search, Select, Star, SwitchButton, Timer } from '@element-plus/icons-vue'
+import { ArrowUp, Check, CircleCheck, CircleClose, Clock, Close, Collection, Delete, Files, Filter, Folder, FolderOpened, FullScreen, Loading, Location, MagicStick, Picture, PictureFilled, Plus, PriceTag, QuestionFilled, Refresh, RefreshLeft, RefreshRight, Search, Select, Star, SwitchButton, Timer } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
@@ -670,6 +653,7 @@ const selectedPhotos = ref<Set<number>>(new Set())
 const lastSelectedIndex = ref<number>(-1) // Shift 多选锚点
 const batchSelectMode = ref(false)
 const excludingPhotos = ref(false)
+const batchRotating = ref(false)
 const showBatchLocationPicker = ref(false)
 const batchLocationLoading = ref(false)
 
@@ -759,6 +743,21 @@ const handleRestoreSelected = async () => {
     ElMessage.error(error.message || '恢复失败')
   } finally {
     excludingPhotos.value = false
+  }
+}
+
+const handleBatchRotate = async (direction: 'left' | 'right') => {
+  const ids = Array.from(selectedPhotos.value)
+  batchRotating.value = true
+  try {
+    await photoApi.batchRotate({ photo_ids: ids, direction })
+    ElMessage.success(`已旋转 ${ids.length} 张照片`)
+    selectedPhotos.value = new Set()
+    loadPhotos()
+  } catch (error: any) {
+    ElMessage.error(error.message || '旋转失败')
+  } finally {
+    batchRotating.value = false
   }
 }
 

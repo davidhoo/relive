@@ -75,6 +75,8 @@ func (s *stubPhotoService) CountByStatus() (*model.PhotoCountsResponse, error) {
 func (s *stubPhotoService) BatchUpdateStatus(_ *model.BatchUpdateStatusRequest) (int64, error) { return 0, nil }
 func (s *stubPhotoService) UpdateCategory(_ uint, _ string) error       { return nil }
 func (s *stubPhotoService) UpdateManualRotation(_ uint, _ int) error    { return nil }
+func (s *stubPhotoService) BatchRotate(_ *model.BatchRotateRequest) (int64, error) { return 0, nil }
+func (s *stubPhotoService) GetAdjacentPhotos(_ uint, _ *model.GetPhotosRequest) (*model.AdjacentPhotosResponse, error) { return &model.AdjacentPhotosResponse{}, nil }
 func (s *stubPhotoService) SetEventClusteringService(_ service.EventClusteringService) {}
 
 func TestPhotoHandler_GetPhotoStats_Success(t *testing.T) {

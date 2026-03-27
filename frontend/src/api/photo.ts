@@ -78,6 +78,11 @@ export const photoApi = {
     return http.patch<ApiResponse<{ affected: number }>>('/photos/batch-status', data)
   },
 
+  // 批量旋转照片
+  batchRotate(data: { photo_ids: number[]; direction: 'left' | 'right' }) {
+    return http.patch<ApiResponse<{ affected: number }>>('/photos/batch-rotation', data)
+  },
+
   // 更新照片分类
   updateCategory(id: number, category: string) {
     return http.patch<ApiResponse<any>>(`/photos/${id}/category`, { category })

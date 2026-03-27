@@ -68,6 +68,7 @@ type PhotoService interface {
 
 	// 手动旋转（更新 manual_rotation 并重新生成缩略图）
 	UpdateManualRotation(id uint, rotation int) error
+	BatchRotate(req *model.BatchRotateRequest) (int64, error)
 
 	// 事件聚类服务注入（解决循环初始化）
 	SetEventClusteringService(EventClusteringService)
@@ -314,6 +315,31 @@ func (s *photoService) UpdateManualRotation(id uint, rotation int) error {
 		logger.Warnf("Regenerate thumbnail after rotation update (photo %d): %v", id, err)
 	}
 	return nil
+}
+
+// BatchRotate 批量旋转照片（左转-90° / 右转+90°）
+func (s *photoService) BatchRotate(req *model.BatchRotateRequest) (int64, error) {
+	var affected int64
+	for _, id := range req.PhotoIDs {
+		photo, err := s.repo.GetByID(id)
+		if err != nil {
+			logger.Warnf("BatchRotate: skip photo %d: %v", id, err)
+			continue
+		}
+		current := photo.ManualRotation
+		var newRotation int
+		if req.Direction == "right" {
+			newRotation = (current + 90) % 360
+		} else {
+			newRotation = (current + 270) % 360
+		}
+		if err := s.UpdateManualRotation(id, newRotation); err != nil {
+			logger.Warnf("BatchRotate: failed to rotate photo %d: %v", id, err)
+			continue
+		}
+		affected++
+	}
+	return affected, nil
 }
 
 // SetEventClusteringService 注入事件聚类服务（避免循环初始化）

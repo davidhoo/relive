@@ -505,3 +505,9 @@ type BatchUpdateStatusRequest struct {
 	PhotoIDs []uint `json:"photo_ids" binding:"required,min=1"`
 	Status   string `json:"status" binding:"required,oneof=active excluded"`
 }
+
+// BatchRotateRequest 批量旋转请求
+type BatchRotateRequest struct {
+	PhotoIDs  []uint `json:"photo_ids" binding:"required,min=1"`
+	Direction string `json:"direction" binding:"required,oneof=left right"`
+}

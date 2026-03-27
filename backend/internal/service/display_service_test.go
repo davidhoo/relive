@@ -92,6 +92,7 @@ func (r *stubPhotoRepo) GetDerivedStatusByPathPrefixes(prefixes []string) (map[s
 func (r *stubPhotoRepo) BatchUpdateStatus(ids []uint, status string) (int64, error) { return 0, nil }
 func (r *stubPhotoRepo) UpdateCategory(id uint, category string) error              { return nil }
 func (r *stubPhotoRepo) UpdateManualRotation(id uint, rotation int) error              { return nil }
+func (r *stubPhotoRepo) GetAdjacent(id uint, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string) (*model.AdjacentPhotosResponse, error) { return &model.AdjacentPhotosResponse{}, nil }
 func (r *stubPhotoRepo) GetScatteredHighQuality(minBeauty int, excludeIDs []uint, limit int) ([]*model.Photo, error) {
 	return nil, nil
 }

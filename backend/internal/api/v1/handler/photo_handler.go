@@ -1198,6 +1198,33 @@ func (h *PhotoHandler) BatchUpdateStatus(c *gin.Context) {
 	})
 }
 
+// BatchRotate 批量旋转照片
+func (h *PhotoHandler) BatchRotate(c *gin.Context) {
+	var req model.BatchRotateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "INVALID_REQUEST", Message: err.Error()},
+		})
+		return
+	}
+
+	affected, err := h.photoService.BatchRotate(&req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "ROTATE_FAILED", Message: err.Error()},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: fmt.Sprintf("Successfully rotated %d photos", affected),
+		Data:    map[string]int64{"affected": affected},
+	})
+}
+
 // SetManualLocation 手动设置照片位置
 // @Summary 手动设置照片 GPS 位置
 // @Description 手动指定照片的经纬度坐标，后端自动反向解析填充结构化位置字段

@@ -178,6 +178,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				photos.POST("/count-by-paths", handlers.Photo.CountPhotosByPaths)
 				photos.POST("/derived-status-by-paths", handlers.Photo.CountDerivedStatusByPaths)
 				photos.PATCH("/batch-status", handlers.Photo.BatchUpdateStatus)
+				photos.PATCH("/batch-rotation", handlers.Photo.BatchRotate)
 				photos.GET("/counts", handlers.Photo.GetPhotoCounts)
 				photos.GET("/stats", handlers.Photo.GetPhotoStats)
 				photos.GET("/categories", handlers.Photo.GetCategories)
