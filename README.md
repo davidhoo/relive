@@ -5,6 +5,7 @@
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go)]()
 [![Vue](https://img.shields.io/badge/Vue-3.5+-4FC08D?logo=vue.js)]()
 [![Version](https://img.shields.io/badge/Version-1.3.1-blue)]()
+[![OSHW](https://img.shields.io/badge/OSHW-oshwhub-blue?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6bTAgMThjLTQuNDEgMC04LTMuNTktOC04czMuNTktOCA4LTggOCAzLjU5IDggOC0zLjU5IDgtOCA4eiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=)](https://oshwhub.com/davidhoo/relive)
 
 > 你的 NAS 里存了多少照片？它们上一次被翻看是什么时候？
 > Relive 通过 AI 理解每张照片，以”往年今日”为线索，每天把值得重温的记忆送到你的相框上。
@@ -18,6 +19,7 @@ Relive 是一个自部署的照片回忆系统 —— 扫描你 NAS 中的照片
 - **后端服务**：处理照片分析、地理编码、缩略图生成等后台任务
 - **relive-analyzer**：独立的批量分析工具，适合在另一台 AI 主机上运行
 - **展示终端**：目前已支持 ESP32 墨水屏相框，未来可扩展到电脑屏保、移动端 App、微信小程序等
+  - 🔧 硬件已开源：原理图、PCB、BOM 等均发布在 [立创开源硬件平台](https://oshwhub.com/davidhoo/relive)
 
 ---
 
