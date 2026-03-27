@@ -288,14 +288,14 @@
             <div class="preview-meta">
               <div class="preview-title">
                 {{ photo.caption || getFileName(photo.file_path) }}
-                <el-tag v-if="photo.curation_channel" size="small" :type="curationChannelType(photo.curation_channel)" effect="plain" class="curation-tag">{{ curationChannelLabel(photo.curation_channel) }}</el-tag>
               </div>
               <div class="preview-subtitle">
                 {{ formatPhotoDate(photo.taken_at) || '未知时间' }}
                 <span v-if="photo.location"> · {{ photo.location }}</span>
               </div>
               <div class="preview-score">
-                回忆 {{ photo.memory_score ?? 0 }} / 美观 {{ photo.beauty_score ?? 0 }}
+                <span>回忆 {{ photo.memory_score ?? 0 }} / 美观 {{ photo.beauty_score ?? 0 }}</span>
+                <el-tag v-if="photo.curation_channel" size="small" :type="curationChannelType(photo.curation_channel)" effect="plain" class="curation-tag">{{ curationChannelLabel(photo.curation_channel) }}</el-tag>
               </div>
             </div>
           </div>
@@ -1228,6 +1228,9 @@ onUnmounted(() => {
 
 .preview-subtitle,
 .preview-score {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin-top: 4px;
   font-size: 11px;
   color: #909399;
