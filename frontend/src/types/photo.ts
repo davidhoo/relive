@@ -50,6 +50,7 @@ export interface Photo {
 
   // 状态
   status?: string // active/excluded
+  curation_channel?: string // 策展来源通道
 }
 
 // 照片列表请求参数
@@ -136,4 +137,10 @@ export interface TagInfo {
 export interface TagsResponse {
   items: TagInfo[]
   total: number
+}
+
+// 相邻照片响应
+export interface AdjacentPhotosResponse {
+  prev_id: number | null
+  next_id: number | null
 }

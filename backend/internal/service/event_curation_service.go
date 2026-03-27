@@ -96,6 +96,18 @@ func (s *displayService) curateEventPhotos(
 	// 5. 多样性选择
 	selected := selectCuratedPhotos(candidates, limit)
 
+	// 日志：通道提名数 & 入选分布
+	nominationCounts := make(map[string]int)
+	for _, c := range candidates {
+		nominationCounts[c.channel]++
+	}
+	selectionCounts := make(map[string]int)
+	for _, c := range selected {
+		selectionCounts[c.channel]++
+	}
+	logger.Infof("Curation nominations: %v", nominationCounts)
+	logger.Infof("Curation selections:  %v", selectionCounts)
+
 	// 6. 序列编排
 	photos := make([]*model.Photo, 0, len(selected))
 	for _, c := range selected {
@@ -419,42 +431,48 @@ func selectCuratedPhotos(candidates []curationCandidate, limit int) []*curationC
 		return nil
 	}
 
-	// 按 adjScore 降序排列
-	sort.SliceStable(candidates, func(i, j int) bool {
-		return candidates[i].adjScore > candidates[j].adjScore
-	})
+	// 按通道分组，每组内按 adjScore 降序
+	channelGroups := make(map[string][]int) // channel -> indices in candidates
+	for i := range candidates {
+		ch := candidates[i].channel
+		channelGroups[ch] = append(channelGroups[ch], i)
+	}
+	for _, indices := range channelGroups {
+		sort.SliceStable(indices, func(a, b int) bool {
+			return candidates[indices[a]].adjScore > candidates[indices[b]].adjScore
+		})
+	}
 
 	selected := make([]*curationCandidate, 0, limit)
 	selectedEventIDs := make(map[uint]bool)
 	selectedCategories := make(map[string]int)
+	selectedPhotoIDs := make(map[uint]bool)
 
-	// 第一轮：严格隔离
-	for i := range candidates {
-		if len(selected) >= limit {
-			break
+	// canSelect 检查隔离约束
+	canSelect := func(c *curationCandidate, strict bool) bool {
+		if selectedPhotoIDs[c.photo.ID] {
+			return false
 		}
-		c := &candidates[i]
-
-		// 事件隔离：同 event_id 只选 1 张
-		if c.event != nil {
-			if selectedEventIDs[c.event.ID] {
-				continue
+		if c.event != nil && selectedEventIDs[c.event.ID] {
+			return false
+		}
+		if strict {
+			if hasTimeTunnelConflict(c, selected) {
+				return false
+			}
+			if c.event != nil && c.event.PrimaryCategory != "" {
+				if selectedCategories[c.event.PrimaryCategory] >= 2 {
+					return false
+				}
 			}
 		}
+		return true
+	}
 
-		// 时间隔离：已选照片 taken_at ±24h 内跳过
-		if hasTimeTunnelConflict(c, selected) {
-			continue
-		}
-
-		// 内容隔离：同类别的降权（这里直接跳过超过 2 张的同类别）
-		if c.event != nil && c.event.PrimaryCategory != "" {
-			if selectedCategories[c.event.PrimaryCategory] >= 2 {
-				continue
-			}
-		}
-
+	// markSelected 记录已选状态
+	markSelected := func(c *curationCandidate) {
 		selected = append(selected, c)
+		selectedPhotoIDs[c.photo.ID] = true
 		if c.event != nil {
 			selectedEventIDs[c.event.ID] = true
 			if c.event.PrimaryCategory != "" {
@@ -463,30 +481,66 @@ func selectCuratedPhotos(candidates []curationCandidate, limit int) []*curationC
 		}
 	}
 
-	// 第二轮：若不够，放松时间和内容隔离
-	if len(selected) < limit {
-		selectedPhotoIDs := make(map[uint]bool)
-		for _, c := range selected {
-			selectedPhotoIDs[c.photo.ID] = true
-		}
+	// 第一轮：每个活跃通道保留 1 个席位（通道内最高分且满足隔离约束）
+	// 按通道名排序保证确定性
+	channelOrder := make([]string, 0, len(channelGroups))
+	for ch := range channelGroups {
+		channelOrder = append(channelOrder, ch)
+	}
+	sort.Strings(channelOrder)
 
-		for i := range candidates {
+	for _, ch := range channelOrder {
+		if len(selected) >= limit {
+			break
+		}
+		for _, idx := range channelGroups[ch] {
+			c := &candidates[idx]
+			if canSelect(c, true) {
+				markSelected(c)
+				break
+			}
+		}
+	}
+
+	// 第二轮：剩余席位按全局 adjScore 回填（严格隔离）
+	if len(selected) < limit {
+		// 构建全局排序索引
+		allIndices := make([]int, len(candidates))
+		for i := range allIndices {
+			allIndices[i] = i
+		}
+		sort.SliceStable(allIndices, func(a, b int) bool {
+			return candidates[allIndices[a]].adjScore > candidates[allIndices[b]].adjScore
+		})
+
+		for _, idx := range allIndices {
 			if len(selected) >= limit {
 				break
 			}
-			c := &candidates[i]
-			if selectedPhotoIDs[c.photo.ID] {
-				continue
+			c := &candidates[idx]
+			if canSelect(c, true) {
+				markSelected(c)
 			}
-			// 仍保留事件隔离
-			if c.event != nil && selectedEventIDs[c.event.ID] {
-				continue
-			}
+		}
+	}
 
-			selected = append(selected, c)
-			selectedPhotoIDs[c.photo.ID] = true
-			if c.event != nil {
-				selectedEventIDs[c.event.ID] = true
+	// 第三轮：若仍不够，放松时间和内容隔离
+	if len(selected) < limit {
+		allIndices := make([]int, len(candidates))
+		for i := range allIndices {
+			allIndices[i] = i
+		}
+		sort.SliceStable(allIndices, func(a, b int) bool {
+			return candidates[allIndices[a]].adjScore > candidates[allIndices[b]].adjScore
+		})
+
+		for _, idx := range allIndices {
+			if len(selected) >= limit {
+				break
+			}
+			c := &candidates[idx]
+			if canSelect(c, false) {
+				markSelected(c)
 			}
 		}
 	}
