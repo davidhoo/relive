@@ -90,6 +90,9 @@ type PhotoRepository interface {
 
 	// 策展引擎：无事件高颜值散片
 	GetScatteredHighQuality(minBeauty int, excludeIDs []uint, limit int) ([]*model.Photo, error)
+
+	// 相邻照片查询
+	GetAdjacent(id uint, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string) (*model.AdjacentPhotosResponse, error)
 }
 
 // photoRepository 照片仓库实现
@@ -167,15 +170,9 @@ func (r *photoRepository) ExistsByFilePath(filePath string) (bool, error) {
 	return count > 0, err
 }
 
-// List 分页列表查询
-func (r *photoRepository) List(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string) ([]*model.Photo, int64, error) {
-	var photos []*model.Photo
-	var total int64
-
-	// 构建查询
-	query := r.db.Model(&model.Photo{})
-
-	// status 过滤：默认只查 active，支持 excluded 和 all
+// applyPhotoFilters 构建照片列表的通用 WHERE 条件（List 和 GetAdjacent 共用）
+func (r *photoRepository) applyPhotoFilters(query *gorm.DB, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, enabledPaths []string, status string) *gorm.DB {
+	// status 过滤
 	switch status {
 	case model.PhotoStatusExcluded:
 		query = query.Where("status = ?", model.PhotoStatusExcluded)
@@ -187,10 +184,6 @@ func (r *photoRepository) List(page, pageSize int, analyzed *bool, hasThumbnail 
 
 	// 筛选启用的路径
 	if enabledPaths != nil {
-		if len(enabledPaths) == 0 {
-			return []*model.Photo{}, 0, nil
-		}
-
 		var pathConditions []string
 		var pathValues []interface{}
 		for _, path := range enabledPaths {
@@ -198,19 +191,14 @@ func (r *photoRepository) List(page, pageSize int, analyzed *bool, hasThumbnail 
 			if condition == "" {
 				continue
 			}
-
 			pathConditions = append(pathConditions, condition)
 			pathValues = append(pathValues, values...)
 		}
-
-		if len(pathConditions) == 0 {
-			return []*model.Photo{}, 0, nil
+		if len(pathConditions) > 0 {
+			query = query.Where(strings.Join(pathConditions, " OR "), pathValues...)
 		}
-
-		query = query.Where(strings.Join(pathConditions, " OR "), pathValues...)
 	}
 
-	// 筛选条件
 	if analyzed != nil {
 		query = query.Where("ai_analyzed = ?", *analyzed)
 	}
@@ -231,13 +219,11 @@ func (r *photoRepository) List(page, pageSize int, analyzed *bool, hasThumbnail 
 	if location != "" {
 		query = query.Where("location LIKE ?", "%"+location+"%")
 	}
-	// 搜索关键词
 	if search != "" {
 		if database.FTS5Available {
 			ftsQuery := buildFTSQuery(search)
 			query = query.Where("id IN (SELECT rowid FROM photos_fts WHERE photos_fts MATCH ?)", ftsQuery)
 		} else {
-			// 降级：原 7 字段 LIKE
 			searchPattern := "%" + search + "%"
 			query = query.Where(
 				"file_path LIKE ? OR file_name LIKE ? OR main_category LIKE ? OR tags LIKE ? OR description LIKE ? OR caption LIKE ? OR location LIKE ?",
@@ -245,29 +231,49 @@ func (r *photoRepository) List(page, pageSize int, analyzed *bool, hasThumbnail 
 			)
 		}
 	}
-	// 分类精确筛选
 	if category != "" {
 		query = query.Where("main_category = ?", category)
 	}
-	// 标签筛选（精确匹配 photo_tags 表）
 	if tag != "" {
 		query = query.Where("id IN (?)",
 			r.db.Model(&model.PhotoTag{}).Select("photo_id").Where("tag = ?", tag))
 	}
+	return query
+}
+
+// sanitizeSortBy 白名单校验排序字段
+func sanitizeSortBy(sortBy string) string {
+	allowedSortFields := map[string]bool{
+		"taken_at": true, "overall_score": true, "beauty_score": true,
+		"memory_score": true, "created_at": true, "file_name": true,
+	}
+	if !allowedSortFields[sortBy] {
+		return "taken_at"
+	}
+	return sortBy
+}
+
+// List 分页列表查询
+func (r *photoRepository) List(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string) ([]*model.Photo, int64, error) {
+	var photos []*model.Photo
+	var total int64
+
+	query := r.db.Model(&model.Photo{})
+
+	// enabledPaths 为空数组时直接返回
+	if enabledPaths != nil && len(enabledPaths) == 0 {
+		return []*model.Photo{}, 0, nil
+	}
+
+	query = r.applyPhotoFilters(query, analyzed, hasThumbnail, hasGPS, location, search, category, tag, enabledPaths, status)
 
 	// 统计总数
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	// 排序（白名单校验，防止 SQL 注入）
-	allowedSortFields := map[string]bool{
-		"taken_at": true, "overall_score": true, "beauty_score": true,
-		"memory_score": true, "created_at": true, "file_name": true,
-	}
-	if !allowedSortFields[sortBy] {
-		sortBy = "taken_at"
-	}
+	// 排序
+	sortBy = sanitizeSortBy(sortBy)
 	orderClause := sortBy
 	if sortDesc {
 		orderClause += " DESC"
@@ -283,6 +289,68 @@ func (r *photoRepository) List(page, pageSize int, analyzed *bool, hasThumbnail 
 	}
 
 	return photos, total, nil
+}
+
+// GetAdjacent 获取指定照片在同一筛选/排序条件下的前后相邻照片 ID
+func (r *photoRepository) GetAdjacent(id uint, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string) (*model.AdjacentPhotosResponse, error) {
+	sortBy = sanitizeSortBy(sortBy)
+
+	// 先获取当前照片的排序字段值
+	var current model.Photo
+	if err := r.db.Select("id, "+sortBy).First(&current, id).Error; err != nil {
+		return nil, err
+	}
+
+	// 获取排序字段的值（通过 map 提取）
+	var sortVal interface{}
+	row := r.db.Model(&model.Photo{}).Select(sortBy).Where("id = ?", id).Row()
+	if err := row.Scan(&sortVal); err != nil {
+		return nil, err
+	}
+
+	resp := &model.AdjacentPhotosResponse{}
+
+	// 查找上一张（排序方向相反的第一个）
+	// 如果 sortDesc=true，原排序是 sortBy DESC，"上一张"是排序值更大的那个
+	// 用 (sortBy, id) 复合排序保证稳定性
+	{
+		q := r.db.Model(&model.Photo{})
+		q = r.applyPhotoFilters(q, analyzed, hasThumbnail, hasGPS, location, search, category, tag, enabledPaths, status)
+		if sortDesc {
+			// 原序: sortBy DESC, id DESC → prev 是 (sortBy > val) OR (sortBy = val AND id > currentID)
+			q = q.Where(fmt.Sprintf("(%s > ? OR (%s = ? AND id > ?))", sortBy, sortBy), sortVal, sortVal, id)
+			q = q.Order(sortBy + " ASC, id ASC")
+		} else {
+			// 原序: sortBy ASC, id ASC → prev 是 (sortBy < val) OR (sortBy = val AND id < currentID)
+			q = q.Where(fmt.Sprintf("(%s < ? OR (%s = ? AND id < ?))", sortBy, sortBy), sortVal, sortVal, id)
+			q = q.Order(sortBy + " DESC, id DESC")
+		}
+		var prev model.Photo
+		if err := q.Select("id").Limit(1).Find(&prev).Error; err == nil && prev.ID != 0 {
+			resp.PrevID = &prev.ID
+		}
+	}
+
+	// 查找下一张
+	{
+		q := r.db.Model(&model.Photo{})
+		q = r.applyPhotoFilters(q, analyzed, hasThumbnail, hasGPS, location, search, category, tag, enabledPaths, status)
+		if sortDesc {
+			// 原序: sortBy DESC, id DESC → next 是 (sortBy < val) OR (sortBy = val AND id < currentID)
+			q = q.Where(fmt.Sprintf("(%s < ? OR (%s = ? AND id < ?))", sortBy, sortBy), sortVal, sortVal, id)
+			q = q.Order(sortBy + " DESC, id DESC")
+		} else {
+			// 原序: sortBy ASC, id ASC → next 是 (sortBy > val) OR (sortBy = val AND id > currentID)
+			q = q.Where(fmt.Sprintf("(%s > ? OR (%s = ? AND id > ?))", sortBy, sortBy), sortVal, sortVal, id)
+			q = q.Order(sortBy + " ASC, id ASC")
+		}
+		var next model.Photo
+		if err := q.Select("id").Limit(1).Find(&next).Error; err == nil && next.ID != 0 {
+			resp.NextID = &next.ID
+		}
+	}
+
+	return resp, nil
 }
 
 func normalizePathPrefix(prefix string) string {

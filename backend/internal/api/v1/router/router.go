@@ -184,6 +184,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				photos.GET("/tags", handlers.Photo.GetTags)
 				photos.GET("", handlers.Photo.GetPhotos)
 				photos.GET("/:id", handlers.Photo.GetPhotoByID)
+				photos.GET("/:id/adjacent", handlers.Photo.GetAdjacentPhotos)
 				photos.PATCH("/:id/category", handlers.Photo.UpdateCategory)
 				photos.PATCH("/:id/location", handlers.Photo.SetManualLocation)
 				photos.PATCH("/:id/rotation", handlers.Photo.UpdateRotation)

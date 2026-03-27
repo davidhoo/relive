@@ -3,10 +3,32 @@
     <el-card shadow="never" v-if="photo">
       <template #header>
         <div class="header">
-          <el-button link @click="goBack" class="back-link">
-            <el-icon><ArrowLeft /></el-icon>
-            返回
-          </el-button>
+          <div class="header-nav">
+            <el-button link @click="goBack" class="back-link">
+              <el-icon><ArrowLeft /></el-icon>
+              返回
+            </el-button>
+            <div class="photo-nav-buttons">
+              <el-tooltip content="上一张 (←)" placement="top">
+                <el-button
+                  :icon="ArrowLeft"
+                  circle
+                  size="small"
+                  :disabled="prevId === null"
+                  @click="navigateTo(prevId)"
+                />
+              </el-tooltip>
+              <el-tooltip content="下一张 (→)" placement="top">
+                <el-button
+                  :icon="ArrowRight"
+                  circle
+                  size="small"
+                  :disabled="nextId === null"
+                  @click="navigateTo(nextId)"
+                />
+              </el-tooltip>
+            </div>
+          </div>
           <div class="header-actions">
             <el-button
               v-if="photo?.status === 'excluded'"
@@ -240,9 +262,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { ref, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, InfoFilled, Delete, RefreshRight, RefreshLeft, Edit } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowRight, InfoFilled, Delete, RefreshRight, RefreshLeft, Edit } from '@element-plus/icons-vue'
 import { photoApi } from '@/api/photo'
 import { aiApi } from '@/api/ai'
 import { geocodeApi } from '@/api/geocode'
@@ -265,6 +287,11 @@ const orientationUpdating = ref(false)
 const imageVersion = ref(Date.now())
 const showLocationPicker = ref(false)
 
+// 上一张/下一张导航
+const prevId = ref<number | null>(null)
+const nextId = ref<number | null>(null)
+const navLoading = ref(false)
+
 // 分类编辑状态
 const categoryEditing = ref(false)
 const categoryValue = ref('')
@@ -282,10 +309,6 @@ const clearAllTimers = () => {
   activeTimers.forEach(id => clearInterval(id as any))
   activeTimers.length = 0
 }
-
-onBeforeUnmount(() => {
-  clearAllTimers()
-})
 
 // 获取照片缩略图 URL
 const getPhotoThumbnailUrl = (photoId: number, version?: string) => {
@@ -371,6 +394,61 @@ const loadPhoto = async () => {
     loading.value = false
   }
 }
+
+// 加载相邻照片 ID
+const loadAdjacent = async () => {
+  const photoId = Number(route.params.id)
+  const query = route.query
+  const params: Record<string, any> = {}
+  if (query.analyzed) params.analyzed = query.analyzed
+  if (query.has_thumbnail) params.has_thumbnail = query.has_thumbnail
+  if (query.has_gps) params.has_gps = query.has_gps
+  if (query.status) params.status = query.status
+  if (query.search) params.search = query.search
+  if (query.category) params.category = query.category
+  if (query.tag) params.tag = query.tag
+  if (query.sort_by) params.sort_by = query.sort_by
+  if (query.sort_desc) params.sort_desc = query.sort_desc
+  try {
+    const res = await photoApi.getAdjacent(photoId, params)
+    const data = res.data?.data
+    prevId.value = data?.prev_id ?? null
+    nextId.value = data?.next_id ?? null
+  } catch {
+    prevId.value = null
+    nextId.value = null
+  }
+}
+
+// 导航到相邻照片
+const navigateTo = (id: number | null) => {
+  if (!id || navLoading.value) return
+  navLoading.value = true
+  router.replace({ path: `/photos/${id}`, query: route.query })
+}
+
+// 键盘导航
+const handleKeydown = (e: KeyboardEvent) => {
+  // 忽略输入框内的按键
+  if ((e.target as HTMLElement)?.tagName === 'INPUT' || (e.target as HTMLElement)?.tagName === 'TEXTAREA') return
+  if (e.key === 'ArrowLeft') {
+    e.preventDefault()
+    navigateTo(prevId.value)
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault()
+    navigateTo(nextId.value)
+  }
+}
+
+// 监听路由参数变化（同一组件内切换照片）
+watch(() => route.params.id, async (newId) => {
+  if (newId) {
+    await loadPhoto()
+    loadAdjacent()
+    imageVersion.value = Date.now()
+    navLoading.value = false
+  }
+})
 
 // GPS 解析
 const handleGeocode = async () => {
@@ -622,8 +700,14 @@ const goBack = () => {
 
 onMounted(() => {
   loadPhoto()
+  loadAdjacent()
+  document.addEventListener('keydown', handleKeydown)
 })
-</script>
+
+onBeforeUnmount(() => {
+  clearAllTimers()
+  document.removeEventListener('keydown', handleKeydown)
+})</script>
 
 <style scoped>
 .photo-detail {
@@ -634,6 +718,17 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.header-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.photo-nav-buttons {
+  display: flex;
+  gap: 4px;
 }
 
 .header-actions {

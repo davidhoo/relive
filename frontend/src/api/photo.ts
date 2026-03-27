@@ -1,5 +1,5 @@
 import http from '@/utils/request'
-import type { Photo, PhotoListParams, PhotoStats, ScanPhotosRequest, RebuildPhotosRequest, CleanupPhotosResponse, CountPhotosByPathsRequest, CountPhotosByPathsResponse, CountDerivedStatusByPathsRequest, CountDerivedStatusByPathsResponse, PhotoCountsResponse, TagsResponse } from '@/types/photo'
+import type { Photo, PhotoListParams, PhotoStats, ScanPhotosRequest, RebuildPhotosRequest, CleanupPhotosResponse, CountPhotosByPathsRequest, CountPhotosByPathsResponse, CountDerivedStatusByPathsRequest, CountDerivedStatusByPathsResponse, PhotoCountsResponse, TagsResponse, AdjacentPhotosResponse } from '@/types/photo'
 import type { ApiResponse, PagedResponse } from '@/types/api'
 
 export const photoApi = {
@@ -11,6 +11,11 @@ export const photoApi = {
   // 获取照片详情
   getById(id: number) {
     return http.get<ApiResponse<Photo>>(`/photos/${id}`)
+  },
+
+  // 获取相邻照片 ID
+  getAdjacent(id: number, params?: PhotoListParams) {
+    return http.get<ApiResponse<AdjacentPhotosResponse>>(`/photos/${id}/adjacent`, { params })
   },
 
   // 异步扫描照片（新接口，立即返回任务 ID）

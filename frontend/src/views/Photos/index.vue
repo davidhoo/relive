@@ -393,7 +393,7 @@
         </div>
         </div>
 
-        <div class="photo-grid">
+        <div class="photo-grid" :class="{ 'batch-mode': batchSelectMode }">
           <div
             v-for="(photo, index) in photos"
             :key="photo.id"
@@ -403,7 +403,7 @@
               class="photo-card photo-card-parallax animate-scale-in"
               :style="{ animationDelay: `${index * 30}ms` }"
               :class="{ 'is-selected': selectedPhotos.has(photo.id) }"
-              @click="selectedPhotos.size > 0 ? toggleSelectPhoto(photo.id, $event) : gotoDetail(photo.id)"
+              @click="(selectedPhotos.size > 0 || batchSelectMode) ? toggleSelectPhoto(photo.id, $event) : gotoDetail(photo.id)"
             >
               <div class="photo-image-wrapper">
                 <!-- 选择按钮 -->
@@ -506,7 +506,7 @@
           :icon="Close"
           circle
           size="small"
-          @click="selectedPhotos = new Set()"
+          @click="selectedPhotos = new Set(); batchSelectMode = false"
           title="取消选择"
         />
         <span class="selection-count">已选中 {{ selectedPhotos.size }} 张照片</span>
@@ -544,6 +544,39 @@
           />
         </el-tooltip>
       </div>
+    </Transition>
+
+    <!-- 批量选择入口按钮 -->
+    <Transition name="float-toolbar">
+      <div
+        v-if="batchSelectMode && selectedPhotos.size === 0"
+        class="selection-toolbar"
+      >
+        <el-button
+          :icon="Close"
+          circle
+          size="small"
+          @click="batchSelectMode = false"
+          title="退出批量选择"
+        />
+        <span class="selection-count">点击照片进行选择</span>
+        <el-tooltip content="全选当前页" placement="top">
+          <el-button
+            :icon="Files"
+            circle
+            size="small"
+            @click="selectAll"
+          />
+        </el-tooltip>
+      </div>
+      <el-button
+        v-else-if="selectedPhotos.size === 0 && !batchSelectMode && photos.length > 0"
+        class="batch-select-fab"
+        :icon="Check"
+        circle
+        @click="batchSelectMode = true"
+        title="批量选择"
+      />
     </Transition>
 
     <!-- 添加/编辑扫描路径对话框 -->
@@ -595,7 +628,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
-import { ArrowUp, CircleCheck, CircleClose, Clock, Close, Collection, Delete, Files, Filter, Folder, FolderOpened, FullScreen, Loading, Location, MagicStick, Picture, PictureFilled, Plus, PriceTag, QuestionFilled, Refresh, RefreshLeft, Search, Select, Star, SwitchButton, Timer } from '@element-plus/icons-vue'
+import { ArrowUp, Check, CircleCheck, CircleClose, Clock, Close, Collection, Delete, Files, Filter, Folder, FolderOpened, FullScreen, Loading, Location, MagicStick, Picture, PictureFilled, Plus, PriceTag, QuestionFilled, Refresh, RefreshLeft, Search, Select, Star, SwitchButton, Timer } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
@@ -635,6 +668,7 @@ const cleaningUp = ref(false)
 const autoScanConfig = ref<AutoScanConfig>(configApi.getDefaultAutoScanConfig())
 const selectedPhotos = ref<Set<number>>(new Set())
 const lastSelectedIndex = ref<number>(-1) // Shift 多选锚点
+const batchSelectMode = ref(false)
 const excludingPhotos = ref(false)
 const showBatchLocationPicker = ref(false)
 const batchLocationLoading = ref(false)
@@ -2202,6 +2236,10 @@ defineExpose({
   opacity: 1;
 }
 
+.batch-mode .photo-select-btn {
+  opacity: 1;
+}
+
 .photo-select-btn.selected {
   opacity: 1;
   background: #e05a3a;
@@ -2622,6 +2660,25 @@ defineExpose({
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: var(--radius-lg, 12px);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+
+.batch-select-fab {
+  position: fixed;
+  bottom: 32px;
+  right: 32px;
+  z-index: 100;
+  width: 44px;
+  height: 44px;
+  background: #1a1a2e;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #fff;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+.batch-select-fab:hover,
+.batch-select-fab:focus {
+  background: #2a2a3e;
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.2);
 }
 
 .selection-count {

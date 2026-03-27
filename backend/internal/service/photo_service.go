@@ -32,6 +32,7 @@ type PhotoService interface {
 	// 查询
 	GetPhotoByID(id uint) (*model.Photo, error)
 	GetPhotos(req *model.GetPhotosRequest) ([]*model.Photo, int64, error)
+	GetAdjacentPhotos(id uint, req *model.GetPhotosRequest) (*model.AdjacentPhotosResponse, error)
 
 	// 统计
 	CountAll() (int64, error)
@@ -156,6 +157,16 @@ func (s *photoService) GetPhotos(req *model.GetPhotosRequest) ([]*model.Photo, i
 	}
 	s.enrichPhotoTags(photos)
 	return photos, total, nil
+}
+
+// GetAdjacentPhotos 获取相邻照片 ID
+func (s *photoService) GetAdjacentPhotos(id uint, req *model.GetPhotosRequest) (*model.AdjacentPhotosResponse, error) {
+	enabledPaths, err := s.getEnabledScanPaths()
+	if err != nil {
+		logger.Warnf("Failed to get enabled scan paths: %v", err)
+		enabledPaths = nil
+	}
+	return s.repo.GetAdjacent(id, req.Analyzed, req.HasThumbnail, req.HasGPS, req.Location, req.Search, req.Category, req.Tag, req.SortBy, req.SortDesc, enabledPaths, req.Status)
 }
 
 // CountAll 统计照片总数

@@ -53,6 +53,12 @@ type GetPhotosRequest struct {
 	Status       string `form:"status"`        // 状态筛选：active(默认)/excluded/all
 }
 
+// AdjacentPhotosResponse 相邻照片响应
+type AdjacentPhotosResponse struct {
+	PrevID *uint `json:"prev_id"` // 上一张照片 ID（null 表示已到头）
+	NextID *uint `json:"next_id"` // 下一张照片 ID（null 表示已到尾）
+}
+
 // GetDisplayPhotoRequest 获取展示照片请求
 type GetDisplayPhotoRequest struct {
 	DeviceID string `form:"device_id"` // 设备 ID（可选）

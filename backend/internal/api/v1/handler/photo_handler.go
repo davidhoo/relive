@@ -479,6 +479,61 @@ func (h *PhotoHandler) GetPhotoByID(c *gin.Context) {
 	})
 }
 
+// GetAdjacentPhotos 获取相邻照片
+// @Summary 获取相邻照片 ID
+// @Description 基于当前筛选/排序条件，返回指定照片的上一张和下一张 ID
+// @Tags photos
+// @Accept json
+// @Produce json
+// @Param id path int true "照片 ID"
+// @Success 200 {object} model.Response{data=model.AdjacentPhotosResponse}
+// @Router /api/v1/photos/{id}/adjacent [get]
+func (h *PhotoHandler) GetAdjacentPhotos(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INVALID_REQUEST",
+				Message: "Invalid photo ID",
+			},
+		})
+		return
+	}
+
+	var req model.GetPhotosRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INVALID_REQUEST",
+				Message: err.Error(),
+			},
+		})
+		return
+	}
+
+	resp, err := h.photoService.GetAdjacentPhotos(uint(id), &req)
+	if err != nil {
+		logger.Errorf("Get adjacent photos failed: %v", err)
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "INTERNAL_ERROR",
+				Message: "Failed to get adjacent photos",
+			},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "Success",
+		Data:    resp,
+	})
+}
+
 // GetPhotoImage 获取照片文件
 // @Summary 获取照片文件
 // @Description 返回照片的原始文件或缩略图，自动处理 HEIC 格式转换
