@@ -293,7 +293,6 @@
               <div class="preview-subtitle">
                 {{ formatPhotoDate(photo.taken_at) || '未知时间' }}
                 <span v-if="photo.location"> · {{ photo.location }}</span>
-                <el-button type="primary" link size="small" class="preview-detail-link" @click="router.push({ name: 'PhotoDetail', params: { id: photo.id } })">查看详情</el-button>
               </div>
               <div class="preview-score">
                 回忆 {{ photo.memory_score ?? 0 }} / 美观 {{ photo.beauty_score ?? 0 }}
@@ -334,7 +333,6 @@
                 <el-tag v-if="item.curation_channel" size="small" :type="curationChannelType(item.curation_channel)" effect="plain" class="curation-tag">{{ curationChannelLabel(item.curation_channel) }}</el-tag>
               </div>
               <div class="batch-item-subtitle">{{ formatPhotoDate(item.photo?.taken_at) || '未知时间' }}<span v-if="item.photo?.location"> · {{ item.photo.location }}</span>
-                <el-button v-if="item.photo" type="primary" link size="small" class="preview-detail-link" @click="router.push({ name: 'PhotoDetail', params: { id: item.photo.id } })">查看详情</el-button>
               </div>
               <div class="batch-asset-tags">
                 <el-tag v-for="asset in item.assets" :key="asset.id" size="small">{{ asset.render_profile }}</el-tag>
@@ -374,7 +372,6 @@
                     <el-tag v-if="item.curation_channel" size="small" :type="curationChannelType(item.curation_channel)" effect="plain" class="curation-tag">{{ curationChannelLabel(item.curation_channel) }}</el-tag>
                   </div>
                   <div class="batch-asset-links">
-                    <el-button v-if="item.photo" type="primary" link size="small" class="preview-detail-link" @click="router.push({ name: 'PhotoDetail', params: { id: item.photo.id } })">查看详情</el-button>
                     <a v-for="asset in item.assets" :key="asset.id" :href="resolveProtectedUrl(asset.bin_url || '')" target="_blank" rel="noreferrer">{{ asset.render_profile }}</a>
                   </div>
                 </div>
@@ -447,9 +444,9 @@
                 </div>
               </div>
               <div class="frame-preview-action">
-                <el-button type="primary" link @click="router.push({ name: 'PhotoDetail', params: { id: previewPhoto.id } })">
+                <router-link class="preview-download-link" :to="{ name: 'PhotoDetail', params: { id: previewPhoto.id } }">
                   查看照片详情
-                </el-button>
+                </router-link>
               </div>
             </div>
           </div>
@@ -1578,6 +1575,8 @@ onUnmounted(() => {
 }
 
 .frame-preview-action {
+  display: flex;
+  justify-content: center;
   margin-top: 12px;
 }
 
