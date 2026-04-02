@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"time"
+
 	"github.com/davidhoo/relive/internal/model"
 	"gorm.io/gorm"
 )
@@ -10,7 +12,10 @@ type PersonRepository interface {
 	Update(person *model.Person) error
 	UpdateFields(id uint, fields map[string]interface{}) error
 	GetByID(id uint) (*model.Person, error)
+	Delete(id uint) error
+	ListAll() ([]*model.Person, error)
 	ListByIDs(ids []uint) ([]*model.Person, error)
+	RefreshStats(personID uint) error
 	MergeInto(targetPersonID uint, sourcePersonIDs []uint) ([]uint, error)
 }
 
@@ -45,6 +50,16 @@ func (r *personRepository) GetByID(id uint) (*model.Person, error) {
 	return &person, nil
 }
 
+func (r *personRepository) Delete(id uint) error {
+	return r.db.Delete(&model.Person{}, "id = ?", id).Error
+}
+
+func (r *personRepository) ListAll() ([]*model.Person, error) {
+	var people []*model.Person
+	err := r.db.Order("id ASC").Find(&people).Error
+	return people, err
+}
+
 func (r *personRepository) ListByIDs(ids []uint) ([]*model.Person, error) {
 	var people []*model.Person
 	if len(ids) == 0 {
@@ -52,6 +67,10 @@ func (r *personRepository) ListByIDs(ids []uint) ([]*model.Person, error) {
 	}
 	err := r.db.Where("id IN ?", ids).Order("id ASC").Find(&people).Error
 	return people, err
+}
+
+func (r *personRepository) RefreshStats(personID uint) error {
+	return refreshPersonStats(r.db, personID)
 }
 
 func (r *personRepository) MergeInto(targetPersonID uint, sourcePersonIDs []uint) ([]uint, error) {
@@ -85,7 +104,12 @@ func (r *personRepository) MergeInto(targetPersonID uint, sourcePersonIDs []uint
 
 		if err := tx.Model(&model.Face{}).
 			Where("person_id IN ?", sourceIDs).
-			Update("person_id", targetPersonID).Error; err != nil {
+			Updates(map[string]interface{}{
+				"person_id":          targetPersonID,
+				"manual_locked":      true,
+				"manual_lock_reason": "merge",
+				"manual_locked_at":   time.Now(),
+			}).Error; err != nil {
 			return err
 		}
 

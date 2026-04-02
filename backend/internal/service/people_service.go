@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -16,9 +17,10 @@ import (
 )
 
 const (
-	peoplePriorityScan    = 50
-	peoplePriorityManual  = 80
-	peoplePriorityPassive = 100
+	peoplePriorityScan     = 50
+	peoplePriorityManual   = 80
+	peoplePriorityPassive  = 100
+	peopleClusterThreshold = 0.92
 )
 
 type PeopleMLClient interface {
@@ -33,6 +35,12 @@ type PeopleService interface {
 	GetBackgroundLogs() []string
 	EnqueuePhoto(photoID uint, source string, priority int, force bool) error
 	EnqueueByPath(path string, source string, priority int) (int, error)
+	MergePeople(targetPersonID uint, sourcePersonIDs []uint) error
+	SplitPerson(faceIDs []uint) (*model.Person, error)
+	MoveFaces(faceIDs []uint, targetPersonID uint) error
+	UpdatePersonCategory(personID uint, category string) error
+	UpdatePersonName(personID uint, name string) error
+	UpdatePersonAvatar(personID uint, faceID uint) error
 	HandleShutdown() error
 }
 
@@ -186,6 +194,130 @@ func (s *peopleService) HandleShutdown() error {
 	return s.StopBackground()
 }
 
+func (s *peopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint) error {
+	affectedPhotoIDs, err := s.personRepo.MergeInto(targetPersonID, sourcePersonIDs)
+	if err != nil {
+		return err
+	}
+	if err := s.syncPersonState(targetPersonID); err != nil {
+		return err
+	}
+	return s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs)
+}
+
+func (s *peopleService) SplitPerson(faceIDs []uint) (*model.Person, error) {
+	faces, err := s.faceRepo.ListByIDs(faceIDs)
+	if err != nil {
+		return nil, err
+	}
+	if len(faces) == 0 {
+		return nil, fmt.Errorf("faces not found")
+	}
+
+	var sourcePersonID uint
+	for _, face := range faces {
+		if face.PersonID == nil || *face.PersonID == 0 {
+			return nil, fmt.Errorf("face %d has no person", face.ID)
+		}
+		if sourcePersonID == 0 {
+			sourcePersonID = *face.PersonID
+			continue
+		}
+		if sourcePersonID != *face.PersonID {
+			return nil, fmt.Errorf("split faces must belong to the same person")
+		}
+	}
+
+	sourcePerson, err := s.personRepo.GetByID(sourcePersonID)
+	if err != nil {
+		return nil, err
+	}
+	if sourcePerson == nil {
+		return nil, fmt.Errorf("source person not found")
+	}
+
+	newPerson := &model.Person{Category: sourcePerson.Category}
+	if err := s.personRepo.Create(newPerson); err != nil {
+		return nil, err
+	}
+	if err := s.faceRepo.ReassignFaces(faceIDs, newPerson.ID, "split"); err != nil {
+		return nil, err
+	}
+
+	if err := s.syncPersonState(sourcePersonID); err != nil {
+		return nil, err
+	}
+	if err := s.syncPersonState(newPerson.ID); err != nil {
+		return nil, err
+	}
+	if err := s.photoRepo.RecomputeTopPersonCategory(facePhotoIDs(faces)); err != nil {
+		return nil, err
+	}
+
+	return s.personRepo.GetByID(newPerson.ID)
+}
+
+func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) error {
+	faces, err := s.faceRepo.ListByIDs(faceIDs)
+	if err != nil {
+		return err
+	}
+	if len(faces) == 0 {
+		return fmt.Errorf("faces not found")
+	}
+
+	sourcePersonIDs := make(map[uint]struct{})
+	for _, face := range faces {
+		if face.PersonID != nil && *face.PersonID != 0 && *face.PersonID != targetPersonID {
+			sourcePersonIDs[*face.PersonID] = struct{}{}
+		}
+	}
+
+	if err := s.faceRepo.ReassignFaces(faceIDs, targetPersonID, "move"); err != nil {
+		return err
+	}
+
+	if err := s.syncPersonState(targetPersonID); err != nil {
+		return err
+	}
+	for personID := range sourcePersonIDs {
+		if err := s.syncPersonState(personID); err != nil {
+			return err
+		}
+	}
+
+	return s.photoRepo.RecomputeTopPersonCategory(facePhotoIDs(faces))
+}
+
+func (s *peopleService) UpdatePersonCategory(personID uint, category string) error {
+	if err := s.personRepo.UpdateFields(personID, map[string]interface{}{"category": category}); err != nil {
+		return err
+	}
+	faces, err := s.faceRepo.ListByPersonID(personID)
+	if err != nil {
+		return err
+	}
+	return s.photoRepo.RecomputeTopPersonCategory(facePhotoIDs(faces))
+}
+
+func (s *peopleService) UpdatePersonName(personID uint, name string) error {
+	return s.personRepo.UpdateFields(personID, map[string]interface{}{"name": name})
+}
+
+func (s *peopleService) UpdatePersonAvatar(personID uint, faceID uint) error {
+	face, err := s.faceRepo.GetByID(faceID)
+	if err != nil {
+		return err
+	}
+	if face == nil || face.PersonID == nil || *face.PersonID != personID {
+		return fmt.Errorf("face %d does not belong to person %d", faceID, personID)
+	}
+	return s.personRepo.UpdateFields(personID, map[string]interface{}{
+		"representative_face_id": faceID,
+		"avatar_locked":          true,
+	})
+}
+
 func (s *peopleService) enqueuePhotoModel(photo *model.Photo, source string, priority int, force bool) error {
 	if photo == nil {
 		return fmt.Errorf("photo is nil")
@@ -295,6 +427,21 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 		})
 	}
 
+	existingFaces, err := s.faceRepo.ListByPhotoID(photo.ID)
+	if err != nil {
+		return err
+	}
+	if hasManualLockedFaces(existingFaces) {
+		if err := s.photoRepo.RecomputeTopPersonCategory([]uint{photo.ID}); err != nil {
+			return err
+		}
+		return s.jobRepo.UpdateFields(job.ID, map[string]interface{}{
+			"status":       model.PeopleJobStatusCompleted,
+			"last_error":   "",
+			"completed_at": &now,
+		})
+	}
+
 	if err := s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
 		"face_process_status": model.FaceProcessStatusProcessing,
 	}); err != nil {
@@ -323,12 +470,11 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 		result = &mlclient.DetectFacesResponse{}
 	}
 
-	return s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("photo_id = ?", photo.ID).Delete(&model.Face{}).Error; err != nil {
-			return err
-		}
-
-		if len(result.Faces) == 0 {
+	if len(result.Faces) == 0 {
+		return s.db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Where("photo_id = ?", photo.ID).Delete(&model.Face{}).Error; err != nil {
+				return err
+			}
 			if err := tx.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
 				"face_process_status": model.FaceProcessStatusNoFace,
 				"face_count":          0,
@@ -341,24 +487,63 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 				"last_error":   "",
 				"completed_at": &now,
 			}).Error
+		})
+	}
+
+	assignedCandidates, err := s.faceRepo.ListAssigned()
+	if err != nil {
+		return err
+	}
+	assignedCandidates = filterFacesByOtherPhotos(assignedCandidates, photo.ID)
+	previousPersonIDs := personIDsFromFaces(existingFaces)
+
+	people, err := s.personRepo.ListAll()
+	if err != nil {
+		return err
+	}
+	personByID := make(map[uint]*model.Person, len(people))
+	for _, person := range people {
+		personByID[person.ID] = person
+	}
+
+	affectedPersonIDs := make(map[uint]struct{})
+	createdFaces := make([]*model.Face, 0, len(result.Faces))
+	for _, detected := range result.Faces {
+		personID, ensureErr := s.ensurePersonForDetectedFace(detected, assignedCandidates, personByID)
+		if ensureErr != nil {
+			return ensureErr
 		}
 
-		for _, detected := range result.Faces {
-			embeddingPayload, err := json.Marshal(detected.Embedding)
-			if err != nil {
-				return err
-			}
-			face := &model.Face{
-				PhotoID:       photo.ID,
-				BBoxX:         detected.BBox.X,
-				BBoxY:         detected.BBox.Y,
-				BBoxWidth:     detected.BBox.Width,
-				BBoxHeight:    detected.BBox.Height,
-				Confidence:    detected.Confidence,
-				QualityScore:  detected.QualityScore,
-				Embedding:     embeddingPayload,
-				ThumbnailPath: "",
-			}
+		embeddingPayload, err := json.Marshal(detected.Embedding)
+		if err != nil {
+			return err
+		}
+		face := &model.Face{
+			PhotoID:       photo.ID,
+			PersonID:      &personID,
+			BBoxX:         detected.BBox.X,
+			BBoxY:         detected.BBox.Y,
+			BBoxWidth:     detected.BBox.Width,
+			BBoxHeight:    detected.BBox.Height,
+			Confidence:    detected.Confidence,
+			QualityScore:  detected.QualityScore,
+			Embedding:     embeddingPayload,
+			ThumbnailPath: "",
+		}
+		createdFaces = append(createdFaces, face)
+		assignedCandidates = append(assignedCandidates, face)
+		affectedPersonIDs[personID] = struct{}{}
+	}
+	for _, personID := range previousPersonIDs {
+		affectedPersonIDs[personID] = struct{}{}
+	}
+
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("photo_id = ?", photo.ID).Delete(&model.Face{}).Error; err != nil {
+			return err
+		}
+
+		for _, face := range createdFaces {
 			if err := tx.Create(face).Error; err != nil {
 				return err
 			}
@@ -366,8 +551,7 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 
 		if err := tx.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
 			"face_process_status": model.FaceProcessStatusReady,
-			"face_count":          len(result.Faces),
-			"top_person_category": "",
+			"face_count":          len(createdFaces),
 		}).Error; err != nil {
 			return err
 		}
@@ -377,7 +561,17 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 			"last_error":   "",
 			"completed_at": &now,
 		}).Error
-	})
+	}); err != nil {
+		return err
+	}
+
+	for personID := range affectedPersonIDs {
+		if err := s.syncPersonState(personID); err != nil {
+			return err
+		}
+	}
+
+	return s.photoRepo.RecomputeTopPersonCategory([]uint{photo.ID})
 }
 
 func (s *peopleService) resetBackgroundLogs() {
@@ -402,4 +596,168 @@ func clonePeopleTask(task *model.PeopleTask) *model.PeopleTask {
 	}
 	clone := *task
 	return &clone
+}
+
+func (s *peopleService) ensurePersonForDetectedFace(detected mlclient.DetectedFace, candidates []*model.Face, people map[uint]*model.Person) (uint, error) {
+	bestPersonID := uint(0)
+	bestScore := -1.0
+
+	for _, face := range candidates {
+		if face.PersonID == nil || *face.PersonID == 0 {
+			continue
+		}
+		score := cosineSimilarity(detected.Embedding, decodeEmbedding(face.Embedding))
+		if score > bestScore {
+			bestScore = score
+			bestPersonID = *face.PersonID
+		}
+	}
+
+	if bestPersonID != 0 && bestScore >= peopleClusterThreshold {
+		if _, ok := people[bestPersonID]; ok {
+			return bestPersonID, nil
+		}
+	}
+
+	person := &model.Person{Category: model.PersonCategoryStranger}
+	if err := s.personRepo.Create(person); err != nil {
+		return 0, err
+	}
+	people[person.ID] = person
+	return person.ID, nil
+}
+
+func (s *peopleService) syncPersonState(personID uint) error {
+	person, err := s.personRepo.GetByID(personID)
+	if err != nil {
+		return err
+	}
+	if person == nil {
+		return nil
+	}
+
+	faces, err := s.faceRepo.ListByPersonID(personID)
+	if err != nil {
+		return err
+	}
+	if len(faces) == 0 {
+		return s.personRepo.Delete(personID)
+	}
+
+	if err := s.personRepo.RefreshStats(personID); err != nil {
+		return err
+	}
+
+	if person.AvatarLocked && person.RepresentativeFaceID != nil {
+		for _, face := range faces {
+			if face.ID == *person.RepresentativeFaceID {
+				return nil
+			}
+		}
+		person.AvatarLocked = false
+	}
+
+	bestFace := faces[0]
+	for _, face := range faces[1:] {
+		if face.QualityScore > bestFace.QualityScore {
+			bestFace = face
+			continue
+		}
+		if face.QualityScore == bestFace.QualityScore && face.Confidence > bestFace.Confidence {
+			bestFace = face
+		}
+	}
+
+	updates := map[string]interface{}{
+		"representative_face_id": bestFace.ID,
+	}
+	if !person.AvatarLocked {
+		updates["avatar_locked"] = false
+	}
+	return s.personRepo.UpdateFields(personID, updates)
+}
+
+func facePhotoIDs(faces []*model.Face) []uint {
+	seen := make(map[uint]struct{})
+	photoIDs := make([]uint, 0, len(faces))
+	for _, face := range faces {
+		if face == nil || face.PhotoID == 0 {
+			continue
+		}
+		if _, ok := seen[face.PhotoID]; ok {
+			continue
+		}
+		seen[face.PhotoID] = struct{}{}
+		photoIDs = append(photoIDs, face.PhotoID)
+	}
+	return photoIDs
+}
+
+func hasManualLockedFaces(faces []*model.Face) bool {
+	for _, face := range faces {
+		if face != nil && face.ManualLocked {
+			return true
+		}
+	}
+	return false
+}
+
+func filterFacesByOtherPhotos(faces []*model.Face, photoID uint) []*model.Face {
+	filtered := make([]*model.Face, 0, len(faces))
+	for _, face := range faces {
+		if face == nil || face.PhotoID == photoID {
+			continue
+		}
+		filtered = append(filtered, face)
+	}
+	return filtered
+}
+
+func personIDsFromFaces(faces []*model.Face) []uint {
+	seen := make(map[uint]struct{})
+	personIDs := make([]uint, 0, len(faces))
+	for _, face := range faces {
+		if face == nil || face.PersonID == nil || *face.PersonID == 0 {
+			continue
+		}
+		personID := *face.PersonID
+		if _, ok := seen[personID]; ok {
+			continue
+		}
+		seen[personID] = struct{}{}
+		personIDs = append(personIDs, personID)
+	}
+	return personIDs
+}
+
+func decodeEmbedding(payload []byte) []float32 {
+	if len(payload) == 0 {
+		return nil
+	}
+	var embedding []float32
+	if err := json.Unmarshal(payload, &embedding); err != nil {
+		return nil
+	}
+	return embedding
+}
+
+func cosineSimilarity(a, b []float32) float64 {
+	if len(a) == 0 || len(a) != len(b) {
+		return -1
+	}
+
+	var dot float64
+	var normA float64
+	var normB float64
+	for i := range a {
+		af := float64(a[i])
+		bf := float64(b[i])
+		dot += af * bf
+		normA += af * af
+		normB += bf * bf
+	}
+	if normA == 0 || normB == 0 {
+		return -1
+	}
+	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }

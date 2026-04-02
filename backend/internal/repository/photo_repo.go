@@ -734,6 +734,21 @@ func (r *photoRepository) RecomputeTopPersonCategory(photoIDs []uint) error {
 	if len(photoIDs) == 0 {
 		return nil
 	}
+	dedupedIDs := make([]uint, 0, len(photoIDs))
+	seen := make(map[uint]struct{}, len(photoIDs))
+	for _, photoID := range photoIDs {
+		if photoID == 0 {
+			continue
+		}
+		if _, ok := seen[photoID]; ok {
+			continue
+		}
+		seen[photoID] = struct{}{}
+		dedupedIDs = append(dedupedIDs, photoID)
+	}
+	if len(dedupedIDs) == 0 {
+		return nil
+	}
 
 	type row struct {
 		PhotoID      uint `gorm:"column:photo_id"`
@@ -756,7 +771,7 @@ func (r *photoRepository) RecomputeTopPersonCategory(photoIDs []uint) error {
 		`).
 		Joins("LEFT JOIN faces ON faces.photo_id = photos.id").
 		Joins("LEFT JOIN people ON people.id = faces.person_id").
-		Where("photos.id IN ?", photoIDs).
+		Where("photos.id IN ?", dedupedIDs).
 		Group("photos.id").
 		Scan(&rows).Error
 	if err != nil {
@@ -769,7 +784,7 @@ func (r *photoRepository) RecomputeTopPersonCategory(photoIDs []uint) error {
 	}
 
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		for _, photoID := range photoIDs {
+		for _, photoID := range dedupedIDs {
 			current, ok := byPhotoID[photoID]
 			updates := map[string]interface{}{
 				"face_count":          0,
