@@ -19,7 +19,10 @@
 # 依赖安装
 make deps
 
-# 后端开发
+# 开发环境（交互式菜单）
+make dev
+
+# 只启动后端开发服务
 make dev-backend
 
 # 前端开发
@@ -28,12 +31,16 @@ make dev-frontend
 # 构建与部署
 make build
 make deploy
+make prod
 
 # 查看日志
-docker-compose logs -f
+make logs
 
 # 后端测试
 make test
+
+# 清理
+make clean
 
 # analyzer
 make build-analyzer

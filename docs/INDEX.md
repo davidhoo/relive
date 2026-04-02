@@ -7,7 +7,6 @@
 ### 当前使用
 - `README.md`：项目总览
 - `QUICKSTART.md`：当前版本快速启动
-- `QUICKSTART.md`：快速启动与部署
 - `docs/BACKEND_API.md`：当前已实现 API
 - `docs/ANALYZER_API_MODE.md`：当前 analyzer API 模式
 - `docs/PROJECT_STATUS.md`：当前项目状态
@@ -16,9 +15,11 @@
 - `docs/QUICK_REFERENCE.md`：开发速查卡
 - `docs/CONFIGURATION.md`：配置职责与优先级
 - `docs/DEVICE_PROTOCOL.md`：设备协议设计
+- `docs/GOTCHAS.md`：踩坑经验（GORM/SQLite/Vue/ESP32 常见陷阱）
 
 ### 设计方案
 - `docs/plans/event-driven-curation.md`：事件驱动型智能策展方案
+- `docs/plans/face-recognition-vector-db.md`：人像识别 + 向量数据库 + 智能裁切方案
 
 ## 当前实现文档
 
