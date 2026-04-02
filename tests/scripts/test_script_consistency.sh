@@ -95,6 +95,7 @@ assert_not_contains "$DEV_SCRIPT" "read -p" "dev.sh still uses read -p"
 assert_contains "$DEV_SCRIPT" "go run cmd/relive/main.go --config config.dev.yaml" "dev.sh no longer starts the backend locally"
 assert_contains "$DEV_SCRIPT" "npm run dev" "dev.sh no longer starts the frontend locally"
 assert_contains "$DEV_SCRIPT" "trap" "dev.sh no longer installs cleanup handling for child processes"
+assert_contains "$DEV_SCRIPT" "kill -0 \"\${BACKEND_PID}\"" "dev.sh does not verify that the backend process is still alive before starting the frontend"
 
 # 7) deploy.sh should stay source-only and let Docker build the app image
 DEPLOY_SCRIPT="$(cat "$ROOT/deploy.sh")"

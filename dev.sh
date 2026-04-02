@@ -67,6 +67,12 @@ BACKEND_PID=$!
 
 sleep 3
 
+if ! kill -0 "${BACKEND_PID}" 2>/dev/null; then
+    echo "Backend failed to start. Port 8080 may already be in use." >&2
+    echo "Stop the existing service and retry make dev." >&2
+    exit 1
+fi
+
 (cd frontend && npm run dev) &
 FRONTEND_PID=$!
 
