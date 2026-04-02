@@ -138,6 +138,93 @@
             <el-descriptions-item label="缩略图时间">{{ formatTime(photo.thumbnail_generated_at) }}</el-descriptions-item>
           </el-descriptions>
 
+          <el-divider />
+          <div class="people-detail-section">
+            <div class="people-section-header">
+              <div>
+                <h3>人物信息</h3>
+                <p class="people-section-subtitle">展示这张照片中出现的人物和对应的人脸样本，便于检查聚类结果。</p>
+              </div>
+              <el-tag effect="light" :type="photoPeopleGroups.length > 0 ? 'danger' : 'info'">
+                {{ photoPeopleSummaryLabel }}
+              </el-tag>
+            </div>
+
+            <el-skeleton v-if="photoPeopleLoading" animated :rows="4" />
+
+            <template v-else>
+              <el-alert
+                v-if="photoPeopleStatus === 'pending' || photoPeopleStatus === 'processing'"
+                type="info"
+                :closable="false"
+                show-icon
+                :title="photoPeopleStatus === 'pending' ? '人物队列待处理' : '人物识别处理中'"
+                description="人物后台任务会在扫描 / 重建后自动推进，识别完成后这里会展示分组结果。"
+                class="people-status-alert"
+              />
+
+              <el-alert
+                v-else-if="photoPeopleStatus === 'failed'"
+                type="warning"
+                :closable="false"
+                show-icon
+                title="人物识别失败"
+                description="可以先检查人物后台任务日志，必要时重新触发扫描或后续修复。"
+                class="people-status-alert"
+              />
+
+              <el-empty
+                v-if="photoPeopleGroups.length === 0"
+                :description="photoPeopleEmptyText"
+              />
+
+              <div v-else class="photo-people-groups">
+                <div v-for="group in photoPeopleGroups" :key="group.category" class="photo-people-group">
+                  <div class="photo-people-group-header">
+                    <h4>{{ group.label }}</h4>
+                    <span class="photo-people-group-meta">
+                      {{ `${group.people.length} 人 · ${group.face_count} 张人脸` }}
+                    </span>
+                  </div>
+
+                  <div class="photo-people-person-grid">
+                    <router-link
+                      v-for="personItem in group.people"
+                      :key="personItem.id"
+                      :to="`/people/${personItem.id}`"
+                      class="photo-person-card"
+                    >
+                      <div class="photo-person-main">
+                        <el-avatar
+                          :size="44"
+                          :src="personItem.representative_face_id ? getFaceThumbnailUrl(personItem.representative_face_id, String(imageVersion)) : ''"
+                        >
+                          {{ getPersonAvatarFallback(personItem) }}
+                        </el-avatar>
+                        <div class="photo-person-copy">
+                          <div class="photo-person-name">{{ getPhotoPersonName(personItem) }}</div>
+                          <div class="photo-person-meta">
+                            {{ `${getPersonCategoryLabel(personItem.category)} · ${personItem.faces?.length || 0} 张样本` }}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="photo-person-face-strip">
+                        <img
+                          v-for="face in (personItem.faces || []).slice(0, 4)"
+                          :key="face.id"
+                          :src="getFaceThumbnailUrl(face.id, String(imageVersion))"
+                          :alt="`face-${face.id}`"
+                          class="photo-person-face"
+                        />
+                      </div>
+                    </router-link>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+
           <!-- 文件时间信息 -->
           <el-divider />
           <el-descriptions title="文件时间" :column="2" border>
@@ -262,17 +349,21 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
+import { computed, ref, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, ArrowRight, InfoFilled, Delete, RefreshRight, RefreshLeft, Edit } from '@element-plus/icons-vue'
 import { photoApi } from '@/api/photo'
 import { aiApi } from '@/api/ai'
 import { geocodeApi } from '@/api/geocode'
 import { thumbnailApi } from '@/api/thumbnail'
+import { peopleApi } from '@/api/people'
 import type { Photo } from '@/types/photo'
+import type { PhotoPeopleResponse, Person } from '@/types/people'
 import LocationPicker from '@/components/LocationPicker.vue'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { getPersonAvatarFallback, getPersonCategoryLabel } from '@/views/People/peopleHelpers'
+import { buildFaceThumbnailUrl, getPhotoPeopleSummaryLabel, groupPhotoPeopleByCategory } from './photoPeopleHelpers'
 
 const route = useRoute()
 const router = useRouter()
@@ -286,6 +377,8 @@ const statusUpdating = ref(false)
 const orientationUpdating = ref(false)
 const imageVersion = ref(Date.now())
 const showLocationPicker = ref(false)
+const photoPeople = ref<PhotoPeopleResponse | null>(null)
+const photoPeopleLoading = ref(false)
 
 // 上一张/下一张导航
 const prevId = ref<number | null>(null)
@@ -298,6 +391,31 @@ const categoryValue = ref('')
 const availableCategories = ref<string[]>([])
 const categoriesLoading = ref(false)
 const categorySelectRef = ref<any>(null)
+
+const buildPhotoPeopleFallback = (): Pick<PhotoPeopleResponse, 'face_process_status' | 'face_count' | 'top_person_category'> | null => {
+  if (!photo.value) return null
+  return {
+    face_process_status: (photo.value.face_process_status as PhotoPeopleResponse['face_process_status']) || 'none',
+    face_count: photo.value.face_count || 0,
+    top_person_category: (photo.value.top_person_category as PhotoPeopleResponse['top_person_category']) || '',
+  }
+}
+
+const photoPeopleStatus = computed(() => photoPeople.value?.face_process_status || buildPhotoPeopleFallback()?.face_process_status || 'none')
+const photoPeopleGroups = computed(() => groupPhotoPeopleByCategory(photoPeople.value))
+const photoPeopleSummaryLabel = computed(() => getPhotoPeopleSummaryLabel(photoPeople.value || buildPhotoPeopleFallback()))
+const photoPeopleEmptyText = computed(() => {
+  switch (photoPeopleStatus.value) {
+    case 'none':
+      return '尚未生成人物结果'
+    case 'no_face':
+      return '未检测到人脸'
+    case 'failed':
+      return '人物识别失败'
+    default:
+      return photoPeopleSummaryLabel.value
+  }
+})
 
 // 统一管理所有轮询定时器，离开页面时清理
 const activeTimers: ReturnType<typeof setInterval | typeof setTimeout>[] = []
@@ -324,6 +442,13 @@ const getPhotoUrl = (photoId: number) => {
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
   return `${baseUrl}/photos/${photoId}/image`
 }
+
+const getFaceThumbnailUrl = (faceId: number, version?: string) => {
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
+  return buildFaceThumbnailUrl(faceId, baseUrl, version)
+}
+
+const getPhotoPersonName = (personItem: Person) => personItem.name?.trim() || `未命名人物 #${personItem.id}`
 
 // 格式化时间
 const formatTime = (time?: string) => {
@@ -388,10 +513,29 @@ const loadPhoto = async () => {
     const photoId = Number(route.params.id)
     const res = await photoApi.getById(photoId)
     photo.value = res.data?.data || null
+    await loadPhotoPeople(photo.value?.id)
   } catch (error: any) {
     ElMessage.error(error.message || '加载照片详情失败')
   } finally {
     loading.value = false
+  }
+}
+
+const loadPhotoPeople = async (photoId?: number) => {
+  if (!photoId) {
+    photoPeople.value = null
+    return
+  }
+
+  photoPeopleLoading.value = true
+  try {
+    const res = await peopleApi.getPhotoPeople(photoId)
+    photoPeople.value = res.data?.data || null
+  } catch (error) {
+    photoPeople.value = null
+    console.error('Failed to load photo people:', error)
+  } finally {
+    photoPeopleLoading.value = false
   }
 }
 
@@ -828,6 +972,122 @@ h4 {
 
 .orientation-actions {
   margin-left: auto;
+}
+
+.people-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.people-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.people-section-subtitle {
+  margin: 6px 0 0;
+  color: #606266;
+  line-height: 1.7;
+}
+
+.people-status-alert {
+  margin-top: 4px;
+}
+
+.photo-people-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.photo-people-group {
+  padding: 16px;
+  border-radius: 14px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+}
+
+.photo-people-group-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  margin-bottom: 12px;
+}
+
+.photo-people-group-meta {
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.photo-people-person-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.photo-person-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  text-decoration: none;
+}
+
+.photo-person-card:hover {
+  border-color: var(--el-color-primary);
+}
+
+.photo-person-main {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.photo-person-copy {
+  min-width: 0;
+}
+
+.photo-person-name {
+  font-weight: 600;
+  color: #303133;
+}
+
+.photo-person-meta {
+  margin-top: 4px;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.photo-person-face-strip {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.photo-person-face {
+  width: 54px;
+  height: 54px;
+  object-fit: cover;
+  border-radius: 10px;
+  background: #eef2f7;
+}
+
+@media (max-width: 768px) {
+  .people-section-header,
+  .photo-people-group-header {
+    flex-direction: column;
+  }
+
+  .photo-people-person-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 </style>
