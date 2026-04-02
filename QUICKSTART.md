@@ -5,7 +5,7 @@
 ## 前置要求
 
 - Docker 20.10+
-- Docker Compose 1.29+
+- Docker Compose v2（可使用 `docker compose` 命令）
 - 一个可挂载到容器内的照片目录
 - 可选：Ollama / Qwen / OpenAI 等 AI 服务
 
@@ -16,9 +16,10 @@ git clone https://github.com/davidhoo/relive.git
 cd relive
 ```
 
-## 2. 复制环境变量模板
+## 2. 准备已发布镜像部署文件
 
 ```bash
+cp docker-compose.prod.yml.example docker-compose.prod.yml
 cp .env.example .env
 cp backend/config.prod.yaml.example backend/config.prod.yaml
 ```
@@ -29,13 +30,13 @@ cp backend/config.prod.yaml.example backend/config.prod.yaml
 JWT_SECRET=replace-with-a-random-secret
 ```
 
-> 当前 Docker 部署 **不通过** `.env` 中的 `PHOTOS_PATH` 指定照片目录；照片目录需要在 `docker-compose.yml` 的 `volumes` 里挂载。
+> 当前 Docker 部署 **不通过** `.env` 中的 `PHOTOS_PATH` 指定照片目录；照片目录需要在 `docker-compose.prod.yml` 的 `volumes` 里挂载。
 >
-> 如果你不确定某项配置该改 `.env`、`docker-compose.yml`、`analyzer.yaml` 还是后台配置页，请先阅读 `docs/CONFIGURATION.md`。
+> 如果你不确定某项配置该改 `.env`、`docker-compose.prod.yml`、`analyzer.yaml` 还是后台配置页，请先阅读 `docs/CONFIGURATION.md`。
 
 ## 3. 修改照片目录挂载
 
-编辑 `docker-compose.yml`，把示例路径改成你自己的宿主机目录：
+编辑 `docker-compose.prod.yml`，把示例路径改成你自己的宿主机目录：
 
 ```yaml
 services:
@@ -52,8 +53,12 @@ services:
 ## 4. 启动服务
 
 ```bash
-make deploy
+make deploy-image
 ```
+
+`make deploy-image` 是普通用户默认推荐路径，会拉取已发布镜像并启动服务。
+
+如果你正在本地改代码，需要从源码构建镜像，请先执行 `cp docker-compose.yml.example docker-compose.yml`，再使用 `make deploy` 做源码部署。
 
 常用访问地址：
 - Web：`http://localhost:8080`
@@ -116,21 +121,21 @@ make build-analyzer
 
 ```bash
 # 查看服务状态
-docker-compose ps
+docker compose -f docker-compose.prod.yml ps
 
 # 查看日志
-docker-compose logs -f
-docker-compose logs -f relive
+docker compose -f docker-compose.prod.yml logs -f
+docker compose -f docker-compose.prod.yml logs -f relive
 
 # 停止服务
-docker-compose down
+docker compose -f docker-compose.prod.yml down
 
 # 重启服务
-docker-compose restart
+docker compose -f docker-compose.prod.yml restart
 
 # 更新后重新部署
 git pull
-make deploy
+make deploy-image
 ```
 
 ## 故障排除
@@ -159,10 +164,12 @@ curl http://localhost:8080/api/v1/system/health
 ### 照片目录不可见
 
 ```bash
-docker-compose exec relive ls -la /app/photos
+docker compose -f docker-compose.prod.yml exec relive ls -la /app/photos
 ```
 
-如果目录不存在或为空，优先检查 `docker-compose.yml` 的挂载路径。
+如果目录不存在或为空，优先检查 `docker-compose.prod.yml` 的挂载路径。
+
+如果同一台机器同时保留了 `docker-compose.yml` 和 `docker-compose.prod.yml`，排查镜像部署问题时优先使用显式带 `-f docker-compose.prod.yml` 的命令，避免误操作到源码部署栈。
 
 更多配置分层说明见：`docs/CONFIGURATION.md`。
 

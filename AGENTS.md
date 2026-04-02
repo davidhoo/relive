@@ -15,17 +15,18 @@ Relive is an intelligent photo memory frame system that analyzes photos using AI
 ### Root Level (Makefile)
 ```bash
 # Development
-make dev              # Interactive dev environment launcher (choose backend/frontend/both)
-make dev-backend      # Start backend only (cd backend && go run cmd/relive/main.go --config config.dev.yaml)
-make dev-frontend     # Start frontend only (cd frontend && npm run dev)
+make dev              # Start the local development environment (backend + frontend)
+make dev-backend      # Start backend only (available for focused debugging)
+make dev-frontend     # Start frontend only (available for focused debugging)
 
 # Production
 make build            # Build Docker images
-make deploy           # Local build and deploy
-make prod             # Deploy using DockerHub images
-make stop             # Stop all services (docker-compose down)
-make restart          # Restart services
-make logs             # View logs (docker-compose logs -f)
+make deploy           # Source deployment from the current checkout
+make deploy-image     # Deploy using published images (recommended for normal users)
+make prod             # Compatibility alias for deploy-image
+make stop             # Stop services for the active compose file
+make restart          # Restart services for the active compose file
+make logs             # View logs for the active compose file
 
 # Testing & Maintenance
 make test             # Run backend tests (cd backend && go test -v ./...)
@@ -173,8 +174,9 @@ The `Device` model and `CreateDeviceRequest` have been simplified to use a singl
 - `backend/cmd/relive/main.go` - Backend entry point
 - `backend/config.dev.yaml` - Development configuration
 - `frontend/src/main.ts` - Frontend entry point
-- `docker-compose.yml` - Production deployment
-- `dev.sh` - Interactive development launcher
+- `docker-compose.yml` - Source deployment compose file
+- `docker-compose.prod.yml` - Published-image deployment compose file
+- `dev.sh` - Local development launcher
 
 ## Testing
 
@@ -223,18 +225,17 @@ sqlite3 backend/data/relive.db "SELECT count(*) FROM photos;"
 
 ## Development Workflow
 
-1. **Start services**: `make dev` (choose option 3 for both)
+1. **Start services**: `make dev`
 2. **Backend runs on**: http://localhost:8080
 3. **Frontend runs on**: http://localhost:5173
 4. **API prefix**: `/api/v1/`
 
 ## Deployment
 
-Production uses Docker Compose with single image:
+Deployment supports two paths:
 ```bash
-make deploy    # Local build and deploy
-# or
-make prod      # Use DockerHub images
+make deploy-image    # Published-image deployment (recommended)
+make deploy          # Source deployment from the current checkout
 ```
 - Web UI: http://localhost:8080
 - API: http://localhost:8080/api/v1/

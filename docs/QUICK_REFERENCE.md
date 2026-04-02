@@ -8,7 +8,8 @@
 - 后端路由：`backend/internal/api/v1/router/router.go`
 - analyzer CLI：`backend/cmd/relive-analyzer/main.go`
 - 前端路由：`frontend/src/router/index.ts`
-- Docker 部署：`docker-compose.yml`
+- 源码部署模板：`docker-compose.yml.example`
+- 镜像部署模板：`docker-compose.prod.yml.example`
 - analyzer 模板：`analyzer.yaml.example`
 - 配置职责：`docs/CONFIGURATION.md`
 - 生成配置：`backend/config.dev.yaml.example` / `backend/config.prod.yaml.example`
@@ -16,25 +17,20 @@
 ## 常用命令
 
 ```bash
-# 依赖安装
-make deps
-
-# 开发环境（交互式菜单）
+# 本地开发
 make dev
-
-# 只启动后端开发服务
-make dev-backend
-
-# 前端开发
-make dev-frontend
 
 # 构建与部署
 make build
+make deploy-image
 make deploy
-make prod
 
 # 查看日志
 make logs
+
+# 服务控制
+make stop
+make restart
 
 # 后端测试
 make test
@@ -47,6 +43,8 @@ make build-analyzer
 ./backend/bin/relive-analyzer check -config analyzer.yaml
 ./backend/bin/relive-analyzer analyze -config analyzer.yaml
 ```
+
+注：若同一台机器同时存在 `docker-compose.yml` 和 `docker-compose.prod.yml`，`make logs` / `make stop` / `make restart` 默认优先作用于 `docker-compose.yml`。排查镜像部署时，优先显式使用 `docker compose -f docker-compose.prod.yml ...`。
 
 ## 当前前端页面
 

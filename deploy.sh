@@ -175,40 +175,9 @@ echo ""
 
 echo -e "${BLUE}[5/5]${NC} 构建并启动服务..."
 
-# 构建前端（如果需要）
-if [ ! -d "frontend/dist" ]; then
-    echo "  前端未构建，开始构建..."
-
-    if [ ! -d "frontend/node_modules" ]; then
-        echo "  安装前端依赖..."
-        cd frontend
-        if command -v npm &> /dev/null; then
-            npm install
-        else
-            echo -e "${RED}  ❌ npm 未安装，无法构建前端${NC}"
-            exit 1
-        fi
-        cd ..
-    fi
-
-    echo "  构建前端..."
-    cd frontend
-    npm run build
-    cd ..
-
-    echo -e "${GREEN}  ✓${NC} 前端构建完成"
-else
-    echo -e "${GREEN}  ✓${NC} 前端已构建，跳过"
-fi
-
 # 构建并启动 Docker
-if docker compose version &> /dev/null 2>&1; then
-    docker compose build
-    docker compose up -d
-else
-    docker-compose build
-    docker-compose up -d
-fi
+docker compose build
+docker compose up -d
 
 echo -e "${GREEN}  ✓${NC} Docker 服务已启动"
 
