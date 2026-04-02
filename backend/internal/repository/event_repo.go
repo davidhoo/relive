@@ -200,7 +200,7 @@ func (r *eventRepository) IncrementDisplayCount(eventID uint) error {
 	now := time.Now()
 	return r.db.Model(&model.Event{}).Where("id = ?", eventID).
 		Updates(map[string]interface{}{
-			"display_count":    gorm.Expr("display_count + 1"),
+			"display_count":     gorm.Expr("display_count + 1"),
 			"last_displayed_at": now,
 		}).Error
 }
@@ -213,10 +213,82 @@ var peopleKeywords = []string{
 
 // GetPeopleEvents 人物专题：PrimaryTag 含人物关键词的事件
 func (r *eventRepository) GetPeopleEvents(excludeIDs []uint, limit int) ([]*model.Event, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+
+	selected := make([]*model.Event, 0, limit)
+	selectedIDs := make(map[uint]struct{}, limit)
+	excluded := make([]uint, 0, len(excludeIDs)+limit)
+	excluded = append(excluded, excludeIDs...)
+
+	realEvents, err := r.getRealPeopleEvents(excluded, limit)
+	if err != nil {
+		return nil, err
+	}
+	for _, event := range realEvents {
+		if event == nil {
+			continue
+		}
+		selected = append(selected, event)
+		selectedIDs[event.ID] = struct{}{}
+		excluded = append(excluded, event.ID)
+	}
+	if len(selected) >= limit {
+		return selected[:limit], nil
+	}
+
+	heuristicEvents, err := r.getHeuristicPeopleEvents(excluded, limit-len(selected))
+	if err != nil {
+		return nil, err
+	}
+	for _, event := range heuristicEvents {
+		if event == nil {
+			continue
+		}
+		if _, exists := selectedIDs[event.ID]; exists {
+			continue
+		}
+		selected = append(selected, event)
+		if len(selected) >= limit {
+			break
+		}
+	}
+
+	return selected, nil
+}
+
+func (r *eventRepository) getRealPeopleEvents(excludeIDs []uint, limit int) ([]*model.Event, error) {
+	var events []*model.Event
+	query := r.db.Table("events e").
+		Select("e.*").
+		Joins("JOIN photos p ON p.event_id = e.id AND p.status = 'active'").
+		Where("e.photo_count > 0 AND e.cover_photo_id IS NOT NULL").
+		Where("p.top_person_category != ''")
+
+	if len(excludeIDs) > 0 {
+		query = query.Where("e.id NOT IN ?", excludeIDs)
+	}
+
+	err := query.
+		Group("e.id").
+		Order(`MAX(CASE p.top_person_category
+			WHEN 'family' THEN 4
+			WHEN 'friend' THEN 3
+			WHEN 'acquaintance' THEN 2
+			WHEN 'stranger' THEN 1
+			ELSE 0
+		END) DESC`).
+		Order("e.event_score DESC").
+		Limit(limit).
+		Find(&events).Error
+	return events, err
+}
+
+func (r *eventRepository) getHeuristicPeopleEvents(excludeIDs []uint, limit int) ([]*model.Event, error) {
 	var events []*model.Event
 	query := r.db.Model(&model.Event{}).Scopes(validEventScope)
 
-	// 构建 OR 条件：primary_tag LIKE '%keyword%'
 	conditions := make([]string, 0, len(peopleKeywords))
 	args := make([]interface{}, 0, len(peopleKeywords))
 	for _, kw := range peopleKeywords {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPhotoRepository_Create(t *testing.T) {
@@ -299,10 +300,10 @@ func TestPhotoRepository_GetOnThisDayCandidates(t *testing.T) {
 	repo := NewPhotoRepository(db)
 
 	// 创建不同年份、相同月日附近的照片
-	takenAt1 := time.Date(2024, 3, 6, 10, 0, 0, 0, time.Local) // 3月6日
-	takenAt2 := time.Date(2023, 3, 8, 10, 0, 0, 0, time.Local) // 3月8日（±3天窗口内）
+	takenAt1 := time.Date(2024, 3, 6, 10, 0, 0, 0, time.Local)  // 3月6日
+	takenAt2 := time.Date(2023, 3, 8, 10, 0, 0, 0, time.Local)  // 3月8日（±3天窗口内）
 	takenAt3 := time.Date(2022, 3, 20, 10, 0, 0, 0, time.Local) // 3月20日（±3天窗口外）
-	takenAt4 := time.Date(2021, 3, 5, 10, 0, 0, 0, time.Local) // 3月5日（低分）
+	takenAt4 := time.Date(2021, 3, 5, 10, 0, 0, 0, time.Local)  // 3月5日（低分）
 
 	testPhotos := []*model.Photo{
 		{FilePath: "/p1.jpg", FileName: "p1.jpg", FileSize: 1, FileHash: "h1", Width: 100, Height: 100, TakenAt: &takenAt1, AIAnalyzed: true, MemoryScore: 80, BeautyScore: 80, OverallScore: 80},
@@ -392,4 +393,74 @@ func TestPhotoRepository_GetTopScoredCandidates(t *testing.T) {
 	photos, err = repo.GetTopScoredCandidates(0, 0, nil, 2)
 	assert.NoError(t, err)
 	assert.Len(t, photos, 2)
+}
+
+func TestPhotoRepositoryRecomputeTopPersonCategory(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	photoRepo := NewPhotoRepository(db)
+	personRepo := NewPersonRepository(db)
+	faceRepo := NewFaceRepository(db)
+
+	photos := []*model.Photo{
+		{FilePath: "/photos/family.jpg", FileName: "family.jpg", FileSize: 1, FileHash: "hash-family", Width: 100, Height: 100},
+		{FilePath: "/photos/friend.jpg", FileName: "friend.jpg", FileSize: 1, FileHash: "hash-friend", Width: 100, Height: 100},
+		{FilePath: "/photos/empty.jpg", FileName: "empty.jpg", FileSize: 1, FileHash: "hash-empty", Width: 100, Height: 100},
+	}
+	for _, photo := range photos {
+		require.NoError(t, photoRepo.Create(photo))
+	}
+
+	family := &model.Person{Category: model.PersonCategoryFamily}
+	stranger := &model.Person{Category: model.PersonCategoryStranger}
+	friend := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(family))
+	require.NoError(t, personRepo.Create(stranger))
+	require.NoError(t, personRepo.Create(friend))
+
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID:      photos[0].ID,
+		PersonID:     &stranger.ID,
+		BBoxX:        0.1,
+		BBoxY:        0.1,
+		BBoxWidth:    0.2,
+		BBoxHeight:   0.2,
+		Confidence:   0.9,
+		QualityScore: 0.8,
+	}))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID:      photos[0].ID,
+		PersonID:     &family.ID,
+		BBoxX:        0.4,
+		BBoxY:        0.1,
+		BBoxWidth:    0.2,
+		BBoxHeight:   0.2,
+		Confidence:   0.95,
+		QualityScore: 0.9,
+	}))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID:      photos[1].ID,
+		PersonID:     &friend.ID,
+		BBoxX:        0.2,
+		BBoxY:        0.2,
+		BBoxWidth:    0.2,
+		BBoxHeight:   0.2,
+		Confidence:   0.92,
+		QualityScore: 0.85,
+	}))
+
+	require.NoError(t, photoRepo.RecomputeTopPersonCategory([]uint{photos[0].ID, photos[1].ID, photos[2].ID}))
+
+	updatedFamily, err := photoRepo.GetByID(photos[0].ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.PersonCategoryFamily, updatedFamily.TopPersonCategory)
+
+	updatedFriend, err := photoRepo.GetByID(photos[1].ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.PersonCategoryFriend, updatedFriend.TopPersonCategory)
+
+	updatedEmpty, err := photoRepo.GetByID(photos[2].ID)
+	require.NoError(t, err)
+	assert.Equal(t, "", updatedEmpty.TopPersonCategory)
 }

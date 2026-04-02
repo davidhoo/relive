@@ -10,6 +10,7 @@
 - `docs/BACKEND_API.md`：当前已实现 API
 - `docs/ANALYZER_API_MODE.md`：当前 analyzer API 模式
 - `docs/PROJECT_STATUS.md`：当前项目状态
+- `docs/plans/2026-04-02-people-system-design.md`：人物系统的一期产品定义
 
 ### 当前开发
 - `docs/QUICK_REFERENCE.md`：开发速查卡
@@ -18,8 +19,9 @@
 - `docs/GOTCHAS.md`：踩坑经验（GORM/SQLite/Vue/ESP32 常见陷阱）
 
 ### 设计方案
+- `docs/plans/2026-04-02-people-system-design.md`：当前批准的人物系统产品定义
+- `docs/plans/2026-04-02-people-system.md`：人物系统实施计划
 - `docs/plans/event-driven-curation.md`：事件驱动型智能策展方案
-- `docs/plans/face-recognition-vector-db.md`：人像识别 + 向量数据库 + 智能裁切方案
 
 ## 当前实现文档
 
@@ -38,6 +40,12 @@
 - `docs/BACKEND_COMPLETE.md`（能力快照）
 - `docs/FRONTEND_COMPLETE.md`（能力快照）
 
+### 人物系统相关
+- `docs/plans/2026-04-02-people-system-design.md`
+- `docs/plans/2026-04-02-people-system.md`
+- `docs/BACKEND_API.md`（`/people`、`/photos/:id/people`、`/faces/:id/thumbnail`）
+- `docs/PROJECT_STATUS.md`（人物页、后台任务、展示策略权重）
+
 ### 开发与测试
 - `docs/TESTING.md`
 - `docs/QUICK_REFERENCE.md`
@@ -52,6 +60,8 @@
 - `docs/OFFLINE_WORKFLOW_REVIEW.md`（历史）：查看旧离线方案当时识别出的技术风险与评审意见
 - `docs/API_DESIGN.md`（设计稿）：了解接口命名和资源划分的原始设计意图
 - `docs/FRONTEND_PLAN.md`（规划稿）：了解前端页面和模块最初的规划范围
+- `docs/plans/face-recognition-vector-db.md`（旧候选方案）：人像识别 + 向量数据库 + 智能裁切混合方案，已被 `2026-04-02-people-system-design.md` 收敛替代
+- `docs/plans/2026-04-01-photo-detail-face-list.md`（局部草案）：依赖尚不存在的 `/faces/*` API，已被 `2026-04-02-people-system.md` 吸收
 
 ### 归档文档
 - `docs/archive/ARCHITECTURE.md`：系统架构（设计阶段）

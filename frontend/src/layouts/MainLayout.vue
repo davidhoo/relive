@@ -130,6 +130,7 @@ const isCollapsed = ref(false)
 const menuIconMap = {
   DataLine,
   Picture,
+  User,
   Files,
   Location,
   MagicStick,
@@ -158,6 +159,9 @@ const activeMenu = computed(() => {
   const path = route.path
   if (path.startsWith('/photos/')) {
     return '/photos'
+  }
+  if (path.startsWith('/people/')) {
+    return '/people'
   }
   if (path.startsWith('/events/')) {
     return '/events'
@@ -695,4 +699,3 @@ onMounted(() => {
   background: var(--color-text-tertiary);
 }
 </style>
-

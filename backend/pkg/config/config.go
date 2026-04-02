@@ -3,9 +3,9 @@ package config
 import (
 	"fmt"
 	"os"
-	"strings"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -17,6 +17,7 @@ type Config struct {
 	Photos      PhotosConfig      `yaml:"photos"`
 	Performance PerformanceConfig `yaml:"performance"`
 	AI          AIConfig          `yaml:"ai"`
+	People      PeopleConfig      `yaml:"people"`
 	Display     DisplayConfig     `yaml:"display"`
 	Geocode     GeocodeConfig     `yaml:"geocode"` // 新增：地理编码配置
 	Logging     LoggingConfig     `yaml:"logging"`
@@ -67,6 +68,12 @@ type AIConfig struct {
 	OpenAI      OpenAIConfig         `yaml:"openai"`
 	VLLM        VLLMConfig           `yaml:"vllm"`
 	Hybrid      HybridProviderConfig `yaml:"hybrid"`
+}
+
+// PeopleConfig 人物系统配置
+type PeopleConfig struct {
+	MLEndpoint string `yaml:"ml_endpoint"`
+	Timeout    int    `yaml:"timeout"`
 }
 
 // OllamaConfig Ollama 配置

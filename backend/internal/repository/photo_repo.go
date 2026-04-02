@@ -84,6 +84,7 @@ type PhotoRepository interface {
 
 	// 分类更新
 	UpdateCategory(id uint, category string) error
+	RecomputeTopPersonCategory(photoIDs []uint) error
 
 	// 手动旋转
 	UpdateManualRotation(id uint, rotation int) error
@@ -451,6 +452,7 @@ func (r *photoRepository) GetByDateRange(start, end time.Time) ([]*model.Photo, 
 func (r *photoRepository) GetTopByScore(limit int, excludePhotoIDs []uint) ([]*model.Photo, error) {
 	var photos []*model.Photo
 	query := r.db.Scopes(activeScope).Where("ai_analyzed = ?", true).
+		Order(topPersonWeightedScoreSQL() + " DESC").
 		Order("overall_score DESC, taken_at DESC")
 
 	if len(excludePhotoIDs) > 0 {
@@ -511,7 +513,9 @@ func (r *photoRepository) GetOnThisDayCandidates(monthDayStart, monthDayEnd stri
 		query = query.Where("id NOT IN ?", excludeIDs)
 	}
 
-	err := query.Order("overall_score DESC").Limit(limit).Find(&photos).Error
+	err := query.Order(topPersonWeightedScoreSQL() + " DESC").
+		Order("overall_score DESC, taken_at DESC").
+		Limit(limit).Find(&photos).Error
 	return photos, err
 }
 
@@ -526,8 +530,19 @@ func (r *photoRepository) GetTopScoredCandidates(minBeauty, minMemory int, exclu
 		query = query.Where("id NOT IN ?", excludeIDs)
 	}
 
-	err := query.Order("overall_score DESC, taken_at DESC").Limit(limit).Find(&photos).Error
+	err := query.Order(topPersonWeightedScoreSQL() + " DESC").
+		Order("overall_score DESC, taken_at DESC").
+		Limit(limit).Find(&photos).Error
 	return photos, err
+}
+
+func topPersonWeightedScoreSQL() string {
+	return `overall_score + CASE top_person_category
+		WHEN 'family' THEN 3
+		WHEN 'friend' THEN 2
+		WHEN 'acquaintance' THEN 1
+		ELSE 0
+	END`
 }
 
 // Count 统计照片总数
@@ -728,6 +743,80 @@ func (r *photoRepository) UpdateCategory(id uint, category string) error {
 	return r.db.Model(&model.Photo{}).Where("id = ?", id).Update("main_category", category).Error
 }
 
+// RecomputeTopPersonCategory 根据照片关联人物重新计算最高人物类别
+func (r *photoRepository) RecomputeTopPersonCategory(photoIDs []uint) error {
+	if len(photoIDs) == 0 {
+		return nil
+	}
+	dedupedIDs := make([]uint, 0, len(photoIDs))
+	seen := make(map[uint]struct{}, len(photoIDs))
+	for _, photoID := range photoIDs {
+		if photoID == 0 {
+			continue
+		}
+		if _, ok := seen[photoID]; ok {
+			continue
+		}
+		seen[photoID] = struct{}{}
+		dedupedIDs = append(dedupedIDs, photoID)
+	}
+	if len(dedupedIDs) == 0 {
+		return nil
+	}
+
+	type row struct {
+		PhotoID      uint `gorm:"column:photo_id"`
+		FaceCount    int  `gorm:"column:face_count"`
+		CategoryRank int  `gorm:"column:category_rank"`
+	}
+
+	var rows []row
+	err := r.db.Model(&model.Photo{}).
+		Select(`
+			photos.id AS photo_id,
+			COUNT(faces.id) AS face_count,
+			MAX(CASE people.category
+				WHEN 'family' THEN 4
+				WHEN 'friend' THEN 3
+				WHEN 'acquaintance' THEN 2
+				WHEN 'stranger' THEN 1
+				ELSE 0
+			END) AS category_rank
+		`).
+		Joins("LEFT JOIN faces ON faces.photo_id = photos.id").
+		Joins("LEFT JOIN people ON people.id = faces.person_id").
+		Where("photos.id IN ?", dedupedIDs).
+		Group("photos.id").
+		Scan(&rows).Error
+	if err != nil {
+		return err
+	}
+
+	byPhotoID := make(map[uint]row, len(rows))
+	for _, row := range rows {
+		byPhotoID[row.PhotoID] = row
+	}
+
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		for _, photoID := range dedupedIDs {
+			current, ok := byPhotoID[photoID]
+			updates := map[string]interface{}{
+				"face_count":          0,
+				"top_person_category": "",
+			}
+			if ok {
+				updates["face_count"] = current.FaceCount
+				updates["top_person_category"] = personCategoryFromRank(current.CategoryRank)
+			}
+
+			if err := tx.Model(&model.Photo{}).Where("id = ?", photoID).Updates(updates).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // UpdateManualRotation 更新照片手动旋转角度
 func (r *photoRepository) UpdateManualRotation(id uint, rotation int) error {
 	return r.db.Model(&model.Photo{}).Where("id = ?", id).Update("manual_rotation", rotation).Error
@@ -865,6 +954,21 @@ func buildFTSQuery(search string) string {
 		quoted[i] = `"` + w + `"`
 	}
 	return strings.Join(quoted, " ")
+}
+
+func personCategoryFromRank(rank int) string {
+	switch rank {
+	case 4:
+		return model.PersonCategoryFamily
+	case 3:
+		return model.PersonCategoryFriend
+	case 2:
+		return model.PersonCategoryAcquaintance
+	case 1:
+		return model.PersonCategoryStranger
+	default:
+		return ""
+	}
 }
 
 // GetScatteredHighQuality 获取无事件、高颜值、从未展示的散片（角落遗珠）

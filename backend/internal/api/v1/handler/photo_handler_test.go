@@ -14,10 +14,10 @@ import (
 
 // stubPhotoService implements the minimal PhotoService methods needed for handler tests.
 type stubPhotoService struct {
-	getPhotosFunc      func(req *model.GetPhotosRequest) ([]*model.Photo, int64, error)
-	getPhotoByIDFunc   func(id uint) (*model.Photo, error)
-	countAllFunc       func() (int64, error)
-	countAnalyzedFunc  func() (int64, error)
+	getPhotosFunc       func(req *model.GetPhotosRequest) ([]*model.Photo, int64, error)
+	getPhotoByIDFunc    func(id uint) (*model.Photo, error)
+	countAllFunc        func() (int64, error)
+	countAnalyzedFunc   func() (int64, error)
 	countUnanalyzedFunc func() (int64, error)
 }
 
@@ -54,35 +54,50 @@ func (s *stubPhotoService) CountUnanalyzed() (int64, error) {
 
 // No-op implementations for the rest of the PhotoService interface
 func (s *stubPhotoService) ScanDirectory(_ string) ([]*model.Photo, error) { return nil, nil }
-func (s *stubPhotoService) CleanupNonExistentPhotos() (*model.CleanupPhotosResponse, error) { return nil, nil }
-func (s *stubPhotoService) StartScan(_ string) (*model.ScanTask, error) { return nil, nil }
+func (s *stubPhotoService) CleanupNonExistentPhotos() (*model.CleanupPhotosResponse, error) {
+	return nil, nil
+}
+func (s *stubPhotoService) StartScan(_ string) (*model.ScanTask, error)    { return nil, nil }
 func (s *stubPhotoService) StartRebuild(_ string) (*model.ScanTask, error) { return nil, nil }
 func (s *stubPhotoService) StopScanTask(_ string) (*model.ScanTask, error) { return nil, nil }
-func (s *stubPhotoService) GetScanTask() *model.ScanTask { return nil }
-func (s *stubPhotoService) HandleShutdown() error { return nil }
-func (s *stubPhotoService) RunAutoScanCheck() error { return nil }
-func (s *stubPhotoService) GetCategories() ([]string, error) { return nil, nil }
-func (s *stubPhotoService) GetTags(_ string, _ int) ([]model.TagWithCount, int64, error) { return nil, 0, nil }
-func (s *stubPhotoService) GeocodePhotoIfNeeded(_ *model.Photo) error { return nil }
-func (s *stubPhotoService) RegeocodeAllPhotos() (int, error) { return 0, nil }
-func (s *stubPhotoService) DeletePhotosByPathPrefix(_ string) (int64, error) { return 0, nil }
-func (s *stubPhotoService) GetPhotoIDsByPathPrefix(_ string) ([]uint, error) { return nil, nil }
+func (s *stubPhotoService) GetScanTask() *model.ScanTask                   { return nil }
+func (s *stubPhotoService) HandleShutdown() error                          { return nil }
+func (s *stubPhotoService) RunAutoScanCheck() error                        { return nil }
+func (s *stubPhotoService) GetCategories() ([]string, error)               { return nil, nil }
+func (s *stubPhotoService) GetTags(_ string, _ int) ([]model.TagWithCount, int64, error) {
+	return nil, 0, nil
+}
+func (s *stubPhotoService) GeocodePhotoIfNeeded(_ *model.Photo) error              { return nil }
+func (s *stubPhotoService) RegeocodeAllPhotos() (int, error)                       { return 0, nil }
+func (s *stubPhotoService) DeletePhotosByPathPrefix(_ string) (int64, error)       { return 0, nil }
+func (s *stubPhotoService) GetPhotoIDsByPathPrefix(_ string) ([]uint, error)       { return nil, nil }
 func (s *stubPhotoService) GetPhotosByPathPrefix(_ string) ([]*model.Photo, error) { return nil, nil }
-func (s *stubPhotoService) CountPhotosByPathPrefix(_ string) (int64, error) { return 0, nil }
-func (s *stubPhotoService) GetPathDerivedStatus(_ string) (*model.PathDerivedStatus, error) { return nil, nil }
-func (s *stubPhotoService) GetPathDerivedStatusBatch(_ []string) (map[string]*model.PathDerivedStatus, error) { return nil, nil }
-func (s *stubPhotoService) CountByStatus() (*model.PhotoCountsResponse, error) { return &model.PhotoCountsResponse{}, nil }
-func (s *stubPhotoService) BatchUpdateStatus(_ *model.BatchUpdateStatusRequest) (int64, error) { return 0, nil }
-func (s *stubPhotoService) UpdateCategory(_ uint, _ string) error       { return nil }
-func (s *stubPhotoService) UpdateManualRotation(_ uint, _ int) error    { return nil }
+func (s *stubPhotoService) CountPhotosByPathPrefix(_ string) (int64, error)        { return 0, nil }
+func (s *stubPhotoService) GetPathDerivedStatus(_ string) (*model.PathDerivedStatus, error) {
+	return nil, nil
+}
+func (s *stubPhotoService) GetPathDerivedStatusBatch(_ []string) (map[string]*model.PathDerivedStatus, error) {
+	return nil, nil
+}
+func (s *stubPhotoService) CountByStatus() (*model.PhotoCountsResponse, error) {
+	return &model.PhotoCountsResponse{}, nil
+}
+func (s *stubPhotoService) BatchUpdateStatus(_ *model.BatchUpdateStatusRequest) (int64, error) {
+	return 0, nil
+}
+func (s *stubPhotoService) UpdateCategory(_ uint, _ string) error                  { return nil }
+func (s *stubPhotoService) UpdateManualRotation(_ uint, _ int) error               { return nil }
 func (s *stubPhotoService) BatchRotate(_ *model.BatchRotateRequest) (int64, error) { return 0, nil }
-func (s *stubPhotoService) GetAdjacentPhotos(_ uint, _ *model.GetPhotosRequest) (*model.AdjacentPhotosResponse, error) { return &model.AdjacentPhotosResponse{}, nil }
+func (s *stubPhotoService) GetAdjacentPhotos(_ uint, _ *model.GetPhotosRequest) (*model.AdjacentPhotosResponse, error) {
+	return &model.AdjacentPhotosResponse{}, nil
+}
 func (s *stubPhotoService) SetEventClusteringService(_ service.EventClusteringService) {}
+func (s *stubPhotoService) SetPeopleService(_ service.PeopleService)                   {}
 
 func TestPhotoHandler_GetPhotoStats_Success(t *testing.T) {
 	svc := &stubPhotoService{
-		countAllFunc:       func() (int64, error) { return 100, nil },
-		countAnalyzedFunc:  func() (int64, error) { return 80, nil },
+		countAllFunc:        func() (int64, error) { return 100, nil },
+		countAnalyzedFunc:   func() (int64, error) { return 80, nil },
 		countUnanalyzedFunc: func() (int64, error) { return 20, nil },
 	}
 	h := &PhotoHandler{photoService: svc}

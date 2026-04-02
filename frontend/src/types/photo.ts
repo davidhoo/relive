@@ -30,6 +30,9 @@ export interface Photo {
   thumbnail_path?: string
   thumbnail_status?: string
   thumbnail_generated_at?: string
+  face_process_status?: string
+  face_count?: number
+  top_person_category?: string
 
   // AI 分析结果
   ai_analyzed: boolean

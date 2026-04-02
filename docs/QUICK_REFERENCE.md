@@ -50,6 +50,7 @@ make build-analyzer
 
 - `/dashboard`
 - `/photos`
+- `/people`
 - `/analysis`
 - `/thumbnails`
 - `/geocode`
@@ -60,6 +61,35 @@ make build-analyzer
 - `/system`
 - `/login`
 - `/change-Password`
+
+人物系统补充：
+- `/people`：人物列表 + 后台任务标签页
+- `/people/:id`：人物详情（改名、改类别、改头像、拆分、移动、合并）
+- `/photos/:id`：照片详情页内含人物分组和人脸样本区
+
+## 当前人物相关 API
+
+- `GET /api/v1/people`
+- `GET /api/v1/people/:id`
+- `GET /api/v1/people/:id/photos`
+- `GET /api/v1/people/:id/faces`
+- `PATCH /api/v1/people/:id/category`
+- `PATCH /api/v1/people/:id/name`
+- `PATCH /api/v1/people/:id/avatar`
+- `POST /api/v1/people/merge`
+- `POST /api/v1/people/split`
+- `POST /api/v1/people/move-faces`
+- `GET /api/v1/people/task`
+- `GET /api/v1/people/stats`
+- `GET /api/v1/people/background/logs`
+- `GET /api/v1/photos/:id/people`
+- `GET /api/v1/faces/:id/thumbnail`
+
+## 展示策略补充
+
+- `photos.top_person_category` 会作为照片层人物信号参与展示排序
+- 人物优先级为：`family > friend > acquaintance > stranger`
+- `people_spotlight` 会优先使用真实人物数据支持的事件，其次才退回到 `PrimaryTag` 猜测
 
 ## 当前 analyzer 说明
 

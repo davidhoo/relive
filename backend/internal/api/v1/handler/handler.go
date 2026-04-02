@@ -11,6 +11,7 @@ import (
 type Handlers struct {
 	System    *SystemHandler
 	Photo     *PhotoHandler
+	People    *PeopleHandler
 	Thumbnail *ThumbnailHandler
 	Geocode   *GeocodeHandler
 	Display   *DisplayHandler
@@ -30,6 +31,7 @@ func NewHandlers(db *gorm.DB, services *service.Services, repos *repository.Repo
 	handlers := &Handlers{
 		System:    NewSystemHandler(services.System, cfg),
 		Photo:     NewPhotoHandler(services.Photo, services.Thumbnail, services.GeocodeTask, services.Config, cfg),
+		People:    NewPeopleHandler(services.People, repos.Person, repos.Face, repos.Photo, cfg),
 		Thumbnail: NewThumbnailHandler(services.Thumbnail),
 		Geocode:   NewGeocodeHandler(services.GeocodeTask),
 		Display:   NewDisplayHandler(services.Display, services.Device, cfg),

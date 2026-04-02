@@ -121,6 +121,7 @@ Authorization: Bearer <api_key>
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| GET | `/api/v1/faces/:id/thumbnail` | 人脸裁切缩略图（人物 UI 辅助接口） |
 | GET | `/api/v1/photos/:id/image` | 原图访问 |
 | GET | `/api/v1/photos/:id/thumbnail` | 缩略图 |
 | GET | `/api/v1/photos/:id/frame-preview` | 相框预览图 |
@@ -170,6 +171,7 @@ Authorization: Bearer <api_key>
 | GET | `/api/v1/photos/tags` | 标签列表（支持 `?q=&limit=15`） |
 | GET | `/api/v1/photos` | 分页照片列表 |
 | GET | `/api/v1/photos/:id` | 照片详情 |
+| GET | `/api/v1/photos/:id/people` | 当前照片中的人物与人脸样本 |
 | PATCH | `/api/v1/photos/:id/category` | 修改照片分类 |
 | PATCH | `/api/v1/photos/:id/location` | 手动设置照片位置 |
 | PATCH | `/api/v1/photos/:id/rotation` | 手动旋转照片 |
@@ -210,7 +212,42 @@ Authorization: Bearer <jwt>
 - `sort_by`
 - `sort_desc`
 
-### 4.4 缩略图
+照片详情返回中，人物系统相关字段包括：
+- `face_process_status`
+- `face_count`
+- `top_person_category`
+
+### 4.4 人物系统
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/people` | 人物列表（支持 `page` / `page_size` / `search` / `category`） |
+| GET | `/api/v1/people/:id` | 人物详情 |
+| GET | `/api/v1/people/:id/photos` | 该人物关联的照片 |
+| GET | `/api/v1/people/:id/faces` | 该人物的人脸样本 |
+| PATCH | `/api/v1/people/:id/category` | 修改人物类别（`family` / `friend` / `acquaintance` / `stranger`） |
+| PATCH | `/api/v1/people/:id/name` | 修改人物姓名 |
+| PATCH | `/api/v1/people/:id/avatar` | 指定代表头像 |
+| POST | `/api/v1/people/merge` | 合并人物 |
+| POST | `/api/v1/people/split` | 将选中人脸拆成新人物 |
+| POST | `/api/v1/people/move-faces` | 将选中人脸移动到已有其他人物 |
+| GET | `/api/v1/people/task` | 当前人物后台任务状态 |
+| GET | `/api/v1/people/stats` | 人物队列统计 |
+| GET | `/api/v1/people/background/logs` | 人物后台任务最近日志 |
+
+人物类别说明：
+- `family`：家人
+- `friend`：亲友
+- `acquaintance`：熟人
+- `stranger`：路人
+
+人物系统说明：
+- 照片扫描 / 重建后会自动为 active 照片创建 `people_jobs`
+- `excluded` 照片不会进入人物队列
+- `photos.top_person_category` 是人物展示优先级的照片级派生缓存
+- `GET /api/v1/faces/:id/thumbnail` 只用于 UI 裁切图显示，不是独立的人脸管理主入口
+
+### 4.5 缩略图
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -223,7 +260,7 @@ Authorization: Bearer <jwt>
 | POST | `/api/v1/thumbnails/enqueue-by-path` | 按路径入队 |
 | POST | `/api/v1/thumbnails/generate` | 生成指定照片缩略图 |
 
-### 4.5 GPS 地理编码
+### 4.6 GPS 地理编码
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -238,7 +275,7 @@ Authorization: Bearer <jwt>
 | POST | `/api/v1/geocode/geocode` | 单次地理编码 |
 | POST | `/api/v1/geocode/regeocode-all` | 全量重建位置解析 |
 
-### 4.6 AI 分析
+### 4.7 AI 分析
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -253,7 +290,7 @@ Authorization: Bearer <jwt>
 | POST | `/api/v1/ai/reanalyze/:id` | 重分析单张照片 |
 | GET | `/api/v1/ai/provider` | 当前 Provider 信息 |
 
-### 4.7 事件聚类与浏览
+### 4.8 事件聚类与浏览
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -264,7 +301,7 @@ Authorization: Bearer <jwt>
 | GET | `/api/v1/events/cluster/task` | 聚类任务状态 |
 | POST | `/api/v1/events/cluster/stop` | 停止聚类任务 |
 
-### 4.8 设备管理
+### 4.9 设备管理
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -276,7 +313,7 @@ Authorization: Bearer <jwt>
 | GET | `/api/v1/devices` | 设备列表 |
 | GET | `/api/v1/devices/:device_id` | 设备详情 |
 
-### 4.9 配置管理
+### 4.10 配置管理
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -299,4 +336,5 @@ Authorization: Bearer <jwt>
 - 已移除旧的导出/导入 API
 - `relive-analyzer` 默认使用 API 模式，而不是 `export.db` 文件交换
 - 扫描和重建接口为异步任务接口，返回 `task_id`
-- 前端已包含缩略图、地理编码、设备管理、系统管理等独立页面
+- 前端已包含人物、缩略图、地理编码、设备管理、系统管理等独立页面
+- 展示策略已读取 `photos.top_person_category`，`people_spotlight` 会优先使用真实人物数据

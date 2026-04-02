@@ -472,7 +472,7 @@ func (s *photoService) runScanTask(runtime *activeScanJob, path string, rebuild 
 		runtime.id, progress.totalFilesSnapshot(), progress.newPhotosSnapshot(), progress.updatedPhotosSnapshot(), progress.deletedPhotosSnapshot(), progress.skippedFilesSnapshot())
 
 	if s.thumbnailService != nil {
-		if task := s.thumbnailService.GetTaskStatus(); task == nil || (task.Status != model.ScanJobStatusRunning && task.Status != model.ScanJobStatusStopping) {
+		if task := s.thumbnailService.GetTaskStatus(); task == nil || (task.Status != model.TaskStatusRunning && task.Status != model.TaskStatusStopping) {
 			if _, err := s.thumbnailService.StartBackground(); err != nil {
 				logger.Warnf("[Task %s] Auto start thumbnail background failed: %v", runtime.id, err)
 			} else {
@@ -481,11 +481,20 @@ func (s *photoService) runScanTask(runtime *activeScanJob, path string, rebuild 
 		}
 	}
 	if s.geocodeTaskService != nil {
-		if task := s.geocodeTaskService.GetTaskStatus(); task == nil || (task.Status != model.ScanJobStatusRunning && task.Status != model.ScanJobStatusStopping) {
+		if task := s.geocodeTaskService.GetTaskStatus(); task == nil || (task.Status != model.TaskStatusRunning && task.Status != model.TaskStatusStopping) {
 			if _, err := s.geocodeTaskService.StartBackground(); err != nil {
 				logger.Warnf("[Task %s] Auto start geocode background failed: %v", runtime.id, err)
 			} else {
 				logger.Infof("[Task %s] Geocode background started automatically after scan completion", runtime.id)
+			}
+		}
+	}
+	if s.peopleService != nil {
+		if task := s.peopleService.GetTaskStatus(); task == nil || (task.Status != model.TaskStatusRunning && task.Status != model.TaskStatusStopping) {
+			if _, err := s.peopleService.StartBackground(); err != nil {
+				logger.Warnf("[Task %s] Auto start people background failed: %v", runtime.id, err)
+			} else {
+				logger.Infof("[Task %s] People background started automatically after scan completion", runtime.id)
 			}
 		}
 	}
@@ -547,6 +556,7 @@ func (s *photoService) processScanFile(ctx context.Context, jobID string, task s
 			progress.incrementNew(1)
 			s.enqueueThumbnailForPhoto(photo, model.ThumbnailJobSourceScan, thumbnailPriorityScan)
 			s.enqueueGeocodeForPhoto(photo, model.GeocodeJobSourceScan, geocodePriorityScan)
+			s.enqueuePeopleForPhoto(photo, model.PeopleJobSourceScan, peoplePriorityScan, false)
 		}
 		progress.incrementProcessed(1)
 		return nil
@@ -562,6 +572,7 @@ func (s *photoService) processScanFile(ctx context.Context, jobID string, task s
 			progress.incrementUpdated(1)
 			s.enqueueThumbnailForPhoto(photo, model.ThumbnailJobSourceScan, thumbnailPriorityScan)
 			s.enqueueGeocodeForPhoto(photo, model.GeocodeJobSourceScan, geocodePriorityScan)
+			s.enqueuePeopleForPhoto(photo, model.PeopleJobSourceScan, peoplePriorityScan, true)
 		}
 		progress.incrementProcessed(1)
 		return nil
@@ -577,6 +588,7 @@ func (s *photoService) processScanFile(ctx context.Context, jobID string, task s
 			progress.incrementUpdated(1)
 			s.enqueueThumbnailForPhoto(photo, model.ThumbnailJobSourceScan, thumbnailPriorityScan)
 			s.enqueueGeocodeForPhoto(photo, model.GeocodeJobSourceScan, geocodePriorityScan)
+			s.enqueuePeopleForPhoto(photo, model.PeopleJobSourceScan, peoplePriorityScan, false)
 		}
 	}
 
@@ -598,6 +610,16 @@ func (s *photoService) preserveAnalysisFields(existing, photo *model.Photo) {
 	if existing == nil || photo == nil {
 		return
 	}
+	photo.Status = existing.Status
+	photo.ThumbnailPath = existing.ThumbnailPath
+	photo.ThumbnailStatus = existing.ThumbnailStatus
+	photo.ThumbnailGeneratedAt = existing.ThumbnailGeneratedAt
+	photo.GeocodeStatus = existing.GeocodeStatus
+	photo.GeocodeProvider = existing.GeocodeProvider
+	photo.GeocodedAt = existing.GeocodedAt
+	photo.FaceProcessStatus = existing.FaceProcessStatus
+	photo.FaceCount = existing.FaceCount
+	photo.TopPersonCategory = existing.TopPersonCategory
 	if existing.Description != "" {
 		photo.Description = existing.Description
 		photo.MainCategory = existing.MainCategory
@@ -628,6 +650,15 @@ func (s *photoService) enqueueThumbnailForPhoto(photo *model.Photo, source strin
 	}
 	if err := s.thumbnailService.EnqueuePhoto(photo.ID, source, priority, false); err != nil {
 		logger.Warnf("enqueue thumbnail failed for photo %d: %v", photo.ID, err)
+	}
+}
+
+func (s *photoService) enqueuePeopleForPhoto(photo *model.Photo, source string, priority int, force bool) {
+	if s.peopleService == nil || photo == nil || photo.ID == 0 {
+		return
+	}
+	if err := s.peopleService.EnqueuePhoto(photo.ID, source, priority, force); err != nil {
+		logger.Warnf("enqueue people failed for photo %d: %v", photo.ID, err)
 	}
 }
 

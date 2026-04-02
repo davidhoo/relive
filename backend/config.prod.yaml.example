@@ -30,3 +30,7 @@ performance:
   max_thumbnail_workers: 1
   max_geocode_workers: 1
   cache_size: 1000
+
+people:
+  ml_endpoint: "http://relive-ml:5050"
+  timeout: 15

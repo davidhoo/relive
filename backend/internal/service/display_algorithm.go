@@ -230,6 +230,12 @@ func rankOnThisDayCandidates(targetDate time.Time, photos []*model.Photo) []*mod
 			return leftYearGap < rightYearGap
 		}
 
+		leftWeighted := weightedDisplayScore(left)
+		rightWeighted := weightedDisplayScore(right)
+		if leftWeighted != rightWeighted {
+			return leftWeighted > rightWeighted
+		}
+
 		if left.OverallScore != right.OverallScore {
 			return left.OverallScore > right.OverallScore
 		}
@@ -281,6 +287,11 @@ func selectTopPhotos(photos []*model.Photo, limit int) []*model.Photo {
 
 	result := append([]*model.Photo(nil), photos...)
 	sort.SliceStable(result, func(i, j int) bool {
+		leftWeighted := weightedDisplayScore(result[i])
+		rightWeighted := weightedDisplayScore(result[j])
+		if leftWeighted != rightWeighted {
+			return leftWeighted > rightWeighted
+		}
 		if result[i].OverallScore != result[j].OverallScore {
 			return result[i].OverallScore > result[j].OverallScore
 		}
@@ -341,4 +352,24 @@ func isLaterPhotoTime(left, right *model.Photo) bool {
 		return true
 	}
 	return leftTime.After(rightTime)
+}
+
+func weightedDisplayScore(photo *model.Photo) float64 {
+	if photo == nil {
+		return 0
+	}
+	return float64(photo.OverallScore) + photoPeoplePriorityBonus(photo.TopPersonCategory)
+}
+
+func photoPeoplePriorityBonus(category string) float64 {
+	switch category {
+	case model.PersonCategoryFamily:
+		return 3
+	case model.PersonCategoryFriend:
+		return 2
+	case model.PersonCategoryAcquaintance:
+		return 1
+	default:
+		return 0
+	}
 }
