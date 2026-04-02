@@ -4,8 +4,12 @@ MAKEFLAGS += --no-builtin-rules
 
 # 自动检测 docker compose v2 或 v1
 DOCKER_COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
+SOURCE_COMPOSE_FILE := docker-compose.yml
+IMAGE_COMPOSE_FILE := docker-compose.prod.yml
+RUNTIME_COMPOSE_FILE := $(firstword $(wildcard $(SOURCE_COMPOSE_FILE) $(IMAGE_COMPOSE_FILE)))
+RUNTIME_COMPOSE_ARGS := $(if $(RUNTIME_COMPOSE_FILE),-f $(RUNTIME_COMPOSE_FILE),)
 
-.PHONY: help dev build deploy deploy-image prod stop restart logs clean test deps sync-version build-analyzer analyzer dev-backend dev-frontend check-compose
+.PHONY: help dev build deploy deploy-image prod stop restart logs clean test deps sync-version build-analyzer analyzer dev-backend dev-frontend check-compose check-runtime-compose
 
 # 版本管理
 VERSION_FILE := VERSION
@@ -52,7 +56,10 @@ dev-frontend:
 
 # Docker Compose 配置检查
 check-compose:
-	@test -f docker-compose.yml || (echo "错误: docker-compose.yml 不存在"; echo "请运行: cp docker-compose.yml.example docker-compose.yml"; exit 1)
+	@test -f $(SOURCE_COMPOSE_FILE) || (echo "错误: $(SOURCE_COMPOSE_FILE) 不存在"; echo "请运行: cp docker-compose.yml.example $(SOURCE_COMPOSE_FILE)"; exit 1)
+
+check-runtime-compose:
+	@test -n "$(RUNTIME_COMPOSE_FILE)" || (echo "错误: 未找到 docker-compose.yml 或 docker-compose.prod.yml"; echo "请运行: cp docker-compose.yml.example docker-compose.yml 或 cp docker-compose.prod.yml.example docker-compose.prod.yml"; exit 1)
 
 # 生产部署
 build: sync-version check-compose
@@ -69,16 +76,16 @@ deploy-image:
 
 prod: deploy-image
 
-stop: check-compose
+stop: check-runtime-compose
 	@echo "停止服务..."
-	$(DOCKER_COMPOSE) down
+	$(DOCKER_COMPOSE) $(RUNTIME_COMPOSE_ARGS) down
 
-restart: check-compose
+restart: check-runtime-compose
 	@echo "重启服务..."
-	$(DOCKER_COMPOSE) restart
+	$(DOCKER_COMPOSE) $(RUNTIME_COMPOSE_ARGS) restart
 
-logs: check-compose
-	$(DOCKER_COMPOSE) logs -f
+logs: check-runtime-compose
+	$(DOCKER_COMPOSE) $(RUNTIME_COMPOSE_ARGS) logs -f
 
 # 测试
 test:

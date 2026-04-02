@@ -12,7 +12,7 @@ assert_contains() {
   local haystack="$1"
   local needle="$2"
   local description="$3"
-  if ! grep -Fq "$needle" <<<"$haystack"; then
+  if ! grep -Fq -- "$needle" <<<"$haystack"; then
     fail "$description"
   fi
 }
@@ -21,7 +21,7 @@ assert_not_contains() {
   local haystack="$1"
   local needle="$2"
   local description="$3"
-  if grep -Fq "$needle" <<<"$haystack"; then
+  if grep -Fq -- "$needle" <<<"$haystack"; then
     fail "$description"
   fi
 }
@@ -30,6 +30,15 @@ MAKE_HELP="$(make -C "$ROOT" help)"
 MAKE_DEV="$(make -C "$ROOT" -n dev)"
 MAKE_DEPLOY="$(make -C "$ROOT" -n deploy)"
 MAKE_DEPLOY_IMAGE="$(make -C "$ROOT" -n deploy-image)"
+TMPDIR_MAKE="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR_MAKE"' EXIT
+
+cp "$ROOT/Makefile" "$TMPDIR_MAKE/Makefile"
+cp "$ROOT/docker-compose.prod.yml.example" "$TMPDIR_MAKE/docker-compose.prod.yml"
+
+IMAGE_ONLY_LOGS="$(make -C "$TMPDIR_MAKE" -n logs)"
+IMAGE_ONLY_STOP="$(make -C "$TMPDIR_MAKE" -n stop)"
+IMAGE_ONLY_RESTART="$(make -C "$TMPDIR_MAKE" -n restart)"
 
 # 1) Entry point should NOT call init-cities (embedded data now)
 if grep -q "/app/init-cities.sh" "$ROOT/backend/scripts/docker-entrypoint.sh"; then
@@ -126,5 +135,13 @@ for target in \
 do
   assert_not_contains "$DOCS_TEXT" "$target" "Docs still advertise deprecated target: $target"
 done
+
+# 10) operational targets should work for image-only installs
+assert_contains "$IMAGE_ONLY_LOGS" "-f docker-compose.prod.yml logs -f" "make -n logs does not target docker-compose.prod.yml for image-only installs"
+assert_contains "$IMAGE_ONLY_STOP" "-f docker-compose.prod.yml down" "make -n stop does not target docker-compose.prod.yml for image-only installs"
+assert_contains "$IMAGE_ONLY_RESTART" "-f docker-compose.prod.yml restart" "make -n restart does not target docker-compose.prod.yml for image-only installs"
+assert_not_contains "$IMAGE_ONLY_LOGS" "docker-compose.yml 不存在" "make -n logs still requires docker-compose.yml for image-only installs"
+assert_not_contains "$IMAGE_ONLY_STOP" "docker-compose.yml 不存在" "make -n stop still requires docker-compose.yml for image-only installs"
+assert_not_contains "$IMAGE_ONLY_RESTART" "docker-compose.yml 不存在" "make -n restart still requires docker-compose.yml for image-only installs"
 
 echo "OK: script consistency checks passed"
