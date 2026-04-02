@@ -2,7 +2,6 @@ package handler
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -10,9 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/davidhoo/relive/internal/factoryreset"
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/service"
-	"github.com/davidhoo/relive/internal/util"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/logger"
 	"github.com/davidhoo/relive/pkg/version"
@@ -24,6 +23,7 @@ type SystemHandler struct {
 	systemService service.SystemService
 	cfg           *config.Config
 	startTime     time.Time
+	scheduleExit  func(time.Duration)
 }
 
 // NewSystemHandler 创建系统处理器
@@ -32,6 +32,12 @@ func NewSystemHandler(systemService service.SystemService, cfg *config.Config) *
 		systemService: systemService,
 		cfg:           cfg,
 		startTime:     time.Now(),
+		scheduleExit: func(delay time.Duration) {
+			go func() {
+				time.Sleep(delay)
+				os.Exit(0)
+			}()
+		},
 	}
 }
 
@@ -247,61 +253,29 @@ func (h *SystemHandler) Reset(c *gin.Context) {
 		return
 	}
 
-	response := model.SystemResetResponse{
-		Success: true,
-	}
-	generatedFilesCleared := true
-
-	if err := h.systemService.ResetSystem(); err != nil {
-		logger.Errorf("Failed to reset database state: %v", err)
-		response.DatabaseCleared = false
-		c.JSON(http.StatusInternalServerError, model.Response{
+	if err := factoryreset.Schedule(h.cfg); err != nil {
+		status := http.StatusInternalServerError
+		code := "RESET_SCHEDULE_FAILED"
+		message := "Failed to schedule factory reset"
+		if errors.Is(err, factoryreset.ErrUnsupportedDatabase) {
+			status = http.StatusNotImplemented
+			code = "UNSUPPORTED_DATABASE"
+			message = err.Error()
+		}
+		c.JSON(status, model.Response{
 			Success: false,
 			Error: &model.ErrorInfo{
-				Code:    "DATABASE_ERROR",
-				Message: "Failed to reset database state",
+				Code:    code,
+				Message: message,
 			},
 		})
 		return
 	}
-	response.DatabaseCleared = true
 
-	// 清除缩略图
-	if h.cfg.Photos.ThumbnailPath != "" {
-		if err := clearDirectoryContents(h.cfg.Photos.ThumbnailPath); err != nil {
-			logger.Errorf("Failed to clear thumbnails: %v", err)
-			response.ThumbnailsCleared = false
-		} else {
-			response.ThumbnailsCleared = true
-			logger.Info("Thumbnails cleared")
-		}
-	}
-
-	// 清除展示批次文件
-	displayBatchPath := util.DisplayBatchRoot(h.cfg.Photos.ThumbnailPath)
-	if err := clearDirectoryContents(displayBatchPath); err != nil {
-		logger.Errorf("Failed to clear display batch assets: %v", err)
-		generatedFilesCleared = false
-	} else {
-		logger.Info("Display batch assets cleared")
-	}
-
-	// 清除缓存目录
-	cachePath := h.getCachePath()
-	if err := clearDirectoryContents(cachePath); err != nil {
-		logger.Errorf("Failed to clear cache: %v", err)
-		response.CacheCleared = false
-	} else {
-		response.CacheCleared = true
-		logger.Info("Cache cleared")
-	}
-
-	response.PasswordReset = true
-
-	response.Success = true
-	response.Message = "System has been reset to initial state. Please login with admin/admin"
-	if !response.ThumbnailsCleared || !response.CacheCleared || !generatedFilesCleared {
-		response.Message = "System data has been reset, but some generated files could not be removed completely"
+	response := model.SystemResetResponse{
+		Success:          true,
+		Message:          "Factory reset scheduled. The service will restart and return to admin/admin.",
+		RestartScheduled: true,
 	}
 
 	c.JSON(http.StatusOK, model.Response{
@@ -309,43 +283,11 @@ func (h *SystemHandler) Reset(c *gin.Context) {
 		Data:    response,
 		Message: response.Message,
 	})
-}
 
-// clearDirectoryContents 清除目录内所有文件和子目录，但保留目录本身
-func clearDirectoryContents(dirPath string) error {
-	if dirPath == "" {
-		return nil
+	if flusher, ok := c.Writer.(http.Flusher); ok {
+		flusher.Flush()
 	}
-	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
-		return nil
+	if h.scheduleExit != nil {
+		h.scheduleExit(500 * time.Millisecond)
 	}
-
-	entries, err := os.ReadDir(dirPath)
-	if err != nil {
-		return fmt.Errorf("read directory: %w", err)
-	}
-
-	var removeErrs []error
-	for _, entry := range entries {
-		fullPath := filepath.Join(dirPath, entry.Name())
-		if err := os.RemoveAll(fullPath); err != nil {
-			logger.Errorf("Failed to remove %s: %v", fullPath, err)
-			removeErrs = append(removeErrs, fmt.Errorf("remove %s: %w", fullPath, err))
-		}
-	}
-
-	return errors.Join(removeErrs...)
-}
-
-func (h *SystemHandler) getCachePath() string {
-	if h.cfg == nil {
-		return ""
-	}
-
-	dbPath := strings.TrimSpace(h.cfg.Database.Path)
-	if dbPath == "" {
-		dbPath = "./data/relive.db"
-	}
-
-	return filepath.Join(filepath.Dir(filepath.Clean(dbPath)), "cache")
 }

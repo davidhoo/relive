@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/davidhoo/relive/internal/factoryreset"
 	"github.com/davidhoo/relive/internal/api/v1/router"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/database"
@@ -44,6 +45,12 @@ func main() {
 		log.Fatalf("Failed to initialize logger: %v", err)
 	}
 	defer logger.Sync()
+
+	if applied, err := factoryreset.ApplyPending(cfg); err != nil {
+		logger.Fatalf("Failed to apply pending factory reset: %v", err)
+	} else if applied {
+		logger.Info("Factory reset cleanup completed")
+	}
 
 	logger.Info("Starting Relive Backend...")
 	logger.Infof("Version: %s, Build Time: %s", version.Version, version.BuildTime)

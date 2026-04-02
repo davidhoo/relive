@@ -186,6 +186,7 @@
               <li>所有缩略图文件</li>
               <li>所有缓存数据</li>
               <li><strong>管理员密码将重置为 admin/admin</strong></li>
+              <li><strong>服务会退出并重启，若未自动重启请手动启动</strong></li>
             </ul>
           </div>
           <div class="danger-footer">
@@ -219,7 +220,7 @@
         <p class="reset-desc">
           此操作将<strong>永久删除</strong>所有数据，包括照片记录、设备信息、展示历史、API Key、缩略图和缓存。
           删除的数据<strong>无法恢复</strong>！<br/>
-          管理员密码将重置为 <strong>admin/admin</strong>，还原后需要重新登录。
+          管理员密码将重置为 <strong>admin/admin</strong>。系统会在还原后退出并重启，若未自动重启，请手动启动服务后重新登录。
         </p>
         <div class="reset-confirm-input">
           <p class="reset-hint">
@@ -272,7 +273,7 @@ import {
 import { useSystemStore } from '@/stores/system'
 import { useUserStore } from '@/stores/user'
 import { systemApi } from '@/api/system'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
 import duration from 'dayjs/plugin/duration'
 
@@ -304,14 +305,14 @@ const handleResetConfirm = async () => {
   try {
     const response = await systemApi.reset({ confirm_text: resetConfirmText.value })
     if (response.data.success) {
-      ElMessage.success('系统已成功还原到初始状态，即将退出登录...')
+      ElMessage.success('已安排恢复出厂设置，服务即将退出；若未自动重启，请手动启动服务。')
       resetDialogVisible.value = false
 
-      // 延迟1秒后退出登录并跳转到登录页
-      setTimeout(async () => {
-        await userStore.logout()
+      // 后端即将退出并重启，本地直接清掉登录态，避免 logout 请求撞上重启窗口。
+      setTimeout(() => {
+        userStore.clearUserState()
         router.push('/login')
-      }, 1500)
+      }, 1000)
     } else {
       ElMessage.error(response.data.message || '系统还原失败')
     }

@@ -31,10 +31,7 @@ export interface SystemResetRequest {
 export interface SystemResetResponse {
   success: boolean
   message: string
-  database_cleared: boolean
-  thumbnails_cleared: boolean
-  cache_cleared: boolean
-  password_reset: boolean
+  restart_scheduled: boolean
 }
 
 // 系统环境信息

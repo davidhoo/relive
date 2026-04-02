@@ -227,12 +227,9 @@ type SystemResetRequest struct {
 
 // SystemResetResponse 系统还原响应
 type SystemResetResponse struct {
-	Success           bool   `json:"success"`
-	Message           string `json:"message"`
-	DatabaseCleared   bool   `json:"database_cleared"`   // 数据库是否已清除
-	ThumbnailsCleared bool   `json:"thumbnails_cleared"` // 缩略图是否已清除
-	CacheCleared      bool   `json:"cache_cleared"`      // 缓存是否已清除
-	PasswordReset     bool   `json:"password_reset"`     // 密码是否已重置
+	Success          bool   `json:"success"`
+	Message          string `json:"message"`
+	RestartScheduled bool   `json:"restart_scheduled"` // 是否已安排进程退出并重启
 }
 
 // SystemStatsResponse 系统统计响应
