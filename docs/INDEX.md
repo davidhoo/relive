@@ -10,6 +10,7 @@
 - `docs/BACKEND_API.md`：当前已实现 API
 - `docs/ANALYZER_API_MODE.md`：当前 analyzer API 模式
 - `docs/PROJECT_STATUS.md`：当前项目状态
+- `docs/plans/2026-04-02-people-system-design.md`：人物系统的一期产品定义
 
 ### 当前开发
 - `docs/QUICK_REFERENCE.md`：开发速查卡
@@ -38,6 +39,12 @@
 - `docs/PROJECT_STATUS.md`
 - `docs/BACKEND_COMPLETE.md`（能力快照）
 - `docs/FRONTEND_COMPLETE.md`（能力快照）
+
+### 人物系统相关
+- `docs/plans/2026-04-02-people-system-design.md`
+- `docs/plans/2026-04-02-people-system.md`
+- `docs/BACKEND_API.md`（`/people`、`/photos/:id/people`、`/faces/:id/thumbnail`）
+- `docs/PROJECT_STATUS.md`（人物页、后台任务、展示策略权重）
 
 ### 开发与测试
 - `docs/TESTING.md`
