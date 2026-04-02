@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -450,8 +451,20 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 		return err
 	}
 
+	processor := util.NewImageProcessor(1024, 85)
+	processedImage, processErr := processor.ProcessForAI(photo.FilePath)
+	if processErr != nil {
+		logger.Warnf("process photo %d for people detect failed, falling back to image path: %v", photo.ID, processErr)
+	}
+
+	var imageBase64 string
+	if len(processedImage) > 0 {
+		imageBase64 = base64.StdEncoding.EncodeToString(processedImage)
+	}
+
 	result, detectErr := s.client.DetectFaces(context.Background(), mlclient.DetectFacesRequest{
 		ImagePath:     photo.FilePath,
+		ImageBase64:   imageBase64,
 		MinConfidence: 0.5,
 		MaxFaces:      20,
 	})

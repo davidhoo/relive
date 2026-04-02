@@ -311,6 +311,78 @@ func TestPhotoService_StartScan_SkipsUnchangedExistingPhotoProcessing(t *testing
 	}
 }
 
+func TestPhotoService_StartRebuild_PreservesPeopleFieldsForExistingPhoto(t *testing.T) {
+	rootDir := t.TempDir()
+	service, _ := newAutoScanTestService(t, rootDir)
+
+	filePath := filepath.Join(rootDir, "existing.jpg")
+	if err := os.WriteFile(filePath, []byte("test"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	info, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatalf("stat file: %v", err)
+	}
+
+	now := time.Now()
+	existing := &model.Photo{
+		FilePath:          filePath,
+		FileName:          filepath.Base(filePath),
+		FileSize:          info.Size(),
+		FileHash:          "existing-hash",
+		Width:             100,
+		Height:            100,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+		FileModTime:       &now,
+		FaceProcessStatus: model.FaceProcessStatusReady,
+		FaceCount:         2,
+		TopPersonCategory: model.PersonCategoryFamily,
+	}
+	if err := service.repo.Create(existing); err != nil {
+		t.Fatalf("create existing photo: %v", err)
+	}
+
+	service.processPhotoFunc = func(filePath string, info os.FileInfo) (*model.Photo, error) {
+		now := time.Now()
+		return &model.Photo{
+			FilePath:    filePath,
+			FileName:    filepath.Base(filePath),
+			FileSize:    info.Size(),
+			FileHash:    filePath,
+			Width:       1,
+			Height:      1,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			FileModTime: &now,
+		}, nil
+	}
+
+	if _, err := service.StartRebuild(rootDir); err != nil {
+		t.Fatalf("start rebuild: %v", err)
+	}
+
+	task := waitForTaskStatus(t, service, map[string]bool{model.ScanJobStatusCompleted: true}, 3*time.Second)
+	if task.SkippedFiles != 0 {
+		t.Fatalf("expected rebuild to update existing photo without skip, got skipped=%d", task.SkippedFiles)
+	}
+
+	updated, err := service.repo.GetByID(existing.ID)
+	if err != nil {
+		t.Fatalf("load updated photo: %v", err)
+	}
+	if updated.FaceProcessStatus != model.FaceProcessStatusReady {
+		t.Fatalf("expected face_process_status to stay ready, got %s", updated.FaceProcessStatus)
+	}
+	if updated.FaceCount != 2 {
+		t.Fatalf("expected face_count to stay 2, got %d", updated.FaceCount)
+	}
+	if updated.TopPersonCategory != model.PersonCategoryFamily {
+		t.Fatalf("expected top_person_category to stay family, got %s", updated.TopPersonCategory)
+	}
+}
+
 func waitForTaskStatus(t *testing.T, service *photoService, statuses map[string]bool, timeout time.Duration) *model.ScanTask {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

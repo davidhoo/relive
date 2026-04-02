@@ -610,6 +610,16 @@ func (s *photoService) preserveAnalysisFields(existing, photo *model.Photo) {
 	if existing == nil || photo == nil {
 		return
 	}
+	photo.Status = existing.Status
+	photo.ThumbnailPath = existing.ThumbnailPath
+	photo.ThumbnailStatus = existing.ThumbnailStatus
+	photo.ThumbnailGeneratedAt = existing.ThumbnailGeneratedAt
+	photo.GeocodeStatus = existing.GeocodeStatus
+	photo.GeocodeProvider = existing.GeocodeProvider
+	photo.GeocodedAt = existing.GeocodedAt
+	photo.FaceProcessStatus = existing.FaceProcessStatus
+	photo.FaceCount = existing.FaceCount
+	photo.TopPersonCategory = existing.TopPersonCategory
 	if existing.Description != "" {
 		photo.Description = existing.Description
 		photo.MainCategory = existing.MainCategory

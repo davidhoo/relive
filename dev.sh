@@ -71,7 +71,7 @@ if [ ! -x "ml-service/.venv/bin/python" ]; then
     python3 -m venv ml-service/.venv
 fi
 
-if ! ml-service/.venv/bin/python -c "import fastapi, uvicorn" >/dev/null 2>&1; then
+if ! ml-service/.venv/bin/python -c "import fastapi, uvicorn, cv2" >/dev/null 2>&1; then
     echo "Installing ml-service dependencies..."
     (cd ml-service && .venv/bin/python -m pip install -r requirements.txt)
 fi

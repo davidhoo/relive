@@ -73,7 +73,15 @@
 
             <el-table-column label="操作" width="120" fixed="right">
               <template #default="{ row }">
-                <el-button link type="primary" @click="goToDetail(row.id)">查看详情</el-button>
+                <el-button
+                  type="warning"
+                  size="small"
+                  plain
+                  class="detail-btn"
+                  @click="goToDetail(row.id)"
+                >
+                  查看详情
+                </el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -349,6 +357,26 @@ onMounted(async () => {
 
 .people-table :deep(.el-table__cell) {
   vertical-align: middle;
+}
+
+.detail-btn {
+  background-color: #fff7e6 !important;
+  border-color: #ffd591 !important;
+  color: #d46b08 !important;
+  border-radius: var(--radius-sm);
+  min-width: 78px;
+}
+
+.detail-btn:hover:not(:disabled) {
+  background-color: #ffe7ba !important;
+  border-color: #ffc53d !important;
+  color: #ad4e00 !important;
+}
+
+.detail-btn:disabled {
+  background-color: #f5f5f5 !important;
+  border-color: #d9d9d9 !important;
+  color: #999 !important;
 }
 
 .person-cell {

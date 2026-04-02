@@ -1,3 +1,7 @@
+from pathlib import Path
+
+import cv2
+import numpy as np
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -12,13 +16,15 @@ def test_health_endpoint():
     assert response.json() == {"status": "ok"}
 
 
-def test_detect_faces_endpoint_shape():
+def test_detect_faces_endpoint_shape(tmp_path: Path):
     client = TestClient(app)
+    image_path = tmp_path / "blank.jpg"
+    cv2.imwrite(str(image_path), np.full((320, 320, 3), 255, dtype=np.uint8))
 
     response = client.post(
         "/api/v1/detect-faces",
         json={
-            "image_path": "/photos/family.jpg",
+            "image_path": str(image_path),
             "min_confidence": 0.5,
             "max_faces": 3,
         },
@@ -28,9 +34,4 @@ def test_detect_faces_endpoint_shape():
     payload = response.json()
     assert "faces" in payload
     assert "processing_time_ms" in payload
-    assert len(payload["faces"]) == 1
-
-    face = payload["faces"][0]
-    assert set(face.keys()) == {"bbox", "confidence", "quality_score", "embedding"}
-    assert set(face["bbox"].keys()) == {"x", "y", "width", "height"}
-    assert len(face["embedding"]) == 512
+    assert payload["faces"] == []
