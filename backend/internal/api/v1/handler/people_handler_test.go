@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"image/color"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/pkg/config"
+	"github.com/disintegration/imaging"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -462,6 +464,44 @@ func TestPeopleHandlerGetFaceThumbnail(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "face-thumb", rec.Body.String())
+}
+
+func TestPeopleHandlerGetFaceThumbnailGeneratesMissingCrop(t *testing.T) {
+	handler, _, db, cfg := newPeopleHandlerForTest(t)
+	sourceDir := t.TempDir()
+	photoPath := filepath.Join(sourceDir, "photo.jpg")
+	require.NoError(t, imaging.Save(imaging.New(320, 320, color.NRGBA{R: 120, G: 80, B: 40, A: 255}), photoPath))
+
+	photo := &model.Photo{
+		FilePath: photoPath,
+		FileName: filepath.Base(photoPath),
+		FileSize: 1,
+		FileHash: "handler-face-thumb",
+		Width:    320,
+		Height:   320,
+		Status:   model.PhotoStatusActive,
+	}
+	require.NoError(t, db.Create(photo).Error)
+
+	face := &model.Face{
+		PhotoID:      photo.ID,
+		BBoxX:        0.2,
+		BBoxY:        0.2,
+		BBoxWidth:    0.3,
+		BBoxHeight:   0.3,
+		Confidence:   0.95,
+		QualityScore: 0.9,
+	}
+	require.NoError(t, db.Create(face).Error)
+
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/faces/1/thumbnail", nil, gin.Params{{Key: "id", Value: "1"}}, handler.GetFaceThumbnail)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var updated model.Face
+	require.NoError(t, db.First(&updated, face.ID).Error)
+	require.NotEmpty(t, updated.ThumbnailPath)
+	require.FileExists(t, filepath.Join(cfg.Photos.ThumbnailPath, updated.ThumbnailPath))
 }
 
 func TestPeopleHandlerStatsError(t *testing.T) {

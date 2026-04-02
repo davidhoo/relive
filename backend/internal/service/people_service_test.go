@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"image/color"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/pkg/config"
+	"github.com/disintegration/imaging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
@@ -106,10 +108,21 @@ func encodeEmbedding(t *testing.T, embedding []float32) []byte {
 	return payload
 }
 
+func createTestImageFile(t *testing.T, dir string, name string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, imaging.Save(imaging.New(320, 320, color.NRGBA{R: 180, G: 120, B: 90, A: 255}), path))
+	return path
+}
+
 func TestPeopleServiceBackground(t *testing.T) {
+	rootDir := t.TempDir()
+	photoPath := createTestImageFile(t, rootDir, "face.jpg")
+
 	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{
 		responses: map[string]*mlclient.DetectFacesResponse{
-			"/photos/face.jpg": {
+			photoPath: {
 				Faces: []mlclient.DetectedFace{
 					{
 						BBox:         mlclient.BoundingBox{X: 0.1, Y: 0.1, Width: 0.2, Height: 0.2},
@@ -128,8 +141,8 @@ func TestPeopleServiceBackground(t *testing.T) {
 	faceRepo := repository.NewFaceRepository(db)
 
 	photo := &model.Photo{
-		FilePath: "/photos/face.jpg",
-		FileName: "face.jpg",
+		FilePath: photoPath,
+		FileName: filepath.Base(photoPath),
 		FileSize: 1,
 		FileHash: "hash-face",
 		Width:    100,
@@ -319,11 +332,95 @@ func TestPeopleServiceMarksNoFaceReady(t *testing.T) {
 	require.NoError(t, svc.StopBackground())
 }
 
+func TestPeopleServiceGeneratesFaceThumbnail(t *testing.T) {
+	rootDir := t.TempDir()
+	photoPath := filepath.Join(rootDir, "face-source.jpg")
+	require.NoError(t, imaging.Save(imaging.New(400, 400, color.NRGBA{R: 180, G: 120, B: 90, A: 255}), photoPath))
+
+	db := setupPeopleServiceTestDB(t)
+	cfg := &config.Config{
+		People: config.PeopleConfig{
+			MLEndpoint: "http://ml-service",
+			Timeout:    5,
+		},
+		Photos: config.PhotosConfig{
+			ThumbnailPath: filepath.Join(rootDir, ".thumbnails"),
+		},
+	}
+
+	svc := NewPeopleService(
+		db,
+		repository.NewPhotoRepository(db),
+		repository.NewFaceRepository(db),
+		repository.NewPersonRepository(db),
+		repository.NewPeopleJobRepository(db),
+		cfg,
+		&fakePeopleMLClient{
+			responses: map[string]*mlclient.DetectFacesResponse{
+				photoPath: {
+					Faces: []mlclient.DetectedFace{
+						{
+							BBox:         mlclient.BoundingBox{X: 0.2, Y: 0.2, Width: 0.3, Height: 0.3},
+							Confidence:   0.96,
+							QualityScore: 0.9,
+							Embedding:    []float32{0.1, 0.2, 0.3},
+						},
+					},
+					ProcessingTimeMS: 4,
+				},
+			},
+		},
+	).(*peopleService)
+
+	photoRepo := repository.NewPhotoRepository(db)
+	jobRepo := repository.NewPeopleJobRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+
+	photo := &model.Photo{
+		FilePath: photoPath,
+		FileName: filepath.Base(photoPath),
+		FileSize: 1,
+		FileHash: "face-source",
+		Width:    400,
+		Height:   400,
+		Status:   model.PhotoStatusActive,
+	}
+	require.NoError(t, photoRepo.Create(photo))
+	require.NoError(t, jobRepo.Create(&model.PeopleJob{
+		PhotoID:  photo.ID,
+		FilePath: photo.FilePath,
+		Status:   model.PeopleJobStatusQueued,
+		Source:   model.PeopleJobSourceScan,
+		Priority: 10,
+		QueuedAt: time.Now(),
+	}))
+
+	_, err := svc.StartBackground()
+	require.NoError(t, err)
+
+	waitForPeopleCondition(t, 3*time.Second, func() bool {
+		updated, getErr := photoRepo.GetByID(photo.ID)
+		require.NoError(t, getErr)
+		return updated.FaceProcessStatus == model.FaceProcessStatusReady
+	})
+
+	faces, err := faceRepo.ListByPhotoID(photo.ID)
+	require.NoError(t, err)
+	require.Len(t, faces, 1)
+	require.NotEmpty(t, faces[0].ThumbnailPath)
+	require.FileExists(t, filepath.Join(cfg.Photos.ThumbnailPath, faces[0].ThumbnailPath))
+
+	require.NoError(t, svc.StopBackground())
+}
+
 func TestPeopleServiceCluster(t *testing.T) {
 	t.Run("高置信度并入已有人物", func(t *testing.T) {
+		rootDir := t.TempDir()
+		newPhotoPath := createTestImageFile(t, rootDir, "new.jpg")
+
 		svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{
 			responses: map[string]*mlclient.DetectFacesResponse{
-				"/photos/new.jpg": {
+				newPhotoPath: {
 					Faces: []mlclient.DetectedFace{
 						{
 							BBox:         mlclient.BoundingBox{X: 0.1, Y: 0.1, Width: 0.2, Height: 0.2},
@@ -342,8 +439,8 @@ func TestPeopleServiceCluster(t *testing.T) {
 		faceRepo := repository.NewFaceRepository(db)
 		jobRepo := repository.NewPeopleJobRepository(db)
 
-		oldPhoto := &model.Photo{FilePath: "/photos/old.jpg", FileName: "old.jpg", FileSize: 1, FileHash: "old", Width: 100, Height: 100, Status: model.PhotoStatusActive}
-		newPhoto := &model.Photo{FilePath: "/photos/new.jpg", FileName: "new.jpg", FileSize: 1, FileHash: "new", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+		oldPhoto := &model.Photo{FilePath: filepath.Join(rootDir, "old.jpg"), FileName: "old.jpg", FileSize: 1, FileHash: "old", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+		newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: filepath.Base(newPhotoPath), FileSize: 1, FileHash: "new", Width: 100, Height: 100, Status: model.PhotoStatusActive}
 		require.NoError(t, photoRepo.Create(oldPhoto))
 		require.NoError(t, photoRepo.Create(newPhoto))
 
@@ -398,9 +495,12 @@ func TestPeopleServiceCluster(t *testing.T) {
 	})
 
 	t.Run("边界样本新建人物", func(t *testing.T) {
+		rootDir := t.TempDir()
+		newPhotoPath := createTestImageFile(t, rootDir, "uncertain.jpg")
+
 		svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{
 			responses: map[string]*mlclient.DetectFacesResponse{
-				"/photos/uncertain.jpg": {
+				newPhotoPath: {
 					Faces: []mlclient.DetectedFace{
 						{
 							BBox:         mlclient.BoundingBox{X: 0.2, Y: 0.2, Width: 0.2, Height: 0.2},
@@ -419,8 +519,8 @@ func TestPeopleServiceCluster(t *testing.T) {
 		faceRepo := repository.NewFaceRepository(db)
 		jobRepo := repository.NewPeopleJobRepository(db)
 
-		oldPhoto := &model.Photo{FilePath: "/photos/existing.jpg", FileName: "existing.jpg", FileSize: 1, FileHash: "existing", Width: 100, Height: 100, Status: model.PhotoStatusActive}
-		newPhoto := &model.Photo{FilePath: "/photos/uncertain.jpg", FileName: "uncertain.jpg", FileSize: 1, FileHash: "uncertain", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+		oldPhoto := &model.Photo{FilePath: filepath.Join(rootDir, "existing.jpg"), FileName: "existing.jpg", FileSize: 1, FileHash: "existing", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+		newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: filepath.Base(newPhotoPath), FileSize: 1, FileHash: "uncertain", Width: 100, Height: 100, Status: model.PhotoStatusActive}
 		require.NoError(t, photoRepo.Create(oldPhoto))
 		require.NoError(t, photoRepo.Create(newPhoto))
 
@@ -476,9 +576,12 @@ func TestPeopleServiceCluster(t *testing.T) {
 }
 
 func TestPeopleServiceMerge(t *testing.T) {
+	rootDir := t.TempDir()
+	newPhotoPath := createTestImageFile(t, rootDir, "merged-new.jpg")
+
 	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{
 		responses: map[string]*mlclient.DetectFacesResponse{
-			"/photos/merged-new.jpg": {
+			newPhotoPath: {
 				Faces: []mlclient.DetectedFace{
 					{
 						BBox:         mlclient.BoundingBox{X: 0.3, Y: 0.3, Width: 0.2, Height: 0.2},
@@ -497,9 +600,9 @@ func TestPeopleServiceMerge(t *testing.T) {
 	faceRepo := repository.NewFaceRepository(db)
 	jobRepo := repository.NewPeopleJobRepository(db)
 
-	targetPhoto := &model.Photo{FilePath: "/photos/target.jpg", FileName: "target.jpg", FileSize: 1, FileHash: "target", Width: 100, Height: 100, Status: model.PhotoStatusActive}
-	sourcePhoto := &model.Photo{FilePath: "/photos/source.jpg", FileName: "source.jpg", FileSize: 1, FileHash: "source", Width: 100, Height: 100, Status: model.PhotoStatusActive}
-	newPhoto := &model.Photo{FilePath: "/photos/merged-new.jpg", FileName: "merged-new.jpg", FileSize: 1, FileHash: "merged-new", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	targetPhoto := &model.Photo{FilePath: filepath.Join(rootDir, "target.jpg"), FileName: "target.jpg", FileSize: 1, FileHash: "target", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	sourcePhoto := &model.Photo{FilePath: filepath.Join(rootDir, "source.jpg"), FileName: "source.jpg", FileSize: 1, FileHash: "source", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: filepath.Base(newPhotoPath), FileSize: 1, FileHash: "merged-new", Width: 100, Height: 100, Status: model.PhotoStatusActive}
 	require.NoError(t, photoRepo.Create(targetPhoto))
 	require.NoError(t, photoRepo.Create(sourcePhoto))
 	require.NoError(t, photoRepo.Create(newPhoto))
@@ -739,9 +842,12 @@ func TestPeopleServiceCategoryBackfillsPhotos(t *testing.T) {
 }
 
 func TestPeopleServiceManualAvatarWins(t *testing.T) {
+	rootDir := t.TempDir()
+	newPhotoPath := createTestImageFile(t, rootDir, "avatar-new.jpg")
+
 	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{
 		responses: map[string]*mlclient.DetectFacesResponse{
-			"/photos/avatar-new.jpg": {
+			newPhotoPath: {
 				Faces: []mlclient.DetectedFace{
 					{
 						BBox:         mlclient.BoundingBox{X: 0.3, Y: 0.3, Width: 0.2, Height: 0.2},
@@ -760,8 +866,8 @@ func TestPeopleServiceManualAvatarWins(t *testing.T) {
 	faceRepo := repository.NewFaceRepository(db)
 	jobRepo := repository.NewPeopleJobRepository(db)
 
-	oldPhoto := &model.Photo{FilePath: "/photos/avatar-old.jpg", FileName: "avatar-old.jpg", FileSize: 1, FileHash: "avatar-old", Width: 100, Height: 100, Status: model.PhotoStatusActive}
-	newPhoto := &model.Photo{FilePath: "/photos/avatar-new.jpg", FileName: "avatar-new.jpg", FileSize: 1, FileHash: "avatar-new", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	oldPhoto := &model.Photo{FilePath: filepath.Join(rootDir, "avatar-old.jpg"), FileName: "avatar-old.jpg", FileSize: 1, FileHash: "avatar-old", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: filepath.Base(newPhotoPath), FileSize: 1, FileHash: "avatar-new", Width: 100, Height: 100, Status: model.PhotoStatusActive}
 	require.NoError(t, photoRepo.Create(oldPhoto))
 	require.NoError(t, photoRepo.Create(newPhoto))
 

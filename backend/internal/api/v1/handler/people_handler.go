@@ -13,6 +13,7 @@ import (
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/internal/service"
+	"github.com/davidhoo/relive/internal/util"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -414,6 +415,24 @@ func (h *PeopleHandler) GetFaceThumbnail(c *gin.Context) {
 		return
 	}
 
+	if strings.TrimSpace(face.ThumbnailPath) == "" {
+		photo, photoErr := h.photoRepo.GetByID(face.PhotoID)
+		if photoErr != nil {
+			writePeopleError(c, http.StatusInternalServerError, "GET_FAILED", photoErr.Error())
+			return
+		}
+		thumbnailPath, genErr := util.GenerateFaceThumbnail(photo.FilePath, thumbnailRoot(h.cfg), face.BBoxX, face.BBoxY, face.BBoxWidth, face.BBoxHeight)
+		if genErr != nil {
+			writePeopleError(c, http.StatusInternalServerError, "GENERATE_FAILED", genErr.Error())
+			return
+		}
+		if updateErr := h.faceRepo.UpdateFields(face.ID, map[string]interface{}{"thumbnail_path": thumbnailPath}); updateErr != nil {
+			writePeopleError(c, http.StatusInternalServerError, "UPDATE_FAILED", updateErr.Error())
+			return
+		}
+		face.ThumbnailPath = thumbnailPath
+	}
+
 	fullPath, err := resolveThumbnailPath(h.cfg, face.ThumbnailPath)
 	if err != nil {
 		writePeopleError(c, http.StatusNotFound, "NOT_FOUND", "Face thumbnail not found")
@@ -625,4 +644,11 @@ func resolveThumbnailPath(cfg *config.Config, thumbnailPath string) (string, err
 	}
 
 	return fullPath, nil
+}
+
+func thumbnailRoot(cfg *config.Config) string {
+	if cfg != nil && strings.TrimSpace(cfg.Photos.ThumbnailPath) != "" {
+		return cfg.Photos.ThumbnailPath
+	}
+	return "./data/thumbnails"
 }

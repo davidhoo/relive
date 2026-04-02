@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/davidhoo/relive/internal/mlclient"
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
+	"github.com/davidhoo/relive/internal/util"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/logger"
 	"gorm.io/gorm"
@@ -518,6 +520,10 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 		if err != nil {
 			return err
 		}
+		thumbnailPath, err := s.generateFaceThumbnail(photo, detected.BBox)
+		if err != nil {
+			return err
+		}
 		face := &model.Face{
 			PhotoID:       photo.ID,
 			PersonID:      &personID,
@@ -528,7 +534,7 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 			Confidence:    detected.Confidence,
 			QualityScore:  detected.QualityScore,
 			Embedding:     embeddingPayload,
-			ThumbnailPath: "",
+			ThumbnailPath: thumbnailPath,
 		}
 		createdFaces = append(createdFaces, face)
 		assignedCandidates = append(assignedCandidates, face)
@@ -588,6 +594,20 @@ func (s *peopleService) appendBackgroundLog(message string) {
 	if len(s.backgroundLogs) > 100 {
 		s.backgroundLogs = s.backgroundLogs[len(s.backgroundLogs)-100:]
 	}
+}
+
+func (s *peopleService) generateFaceThumbnail(photo *model.Photo, bbox mlclient.BoundingBox) (string, error) {
+	if photo == nil {
+		return "", fmt.Errorf("photo is nil")
+	}
+	return util.GenerateFaceThumbnail(photo.FilePath, s.faceThumbnailRoot(), bbox.X, bbox.Y, bbox.Width, bbox.Height)
+}
+
+func (s *peopleService) faceThumbnailRoot() string {
+	if s.config != nil && strings.TrimSpace(s.config.Photos.ThumbnailPath) != "" {
+		return s.config.Photos.ThumbnailPath
+	}
+	return "./data/thumbnails"
 }
 
 func clonePeopleTask(task *model.PeopleTask) *model.PeopleTask {
