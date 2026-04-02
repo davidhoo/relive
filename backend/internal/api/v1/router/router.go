@@ -139,6 +139,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 		photoAuth := v1.Group("")
 		photoAuth.Use(middleware.PhotoAuth(services.Auth, services.Device))
 		{
+			photoAuth.GET("/faces/:id/thumbnail", handlers.People.GetFaceThumbnail)
 			photoAuth.GET("/photos/:id/image", handlers.Photo.GetPhotoImage)
 			photoAuth.GET("/photos/:id/thumbnail", handlers.Photo.GetPhotoThumbnail)
 			photoAuth.GET("/photos/:id/frame-preview", handlers.Photo.GetPhotoFramePreview)
@@ -186,10 +187,28 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				photos.GET("", handlers.Photo.GetPhotos)
 				photos.GET("/:id", handlers.Photo.GetPhotoByID)
 				photos.GET("/:id/adjacent", handlers.Photo.GetAdjacentPhotos)
+				photos.GET("/:id/people", handlers.People.GetPhotoPeople)
 				photos.PATCH("/:id/category", handlers.Photo.UpdateCategory)
 				photos.PATCH("/:id/location", handlers.Photo.SetManualLocation)
 				photos.PATCH("/:id/rotation", handlers.Photo.UpdateRotation)
 				photos.PATCH("/:id/orientation", handlers.Photo.UpdateRotation) // 兼容旧路由
+			}
+
+			people := authorized.Group("/people")
+			{
+				people.GET("/task", handlers.People.GetTask)
+				people.GET("/stats", handlers.People.GetStats)
+				people.GET("/background/logs", handlers.People.GetBackgroundLogs)
+				people.POST("/merge", handlers.People.MergePeople)
+				people.POST("/split", handlers.People.SplitPerson)
+				people.POST("/move-faces", handlers.People.MoveFaces)
+				people.GET("", handlers.People.ListPeople)
+				people.GET("/:id", handlers.People.GetPerson)
+				people.GET("/:id/photos", handlers.People.GetPersonPhotos)
+				people.GET("/:id/faces", handlers.People.GetPersonFaces)
+				people.PATCH("/:id/category", handlers.People.UpdatePersonCategory)
+				people.PATCH("/:id/name", handlers.People.UpdatePersonName)
+				people.PATCH("/:id/avatar", handlers.People.UpdatePersonAvatar)
 			}
 
 			thumbnails := authorized.Group("/thumbnails")
