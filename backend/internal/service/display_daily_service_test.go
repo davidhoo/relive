@@ -119,6 +119,8 @@ func setupDisplayServiceTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(
 		&model.Photo{},
+		&model.Person{},
+		&model.Face{},
 		&model.AnalysisRuntimeLease{},
 		&model.DisplayRecord{},
 		&model.Device{},
@@ -205,4 +207,87 @@ func TestDisplayService_GenerateDailyBatchAvoidsRecentlyDisplayedPhotos(t *testi
 	for _, item := range batch.Items {
 		assert.NotEqual(t, allPhotos[0].ID, item.PhotoID, "recently displayed photo should be excluded from generated batch")
 	}
+}
+
+func TestCurationPeopleSpotlightUsesRealPeopleData(t *testing.T) {
+	db := setupDisplayServiceTestDB(t)
+	defer closeDisplayServiceTestDB(db)
+
+	tempDir := t.TempDir()
+	svcIface, photoRepo, _, _ := buildTestDisplayService(t, db, tempDir)
+	svc := svcIface.(*displayService)
+
+	realPath := filepath.Join(tempDir, "photos", "real-people.jpg")
+	heuristicPath := filepath.Join(tempDir, "photos", "heuristic-people.jpg")
+	require.NoError(t, os.MkdirAll(filepath.Dir(realPath), 0o755))
+	require.NoError(t, os.WriteFile(realPath, []byte("real"), 0o644))
+	require.NoError(t, os.WriteFile(heuristicPath, []byte("heuristic"), 0o644))
+
+	takenAt := time.Date(2025, 4, 2, 10, 0, 0, 0, time.Local)
+	realPhoto := &model.Photo{
+		FilePath:          realPath,
+		FileName:          filepath.Base(realPath),
+		FileSize:          1024,
+		FileHash:          "real-people",
+		TakenAt:           &takenAt,
+		Width:             1200,
+		Height:            1600,
+		Status:            model.PhotoStatusActive,
+		AIAnalyzed:        true,
+		MemoryScore:       86,
+		BeautyScore:       80,
+		OverallScore:      84,
+		TopPersonCategory: model.PersonCategoryFamily,
+	}
+	heuristicPhoto := &model.Photo{
+		FilePath:          heuristicPath,
+		FileName:          filepath.Base(heuristicPath),
+		FileSize:          1024,
+		FileHash:          "heuristic-people",
+		TakenAt:           &takenAt,
+		Width:             1200,
+		Height:            1600,
+		Status:            model.PhotoStatusActive,
+		AIAnalyzed:        true,
+		MemoryScore:       96,
+		BeautyScore:       94,
+		OverallScore:      95,
+		TopPersonCategory: "",
+	}
+	require.NoError(t, photoRepo.Create(realPhoto))
+	require.NoError(t, photoRepo.Create(heuristicPhoto))
+
+	realEvent := &model.Event{
+		StartTime:       takenAt,
+		EndTime:         takenAt.Add(2 * time.Hour),
+		DurationHours:   2,
+		PhotoCount:      1,
+		CoverPhotoID:    &realPhoto.ID,
+		PrimaryCategory: "travel",
+		PrimaryTag:      "旅行",
+		EventScore:      70,
+	}
+	heuristicEvent := &model.Event{
+		StartTime:       takenAt,
+		EndTime:         takenAt.Add(2 * time.Hour),
+		DurationHours:   2,
+		PhotoCount:      1,
+		CoverPhotoID:    &heuristicPhoto.ID,
+		PrimaryCategory: "portrait",
+		PrimaryTag:      "people",
+		EventScore:      95,
+	}
+	require.NoError(t, db.Create(realEvent).Error)
+	require.NoError(t, db.Create(heuristicEvent).Error)
+	require.NoError(t, photoRepo.UpdateFields(realPhoto.ID, map[string]interface{}{"event_id": realEvent.ID}))
+	require.NoError(t, photoRepo.UpdateFields(heuristicPhoto.ID, map[string]interface{}{"event_id": heuristicEvent.ID}))
+
+	cfg := defaultDisplayStrategyConfig()
+	cfg.CurationPeopleEventsLimit = 5
+
+	candidates, err := svc.nominatePeopleSpotlight(map[uint]bool{}, nil, cfg)
+	require.NoError(t, err)
+	require.Len(t, candidates, 2)
+	require.Equal(t, uint(realPhoto.ID), candidates[0].photo.ID, "real people-backed event should be nominated before tag-only heuristic event")
+	require.Equal(t, uint(heuristicPhoto.ID), candidates[1].photo.ID)
 }

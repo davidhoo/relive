@@ -258,6 +258,28 @@ func TestGetOnThisDayPhotos_PrefersCloserCalendarDateForAdjacentPreviewDays(t *t
 	require.Equal(t, uint(32), photosMarch6[0].ID)
 }
 
+func TestSelectTopPhotosPrefersPeoplePriority(t *testing.T) {
+	takenAt := time.Date(2026, 4, 2, 9, 0, 0, 0, time.Local)
+	olderTakenAt := takenAt.Add(-time.Hour)
+
+	photos := []*model.Photo{
+		{ID: 1, OverallScore: 90, MemoryScore: 90, TakenAt: &olderTakenAt, TopPersonCategory: model.PersonCategoryStranger},
+		{ID: 2, OverallScore: 90, MemoryScore: 90, TakenAt: &olderTakenAt, TopPersonCategory: model.PersonCategoryFamily},
+		{ID: 3, OverallScore: 90, MemoryScore: 90, TakenAt: &olderTakenAt, TopPersonCategory: model.PersonCategoryAcquaintance},
+		{ID: 4, OverallScore: 90, MemoryScore: 90, TakenAt: &olderTakenAt, TopPersonCategory: model.PersonCategoryFriend},
+		{ID: 5, OverallScore: 95, MemoryScore: 95, TakenAt: &takenAt, TopPersonCategory: ""},
+	}
+
+	ranked := selectTopPhotos(photos, len(photos))
+	require.Len(t, ranked, 5)
+
+	require.Equal(t, uint(5), ranked[0].ID, "no-face photo should stay neutral and still win by higher base score")
+	require.Equal(t, uint(2), ranked[1].ID, "family should outrank stranger when base score is otherwise similar")
+	require.Equal(t, uint(4), ranked[2].ID, "friend should outrank acquaintance")
+	require.Equal(t, uint(3), ranked[3].ID)
+	require.Equal(t, uint(1), ranked[4].ID)
+}
+
 func TestGetOnThisDayPhotos_FillsRemainingSlotsFromWiderFallbackWindow(t *testing.T) {
 	targetDate := time.Date(2026, 3, 6, 10, 0, 0, 0, time.Local)
 	exactA := time.Date(2025, 3, 6, 9, 0, 0, 0, time.Local)

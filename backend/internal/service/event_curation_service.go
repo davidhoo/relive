@@ -364,8 +364,14 @@ func applyCurationScoreAdjustments(candidates []curationCandidate, targetDate ti
 			c.adjScore *= cfg.CurationFreshnessPenalty
 		}
 
-		// 人物偏好：event.PrimaryTag 含人物关键词
-		if c.event != nil && isPeopleRelated(c.event.PrimaryTag) {
+		// 人物偏好：真实人物信号优先，标签仅作兜底
+		if c.channel == "people_spotlight" {
+			if bonus := peopleSpotlightSignalBonus(c.photo, cfg); bonus > 0 {
+				c.adjScore += bonus
+			} else if c.event != nil && isPeopleRelated(c.event.PrimaryTag) {
+				c.adjScore += cfg.CurationPeopleBonus
+			}
+		} else if c.event != nil && isPeopleRelated(c.event.PrimaryTag) {
 			c.adjScore += cfg.CurationPeopleBonus
 		}
 
@@ -394,6 +400,26 @@ func isPeopleRelated(tag string) bool {
 		}
 	}
 	return false
+}
+
+func peopleSpotlightSignalBonus(photo *model.Photo, cfg model.DisplayStrategyConfig) float64 {
+	if photo == nil || photo.TopPersonCategory == "" {
+		return 0
+	}
+
+	base := cfg.CurationPeopleBonus * 4
+	switch photo.TopPersonCategory {
+	case model.PersonCategoryFamily:
+		return base + 12
+	case model.PersonCategoryFriend:
+		return base + 8
+	case model.PersonCategoryAcquaintance:
+		return base + 4
+	case model.PersonCategoryStranger:
+		return base
+	default:
+		return base
+	}
 }
 
 // matchesCurrentSeason 判断照片标签是否匹配当前季节

@@ -452,6 +452,7 @@ func (r *photoRepository) GetByDateRange(start, end time.Time) ([]*model.Photo, 
 func (r *photoRepository) GetTopByScore(limit int, excludePhotoIDs []uint) ([]*model.Photo, error) {
 	var photos []*model.Photo
 	query := r.db.Scopes(activeScope).Where("ai_analyzed = ?", true).
+		Order(topPersonWeightedScoreSQL() + " DESC").
 		Order("overall_score DESC, taken_at DESC")
 
 	if len(excludePhotoIDs) > 0 {
@@ -512,7 +513,9 @@ func (r *photoRepository) GetOnThisDayCandidates(monthDayStart, monthDayEnd stri
 		query = query.Where("id NOT IN ?", excludeIDs)
 	}
 
-	err := query.Order("overall_score DESC").Limit(limit).Find(&photos).Error
+	err := query.Order(topPersonWeightedScoreSQL() + " DESC").
+		Order("overall_score DESC, taken_at DESC").
+		Limit(limit).Find(&photos).Error
 	return photos, err
 }
 
@@ -527,8 +530,19 @@ func (r *photoRepository) GetTopScoredCandidates(minBeauty, minMemory int, exclu
 		query = query.Where("id NOT IN ?", excludeIDs)
 	}
 
-	err := query.Order("overall_score DESC, taken_at DESC").Limit(limit).Find(&photos).Error
+	err := query.Order(topPersonWeightedScoreSQL() + " DESC").
+		Order("overall_score DESC, taken_at DESC").
+		Limit(limit).Find(&photos).Error
 	return photos, err
+}
+
+func topPersonWeightedScoreSQL() string {
+	return `overall_score + CASE top_person_category
+		WHEN 'family' THEN 3
+		WHEN 'friend' THEN 2
+		WHEN 'acquaintance' THEN 1
+		ELSE 0
+	END`
 }
 
 // Count 统计照片总数
