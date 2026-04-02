@@ -40,3 +40,7 @@ performance:
   max_analyze_workers: 1
   max_thumbnail_workers: 1
   max_geocode_workers: 1
+
+people:
+  ml_endpoint: "http://localhost:5050"
+  timeout: 15
