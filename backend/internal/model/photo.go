@@ -28,6 +28,16 @@ const (
 	GeocodeStatusFailed  = "failed"
 )
 
+// 人脸处理状态常量
+const (
+	FaceProcessStatusNone       = "none"
+	FaceProcessStatusPending    = "pending"
+	FaceProcessStatusProcessing = "processing"
+	FaceProcessStatusReady      = "ready"
+	FaceProcessStatusNoFace     = "no_face"
+	FaceProcessStatusFailed     = "failed"
+)
+
 // Photo 照片模型
 type Photo struct {
 	ID        uint           `gorm:"primarykey" json:"id"`
@@ -53,23 +63,28 @@ type Photo struct {
 
 	// EXIF 信息
 	TakenAt         *time.Time `gorm:"index:idx_taken_at;index:idx_status_deleted_taken,priority:3,sort:desc" json:"taken_at"` // 拍摄时间
-	CameraModel     string     `gorm:"type:varchar(100)" json:"camera_model"`                // 相机型号
-	Width           int        `gorm:"not null" json:"width"`                                // 宽度
-	Height          int        `gorm:"not null" json:"height"`                               // 高度
-	Orientation     int        `gorm:"default:1" json:"orientation"`                         // 方向（1-8，EXIF 只读）
-	ManualRotation  int        `gorm:"default:0" json:"manual_rotation"`                    // 手动旋转角度（0/90/180/270）
-	GPSLatitude     *float64   `json:"gps_latitude"`                                         // GPS 纬度
-	GPSLongitude    *float64   `json:"gps_longitude"`                                        // GPS 经度
-	Location        string     `gorm:"type:varchar(200);index:idx_location" json:"location"` // 位置（城市）
-	Country         string     `gorm:"type:varchar(100)" json:"country"`                    // 国家
-	Province        string     `gorm:"type:varchar(100)" json:"province"`                   // 省份
-	City            string     `gorm:"type:varchar(100);index:idx_photo_city" json:"city"`  // 城市
-	District        string     `gorm:"type:varchar(100)" json:"district"`                   // 区/县
-	Street          string     `gorm:"type:varchar(200)" json:"street"`                     // 街道
-	POI             string     `gorm:"type:varchar(200)" json:"poi"`                        // 商圈/地标
+	CameraModel     string     `gorm:"type:varchar(100)" json:"camera_model"`                                                  // 相机型号
+	Width           int        `gorm:"not null" json:"width"`                                                                  // 宽度
+	Height          int        `gorm:"not null" json:"height"`                                                                 // 高度
+	Orientation     int        `gorm:"default:1" json:"orientation"`                                                           // 方向（1-8，EXIF 只读）
+	ManualRotation  int        `gorm:"default:0" json:"manual_rotation"`                                                       // 手动旋转角度（0/90/180/270）
+	GPSLatitude     *float64   `json:"gps_latitude"`                                                                           // GPS 纬度
+	GPSLongitude    *float64   `json:"gps_longitude"`                                                                          // GPS 经度
+	Location        string     `gorm:"type:varchar(200);index:idx_location" json:"location"`                                   // 位置（城市）
+	Country         string     `gorm:"type:varchar(100)" json:"country"`                                                       // 国家
+	Province        string     `gorm:"type:varchar(100)" json:"province"`                                                      // 省份
+	City            string     `gorm:"type:varchar(100);index:idx_photo_city" json:"city"`                                     // 城市
+	District        string     `gorm:"type:varchar(100)" json:"district"`                                                      // 区/县
+	Street          string     `gorm:"type:varchar(200)" json:"street"`                                                        // 街道
+	POI             string     `gorm:"type:varchar(200)" json:"poi"`                                                           // 商圈/地标
 	GeocodeStatus   string     `gorm:"type:varchar(20);default:none;index:idx_geocode_status;check:chk_geocode_status,geocode_status IN ('none','pending','ready','failed')" json:"geocode_status"`
 	GeocodeProvider string     `gorm:"column:geocode_provider;type:varchar(50)" json:"geocode_provider"`
 	GeocodedAt      *time.Time `json:"geocoded_at"`
+
+	// 人物系统派生状态
+	FaceProcessStatus string `gorm:"type:varchar(20);default:none;index:idx_face_process_status;check:chk_face_process_status,face_process_status IN ('none','pending','processing','ready','no_face','failed')" json:"face_process_status"`
+	FaceCount         int    `gorm:"not null;default:0" json:"face_count"`
+	TopPersonCategory string `gorm:"type:varchar(20);default:'';index:idx_top_person_category;check:chk_photo_top_person_category,top_person_category IN ('','family','friend','acquaintance','stranger')" json:"top_person_category"`
 
 	// AI 分析结果
 	AIAnalyzed bool       `gorm:"default:false;index:idx_ai_analyzed" json:"ai_analyzed"` // 是否已分析

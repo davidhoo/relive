@@ -104,6 +104,9 @@ func AutoMigrate(db *gorm.DB) error {
 	models := []interface{}{
 		&model.Photo{},
 		&model.PhotoTag{},
+		&model.Person{},
+		&model.Face{},
+		&model.PeopleJob{},
 		&model.ScanJob{},
 		&model.ThumbnailJob{},
 		&model.GeocodeJob{},

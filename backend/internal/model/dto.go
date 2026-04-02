@@ -95,7 +95,7 @@ type DisplayStrategyConfig struct {
 	CurationGeoEventsLimit      int     `json:"curationGeoEventsLimit,omitempty"`      // 地理漂移提名数，默认 10
 	CurationHiddenGemsMinBeauty int     `json:"curationHiddenGemsMinBeauty,omitempty"` // 角落遗珠最低美感分，默认 60
 	CurationSeasonBoost         float64 `json:"curationSeasonBoost,omitempty"`         // 季节对齐加权，默认 1.2
-	CurationFreshnessPenalty    float64 `json:"curationFreshnessPenalty,omitempty"`     // 近期展示惩罚，默认 0.1
+	CurationFreshnessPenalty    float64 `json:"curationFreshnessPenalty,omitempty"`    // 近期展示惩罚，默认 0.1
 	CurationPeopleBonus         float64 `json:"curationPeopleBonus,omitempty"`         // 人物偏好加分，默认 20
 	CurationDisplayDecayFactor  float64 `json:"curationDisplayDecayFactor,omitempty"`  // 展示衰减因子，默认 0.1
 	CurationFreshnessDays       int     `json:"curationFreshnessDays,omitempty"`       // 新鲜度窗口天数，默认 30
@@ -435,6 +435,87 @@ type GeocodeEnqueueRequest struct {
 
 type GeocodeBatchEnqueueRequest struct {
 	Path string `json:"path" binding:"required"`
+}
+
+type PeopleTask struct {
+	Status         string     `json:"status"`
+	CurrentPhotoID uint       `json:"current_photo_id,omitempty"`
+	ProcessedJobs  int64      `json:"processed_jobs"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	StoppedAt      *time.Time `json:"stopped_at,omitempty"`
+}
+
+type PeopleStatsResponse struct {
+	Total      int64 `json:"total"`
+	Pending    int64 `json:"pending"`
+	Queued     int64 `json:"queued"`
+	Processing int64 `json:"processing"`
+	Completed  int64 `json:"completed"`
+	Failed     int64 `json:"failed"`
+	Cancelled  int64 `json:"cancelled"`
+}
+
+type FaceResponse struct {
+	ID               uint       `json:"id"`
+	PhotoID          uint       `json:"photo_id"`
+	PersonID         *uint      `json:"person_id,omitempty"`
+	BBoxX            float64    `json:"bbox_x"`
+	BBoxY            float64    `json:"bbox_y"`
+	BBoxWidth        float64    `json:"bbox_width"`
+	BBoxHeight       float64    `json:"bbox_height"`
+	Confidence       float64    `json:"confidence"`
+	QualityScore     float64    `json:"quality_score"`
+	ThumbnailPath    string     `json:"thumbnail_path,omitempty"`
+	ManualLocked     bool       `json:"manual_locked"`
+	ManualLockReason string     `json:"manual_lock_reason,omitempty"`
+	ManualLockedAt   *time.Time `json:"manual_locked_at,omitempty"`
+}
+
+type PersonResponse struct {
+	ID                   uint           `json:"id"`
+	Name                 string         `json:"name,omitempty"`
+	Category             string         `json:"category"`
+	RepresentativeFaceID *uint          `json:"representative_face_id,omitempty"`
+	AvatarLocked         bool           `json:"avatar_locked"`
+	FaceCount            int            `json:"face_count"`
+	PhotoCount           int            `json:"photo_count"`
+	CreatedAt            time.Time      `json:"created_at"`
+	UpdatedAt            time.Time      `json:"updated_at"`
+	Faces                []FaceResponse `json:"faces,omitempty"`
+}
+
+type PhotoPersonResponse struct {
+	PhotoID           uint             `json:"photo_id"`
+	FaceProcessStatus string           `json:"face_process_status"`
+	FaceCount         int              `json:"face_count"`
+	TopPersonCategory string           `json:"top_person_category"`
+	People            []PersonResponse `json:"people"`
+}
+
+type UpdatePersonCategoryRequest struct {
+	Category string `json:"category" binding:"required,oneof=family friend acquaintance stranger"`
+}
+
+type UpdatePersonNameRequest struct {
+	Name string `json:"name"`
+}
+
+type UpdatePersonAvatarRequest struct {
+	FaceID uint `json:"face_id" binding:"required"`
+}
+
+type MergePeopleRequest struct {
+	SourcePersonIDs []uint `json:"source_person_ids" binding:"required,min=1"`
+	TargetPersonID  uint   `json:"target_person_id" binding:"required"`
+}
+
+type SplitPersonRequest struct {
+	FaceIDs []uint `json:"face_ids" binding:"required,min=1"`
+}
+
+type MoveFacesRequest struct {
+	FaceIDs        []uint `json:"face_ids" binding:"required,min=1"`
+	TargetPersonID uint   `json:"target_person_id" binding:"required"`
 }
 
 // ==================== Auth related DTOs ====================
