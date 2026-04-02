@@ -92,6 +92,8 @@ assert_contains "$MAKE_DEPLOY_IMAGE" "./deploy-image.sh" "make -n deploy-image d
 DEV_SCRIPT="$(cat "$ROOT/dev.sh")"
 assert_not_contains "$DEV_SCRIPT" "请选择启动模式" "dev.sh still contains an interactive menu prompt"
 assert_not_contains "$DEV_SCRIPT" "read -p" "dev.sh still uses read -p"
+assert_contains "$DEV_SCRIPT" "ML_PID" "dev.sh does not manage an ml-service child process"
+assert_contains "$DEV_SCRIPT" "python -m uvicorn app.main:app --host 127.0.0.1 --port 5050" "dev.sh does not start the local ml-service"
 assert_contains "$DEV_SCRIPT" "go run cmd/relive/main.go --config config.dev.yaml" "dev.sh no longer starts the backend locally"
 assert_contains "$DEV_SCRIPT" "npm run dev" "dev.sh no longer starts the frontend locally"
 assert_contains "$DEV_SCRIPT" "trap" "dev.sh no longer installs cleanup handling for child processes"
