@@ -100,9 +100,10 @@ git clone https://github.com/davidhoo/relive.git
 cd relive
 ```
 
-### 2. 准备环境变量和生产配置
+### 2. 准备已发布镜像部署文件
 
 ```bash
+cp docker-compose.prod.yml.example docker-compose.prod.yml
 cp .env.example .env
 cp backend/config.prod.yaml.example backend/config.prod.yaml
 ```
@@ -115,7 +116,7 @@ JWT_SECRET=replace-with-a-random-secret
 
 ### 3. 配置照片目录挂载
 
-编辑 `docker-compose.yml`，把宿主机照片目录挂到容器内：
+编辑 `docker-compose.prod.yml`，把宿主机照片目录挂到容器内：
 
 ```yaml
 services:
@@ -127,8 +128,12 @@ services:
 ### 4. 启动服务
 
 ```bash
-make deploy
+make deploy-image
 ```
+
+普通用户默认推荐这条路径：`make deploy-image` 会使用已发布镜像部署。
+
+如果你是在本地修改代码、需要从源码构建镜像，再改用 `make deploy` 做源码部署。
 
 ### 5. 首次初始化
 

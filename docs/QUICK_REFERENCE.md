@@ -8,7 +8,8 @@
 - 后端路由：`backend/internal/api/v1/router/router.go`
 - analyzer CLI：`backend/cmd/relive-analyzer/main.go`
 - 前端路由：`frontend/src/router/index.ts`
-- Docker 部署：`docker-compose.yml`
+- 源码部署模板：`docker-compose.yml.example`
+- 镜像部署模板：`docker-compose.prod.yml.example`
 - analyzer 模板：`analyzer.yaml.example`
 - 配置职责：`docs/CONFIGURATION.md`
 - 生成配置：`backend/config.dev.yaml.example` / `backend/config.prod.yaml.example`
@@ -16,24 +17,26 @@
 ## 常用命令
 
 ```bash
-# 依赖安装
-make deps
-
-# 后端开发
-make dev-backend
-
-# 前端开发
-make dev-frontend
+# 本地开发
+make dev
 
 # 构建与部署
 make build
+make deploy-image
 make deploy
 
 # 查看日志
-docker-compose logs -f
+make logs
+
+# 服务控制
+make stop
+make restart
 
 # 后端测试
 make test
+
+# 清理
+make clean
 
 # analyzer
 make build-analyzer
