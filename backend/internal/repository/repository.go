@@ -6,6 +6,9 @@ import "gorm.io/gorm"
 type Repositories struct {
 	Photo         PhotoRepository
 	PhotoTag      PhotoTagRepository
+	Face          FaceRepository
+	Person        PersonRepository
+	PeopleJob     PeopleJobRepository
 	ScanJob       ScanJobRepository
 	ThumbnailJob  ThumbnailJobRepository
 	GeocodeJob    GeocodeJobRepository
@@ -22,6 +25,9 @@ func NewRepositories(db *gorm.DB) *Repositories {
 	return &Repositories{
 		Photo:         NewPhotoRepository(db),
 		PhotoTag:      NewPhotoTagRepository(db),
+		Face:          NewFaceRepository(db),
+		Person:        NewPersonRepository(db),
+		PeopleJob:     NewPeopleJobRepository(db),
 		ScanJob:       NewScanJobRepository(db),
 		ThumbnailJob:  NewThumbnailJobRepository(db),
 		GeocodeJob:    NewGeocodeJobRepository(db),

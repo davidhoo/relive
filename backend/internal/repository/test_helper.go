@@ -19,6 +19,10 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	// 自动迁移
 	err = db.AutoMigrate(
 		&model.Photo{},
+		&model.PhotoTag{},
+		&model.Person{},
+		&model.Face{},
+		&model.PeopleJob{},
 		&model.AnalysisRuntimeLease{},
 		&model.DisplayRecord{},
 		&model.Device{},
