@@ -133,7 +133,7 @@ make deploy-image
 
 普通用户默认推荐这条路径：`make deploy-image` 会使用已发布镜像部署。
 
-如果你是在本地修改代码、需要从源码构建镜像，再改用 `make deploy` 做源码部署。
+如果你是在本地修改代码、需要从源码构建镜像，请先执行 `cp docker-compose.yml.example docker-compose.yml`，再改用 `make deploy` 做源码部署。
 
 ### 5. 首次初始化
 

@@ -44,6 +44,8 @@ make build-analyzer
 ./backend/bin/relive-analyzer analyze -config analyzer.yaml
 ```
 
+注：若同一台机器同时存在 `docker-compose.yml` 和 `docker-compose.prod.yml`，`make logs` / `make stop` / `make restart` 默认优先作用于 `docker-compose.yml`。排查镜像部署时，优先显式使用 `docker compose -f docker-compose.prod.yml ...`。
+
 ## 当前前端页面
 
 - `/dashboard`

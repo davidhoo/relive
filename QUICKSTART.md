@@ -5,7 +5,7 @@
 ## 前置要求
 
 - Docker 20.10+
-- Docker Compose 1.29+
+- Docker Compose v2（可使用 `docker compose` 命令）
 - 一个可挂载到容器内的照片目录
 - 可选：Ollama / Qwen / OpenAI 等 AI 服务
 
@@ -58,7 +58,7 @@ make deploy-image
 
 `make deploy-image` 是普通用户默认推荐路径，会拉取已发布镜像并启动服务。
 
-如果你正在本地改代码，需要从源码构建镜像，再使用 `make deploy` 做源码部署；该路径需要单独准备 `docker-compose.yml`。
+如果你正在本地改代码，需要从源码构建镜像，请先执行 `cp docker-compose.yml.example docker-compose.yml`，再使用 `make deploy` 做源码部署。
 
 常用访问地址：
 - Web：`http://localhost:8080`
@@ -124,14 +124,14 @@ make build-analyzer
 docker compose -f docker-compose.prod.yml ps
 
 # 查看日志
-make logs
+docker compose -f docker-compose.prod.yml logs -f
 docker compose -f docker-compose.prod.yml logs -f relive
 
 # 停止服务
-make stop
+docker compose -f docker-compose.prod.yml down
 
 # 重启服务
-make restart
+docker compose -f docker-compose.prod.yml restart
 
 # 更新后重新部署
 git pull
@@ -168,6 +168,8 @@ docker compose -f docker-compose.prod.yml exec relive ls -la /app/photos
 ```
 
 如果目录不存在或为空，优先检查 `docker-compose.prod.yml` 的挂载路径。
+
+如果同一台机器同时保留了 `docker-compose.yml` 和 `docker-compose.prod.yml`，排查镜像部署问题时优先使用显式带 `-f docker-compose.prod.yml` 的命令，避免误操作到源码部署栈。
 
 更多配置分层说明见：`docs/CONFIGURATION.md`。
 
