@@ -25,15 +25,15 @@ type stubPhotoRepo struct {
 	getTopScoredCandidatesFunc func(minBeauty, minMemory int, excludeIDs []uint, limit int) ([]*model.Photo, error)
 }
 
-func (r *stubPhotoRepo) Create(photo *model.Photo) error                       { return nil }
-func (r *stubPhotoRepo) Update(photo *model.Photo) error                       { return nil }
+func (r *stubPhotoRepo) Create(photo *model.Photo) error                           { return nil }
+func (r *stubPhotoRepo) Update(photo *model.Photo) error                           { return nil }
 func (r *stubPhotoRepo) UpdateFields(id uint, fields map[string]interface{}) error { return nil }
-func (r *stubPhotoRepo) Delete(id uint) error                                  { return nil }
-func (r *stubPhotoRepo) GetByID(id uint) (*model.Photo, error)               { return nil, nil }
-func (r *stubPhotoRepo) GetByFilePath(filePath string) (*model.Photo, error) { return nil, nil }
-func (r *stubPhotoRepo) GetByFileHash(fileHash string) (*model.Photo, error) { return nil, nil }
-func (r *stubPhotoRepo) Exists(id uint) (bool, error)                        { return false, nil }
-func (r *stubPhotoRepo) ExistsByFilePath(filePath string) (bool, error)      { return false, nil }
+func (r *stubPhotoRepo) Delete(id uint) error                                      { return nil }
+func (r *stubPhotoRepo) GetByID(id uint) (*model.Photo, error)                     { return nil, nil }
+func (r *stubPhotoRepo) GetByFilePath(filePath string) (*model.Photo, error)       { return nil, nil }
+func (r *stubPhotoRepo) GetByFileHash(fileHash string) (*model.Photo, error)       { return nil, nil }
+func (r *stubPhotoRepo) Exists(id uint) (bool, error)                              { return false, nil }
+func (r *stubPhotoRepo) ExistsByFilePath(filePath string) (bool, error)            { return false, nil }
 func (r *stubPhotoRepo) List(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string) ([]*model.Photo, int64, error) {
 	return nil, 0, nil
 }
@@ -72,27 +72,34 @@ func (r *stubPhotoRepo) GetTopScoredCandidates(minBeauty, minMemory int, exclude
 	}
 	return nil, nil
 }
-func (r *stubPhotoRepo) Count() (int64, error)                                  { return 0, nil }
-func (r *stubPhotoRepo) CountByLocation() (map[string]int64, error)             { return nil, nil }
-func (r *stubPhotoRepo) GetCategories() ([]string, error)                       { return nil, nil }
-func (r *stubPhotoRepo) GetTags(_ string, _ int) ([]model.TagWithCount, error)    { return nil, nil }
-func (r *stubPhotoRepo) CountTags() (int64, error)                                { return 0, nil }
-func (r *stubPhotoRepo) BatchCreate(photos []*model.Photo, batchSize int) error { return nil }
-func (r *stubPhotoRepo) BatchUpdate(photos []*model.Photo, batchSize int) error { return nil }
+func (r *stubPhotoRepo) Count() (int64, error)                                       { return 0, nil }
+func (r *stubPhotoRepo) CountByLocation() (map[string]int64, error)                  { return nil, nil }
+func (r *stubPhotoRepo) GetCategories() ([]string, error)                            { return nil, nil }
+func (r *stubPhotoRepo) GetTags(_ string, _ int) ([]model.TagWithCount, error)       { return nil, nil }
+func (r *stubPhotoRepo) CountTags() (int64, error)                                   { return 0, nil }
+func (r *stubPhotoRepo) BatchCreate(photos []*model.Photo, batchSize int) error      { return nil }
+func (r *stubPhotoRepo) BatchUpdate(photos []*model.Photo, batchSize int) error      { return nil }
 func (r *stubPhotoRepo) UpdateLocation(id uint, location string) error               { return nil }
 func (r *stubPhotoRepo) UpdateLocationFull(id uint, loc *model.LocationFields) error { return nil }
 func (r *stubPhotoRepo) ListWithGPS() ([]*model.Photo, error)                        { return nil, nil }
-func (r *stubPhotoRepo) ListByPathPrefix(prefix string) ([]*model.Photo, error) { return nil, nil }
-func (r *stubPhotoRepo) CountByPathPrefix(prefix string) (int64, error)         { return 0, nil }
+func (r *stubPhotoRepo) ListByPathPrefix(prefix string) ([]*model.Photo, error)      { return nil, nil }
+func (r *stubPhotoRepo) CountByPathPrefix(prefix string) (int64, error)              { return 0, nil }
 func (r *stubPhotoRepo) GetDerivedStatusByPathPrefix(prefix string) (*model.PathDerivedStatus, error) {
 	return &model.PathDerivedStatus{}, nil
 }
-func (r *stubPhotoRepo) CountByStatus() (*model.PhotoCountsResponse, error) { return &model.PhotoCountsResponse{}, nil }
-func (r *stubPhotoRepo) GetDerivedStatusByPathPrefixes(prefixes []string) (map[string]*model.PathDerivedStatus, error) { return nil, nil }
+func (r *stubPhotoRepo) CountByStatus() (*model.PhotoCountsResponse, error) {
+	return &model.PhotoCountsResponse{}, nil
+}
+func (r *stubPhotoRepo) GetDerivedStatusByPathPrefixes(prefixes []string) (map[string]*model.PathDerivedStatus, error) {
+	return nil, nil
+}
 func (r *stubPhotoRepo) BatchUpdateStatus(ids []uint, status string) (int64, error) { return 0, nil }
 func (r *stubPhotoRepo) UpdateCategory(id uint, category string) error              { return nil }
-func (r *stubPhotoRepo) UpdateManualRotation(id uint, rotation int) error              { return nil }
-func (r *stubPhotoRepo) GetAdjacent(id uint, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string) (*model.AdjacentPhotosResponse, error) { return &model.AdjacentPhotosResponse{}, nil }
+func (r *stubPhotoRepo) RecomputeTopPersonCategory(photoIDs []uint) error           { return nil }
+func (r *stubPhotoRepo) UpdateManualRotation(id uint, rotation int) error           { return nil }
+func (r *stubPhotoRepo) GetAdjacent(id uint, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string) (*model.AdjacentPhotosResponse, error) {
+	return &model.AdjacentPhotosResponse{}, nil
+}
 func (r *stubPhotoRepo) GetScatteredHighQuality(minBeauty int, excludeIDs []uint, limit int) ([]*model.Photo, error) {
 	return nil, nil
 }

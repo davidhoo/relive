@@ -1,6 +1,9 @@
 package service
 
 import (
+	"time"
+
+	"github.com/davidhoo/relive/internal/mlclient"
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/logger"
@@ -10,6 +13,7 @@ import (
 // Services 所有服务的集合
 type Services struct {
 	Photo           PhotoService
+	People          PeopleService
 	Thumbnail       ThumbnailService
 	GeocodeTask     GeocodeTaskService
 	Display         DisplayService
@@ -60,6 +64,12 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	thumbnailService := NewThumbnailService(db, repos.Photo, repos.ThumbnailJob, cfg)
 	geocodeTaskService := NewGeocodeTaskService(db, repos.Photo, repos.GeocodeJob, geocodeService)
 	photoService := NewPhotoService(repos.Photo, repos.PhotoTag, repos.ScanJob, cfg, configService, geocodeService, thumbnailService, geocodeTaskService)
+	var peopleClient PeopleMLClient
+	if cfg != nil && cfg.People.MLEndpoint != "" {
+		peopleClient = mlclient.New(cfg.People.MLEndpoint, time.Duration(cfg.People.Timeout)*time.Second)
+	}
+	peopleService := NewPeopleService(db, repos.Photo, repos.Face, repos.Person, repos.PeopleJob, cfg, peopleClient)
+	photoService.SetPeopleService(peopleService)
 	displayService := NewDisplayService(db, repos.Photo, repos.DisplayRecord, repos.Device, repos.Event, configService, cfg)
 
 	// 创建事件聚类服务并注入到 photoService
@@ -93,6 +103,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 
 	return &Services{
 		Photo:           photoService,
+		People:          peopleService,
 		Thumbnail:       thumbnailService,
 		GeocodeTask:     geocodeTaskService,
 		Display:         displayService,

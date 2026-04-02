@@ -72,25 +72,31 @@ type PhotoService interface {
 
 	// 事件聚类服务注入（解决循环初始化）
 	SetEventClusteringService(EventClusteringService)
+	SetPeopleService(PeopleService)
 }
 
 // photoService 照片服务实现
 type photoService struct {
-	repo                    repository.PhotoRepository
-	photoTagRepo            repository.PhotoTagRepository
-	scanJobRepo             repository.ScanJobRepository
-	config                  *config.Config
-	configService           ConfigService
-	geocodeService          GeocodeService
-	thumbnailGenerator      *util.ThumbnailGenerator
-	thumbnailService        ThumbnailService
-	geocodeTaskService      GeocodeTaskService
-	eventClusteringService  EventClusteringService
-	processPhotoFunc        func(string, os.FileInfo) (*model.Photo, error)
-	activeJob               *activeScanJob
-	taskMutex               sync.RWMutex
-	autoScanMutex           sync.Mutex
-	lastAutoScanCheck       time.Time
+	repo                   repository.PhotoRepository
+	photoTagRepo           repository.PhotoTagRepository
+	scanJobRepo            repository.ScanJobRepository
+	config                 *config.Config
+	configService          ConfigService
+	geocodeService         GeocodeService
+	thumbnailGenerator     *util.ThumbnailGenerator
+	thumbnailService       ThumbnailService
+	geocodeTaskService     GeocodeTaskService
+	peopleService          PeopleService
+	eventClusteringService EventClusteringService
+	processPhotoFunc       func(string, os.FileInfo) (*model.Photo, error)
+	activeJob              *activeScanJob
+	taskMutex              sync.RWMutex
+	autoScanMutex          sync.Mutex
+	lastAutoScanCheck      time.Time
+}
+
+func (s *photoService) SetPeopleService(peopleService PeopleService) {
+	s.peopleService = peopleService
 }
 
 // NewPhotoService 创建照片服务
