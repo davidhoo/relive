@@ -466,6 +466,30 @@ func TestPeopleService_CreatePersonFromComponent(t *testing.T) {
 	assert.Equal(t, faceTwo.ID, *storedPerson.RepresentativeFaceID)
 }
 
+func TestPeopleService_ComponentPhotoCount(t *testing.T) {
+	t.Run("same photo counted once", func(t *testing.T) {
+		component := []*model.Face{
+			{ID: 1, PhotoID: 101},
+			{ID: 2, PhotoID: 101},
+			{ID: 3, PhotoID: 101},
+			nil,
+		}
+		assert.Equal(t, 1, componentPhotoCount(component))
+	})
+
+	t.Run("cross photo counted distinctly", func(t *testing.T) {
+		component := []*model.Face{
+			{ID: 4, PhotoID: 101},
+			{ID: 5, PhotoID: 102},
+			{ID: 6, PhotoID: 101},
+			{ID: 7, PhotoID: 102},
+			{ID: 8, PhotoID: 0},
+			nil,
+		}
+		assert.Equal(t, 2, componentPhotoCount(component))
+	})
+}
+
 func TestPeopleService_ProcessJobUsesIncrementalClustering(t *testing.T) {
 	rootDir := t.TempDir()
 	oldPhotoPath := createTestImageFile(t, rootDir, "old.jpg")

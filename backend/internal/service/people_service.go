@@ -1076,6 +1076,10 @@ func facePhotoIDs(faces []*model.Face) []uint {
 	return photoIDs
 }
 
+func componentPhotoCount(component []*model.Face) int {
+	return len(facePhotoIDs(component))
+}
+
 func faceIDs(faces []*model.Face) []uint {
 	seen := make(map[uint]struct{})
 	ids := make([]uint, 0, len(faces))
