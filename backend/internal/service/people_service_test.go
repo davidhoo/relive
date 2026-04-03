@@ -808,7 +808,7 @@ func TestPeopleService_PrototypeRefreshAfterManualOps(t *testing.T) {
 	assert.Equal(t, mergedFace.ID, prototypes[target.ID][0].ID)
 }
 
-func TestPeopleService_TwoSimilarNewFacesCreatePerson(t *testing.T) {
+func TestPeopleService_TwoSimilarSamePhotoFacesStayPending(t *testing.T) {
 	rootDir := t.TempDir()
 	photoPath := createTestImageFile(t, rootDir, "pair.jpg")
 
@@ -856,21 +856,19 @@ func TestPeopleService_TwoSimilarNewFacesCreatePerson(t *testing.T) {
 	faces, err := faceRepo.ListByPhotoID(photo.ID)
 	require.NoError(t, err)
 	require.Len(t, faces, 2)
-	require.NotNil(t, faces[0].PersonID)
-	require.NotNil(t, faces[1].PersonID)
-	assert.Equal(t, *faces[0].PersonID, *faces[1].PersonID)
-	assert.Equal(t, model.FaceClusterStatusAssigned, faces[0].ClusterStatus)
-	assert.Equal(t, model.FaceClusterStatusAssigned, faces[1].ClusterStatus)
+	assert.Nil(t, faces[0].PersonID)
+	assert.Nil(t, faces[1].PersonID)
+	assert.Equal(t, model.FaceClusterStatusPending, faces[0].ClusterStatus)
+	assert.Equal(t, model.FaceClusterStatusPending, faces[1].ClusterStatus)
 
-	person, err := personRepo.GetByID(*faces[0].PersonID)
+	people, err := personRepo.ListAll()
 	require.NoError(t, err)
-	require.NotNil(t, person)
-	assert.Equal(t, model.PersonCategoryStranger, person.Category)
+	assert.Empty(t, people)
 
 	updatedPhoto, err := photoRepo.GetByID(photo.ID)
 	require.NoError(t, err)
 	require.NotNil(t, updatedPhoto)
-	assert.Equal(t, model.PersonCategoryStranger, updatedPhoto.TopPersonCategory)
+	assert.Equal(t, "", updatedPhoto.TopPersonCategory)
 }
 
 func TestPeopleService_PendingFacesBecomeAssignedWhenMoreEvidenceArrives(t *testing.T) {
@@ -965,6 +963,227 @@ func TestPeopleService_PendingFacesBecomeAssignedWhenMoreEvidenceArrives(t *test
 	require.NoError(t, err)
 	assert.Equal(t, model.PersonCategoryStranger, updatedFirstPhoto.TopPersonCategory)
 	assert.Equal(t, model.PersonCategoryStranger, updatedSecondPhoto.TopPersonCategory)
+}
+
+func TestPeopleService_SamePhotoComponentStaysPending(t *testing.T) {
+	rootDir := t.TempDir()
+	photoPath := createTestImageFile(t, rootDir, "same-photo-pending.jpg")
+
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{
+		responses: map[string]*mlclient.DetectFacesResponse{
+			photoPath: {
+				Faces: []mlclient.DetectedFace{
+					{
+						BBox:         mlclient.BoundingBox{X: 0.1, Y: 0.1, Width: 0.2, Height: 0.2},
+						Confidence:   0.95,
+						QualityScore: 0.87,
+						Embedding:    []float32{1, 0},
+					},
+					{
+						BBox:         mlclient.BoundingBox{X: 0.45, Y: 0.1, Width: 0.2, Height: 0.2},
+						Confidence:   0.94,
+						QualityScore: 0.85,
+						Embedding:    []float32{0.97, 0.243},
+					},
+				},
+			},
+		},
+	})
+	svc.config.Photos.ThumbnailPath = filepath.Join(rootDir, ".thumbnails")
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+	jobRepo := repository.NewPeopleJobRepository(db)
+
+	photo := &model.Photo{FilePath: photoPath, FileName: "same-photo-pending.jpg", FileSize: 1, FileHash: "same-photo-pending", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(photo))
+	job := &model.PeopleJob{
+		PhotoID:  photo.ID,
+		FilePath: photo.FilePath,
+		Status:   model.PeopleJobStatusQueued,
+		Source:   model.PeopleJobSourceScan,
+		Priority: 10,
+		QueuedAt: time.Now(),
+	}
+	require.NoError(t, jobRepo.Create(job))
+
+	require.NoError(t, svc.processJob(job))
+
+	faces, err := faceRepo.ListByPhotoID(photo.ID)
+	require.NoError(t, err)
+	require.Len(t, faces, 2)
+	assert.Nil(t, faces[0].PersonID)
+	assert.Nil(t, faces[1].PersonID)
+	assert.Equal(t, model.FaceClusterStatusPending, faces[0].ClusterStatus)
+	assert.Equal(t, model.FaceClusterStatusPending, faces[1].ClusterStatus)
+
+	people, err := personRepo.ListAll()
+	require.NoError(t, err)
+	assert.Empty(t, people)
+
+	updatedPhoto, err := photoRepo.GetByID(photo.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedPhoto)
+	assert.Equal(t, "", updatedPhoto.TopPersonCategory)
+}
+
+func TestPeopleService_SamePhotoComponentCanStillAttach(t *testing.T) {
+	rootDir := t.TempDir()
+	oldPhotoPath := createTestImageFile(t, rootDir, "same-photo-attach-old.jpg")
+	newPhotoPath := createTestImageFile(t, rootDir, "same-photo-attach-new.jpg")
+
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{
+		responses: map[string]*mlclient.DetectFacesResponse{
+			newPhotoPath: {
+				Faces: []mlclient.DetectedFace{
+					{
+						BBox:         mlclient.BoundingBox{X: 0.1, Y: 0.1, Width: 0.2, Height: 0.2},
+						Confidence:   0.98,
+						QualityScore: 0.88,
+						Embedding:    []float32{1, 0},
+					},
+					{
+						BBox:         mlclient.BoundingBox{X: 0.45, Y: 0.1, Width: 0.2, Height: 0.2},
+						Confidence:   0.97,
+						QualityScore: 0.87,
+						Embedding:    []float32{0.97, 0.243},
+					},
+				},
+			},
+		},
+	})
+	svc.config.Photos.ThumbnailPath = filepath.Join(rootDir, ".thumbnails")
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+	jobRepo := repository.NewPeopleJobRepository(db)
+
+	oldPhoto := &model.Photo{FilePath: oldPhotoPath, FileName: "same-photo-attach-old.jpg", FileSize: 1, FileHash: "same-photo-attach-old", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: "same-photo-attach-new.jpg", FileSize: 1, FileHash: "same-photo-attach-new", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(oldPhoto))
+	require.NoError(t, photoRepo.Create(newPhoto))
+
+	person := &model.Person{Category: model.PersonCategoryFamily}
+	require.NoError(t, personRepo.Create(person))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID:       oldPhoto.ID,
+		PersonID:      &person.ID,
+		BBoxX:         0.1,
+		BBoxY:         0.1,
+		BBoxWidth:     0.2,
+		BBoxHeight:    0.2,
+		Confidence:    0.96,
+		QualityScore:  0.84,
+		Embedding:     encodeEmbedding(t, []float32{1, 0}),
+		ClusterStatus: model.FaceClusterStatusAssigned,
+		ClusterScore:  1,
+	}))
+	require.NoError(t, personRepo.RefreshStats(person.ID))
+	require.NoError(t, svc.syncPersonState(person.ID))
+
+	job := &model.PeopleJob{
+		PhotoID:  newPhoto.ID,
+		FilePath: newPhoto.FilePath,
+		Status:   model.PeopleJobStatusQueued,
+		Source:   model.PeopleJobSourceScan,
+		Priority: 10,
+		QueuedAt: time.Now(),
+	}
+	require.NoError(t, jobRepo.Create(job))
+
+	require.NoError(t, svc.processJob(job))
+
+	faces, err := faceRepo.ListByPhotoID(newPhoto.ID)
+	require.NoError(t, err)
+	require.Len(t, faces, 2)
+	require.NotNil(t, faces[0].PersonID)
+	require.NotNil(t, faces[1].PersonID)
+	assert.Equal(t, person.ID, *faces[0].PersonID)
+	assert.Equal(t, person.ID, *faces[1].PersonID)
+	assert.Equal(t, model.FaceClusterStatusAssigned, faces[0].ClusterStatus)
+	assert.Equal(t, model.FaceClusterStatusAssigned, faces[1].ClusterStatus)
+}
+
+func TestPeopleService_CrossPhotoComponentCreatesPerson(t *testing.T) {
+	rootDir := t.TempDir()
+	firstPhotoPath := createTestImageFile(t, rootDir, "cross-photo-first.jpg")
+	secondPhotoPath := createTestImageFile(t, rootDir, "cross-photo-second.jpg")
+
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{
+		responses: map[string]*mlclient.DetectFacesResponse{
+			firstPhotoPath: {
+				Faces: []mlclient.DetectedFace{
+					{
+						BBox:         mlclient.BoundingBox{X: 0.1, Y: 0.1, Width: 0.2, Height: 0.2},
+						Confidence:   0.93,
+						QualityScore: 0.81,
+						Embedding:    []float32{1, 0},
+					},
+				},
+			},
+			secondPhotoPath: {
+				Faces: []mlclient.DetectedFace{
+					{
+						BBox:         mlclient.BoundingBox{X: 0.2, Y: 0.2, Width: 0.2, Height: 0.2},
+						Confidence:   0.94,
+						QualityScore: 0.82,
+						Embedding:    []float32{0.97, 0.243},
+					},
+				},
+			},
+		},
+	})
+	svc.config.Photos.ThumbnailPath = filepath.Join(rootDir, ".thumbnails")
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+	jobRepo := repository.NewPeopleJobRepository(db)
+
+	firstPhoto := &model.Photo{FilePath: firstPhotoPath, FileName: "cross-photo-first.jpg", FileSize: 1, FileHash: "cross-photo-first", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	secondPhoto := &model.Photo{FilePath: secondPhotoPath, FileName: "cross-photo-second.jpg", FileSize: 1, FileHash: "cross-photo-second", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(firstPhoto))
+	require.NoError(t, photoRepo.Create(secondPhoto))
+
+	firstJob := &model.PeopleJob{
+		PhotoID:  firstPhoto.ID,
+		FilePath: firstPhoto.FilePath,
+		Status:   model.PeopleJobStatusQueued,
+		Source:   model.PeopleJobSourceScan,
+		Priority: 10,
+		QueuedAt: time.Now(),
+	}
+	secondJob := &model.PeopleJob{
+		PhotoID:  secondPhoto.ID,
+		FilePath: secondPhoto.FilePath,
+		Status:   model.PeopleJobStatusQueued,
+		Source:   model.PeopleJobSourceScan,
+		Priority: 10,
+		QueuedAt: time.Now(),
+	}
+	require.NoError(t, jobRepo.Create(firstJob))
+	require.NoError(t, jobRepo.Create(secondJob))
+
+	require.NoError(t, svc.processJob(firstJob))
+	require.NoError(t, svc.processJob(secondJob))
+
+	firstFaces, err := faceRepo.ListByPhotoID(firstPhoto.ID)
+	require.NoError(t, err)
+	secondFaces, err := faceRepo.ListByPhotoID(secondPhoto.ID)
+	require.NoError(t, err)
+	require.Len(t, firstFaces, 1)
+	require.Len(t, secondFaces, 1)
+	require.NotNil(t, firstFaces[0].PersonID)
+	require.NotNil(t, secondFaces[0].PersonID)
+	assert.Equal(t, *firstFaces[0].PersonID, *secondFaces[0].PersonID)
+	assert.Equal(t, model.FaceClusterStatusAssigned, firstFaces[0].ClusterStatus)
+	assert.Equal(t, model.FaceClusterStatusAssigned, secondFaces[0].ClusterStatus)
+
+	people, err := personRepo.ListAll()
+	require.NoError(t, err)
+	require.Len(t, people, 1)
 }
 
 func normalizeFaceComponents(components [][]uint) []string {

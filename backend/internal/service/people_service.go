@@ -985,7 +985,7 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 			continue
 		}
 
-		if len(component) >= peopleMinClusterFaces {
+		if len(component) >= peopleMinClusterFaces && componentPhotoCount(component) >= 2 {
 			person, err := s.createPersonFromComponent(component, componentScore)
 			if err != nil {
 				return nil, nil, err
