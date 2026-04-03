@@ -3,9 +3,13 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"image/color"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,6 +118,845 @@ func createTestImageFile(t *testing.T, dir string, name string) string {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, imaging.Save(imaging.New(320, 320, color.NRGBA{R: 180, G: 120, B: 90, A: 255}), path))
 	return path
+}
+
+func TestFaceClusterStatusFields(t *testing.T) {
+	db := setupPeopleServiceTestDB(t)
+	faceRepo := repository.NewFaceRepository(db)
+
+	faceType := reflect.TypeOf(model.Face{})
+	_, hasClusterStatus := faceType.FieldByName("ClusterStatus")
+	_, hasClusterScore := faceType.FieldByName("ClusterScore")
+	_, hasClusteredAt := faceType.FieldByName("ClusteredAt")
+
+	assert.True(t, hasClusterStatus)
+	assert.True(t, hasClusterScore)
+	assert.True(t, hasClusteredAt)
+	assert.True(t, db.Migrator().HasColumn(&model.Face{}, "cluster_status"))
+	assert.True(t, db.Migrator().HasColumn(&model.Face{}, "cluster_score"))
+	assert.True(t, db.Migrator().HasColumn(&model.Face{}, "clustered_at"))
+
+	face := &model.Face{
+		PhotoID:      1,
+		BBoxX:        0.1,
+		BBoxY:        0.1,
+		BBoxWidth:    0.2,
+		BBoxHeight:   0.2,
+		Confidence:   0.95,
+		QualityScore: 0.88,
+	}
+	require.NoError(t, faceRepo.Create(face))
+
+	clusteredAt := time.Now().UTC().Truncate(time.Second)
+	require.NoError(t, db.Model(&model.Face{}).Where("id = ?", face.ID).Updates(map[string]interface{}{
+		"cluster_status": "pending",
+		"cluster_score":  0.91,
+		"clustered_at":   clusteredAt,
+	}).Error)
+
+	var stored struct {
+		ClusterStatus string
+		ClusterScore  float64
+		ClusteredAt   *time.Time
+	}
+	require.NoError(t, db.Table("faces").
+		Select("cluster_status, cluster_score, clustered_at").
+		Where("id = ?", face.ID).
+		Scan(&stored).Error)
+
+	assert.Equal(t, "pending", stored.ClusterStatus)
+	assert.InDelta(t, 0.91, stored.ClusterScore, 0.0001)
+	require.NotNil(t, stored.ClusteredAt)
+	assert.WithinDuration(t, clusteredAt, *stored.ClusteredAt, time.Second)
+}
+
+func TestPeopleService_SelectPersonPrototypes(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	type prototypeSelector interface {
+		selectPersonPrototypes(faces []*model.Face, k int) map[uint][]*model.Face
+	}
+
+	selector, ok := any(svc).(prototypeSelector)
+	require.True(t, ok)
+
+	personOneID := uint(11)
+	personTwoID := uint(22)
+	faces := []*model.Face{
+		{
+			ID:           101,
+			PersonID:     &personOneID,
+			ManualLocked: false,
+			QualityScore: 0.70,
+			Confidence:   0.80,
+		},
+		{
+			ID:           102,
+			PersonID:     &personOneID,
+			ManualLocked: true,
+			QualityScore: 0.60,
+			Confidence:   0.75,
+		},
+		{
+			ID:           103,
+			PersonID:     &personOneID,
+			ManualLocked: false,
+			QualityScore: 0.95,
+			Confidence:   0.70,
+		},
+		{
+			ID:           104,
+			PersonID:     &personOneID,
+			ManualLocked: false,
+			QualityScore: 0.95,
+			Confidence:   0.90,
+		},
+		{
+			ID:           105,
+			PersonID:     &personOneID,
+			ManualLocked: false,
+			QualityScore: 0.95,
+			Confidence:   0.90,
+		},
+		{
+			ID:           201,
+			PersonID:     &personTwoID,
+			ManualLocked: false,
+			QualityScore: 0.88,
+			Confidence:   0.82,
+		},
+		{
+			ID:           202,
+			PersonID:     &personTwoID,
+			ManualLocked: false,
+			QualityScore: 0.88,
+			Confidence:   0.95,
+		},
+		{
+			ID:           301,
+			ManualLocked: true,
+			QualityScore: 0.99,
+			Confidence:   0.99,
+		},
+	}
+
+	prototypes := selector.selectPersonPrototypes(faces, 3)
+	require.Len(t, prototypes, 2)
+	require.Len(t, prototypes[personOneID], 3)
+	require.Len(t, prototypes[personTwoID], 2)
+
+	assert.Equal(t, uint(102), prototypes[personOneID][0].ID)
+	assert.Equal(t, uint(104), prototypes[personOneID][1].ID)
+	assert.Equal(t, uint(105), prototypes[personOneID][2].ID)
+	assert.Equal(t, uint(202), prototypes[personTwoID][0].ID)
+	assert.Equal(t, uint(201), prototypes[personTwoID][1].ID)
+}
+
+func TestPeopleService_BuildFaceGraph(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	const linkThreshold = 0.72
+
+	type graphBuilder interface {
+		buildFaceGraph(faces []*model.Face, linkThreshold float64) map[uint][]uint
+	}
+
+	builder, ok := any(svc).(graphBuilder)
+	require.True(t, ok)
+
+	faces := []*model.Face{
+		{ID: 1, Embedding: encodeEmbedding(t, []float32{1, 0})},
+		{ID: 2, Embedding: encodeEmbedding(t, []float32{0.8, 0.6})},
+		{ID: 3, Embedding: encodeEmbedding(t, []float32{0, 1})},
+		{ID: 4, Embedding: encodeEmbedding(t, []float32{0, 0.9})},
+		{ID: 5, Embedding: encodeEmbedding(t, []float32{-1, 0})},
+	}
+
+	graph := builder.buildFaceGraph(faces, linkThreshold)
+	require.Len(t, graph, 5)
+	assert.Equal(t, []uint{2}, graph[1])
+	assert.Equal(t, []uint{1}, graph[2])
+	assert.Equal(t, []uint{4}, graph[3])
+	assert.Equal(t, []uint{3}, graph[4])
+	assert.Empty(t, graph[5])
+}
+
+func TestPeopleService_FindFaceComponents(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	const linkThreshold = 0.72
+
+	type graphExplorer interface {
+		buildFaceGraph(faces []*model.Face, linkThreshold float64) map[uint][]uint
+		findConnectedComponents(graph map[uint][]uint) [][]uint
+	}
+
+	explorer, ok := any(svc).(graphExplorer)
+	require.True(t, ok)
+
+	faces := []*model.Face{
+		{ID: 1, Embedding: encodeEmbedding(t, []float32{1, 0})},
+		{ID: 2, Embedding: encodeEmbedding(t, []float32{0.8, 0.6})},
+		{ID: 3, Embedding: encodeEmbedding(t, []float32{0, 1})},
+		{ID: 4, Embedding: encodeEmbedding(t, []float32{0, 0.9})},
+		{ID: 5, Embedding: encodeEmbedding(t, []float32{-1, 0})},
+	}
+
+	graph := explorer.buildFaceGraph(faces, linkThreshold)
+	components := explorer.findConnectedComponents(graph)
+
+	assert.Equal(t, []string{"1,2", "3,4", "5"}, normalizeFaceComponents(components))
+}
+
+func TestPeopleService_AttachComponentToExistingPerson(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	const attachThreshold = 0.86
+
+	type componentAttacher interface {
+		scoreComponentAgainstPerson(component []*model.Face, prototypes []*model.Face) float64
+		attachComponentToExistingPerson(component []*model.Face, prototypes map[uint][]*model.Face, attachThreshold float64) (uint, float64, bool)
+	}
+
+	attacher, ok := any(svc).(componentAttacher)
+	require.True(t, ok)
+
+	personOneID := uint(11)
+	personTwoID := uint(22)
+	prototypes := map[uint][]*model.Face{
+		personOneID: {
+			{ID: 101, PersonID: &personOneID, Embedding: encodeEmbedding(t, []float32{1, 0})},
+			{ID: 102, PersonID: &personOneID, Embedding: encodeEmbedding(t, []float32{0.97, 0.243})},
+		},
+		personTwoID: {
+			{ID: 201, PersonID: &personTwoID, Embedding: encodeEmbedding(t, []float32{0, 1})},
+		},
+	}
+
+	t.Run("component attaches when score clears threshold", func(t *testing.T) {
+		component := []*model.Face{
+			{ID: 1, Embedding: encodeEmbedding(t, []float32{1, 0})},
+			{ID: 2, Embedding: encodeEmbedding(t, []float32{0.92, 0.392})},
+		}
+
+		score := attacher.scoreComponentAgainstPerson(component, prototypes[personOneID])
+		assert.Greater(t, score, attachThreshold)
+
+		personID, attachScore, attached := attacher.attachComponentToExistingPerson(component, prototypes, attachThreshold)
+		assert.True(t, attached)
+		assert.Equal(t, personOneID, personID)
+		assert.InDelta(t, score, attachScore, 0.0001)
+	})
+
+	t.Run("component stays unattached below threshold", func(t *testing.T) {
+		component := []*model.Face{
+			{ID: 3, Embedding: encodeEmbedding(t, []float32{0.6, 0.8})},
+			{ID: 4, Embedding: encodeEmbedding(t, []float32{0.6, 0.8})},
+		}
+
+		personOneScore := attacher.scoreComponentAgainstPerson(component, prototypes[personOneID])
+		assert.Less(t, personOneScore, attachThreshold)
+
+		personID, attachScore, attached := attacher.attachComponentToExistingPerson(component, prototypes, attachThreshold)
+		assert.False(t, attached)
+		assert.Zero(t, personID)
+		assert.Less(t, attachScore, attachThreshold)
+	})
+}
+
+func TestPeopleService_PendingComponent(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	faceRepo := repository.NewFaceRepository(db)
+	const minClusterFaces = 2
+
+	type pendingMarker interface {
+		markComponentPending(component []*model.Face, score float64) error
+	}
+
+	marker, ok := any(svc).(pendingMarker)
+	require.True(t, ok)
+
+	face := &model.Face{
+		PhotoID:      1,
+		BBoxX:        0.1,
+		BBoxY:        0.1,
+		BBoxWidth:    0.2,
+		BBoxHeight:   0.2,
+		Confidence:   0.91,
+		QualityScore: 0.83,
+		Embedding:    encodeEmbedding(t, []float32{0.7, 0.7}),
+	}
+	require.NoError(t, faceRepo.Create(face))
+
+	component := []*model.Face{face}
+	require.Less(t, len(component), minClusterFaces)
+	require.NoError(t, marker.markComponentPending(component, 0.41))
+
+	stored, err := faceRepo.GetByID(face.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Nil(t, stored.PersonID)
+	assert.Equal(t, model.FaceClusterStatusPending, stored.ClusterStatus)
+	assert.InDelta(t, 0.41, stored.ClusterScore, 0.0001)
+	require.NotNil(t, stored.ClusteredAt)
+}
+
+func TestPeopleService_CreatePersonFromComponent(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	faceRepo := repository.NewFaceRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	const minClusterFaces = 2
+
+	type personCreator interface {
+		createPersonFromComponent(component []*model.Face, score float64) (*model.Person, error)
+	}
+
+	creator, ok := any(svc).(personCreator)
+	require.True(t, ok)
+
+	faceOne := &model.Face{
+		PhotoID:      1,
+		BBoxX:        0.1,
+		BBoxY:        0.1,
+		BBoxWidth:    0.2,
+		BBoxHeight:   0.2,
+		Confidence:   0.95,
+		QualityScore: 0.88,
+		Embedding:    encodeEmbedding(t, []float32{1, 0}),
+	}
+	faceTwo := &model.Face{
+		PhotoID:      2,
+		BBoxX:        0.2,
+		BBoxY:        0.2,
+		BBoxWidth:    0.2,
+		BBoxHeight:   0.2,
+		Confidence:   0.94,
+		QualityScore: 0.90,
+		Embedding:    encodeEmbedding(t, []float32{0.98, 0.2}),
+	}
+	require.NoError(t, faceRepo.Create(faceOne))
+	require.NoError(t, faceRepo.Create(faceTwo))
+
+	component := []*model.Face{faceOne, faceTwo}
+	require.GreaterOrEqual(t, len(component), minClusterFaces)
+
+	person, err := creator.createPersonFromComponent(component, 0.63)
+	require.NoError(t, err)
+	require.NotNil(t, person)
+	assert.Equal(t, model.PersonCategoryStranger, person.Category)
+
+	storedOne, err := faceRepo.GetByID(faceOne.ID)
+	require.NoError(t, err)
+	storedTwo, err := faceRepo.GetByID(faceTwo.ID)
+	require.NoError(t, err)
+	require.NotNil(t, storedOne.PersonID)
+	require.NotNil(t, storedTwo.PersonID)
+	assert.Equal(t, person.ID, *storedOne.PersonID)
+	assert.Equal(t, person.ID, *storedTwo.PersonID)
+	assert.Equal(t, model.FaceClusterStatusAssigned, storedOne.ClusterStatus)
+	assert.Equal(t, model.FaceClusterStatusAssigned, storedTwo.ClusterStatus)
+	assert.InDelta(t, 0.63, storedOne.ClusterScore, 0.0001)
+	assert.InDelta(t, 0.63, storedTwo.ClusterScore, 0.0001)
+	require.NotNil(t, storedOne.ClusteredAt)
+	require.NotNil(t, storedTwo.ClusteredAt)
+
+	storedPerson, err := personRepo.GetByID(person.ID)
+	require.NoError(t, err)
+	require.NotNil(t, storedPerson)
+	assert.Equal(t, 2, storedPerson.FaceCount)
+	assert.Equal(t, 2, storedPerson.PhotoCount)
+	require.NotNil(t, storedPerson.RepresentativeFaceID)
+	assert.Equal(t, faceTwo.ID, *storedPerson.RepresentativeFaceID)
+}
+
+func TestPeopleService_ProcessJobUsesIncrementalClustering(t *testing.T) {
+	rootDir := t.TempDir()
+	oldPhotoPath := createTestImageFile(t, rootDir, "old.jpg")
+	newPhotoPath := createTestImageFile(t, rootDir, "new.jpg")
+
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{
+		responses: map[string]*mlclient.DetectFacesResponse{
+			newPhotoPath: {
+				Faces: []mlclient.DetectedFace{
+					{
+						BBox:         mlclient.BoundingBox{X: 0.1, Y: 0.1, Width: 0.2, Height: 0.2},
+						Confidence:   0.98,
+						QualityScore: 0.89,
+						Embedding:    []float32{1, 0},
+					},
+				},
+			},
+		},
+	})
+	svc.config.Photos.ThumbnailPath = filepath.Join(rootDir, ".thumbnails")
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+	jobRepo := repository.NewPeopleJobRepository(db)
+
+	oldPhoto := &model.Photo{FilePath: oldPhotoPath, FileName: "old.jpg", FileSize: 1, FileHash: "old-process-job", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: "new.jpg", FileSize: 1, FileHash: "new-process-job", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(oldPhoto))
+	require.NoError(t, photoRepo.Create(newPhoto))
+
+	person := &model.Person{Category: model.PersonCategoryFamily}
+	require.NoError(t, personRepo.Create(person))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID:       oldPhoto.ID,
+		PersonID:      &person.ID,
+		BBoxX:         0.1,
+		BBoxY:         0.1,
+		BBoxWidth:     0.2,
+		BBoxHeight:    0.2,
+		Confidence:    0.96,
+		QualityScore:  0.84,
+		Embedding:     encodeEmbedding(t, []float32{1, 0}),
+		ClusterStatus: model.FaceClusterStatusAssigned,
+		ClusterScore:  1,
+	}))
+	require.NoError(t, personRepo.RefreshStats(person.ID))
+	require.NoError(t, svc.syncPersonState(person.ID))
+
+	job := &model.PeopleJob{
+		PhotoID:  newPhoto.ID,
+		FilePath: newPhoto.FilePath,
+		Status:   model.PeopleJobStatusQueued,
+		Source:   model.PeopleJobSourceScan,
+		Priority: 10,
+		QueuedAt: time.Now(),
+	}
+	require.NoError(t, jobRepo.Create(job))
+
+	require.NoError(t, svc.processJob(job))
+
+	faces, err := faceRepo.ListByPhotoID(newPhoto.ID)
+	require.NoError(t, err)
+	require.Len(t, faces, 1)
+	require.NotNil(t, faces[0].PersonID)
+	assert.Equal(t, person.ID, *faces[0].PersonID)
+	assert.Equal(t, model.FaceClusterStatusAssigned, faces[0].ClusterStatus)
+	assert.GreaterOrEqual(t, faces[0].ClusterScore, peopleAttachThreshold)
+	require.NotNil(t, faces[0].ClusteredAt)
+
+	updatedPhoto, err := photoRepo.GetByID(newPhoto.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedPhoto)
+	assert.Equal(t, model.FaceProcessStatusReady, updatedPhoto.FaceProcessStatus)
+	assert.Equal(t, model.PersonCategoryFamily, updatedPhoto.TopPersonCategory)
+
+	updatedJob, err := jobRepo.GetByID(job.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedJob)
+	assert.Equal(t, model.PeopleJobStatusCompleted, updatedJob.Status)
+
+	people, err := personRepo.ListAll()
+	require.NoError(t, err)
+	assert.Len(t, people, 1)
+}
+
+func TestPeopleService_SingleUncertainFaceStaysPending(t *testing.T) {
+	rootDir := t.TempDir()
+	photoPath := createTestImageFile(t, rootDir, "uncertain.jpg")
+
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{
+		responses: map[string]*mlclient.DetectFacesResponse{
+			photoPath: {
+				Faces: []mlclient.DetectedFace{
+					{
+						BBox:         mlclient.BoundingBox{X: 0.2, Y: 0.2, Width: 0.2, Height: 0.2},
+						Confidence:   0.92,
+						QualityScore: 0.78,
+						Embedding:    []float32{0, 1},
+					},
+				},
+			},
+		},
+	})
+	svc.config.Photos.ThumbnailPath = filepath.Join(rootDir, ".thumbnails")
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+	jobRepo := repository.NewPeopleJobRepository(db)
+
+	photo := &model.Photo{FilePath: photoPath, FileName: "uncertain.jpg", FileSize: 1, FileHash: "uncertain-process-job", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(photo))
+
+	job := &model.PeopleJob{
+		PhotoID:  photo.ID,
+		FilePath: photo.FilePath,
+		Status:   model.PeopleJobStatusQueued,
+		Source:   model.PeopleJobSourceScan,
+		Priority: 10,
+		QueuedAt: time.Now(),
+	}
+	require.NoError(t, jobRepo.Create(job))
+
+	require.NoError(t, svc.processJob(job))
+
+	faces, err := faceRepo.ListByPhotoID(photo.ID)
+	require.NoError(t, err)
+	require.Len(t, faces, 1)
+	assert.Nil(t, faces[0].PersonID)
+	assert.Equal(t, model.FaceClusterStatusPending, faces[0].ClusterStatus)
+	assert.Less(t, faces[0].ClusterScore, peopleAttachThreshold)
+	require.NotNil(t, faces[0].ClusteredAt)
+
+	updatedPhoto, err := photoRepo.GetByID(photo.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedPhoto)
+	assert.Equal(t, model.FaceProcessStatusReady, updatedPhoto.FaceProcessStatus)
+	assert.Equal(t, "", updatedPhoto.TopPersonCategory)
+
+	updatedJob, err := jobRepo.GetByID(job.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedJob)
+	assert.Equal(t, model.PeopleJobStatusCompleted, updatedJob.Status)
+
+	people, err := personRepo.ListAll()
+	require.NoError(t, err)
+	assert.Empty(t, people)
+}
+
+func TestPeopleService_ManualLockedFacesAreStable(t *testing.T) {
+	rootDir := t.TempDir()
+	photoPath := createTestImageFile(t, rootDir, "manual.jpg")
+	rivalPhotoPath := createTestImageFile(t, rootDir, "rival.jpg")
+
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{
+		responses: map[string]*mlclient.DetectFacesResponse{
+			photoPath: {
+				Faces: []mlclient.DetectedFace{
+					{
+						BBox:         mlclient.BoundingBox{X: 0.3, Y: 0.3, Width: 0.2, Height: 0.2},
+						Confidence:   0.97,
+						QualityScore: 0.82,
+						Embedding:    []float32{0, 1},
+					},
+				},
+			},
+		},
+	})
+	svc.config.Photos.ThumbnailPath = filepath.Join(rootDir, ".thumbnails")
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+	jobRepo := repository.NewPeopleJobRepository(db)
+
+	photo := &model.Photo{FilePath: photoPath, FileName: "manual.jpg", FileSize: 1, FileHash: "manual-locked", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	rivalPhoto := &model.Photo{FilePath: rivalPhotoPath, FileName: "rival.jpg", FileSize: 1, FileHash: "manual-rival", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(photo))
+	require.NoError(t, photoRepo.Create(rivalPhoto))
+
+	source := &model.Person{Category: model.PersonCategoryStranger}
+	target := &model.Person{Category: model.PersonCategoryFamily}
+	rival := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(source))
+	require.NoError(t, personRepo.Create(target))
+	require.NoError(t, personRepo.Create(rival))
+
+	face := &model.Face{
+		PhotoID:      photo.ID,
+		PersonID:     &source.ID,
+		BBoxX:        0.1,
+		BBoxY:        0.1,
+		BBoxWidth:    0.2,
+		BBoxHeight:   0.2,
+		Confidence:   0.95,
+		QualityScore: 0.80,
+		Embedding:    encodeEmbedding(t, []float32{1, 0}),
+	}
+	require.NoError(t, faceRepo.Create(face))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID:       rivalPhoto.ID,
+		PersonID:      &rival.ID,
+		BBoxX:         0.2,
+		BBoxY:         0.2,
+		BBoxWidth:     0.2,
+		BBoxHeight:    0.2,
+		Confidence:    0.96,
+		QualityScore:  0.81,
+		Embedding:     encodeEmbedding(t, []float32{0, 1}),
+		ClusterStatus: model.FaceClusterStatusAssigned,
+		ClusterScore:  1,
+	}))
+	require.NoError(t, personRepo.RefreshStats(source.ID))
+	require.NoError(t, personRepo.RefreshStats(rival.ID))
+	require.NoError(t, svc.MoveFaces([]uint{face.ID}, target.ID))
+
+	movedFace, err := faceRepo.GetByID(face.ID)
+	require.NoError(t, err)
+	require.NotNil(t, movedFace)
+	require.NotNil(t, movedFace.PersonID)
+	assert.Equal(t, target.ID, *movedFace.PersonID)
+	assert.True(t, movedFace.ManualLocked)
+	assert.Equal(t, model.FaceClusterStatusManual, movedFace.ClusterStatus)
+
+	job := &model.PeopleJob{
+		PhotoID:  photo.ID,
+		FilePath: photo.FilePath,
+		Status:   model.PeopleJobStatusQueued,
+		Source:   model.PeopleJobSourceScan,
+		Priority: 10,
+		QueuedAt: time.Now(),
+	}
+	require.NoError(t, jobRepo.Create(job))
+
+	require.NoError(t, svc.processJob(job))
+
+	faces, err := faceRepo.ListByPhotoID(photo.ID)
+	require.NoError(t, err)
+	require.Len(t, faces, 1)
+	assert.Equal(t, movedFace.ID, faces[0].ID)
+	require.NotNil(t, faces[0].PersonID)
+	assert.Equal(t, target.ID, *faces[0].PersonID)
+	assert.True(t, faces[0].ManualLocked)
+	assert.Equal(t, model.FaceClusterStatusManual, faces[0].ClusterStatus)
+}
+
+func TestPeopleService_PrototypeRefreshAfterManualOps(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+
+	targetPhoto := &model.Photo{FilePath: "/photos/manual-target.jpg", FileName: "manual-target.jpg", FileSize: 1, FileHash: "manual-target", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	sourcePhoto := &model.Photo{FilePath: "/photos/manual-source.jpg", FileName: "manual-source.jpg", FileSize: 1, FileHash: "manual-source", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(targetPhoto))
+	require.NoError(t, photoRepo.Create(sourcePhoto))
+
+	target := &model.Person{Category: model.PersonCategoryFamily}
+	source := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(target))
+	require.NoError(t, personRepo.Create(source))
+
+	targetFace := &model.Face{
+		PhotoID:       targetPhoto.ID,
+		PersonID:      &target.ID,
+		BBoxX:         0.1,
+		BBoxY:         0.1,
+		BBoxWidth:     0.2,
+		BBoxHeight:    0.2,
+		Confidence:    0.90,
+		QualityScore:  0.70,
+		Embedding:     encodeEmbedding(t, []float32{1, 0}),
+		ClusterStatus: model.FaceClusterStatusAssigned,
+		ClusterScore:  1,
+	}
+	mergedFace := &model.Face{
+		PhotoID:      sourcePhoto.ID,
+		PersonID:     &source.ID,
+		BBoxX:        0.2,
+		BBoxY:        0.2,
+		BBoxWidth:    0.2,
+		BBoxHeight:   0.2,
+		Confidence:   0.96,
+		QualityScore: 0.95,
+		Embedding:    encodeEmbedding(t, []float32{0, 1}),
+	}
+	require.NoError(t, faceRepo.Create(targetFace))
+	require.NoError(t, faceRepo.Create(mergedFace))
+	require.NoError(t, personRepo.RefreshStats(target.ID))
+	require.NoError(t, personRepo.RefreshStats(source.ID))
+	require.NoError(t, svc.syncPersonState(target.ID))
+	require.NoError(t, svc.syncPersonState(source.ID))
+
+	require.NoError(t, svc.MergePeople(target.ID, []uint{source.ID}))
+
+	updatedMergedFace, err := faceRepo.GetByID(mergedFace.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedMergedFace)
+	require.NotNil(t, updatedMergedFace.PersonID)
+	assert.Equal(t, target.ID, *updatedMergedFace.PersonID)
+	assert.True(t, updatedMergedFace.ManualLocked)
+	assert.Equal(t, model.FaceClusterStatusManual, updatedMergedFace.ClusterStatus)
+
+	updatedTarget, err := personRepo.GetByID(target.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedTarget)
+	require.NotNil(t, updatedTarget.RepresentativeFaceID)
+	assert.Equal(t, mergedFace.ID, *updatedTarget.RepresentativeFaceID)
+
+	targetFaces, err := faceRepo.ListByPersonID(target.ID)
+	require.NoError(t, err)
+	prototypes := svc.selectPersonPrototypes(targetFaces, peoplePrototypeCount)
+	require.Len(t, prototypes[target.ID], 2)
+	assert.Equal(t, mergedFace.ID, prototypes[target.ID][0].ID)
+}
+
+func TestPeopleService_TwoSimilarNewFacesCreatePerson(t *testing.T) {
+	rootDir := t.TempDir()
+	photoPath := createTestImageFile(t, rootDir, "pair.jpg")
+
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{
+		responses: map[string]*mlclient.DetectFacesResponse{
+			photoPath: {
+				Faces: []mlclient.DetectedFace{
+					{
+						BBox:         mlclient.BoundingBox{X: 0.1, Y: 0.1, Width: 0.2, Height: 0.2},
+						Confidence:   0.95,
+						QualityScore: 0.87,
+						Embedding:    []float32{1, 0},
+					},
+					{
+						BBox:         mlclient.BoundingBox{X: 0.4, Y: 0.1, Width: 0.2, Height: 0.2},
+						Confidence:   0.94,
+						QualityScore: 0.85,
+						Embedding:    []float32{0.97, 0.243},
+					},
+				},
+			},
+		},
+	})
+	svc.config.Photos.ThumbnailPath = filepath.Join(rootDir, ".thumbnails")
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+	jobRepo := repository.NewPeopleJobRepository(db)
+
+	photo := &model.Photo{FilePath: photoPath, FileName: "pair.jpg", FileSize: 1, FileHash: "pair-regression", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(photo))
+	job := &model.PeopleJob{
+		PhotoID:  photo.ID,
+		FilePath: photo.FilePath,
+		Status:   model.PeopleJobStatusQueued,
+		Source:   model.PeopleJobSourceScan,
+		Priority: 10,
+		QueuedAt: time.Now(),
+	}
+	require.NoError(t, jobRepo.Create(job))
+
+	require.NoError(t, svc.processJob(job))
+
+	faces, err := faceRepo.ListByPhotoID(photo.ID)
+	require.NoError(t, err)
+	require.Len(t, faces, 2)
+	require.NotNil(t, faces[0].PersonID)
+	require.NotNil(t, faces[1].PersonID)
+	assert.Equal(t, *faces[0].PersonID, *faces[1].PersonID)
+	assert.Equal(t, model.FaceClusterStatusAssigned, faces[0].ClusterStatus)
+	assert.Equal(t, model.FaceClusterStatusAssigned, faces[1].ClusterStatus)
+
+	person, err := personRepo.GetByID(*faces[0].PersonID)
+	require.NoError(t, err)
+	require.NotNil(t, person)
+	assert.Equal(t, model.PersonCategoryStranger, person.Category)
+
+	updatedPhoto, err := photoRepo.GetByID(photo.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedPhoto)
+	assert.Equal(t, model.PersonCategoryStranger, updatedPhoto.TopPersonCategory)
+}
+
+func TestPeopleService_PendingFacesBecomeAssignedWhenMoreEvidenceArrives(t *testing.T) {
+	rootDir := t.TempDir()
+	firstPhotoPath := createTestImageFile(t, rootDir, "first.jpg")
+	secondPhotoPath := createTestImageFile(t, rootDir, "second.jpg")
+
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{
+		responses: map[string]*mlclient.DetectFacesResponse{
+			firstPhotoPath: {
+				Faces: []mlclient.DetectedFace{
+					{
+						BBox:         mlclient.BoundingBox{X: 0.1, Y: 0.1, Width: 0.2, Height: 0.2},
+						Confidence:   0.93,
+						QualityScore: 0.81,
+						Embedding:    []float32{1, 0},
+					},
+				},
+			},
+			secondPhotoPath: {
+				Faces: []mlclient.DetectedFace{
+					{
+						BBox:         mlclient.BoundingBox{X: 0.2, Y: 0.2, Width: 0.2, Height: 0.2},
+						Confidence:   0.94,
+						QualityScore: 0.82,
+						Embedding:    []float32{0.97, 0.243},
+					},
+				},
+			},
+		},
+	})
+	svc.config.Photos.ThumbnailPath = filepath.Join(rootDir, ".thumbnails")
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+	jobRepo := repository.NewPeopleJobRepository(db)
+
+	firstPhoto := &model.Photo{FilePath: firstPhotoPath, FileName: "first.jpg", FileSize: 1, FileHash: "pending-first", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	secondPhoto := &model.Photo{FilePath: secondPhotoPath, FileName: "second.jpg", FileSize: 1, FileHash: "pending-second", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(firstPhoto))
+	require.NoError(t, photoRepo.Create(secondPhoto))
+
+	firstJob := &model.PeopleJob{
+		PhotoID:  firstPhoto.ID,
+		FilePath: firstPhoto.FilePath,
+		Status:   model.PeopleJobStatusQueued,
+		Source:   model.PeopleJobSourceScan,
+		Priority: 10,
+		QueuedAt: time.Now(),
+	}
+	secondJob := &model.PeopleJob{
+		PhotoID:  secondPhoto.ID,
+		FilePath: secondPhoto.FilePath,
+		Status:   model.PeopleJobStatusQueued,
+		Source:   model.PeopleJobSourceScan,
+		Priority: 10,
+		QueuedAt: time.Now(),
+	}
+	require.NoError(t, jobRepo.Create(firstJob))
+	require.NoError(t, jobRepo.Create(secondJob))
+
+	require.NoError(t, svc.processJob(firstJob))
+
+	firstFaces, err := faceRepo.ListByPhotoID(firstPhoto.ID)
+	require.NoError(t, err)
+	require.Len(t, firstFaces, 1)
+	assert.Nil(t, firstFaces[0].PersonID)
+	assert.Equal(t, model.FaceClusterStatusPending, firstFaces[0].ClusterStatus)
+
+	require.NoError(t, svc.processJob(secondJob))
+
+	firstFaces, err = faceRepo.ListByPhotoID(firstPhoto.ID)
+	require.NoError(t, err)
+	secondFaces, err := faceRepo.ListByPhotoID(secondPhoto.ID)
+	require.NoError(t, err)
+	require.Len(t, firstFaces, 1)
+	require.Len(t, secondFaces, 1)
+	require.NotNil(t, firstFaces[0].PersonID)
+	require.NotNil(t, secondFaces[0].PersonID)
+	assert.Equal(t, *firstFaces[0].PersonID, *secondFaces[0].PersonID)
+	assert.Equal(t, model.FaceClusterStatusAssigned, firstFaces[0].ClusterStatus)
+	assert.Equal(t, model.FaceClusterStatusAssigned, secondFaces[0].ClusterStatus)
+
+	people, err := personRepo.ListAll()
+	require.NoError(t, err)
+	require.Len(t, people, 1)
+
+	updatedFirstPhoto, err := photoRepo.GetByID(firstPhoto.ID)
+	require.NoError(t, err)
+	updatedSecondPhoto, err := photoRepo.GetByID(secondPhoto.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.PersonCategoryStranger, updatedFirstPhoto.TopPersonCategory)
+	assert.Equal(t, model.PersonCategoryStranger, updatedSecondPhoto.TopPersonCategory)
+}
+
+func normalizeFaceComponents(components [][]uint) []string {
+	normalized := make([]string, 0, len(components))
+	for _, component := range components {
+		ids := append([]uint(nil), component...)
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+
+		parts := make([]string, 0, len(ids))
+		for _, id := range ids {
+			parts = append(parts, fmt.Sprintf("%d", id))
+		}
+		normalized = append(normalized, strings.Join(parts, ","))
+	}
+	sort.Strings(normalized)
+	return normalized
 }
 
 func TestPeopleServiceBackground(t *testing.T) {
@@ -569,7 +1412,7 @@ func TestPeopleServiceCluster(t *testing.T) {
 		require.NoError(t, svc.StopBackground())
 	})
 
-	t.Run("边界样本新建人物", func(t *testing.T) {
+	t.Run("边界单脸保持待聚类", func(t *testing.T) {
 		rootDir := t.TempDir()
 		newPhotoPath := createTestImageFile(t, rootDir, "uncertain.jpg")
 
@@ -634,17 +1477,16 @@ func TestPeopleServiceCluster(t *testing.T) {
 		faces, err := faceRepo.ListByPhotoID(newPhoto.ID)
 		require.NoError(t, err)
 		require.Len(t, faces, 1)
-		require.NotNil(t, faces[0].PersonID)
-		assert.NotEqual(t, existingPerson.ID, *faces[0].PersonID)
+		assert.Nil(t, faces[0].PersonID)
+		assert.Equal(t, model.FaceClusterStatusPending, faces[0].ClusterStatus)
 
-		newPerson, err := personRepo.GetByID(*faces[0].PersonID)
+		people, err := personRepo.ListAll()
 		require.NoError(t, err)
-		require.NotNil(t, newPerson)
-		assert.Equal(t, model.PersonCategoryStranger, newPerson.Category)
+		assert.Len(t, people, 1)
 
 		updatedPhoto, err := photoRepo.GetByID(newPhoto.ID)
 		require.NoError(t, err)
-		assert.Equal(t, model.PersonCategoryStranger, updatedPhoto.TopPersonCategory)
+		assert.Equal(t, "", updatedPhoto.TopPersonCategory)
 
 		require.NoError(t, svc.StopBackground())
 	})

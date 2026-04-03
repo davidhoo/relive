@@ -11,12 +11,15 @@ type FaceRepository interface {
 	Create(face *model.Face) error
 	Update(face *model.Face) error
 	UpdateFields(id uint, fields map[string]interface{}) error
+	UpdateClusterFields(ids []uint, fields map[string]interface{}) error
 	GetByID(id uint) (*model.Face, error)
 	DeleteByPhotoID(photoID uint) error
 	ListByPhotoID(photoID uint) ([]*model.Face, error)
 	ListByPersonID(personID uint) ([]*model.Face, error)
 	ListByIDs(ids []uint) ([]*model.Face, error)
 	ListAssigned() ([]*model.Face, error)
+	ListPending(limit int) ([]*model.Face, error)
+	ListTopByPersonIDs(personIDs []uint, perPerson int) ([]*model.Face, error)
 	ReassignFaces(faceIDs []uint, personID uint, reason string) error
 }
 
@@ -38,6 +41,13 @@ func (r *faceRepository) Update(face *model.Face) error {
 
 func (r *faceRepository) UpdateFields(id uint, fields map[string]interface{}) error {
 	return r.db.Model(&model.Face{}).Where("id = ?", id).Updates(fields).Error
+}
+
+func (r *faceRepository) UpdateClusterFields(ids []uint, fields map[string]interface{}) error {
+	if len(ids) == 0 || len(fields) == 0 {
+		return nil
+	}
+	return r.db.Model(&model.Face{}).Where("id IN ?", ids).Updates(fields).Error
 }
 
 func (r *faceRepository) GetByID(id uint) (*model.Face, error) {
@@ -82,6 +92,54 @@ func (r *faceRepository) ListAssigned() ([]*model.Face, error) {
 	return faces, err
 }
 
+func (r *faceRepository) ListPending(limit int) ([]*model.Face, error) {
+	var faces []*model.Face
+	query := r.db.Where("cluster_status = ?", model.FaceClusterStatusPending).Order("id ASC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	err := query.Find(&faces).Error
+	return faces, err
+}
+
+func (r *faceRepository) ListTopByPersonIDs(personIDs []uint, perPerson int) ([]*model.Face, error) {
+	var faces []*model.Face
+	if len(personIDs) == 0 {
+		return faces, nil
+	}
+
+	err := r.db.
+		Where("person_id IN ?", personIDs).
+		Order("person_id ASC").
+		Order("manual_locked DESC").
+		Order("quality_score DESC").
+		Order("confidence DESC").
+		Order("id ASC").
+		Find(&faces).Error
+	if err != nil {
+		return nil, err
+	}
+
+	if perPerson <= 0 {
+		return faces, nil
+	}
+
+	topFaces := make([]*model.Face, 0, len(faces))
+	counts := make(map[uint]int, len(personIDs))
+	for _, face := range faces {
+		if face == nil || face.PersonID == nil || *face.PersonID == 0 {
+			continue
+		}
+		personID := *face.PersonID
+		if counts[personID] >= perPerson {
+			continue
+		}
+		topFaces = append(topFaces, face)
+		counts[personID]++
+	}
+	return topFaces, nil
+}
+
 func (r *faceRepository) ReassignFaces(faceIDs []uint, personID uint, reason string) error {
 	if len(faceIDs) == 0 {
 		return nil
@@ -89,8 +147,10 @@ func (r *faceRepository) ReassignFaces(faceIDs []uint, personID uint, reason str
 	now := time.Now()
 	return r.db.Model(&model.Face{}).Where("id IN ?", faceIDs).Updates(map[string]interface{}{
 		"person_id":          personID,
+		"cluster_status":     model.FaceClusterStatusManual,
 		"manual_locked":      true,
 		"manual_lock_reason": reason,
 		"manual_locked_at":   &now,
+		"clustered_at":       &now,
 	}).Error
 }

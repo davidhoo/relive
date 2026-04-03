@@ -106,9 +106,11 @@ func (r *personRepository) MergeInto(targetPersonID uint, sourcePersonIDs []uint
 			Where("person_id IN ?", sourceIDs).
 			Updates(map[string]interface{}{
 				"person_id":          targetPersonID,
+				"cluster_status":     model.FaceClusterStatusManual,
 				"manual_locked":      true,
 				"manual_lock_reason": "merge",
 				"manual_locked_at":   time.Now(),
+				"clustered_at":       time.Now(),
 			}).Error; err != nil {
 			return err
 		}

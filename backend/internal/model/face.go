@@ -2,6 +2,13 @@ package model
 
 import "time"
 
+const (
+	FaceClusterStatusPending  = "pending"
+	FaceClusterStatusAssigned = "assigned"
+	FaceClusterStatusOutlier  = "outlier"
+	FaceClusterStatusManual   = "manual"
+)
+
 // Face 单张照片中的人脸检测结果
 type Face struct {
 	ID        uint      `gorm:"primarykey" json:"id"`
@@ -19,6 +26,10 @@ type Face struct {
 	QualityScore  float64 `gorm:"not null;default:0" json:"quality_score"`
 	Embedding     []byte  `gorm:"type:blob" json:"-"`
 	ThumbnailPath string  `gorm:"type:varchar(500)" json:"thumbnail_path,omitempty"`
+
+	ClusterStatus string     `gorm:"type:varchar(20);index:idx_face_cluster_status" json:"cluster_status,omitempty"`
+	ClusterScore  float64    `gorm:"not null;default:0" json:"cluster_score"`
+	ClusteredAt   *time.Time `json:"clustered_at,omitempty"`
 
 	ManualLocked     bool       `gorm:"not null;default:false;index:idx_face_manual_locked" json:"manual_locked"`
 	ManualLockReason string     `gorm:"type:varchar(50)" json:"manual_lock_reason,omitempty"`

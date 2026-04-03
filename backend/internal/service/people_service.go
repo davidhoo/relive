@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,10 @@ const (
 	peoplePriorityManual   = 80
 	peoplePriorityPassive  = 100
 	peopleClusterThreshold = 0.88
+	peoplePrototypeCount   = 3
+	peopleLinkThreshold    = 0.72
+	peopleAttachThreshold  = 0.86
+	peopleMinClusterFaces  = 2
 )
 
 type PeopleMLClient interface {
@@ -505,30 +510,9 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 		})
 	}
 
-	assignedCandidates, err := s.faceRepo.ListAssigned()
-	if err != nil {
-		return err
-	}
-	assignedCandidates = filterFacesByOtherPhotos(assignedCandidates, photo.ID)
 	previousPersonIDs := personIDsFromFaces(existingFaces)
-
-	people, err := s.personRepo.ListAll()
-	if err != nil {
-		return err
-	}
-	personByID := make(map[uint]*model.Person, len(people))
-	for _, person := range people {
-		personByID[person.ID] = person
-	}
-
-	affectedPersonIDs := make(map[uint]struct{})
 	createdFaces := make([]*model.Face, 0, len(result.Faces))
 	for _, detected := range result.Faces {
-		personID, ensureErr := s.ensurePersonForDetectedFace(detected, assignedCandidates, personByID)
-		if ensureErr != nil {
-			return ensureErr
-		}
-
 		embeddingPayload, err := json.Marshal(detected.Embedding)
 		if err != nil {
 			return err
@@ -539,7 +523,6 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 		}
 		face := &model.Face{
 			PhotoID:       photo.ID,
-			PersonID:      &personID,
 			BBoxX:         detected.BBox.X,
 			BBoxY:         detected.BBox.Y,
 			BBoxWidth:     detected.BBox.Width,
@@ -548,13 +531,11 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 			QualityScore:  detected.QualityScore,
 			Embedding:     embeddingPayload,
 			ThumbnailPath: thumbnailPath,
+			ClusterStatus: model.FaceClusterStatusPending,
+			ClusterScore:  0,
+			ClusteredAt:   nil,
 		}
 		createdFaces = append(createdFaces, face)
-		assignedCandidates = append(assignedCandidates, face)
-		affectedPersonIDs[personID] = struct{}{}
-	}
-	for _, personID := range previousPersonIDs {
-		affectedPersonIDs[personID] = struct{}{}
 	}
 
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
@@ -571,26 +552,48 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 		if err := tx.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
 			"face_process_status": model.FaceProcessStatusReady,
 			"face_count":          len(createdFaces),
+			"top_person_category": "",
 		}).Error; err != nil {
 			return err
 		}
-
-		return tx.Model(&model.PeopleJob{}).Where("id = ?", job.ID).Updates(map[string]interface{}{
-			"status":       model.PeopleJobStatusCompleted,
-			"last_error":   "",
-			"completed_at": &now,
-		}).Error
+		return nil
 	}); err != nil {
 		return err
 	}
 
-	for personID := range affectedPersonIDs {
+	affectedPersonIDs, affectedPhotoIDs, clusterErr := s.runIncrementalClustering()
+	if clusterErr != nil {
+		if updateErr := s.jobRepo.UpdateFields(job.ID, map[string]interface{}{
+			"status":       model.PeopleJobStatusFailed,
+			"last_error":   clusterErr.Error(),
+			"completed_at": &now,
+		}); updateErr != nil {
+			logger.Warnf("update people job %d failed after clustering error: %v", job.ID, updateErr)
+		}
+		return clusterErr
+	}
+
+	for _, personID := range previousPersonIDs {
+		if err := s.syncPersonState(personID); err != nil {
+			return err
+		}
+	}
+	for _, personID := range affectedPersonIDs {
 		if err := s.syncPersonState(personID); err != nil {
 			return err
 		}
 	}
 
-	return s.photoRepo.RecomputeTopPersonCategory([]uint{photo.ID})
+	affectedPhotoIDs = append(affectedPhotoIDs, photo.ID)
+	if err := s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs); err != nil {
+		return err
+	}
+
+	return s.jobRepo.UpdateFields(job.ID, map[string]interface{}{
+		"status":       model.PeopleJobStatusCompleted,
+		"last_error":   "",
+		"completed_at": &now,
+	})
 }
 
 func (s *peopleService) resetBackgroundLogs() {
@@ -660,6 +663,353 @@ func (s *peopleService) ensurePersonForDetectedFace(detected mlclient.DetectedFa
 	return person.ID, nil
 }
 
+func (s *peopleService) selectPersonPrototypes(faces []*model.Face, k int) map[uint][]*model.Face {
+	prototypes := make(map[uint][]*model.Face)
+	if k <= 0 {
+		return prototypes
+	}
+
+	grouped := make(map[uint][]*model.Face)
+	for _, face := range faces {
+		if face == nil || face.PersonID == nil || *face.PersonID == 0 {
+			continue
+		}
+		personID := *face.PersonID
+		grouped[personID] = append(grouped[personID], face)
+	}
+
+	for personID, personFaces := range grouped {
+		sort.Slice(personFaces, func(i, j int) bool {
+			if personFaces[i].ManualLocked != personFaces[j].ManualLocked {
+				return personFaces[i].ManualLocked
+			}
+			if personFaces[i].QualityScore != personFaces[j].QualityScore {
+				return personFaces[i].QualityScore > personFaces[j].QualityScore
+			}
+			if personFaces[i].Confidence != personFaces[j].Confidence {
+				return personFaces[i].Confidence > personFaces[j].Confidence
+			}
+			return personFaces[i].ID < personFaces[j].ID
+		})
+
+		if len(personFaces) > k {
+			personFaces = personFaces[:k]
+		}
+		prototypes[personID] = personFaces
+	}
+
+	return prototypes
+}
+
+func (s *peopleService) buildFaceGraph(faces []*model.Face, linkThreshold float64) map[uint][]uint {
+	graph := make(map[uint][]uint, len(faces))
+	for _, face := range faces {
+		if face == nil || face.ID == 0 {
+			continue
+		}
+		graph[face.ID] = []uint{}
+	}
+
+	for i := 0; i < len(faces); i++ {
+		if faces[i] == nil || faces[i].ID == 0 {
+			continue
+		}
+		for j := i + 1; j < len(faces); j++ {
+			if faces[j] == nil || faces[j].ID == 0 {
+				continue
+			}
+
+			score := cosineSimilarity(decodeEmbedding(faces[i].Embedding), decodeEmbedding(faces[j].Embedding))
+			if score < linkThreshold {
+				continue
+			}
+
+			graph[faces[i].ID] = append(graph[faces[i].ID], faces[j].ID)
+			graph[faces[j].ID] = append(graph[faces[j].ID], faces[i].ID)
+		}
+	}
+
+	for faceID := range graph {
+		sort.Slice(graph[faceID], func(i, j int) bool {
+			return graph[faceID][i] < graph[faceID][j]
+		})
+	}
+
+	return graph
+}
+
+func (s *peopleService) findConnectedComponents(graph map[uint][]uint) [][]uint {
+	if len(graph) == 0 {
+		return nil
+	}
+
+	nodeIDs := make([]uint, 0, len(graph))
+	for faceID := range graph {
+		nodeIDs = append(nodeIDs, faceID)
+	}
+	sort.Slice(nodeIDs, func(i, j int) bool { return nodeIDs[i] < nodeIDs[j] })
+
+	visited := make(map[uint]bool, len(graph))
+	components := make([][]uint, 0)
+
+	for _, startID := range nodeIDs {
+		if visited[startID] {
+			continue
+		}
+
+		queue := []uint{startID}
+		visited[startID] = true
+		component := make([]uint, 0)
+
+		for len(queue) > 0 {
+			current := queue[0]
+			queue = queue[1:]
+			component = append(component, current)
+
+			for _, neighbor := range graph[current] {
+				if visited[neighbor] {
+					continue
+				}
+				visited[neighbor] = true
+				queue = append(queue, neighbor)
+			}
+		}
+
+		sort.Slice(component, func(i, j int) bool { return component[i] < component[j] })
+		components = append(components, component)
+	}
+
+	return components
+}
+
+func (s *peopleService) scoreComponentAgainstPerson(component []*model.Face, prototypes []*model.Face) float64 {
+	if len(component) == 0 || len(prototypes) == 0 {
+		return -1
+	}
+
+	var total float64
+	var scored int
+
+	for _, face := range component {
+		if face == nil {
+			continue
+		}
+
+		bestScore := -1.0
+		embedding := decodeEmbedding(face.Embedding)
+		for _, prototype := range prototypes {
+			if prototype == nil {
+				continue
+			}
+			score := cosineSimilarity(embedding, decodeEmbedding(prototype.Embedding))
+			if score > bestScore {
+				bestScore = score
+			}
+		}
+
+		if bestScore < 0 {
+			continue
+		}
+		total += bestScore
+		scored++
+	}
+
+	if scored == 0 {
+		return -1
+	}
+	return total / float64(scored)
+}
+
+func (s *peopleService) attachComponentToExistingPerson(component []*model.Face, prototypes map[uint][]*model.Face, attachThreshold float64) (uint, float64, bool) {
+	if len(component) == 0 || len(prototypes) == 0 {
+		return 0, -1, false
+	}
+
+	personIDs := make([]uint, 0, len(prototypes))
+	for personID := range prototypes {
+		personIDs = append(personIDs, personID)
+	}
+	sort.Slice(personIDs, func(i, j int) bool { return personIDs[i] < personIDs[j] })
+
+	bestPersonID := uint(0)
+	bestScore := -1.0
+	for _, personID := range personIDs {
+		score := s.scoreComponentAgainstPerson(component, prototypes[personID])
+		if score > bestScore {
+			bestScore = score
+			bestPersonID = personID
+		}
+	}
+
+	if bestScore >= attachThreshold {
+		return bestPersonID, bestScore, true
+	}
+	return 0, bestScore, false
+}
+
+func (s *peopleService) markComponentPending(component []*model.Face, score float64) error {
+	ids := faceIDs(component)
+	if len(ids) == 0 {
+		return nil
+	}
+
+	now := time.Now()
+	if err := s.db.Model(&model.Face{}).Where("id IN ?", ids).Updates(map[string]interface{}{
+		"person_id":      nil,
+		"cluster_status": model.FaceClusterStatusPending,
+		"cluster_score":  score,
+		"clustered_at":   &now,
+	}).Error; err != nil {
+		return err
+	}
+
+	for _, face := range component {
+		if face == nil {
+			continue
+		}
+		face.PersonID = nil
+		face.ClusterStatus = model.FaceClusterStatusPending
+		face.ClusterScore = score
+		face.ClusteredAt = &now
+	}
+
+	return nil
+}
+
+func (s *peopleService) createPersonFromComponent(component []*model.Face, score float64) (*model.Person, error) {
+	ids := faceIDs(component)
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("component is empty")
+	}
+
+	now := time.Now()
+	person := &model.Person{Category: model.PersonCategoryStranger}
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(person).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.Face{}).Where("id IN ?", ids).Updates(map[string]interface{}{
+			"person_id":      person.ID,
+			"cluster_status": model.FaceClusterStatusAssigned,
+			"cluster_score":  score,
+			"clustered_at":   &now,
+		}).Error
+	}); err != nil {
+		return nil, err
+	}
+
+	personID := person.ID
+	for _, face := range component {
+		if face == nil {
+			continue
+		}
+		face.PersonID = &personID
+		face.ClusterStatus = model.FaceClusterStatusAssigned
+		face.ClusterScore = score
+		face.ClusteredAt = &now
+	}
+
+	if err := s.syncPersonState(person.ID); err != nil {
+		return nil, err
+	}
+	return s.personRepo.GetByID(person.ID)
+}
+
+func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
+	pendingFaces, err := s.faceRepo.ListPending(0)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(pendingFaces) == 0 {
+		return nil, nil, nil
+	}
+
+	assignedFaces, err := s.faceRepo.ListAssigned()
+	if err != nil {
+		return nil, nil, err
+	}
+	prototypes := s.selectPersonPrototypes(assignedFaces, peoplePrototypeCount)
+
+	graph := s.buildFaceGraph(pendingFaces, peopleLinkThreshold)
+	components := s.findConnectedComponents(graph)
+	pendingByID := make(map[uint]*model.Face, len(pendingFaces))
+	for _, face := range pendingFaces {
+		if face == nil || face.ID == 0 {
+			continue
+		}
+		pendingByID[face.ID] = face
+	}
+
+	affectedPersonIDs := make(map[uint]struct{})
+	affectedPhotoIDs := make(map[uint]struct{})
+
+	for _, componentIDs := range components {
+		component := make([]*model.Face, 0, len(componentIDs))
+		for _, faceID := range componentIDs {
+			face, ok := pendingByID[faceID]
+			if !ok {
+				continue
+			}
+			component = append(component, face)
+		}
+		if len(component) == 0 {
+			continue
+		}
+
+		personID, score, attached := s.attachComponentToExistingPerson(component, prototypes, peopleAttachThreshold)
+		componentScore := nonNegativeScore(score)
+
+		if attached {
+			now := time.Now()
+			if err := s.faceRepo.UpdateClusterFields(faceIDs(component), map[string]interface{}{
+				"person_id":      personID,
+				"cluster_status": model.FaceClusterStatusAssigned,
+				"cluster_score":  componentScore,
+				"clustered_at":   &now,
+			}); err != nil {
+				return nil, nil, err
+			}
+			for _, face := range component {
+				if face == nil {
+					continue
+				}
+				face.PersonID = &personID
+				face.ClusterStatus = model.FaceClusterStatusAssigned
+				face.ClusterScore = componentScore
+				face.ClusteredAt = &now
+			}
+			affectedPersonIDs[personID] = struct{}{}
+			for _, photoID := range facePhotoIDs(component) {
+				affectedPhotoIDs[photoID] = struct{}{}
+			}
+			continue
+		}
+
+		if len(component) >= peopleMinClusterFaces {
+			person, err := s.createPersonFromComponent(component, componentScore)
+			if err != nil {
+				return nil, nil, err
+			}
+			if person != nil && person.ID != 0 {
+				affectedPersonIDs[person.ID] = struct{}{}
+			}
+			for _, photoID := range facePhotoIDs(component) {
+				affectedPhotoIDs[photoID] = struct{}{}
+			}
+			continue
+		}
+
+		if err := s.markComponentPending(component, componentScore); err != nil {
+			return nil, nil, err
+		}
+		for _, photoID := range facePhotoIDs(component) {
+			affectedPhotoIDs[photoID] = struct{}{}
+		}
+	}
+
+	return mapKeys(affectedPersonIDs), mapKeys(affectedPhotoIDs), nil
+}
+
 func (s *peopleService) syncPersonState(personID uint) error {
 	person, err := s.personRepo.GetByID(personID)
 	if err != nil {
@@ -724,6 +1074,38 @@ func facePhotoIDs(faces []*model.Face) []uint {
 		photoIDs = append(photoIDs, face.PhotoID)
 	}
 	return photoIDs
+}
+
+func faceIDs(faces []*model.Face) []uint {
+	seen := make(map[uint]struct{})
+	ids := make([]uint, 0, len(faces))
+	for _, face := range faces {
+		if face == nil || face.ID == 0 {
+			continue
+		}
+		if _, ok := seen[face.ID]; ok {
+			continue
+		}
+		seen[face.ID] = struct{}{}
+		ids = append(ids, face.ID)
+	}
+	return ids
+}
+
+func mapKeys(values map[uint]struct{}) []uint {
+	keys := make([]uint, 0, len(values))
+	for value := range values {
+		keys = append(keys, value)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	return keys
+}
+
+func nonNegativeScore(score float64) float64 {
+	if score < 0 {
+		return 0
+	}
+	return score
 }
 
 func hasManualLockedFaces(faces []*model.Face) bool {
