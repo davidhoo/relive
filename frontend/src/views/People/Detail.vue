@@ -165,7 +165,17 @@
 
     <el-dialog v-model="showMoveDialog" title="移动到其他人物" width="480px">
       <el-select v-model="moveTargetPersonId" filterable class="dialog-select" placeholder="选择目标人物">
-        <el-option v-for="candidate in candidatePeople" :key="candidate.id" :label="candidateLabel(candidate)" :value="candidate.id" />
+        <el-option v-for="candidate in candidatePeople" :key="candidate.id" :label="candidateLabel(candidate)" :value="candidate.id">
+          <div class="candidate-option">
+            <el-avatar :size="34" :src="candidateAvatarUrl(candidate)">
+              {{ getPersonAvatarFallback(candidate) }}
+            </el-avatar>
+            <div class="candidate-option-body">
+              <div class="candidate-option-title">{{ candidate.name?.trim() || `未命名人物 #${candidate.id}` }}</div>
+              <div class="candidate-option-subtitle">{{ getPersonCategoryLabel(candidate.category) }}</div>
+            </div>
+          </div>
+        </el-option>
       </el-select>
       <template #footer>
         <el-button @click="showMoveDialog = false">取消</el-button>
@@ -175,7 +185,17 @@
 
     <el-dialog v-model="showMergeDialog" title="合并其他人物到当前人物" width="560px">
       <el-select v-model="mergeSourceIds" multiple filterable class="dialog-select" placeholder="选择要并入当前人物的对象">
-        <el-option v-for="candidate in candidatePeople" :key="candidate.id" :label="candidateLabel(candidate)" :value="candidate.id" />
+        <el-option v-for="candidate in candidatePeople" :key="candidate.id" :label="candidateLabel(candidate)" :value="candidate.id">
+          <div class="candidate-option">
+            <el-avatar :size="34" :src="candidateAvatarUrl(candidate)">
+              {{ getPersonAvatarFallback(candidate) }}
+            </el-avatar>
+            <div class="candidate-option-body">
+              <div class="candidate-option-title">{{ candidate.name?.trim() || `未命名人物 #${candidate.id}` }}</div>
+              <div class="candidate-option-subtitle">{{ getPersonCategoryLabel(candidate.category) }}</div>
+            </div>
+          </div>
+        </el-option>
       </el-select>
       <template #footer>
         <el-button @click="showMergeDialog = false">取消</el-button>
@@ -252,6 +272,7 @@ const formatTime = (value?: string) => {
 
 const photoThumbnail = (photoId: number) => `${apiBaseUrl}/photos/${photoId}/thumbnail?v=${photoId}`
 const faceThumbnail = (faceId: number) => `${apiBaseUrl}/faces/${faceId}/thumbnail?v=${faceId}`
+const candidateAvatarUrl = (item: Person) => item.representative_face_id ? faceThumbnail(item.representative_face_id) : ''
 
 const candidateLabel = (item: Person) => `${item.name?.trim() || `未命名人物 #${item.id}`} · ${getPersonCategoryLabel(item.category)}`
 
@@ -484,6 +505,31 @@ onMounted(async () => {
 
 .summary-descriptions {
   margin-top: 4px;
+}
+
+.candidate-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.candidate-option-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.candidate-option-title {
+  color: var(--color-text-primary);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.candidate-option-subtitle {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .operation-list {
