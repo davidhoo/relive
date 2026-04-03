@@ -480,6 +480,7 @@ type PersonResponse struct {
 	Name                 string         `json:"name,omitempty"`
 	Category             string         `json:"category"`
 	RepresentativeFaceID *uint          `json:"representative_face_id,omitempty"`
+	HasAvatar            bool           `json:"has_avatar"`
 	AvatarLocked         bool           `json:"avatar_locked"`
 	FaceCount            int            `json:"face_count"`
 	PhotoCount           int            `json:"photo_count"`

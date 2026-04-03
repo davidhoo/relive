@@ -572,6 +572,7 @@ func personToResponse(person *model.Person, faces []model.FaceResponse) model.Pe
 		Name:                 person.Name,
 		Category:             person.Category,
 		RepresentativeFaceID: person.RepresentativeFaceID,
+		HasAvatar:            person.RepresentativeFaceID != nil,
 		AvatarLocked:         person.AvatarLocked,
 		FaceCount:            person.FaceCount,
 		PhotoCount:           person.PhotoCount,

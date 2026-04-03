@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -322,6 +323,37 @@ func TestPeopleHandlerListPeople(t *testing.T) {
 	assert.Equal(t, int64(1), payload.Total)
 }
 
+func TestPeopleHandler_GetPeopleIncludesHasAvatar(t *testing.T) {
+	handler, _, db, _ := newPeopleHandlerForTest(t)
+	fixture := seedPeopleHandlerFixture(t, db)
+
+	noAvatar := model.Person{
+		Name:       "NoAvatar",
+		Category:   model.PersonCategoryStranger,
+		FaceCount:  0,
+		PhotoCount: 0,
+	}
+	require.NoError(t, db.Create(&noAvatar).Error)
+
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people?page=1&page_size=20", nil, nil, handler.ListPeople)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	require.True(t, resp.Success)
+	payload := decodeResponseData[peopleListPayload](t, resp)
+	require.NotEmpty(t, payload.Items)
+
+	itemsByID := make(map[uint]model.PersonResponse, len(payload.Items))
+	for _, item := range payload.Items {
+		itemsByID[item.ID] = item
+	}
+
+	require.Contains(t, itemsByID, fixture.FamilyPerson.ID)
+	assert.True(t, itemsByID[fixture.FamilyPerson.ID].HasAvatar)
+	require.Contains(t, itemsByID, noAvatar.ID)
+	assert.False(t, itemsByID[noAvatar.ID].HasAvatar)
+}
+
 func TestPeopleHandlerGetPerson(t *testing.T) {
 	handler, _, db, _ := newPeopleHandlerForTest(t)
 	fixture := seedPeopleHandlerFixture(t, db)
@@ -336,6 +368,41 @@ func TestPeopleHandlerGetPerson(t *testing.T) {
 	assert.Equal(t, "Alice", person.Name)
 	assert.Equal(t, model.PersonCategoryFamily, person.Category)
 	assert.Equal(t, fixture.FaceOne.ID, *person.RepresentativeFaceID)
+}
+
+func TestPeopleHandler_GetPersonIncludesHasAvatar(t *testing.T) {
+	handler, _, db, _ := newPeopleHandlerForTest(t)
+	fixture := seedPeopleHandlerFixture(t, db)
+
+	noAvatar := model.Person{
+		Name:       "NoAvatar",
+		Category:   model.PersonCategoryStranger,
+		FaceCount:  0,
+		PhotoCount: 0,
+	}
+	require.NoError(t, db.Create(&noAvatar).Error)
+
+	t.Run("person with representative face has avatar", func(t *testing.T) {
+		rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/1", nil, gin.Params{{Key: "id", Value: "1"}}, handler.GetPerson)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		resp := decodeAPIResponse(t, rec)
+		require.True(t, resp.Success)
+		person := decodeResponseData[model.PersonResponse](t, resp)
+		assert.Equal(t, fixture.FamilyPerson.ID, person.ID)
+		assert.True(t, person.HasAvatar)
+	})
+
+	t.Run("person without representative face has no avatar", func(t *testing.T) {
+		rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/"+strconv.FormatUint(uint64(noAvatar.ID), 10), nil, gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(noAvatar.ID), 10)}}, handler.GetPerson)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		resp := decodeAPIResponse(t, rec)
+		require.True(t, resp.Success)
+		person := decodeResponseData[model.PersonResponse](t, resp)
+		assert.Equal(t, noAvatar.ID, person.ID)
+		assert.False(t, person.HasAvatar)
+	})
 }
 
 func TestPeopleHandlerGetPersonPhotos(t *testing.T) {
