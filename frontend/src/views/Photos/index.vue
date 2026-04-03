@@ -155,7 +155,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="250" align="center">
+        <el-table-column label="操作" width="380" align="center">
           <template #default="{ row }">
             <div class="path-action-group">
               <el-button
@@ -194,6 +194,17 @@
                 title="重建照片：重新扫描文件、提取 EXIF、计算哈希、地理编码（保留 AI 分析结果）"
               >
                 重建
+              </el-button>
+              <el-button
+                size="small"
+                plain
+                :disabled="!row.enabled || peopleRescanningPathId === row.id"
+                :loading="peopleRescanningPathId === row.id"
+                @click="handlePeopleRescanPath(row)"
+                class="people-rescan-btn"
+                title="按路径重新加入人物扫描/聚类队列，并自动启动人物后台"
+              >
+                人物重扫
               </el-button>
               <el-button
                 size="small"
@@ -619,6 +630,7 @@ import SectionHeader from '@/components/SectionHeader.vue'
 import PathBrowser from '@/components/PathBrowser.vue'
 import LocationPicker from '@/components/LocationPicker.vue'
 import { photoApi } from '@/api/photo'
+import { peopleApi } from '@/api/people'
 import { configApi, type ScanPathConfig, type AutoScanConfig } from '@/api/config'
 import type { Photo, TagInfo } from '@/types/photo'
 import { v4 as uuidv4 } from 'uuid'
@@ -643,6 +655,7 @@ const scanPathLoading = ref(false)
 const scanPathsCollapsed = ref(localStorage.getItem('photos_scanPaths_collapsed') === 'true')
 const scanningPathId = ref<string>('')
 const rebuildingPathId = ref<string>('')
+const peopleRescanningPathId = ref<string>('')
 const currentTaskId = ref<string>('')
 const currentTaskStatus = ref<string>('')
 const currentScanPath = ref<string>('') // 当前正在扫描的路径
@@ -1425,6 +1438,32 @@ const handleRebuildPath = async (path: ScanPathConfig) => {
   }
 }
 
+const handlePeopleRescanPath = async (path: ScanPathConfig) => {
+  if (!path.enabled) {
+    ElMessage.warning('该路径已禁用，无法执行人物重扫')
+    return
+  }
+
+  try {
+    peopleRescanningPathId.value = path.id
+    const res = await peopleApi.rescanByPath(path.path)
+    const count = res.data?.data?.count || 0
+    const backgroundStarted = !!res.data?.data?.background_started
+
+    if (count === 0) {
+      ElMessage.warning(`「${path.name}」下没有可加入人物队列的照片`)
+      return
+    }
+
+    const suffix = backgroundStarted ? '，人物后台已启动' : ''
+    ElMessage.success(`「${path.name}」已加入 ${count} 张人物重扫任务${suffix}`)
+  } catch (error: any) {
+    ElMessage.error(error.message || '人物重扫失败')
+  } finally {
+    peopleRescanningPathId.value = ''
+  }
+}
+
 const clearCurrentTaskState = () => {
   clearPathPhotoCountDelta(currentScanPath.value)
   scanningPathId.value = ""
@@ -2012,7 +2051,9 @@ defineExpose({
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-wrap: wrap;
   gap: var(--spacing-xs);
+  row-gap: 6px;
   width: 100%;
 }
 
@@ -2054,6 +2095,24 @@ defineExpose({
 }
 
 .rebuild-btn:disabled {
+  background-color: #f5f5f5 !important;
+  border-color: #d9d9d9 !important;
+  color: #999 !important;
+}
+
+.people-rescan-btn {
+  background-color: #eef6ff !important;
+  border-color: #b6d7ff !important;
+  color: #1766c2 !important;
+}
+
+.people-rescan-btn:hover:not(:disabled) {
+  background-color: #dfeeff !important;
+  border-color: #8cbef5 !important;
+  color: #0f4f9a !important;
+}
+
+.people-rescan-btn:disabled {
   background-color: #f5f5f5 !important;
   border-color: #d9d9d9 !important;
   color: #999 !important;

@@ -18,6 +18,7 @@ type Config struct {
 	Performance PerformanceConfig `yaml:"performance"`
 	AI          AIConfig          `yaml:"ai"`
 	People      PeopleConfig      `yaml:"people"`
+	LegacyML    LegacyMLConfig    `yaml:"ml"`
 	Display     DisplayConfig     `yaml:"display"`
 	Geocode     GeocodeConfig     `yaml:"geocode"` // 新增：地理编码配置
 	Logging     LoggingConfig     `yaml:"logging"`
@@ -73,6 +74,12 @@ type AIConfig struct {
 // PeopleConfig 人物系统配置
 type PeopleConfig struct {
 	MLEndpoint string `yaml:"ml_endpoint"`
+	Timeout    int    `yaml:"timeout"`
+}
+
+// LegacyMLConfig 兼容旧版人物配置块
+type LegacyMLConfig struct {
+	ServiceURL string `yaml:"service_url"`
 	Timeout    int    `yaml:"timeout"`
 }
 
@@ -295,6 +302,14 @@ func Load(path string) (*Config, error) {
 
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config file: %w", err)
+	}
+
+	// 兼容旧版 ml 配置块，避免升级后人物后台无法启动。
+	if cfg.People.MLEndpoint == "" && cfg.LegacyML.ServiceURL != "" {
+		cfg.People.MLEndpoint = cfg.LegacyML.ServiceURL
+	}
+	if cfg.People.Timeout == 0 && cfg.LegacyML.Timeout > 0 {
+		cfg.People.Timeout = cfg.LegacyML.Timeout
 	}
 
 	// 从环境变量覆盖敏感配置

@@ -10,163 +10,164 @@
 
     <el-tabs v-model="activeTab" class="people-tabs">
       <el-tab-pane label="人物列表" name="people">
-        <el-card shadow="never" class="section-card animate-fade-in">
-          <template #header>
-            <SectionHeader :icon="Search" title="筛选条件" />
-          </template>
+        <div class="section-stack">
+          <el-card shadow="never" class="section-card animate-fade-in">
+            <template #header>
+              <SectionHeader :icon="Search" title="筛选条件" />
+            </template>
 
-          <div class="filters-row">
-            <el-input
-              v-model="filters.search"
-              clearable
-              placeholder="搜索人物姓名 / ID / 类别"
-              class="filter-input"
-              @keyup.enter="handleSearch"
-              @clear="handleSearch"
-            />
-            <el-select v-model="filters.category" clearable placeholder="全部类别" class="filter-select">
-              <el-option v-for="option in categoryOptions" :key="option.value" :label="option.label" :value="option.value" />
-            </el-select>
-            <el-button type="primary" @click="handleSearch">应用筛选</el-button>
-          </div>
-        </el-card>
+            <div class="filters-row">
+              <el-input
+                v-model="filters.search"
+                clearable
+                placeholder="搜索人物姓名 / ID / 类别"
+                class="filter-input"
+                @keyup.enter="handleSearch"
+                @clear="handleSearch"
+              />
+              <el-select v-model="filters.category" clearable placeholder="全部类别" class="filter-select">
+                <el-option v-for="option in categoryOptions" :key="option.value" :label="option.label" :value="option.value" />
+              </el-select>
+              <el-button type="primary" @click="handleSearch">应用筛选</el-button>
+            </div>
+          </el-card>
 
-        <el-card shadow="never" class="section-card animate-fade-in animate-delay-1">
-          <template #header>
-            <SectionHeader :icon="User" :title="`人物列表（共 ${total} 人）`">
-              <template #actions>
-                <el-button size="small" plain class="mini-action-btn" @click="loadPeople">刷新</el-button>
-              </template>
-            </SectionHeader>
-          </template>
+          <el-card shadow="never" class="section-card animate-fade-in animate-delay-1">
+            <template #header>
+              <SectionHeader :icon="User" :title="`人物列表（共 ${total} 人）`">
+                <template #actions>
+                  <el-button size="small" plain class="mini-action-btn" @click="loadPeople">刷新</el-button>
+                </template>
+              </SectionHeader>
+            </template>
 
-          <el-table v-loading="peopleLoading" :data="people" row-key="id" class="people-table">
-            <el-table-column label="人物" min-width="280">
-              <template #default="{ row }">
-                <div class="person-cell">
-                  <el-avatar :size="52" :src="getFaceThumbnail(row.representative_face_id)">
-                    {{ getPersonAvatarFallback(row) }}
-                  </el-avatar>
-                  <div class="person-cell-main">
-                    <div class="person-cell-title">
-                      <span class="person-name">{{ getPersonName(row) }}</span>
-                      <el-tag size="small" effect="plain">{{ `#${row.id}` }}</el-tag>
-                    </div>
-                    <div class="person-cell-meta">
-                      最近更新：{{ formatTime(row.updated_at) }}
+            <div v-loading="peopleLoading" class="people-grid-wrap">
+              <el-empty v-if="!peopleLoading && people.length === 0" description="暂无人物数据" />
+
+              <div v-else class="people-card-grid">
+                <button
+                  v-for="personItem in people"
+                  :key="personItem.id"
+                  type="button"
+                  class="person-card"
+                  @click="goToDetail(personItem.id)"
+                >
+                  <div class="person-card-header">
+                    <el-avatar :size="56" :src="getFaceThumbnail(personItem.representative_face_id)" class="person-card-avatar">
+                      {{ getPersonAvatarFallback(personItem) }}
+                    </el-avatar>
+
+                    <div class="person-card-main">
+                      <div class="person-card-title-row">
+                        <span class="person-card-name">{{ getPersonName(personItem) }}</span>
+                        <span class="person-card-id">{{ `#${personItem.id}` }}</span>
+                      </div>
+                      <el-tag :type="categoryTagType(personItem.category)" effect="light" size="small" class="person-card-category">
+                        {{ getPersonCategoryLabel(personItem.category) }}
+                      </el-tag>
                     </div>
                   </div>
-                </div>
-              </template>
-            </el-table-column>
 
-            <el-table-column label="类别" width="120">
-              <template #default="{ row }">
-                <el-tag :type="categoryTagType(row.category)" effect="light">
-                  {{ getPersonCategoryLabel(row.category) }}
-                </el-tag>
-              </template>
-            </el-table-column>
+                  <div class="person-card-stats">
+                    <div class="person-card-stat">
+                      <span class="person-card-stat-label">照片</span>
+                      <strong class="person-card-stat-value">{{ personItem.photo_count }}</strong>
+                    </div>
+                    <div class="person-card-stat">
+                      <span class="person-card-stat-label">人脸</span>
+                      <strong class="person-card-stat-value">{{ personItem.face_count }}</strong>
+                    </div>
+                  </div>
 
-            <el-table-column prop="photo_count" label="照片数" width="100" />
-            <el-table-column prop="face_count" label="人脸数" width="100" />
+                  <div class="person-card-footer">
+                    <span class="person-card-link">查看详情</span>
+                  </div>
+                </button>
+              </div>
+            </div>
 
-            <el-table-column label="操作" width="120" fixed="right">
-              <template #default="{ row }">
-                <el-button
-                  type="warning"
-                  size="small"
-                  plain
-                  class="detail-btn"
-                  @click="goToDetail(row.id)"
-                >
-                  查看详情
-                </el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-
-          <el-empty v-if="!peopleLoading && people.length === 0" description="暂无人物数据" />
-
-          <div v-if="total > 0" class="pagination-wrap">
-            <el-pagination
-              background
-              layout="total, sizes, prev, pager, next"
-              :current-page="filters.page"
-              :page-size="filters.page_size"
-              :page-sizes="[10, 20, 50, 100]"
-              :total="total"
-              @current-change="handlePageChange"
-              @size-change="handlePageSizeChange"
-            />
-          </div>
-        </el-card>
+            <div v-if="total > 0" class="pagination-wrap">
+              <el-pagination
+                background
+                layout="total, sizes, prev, pager, next"
+                :current-page="filters.page"
+                :page-size="filters.page_size"
+                :page-sizes="[10, 20, 50, 100]"
+                :total="total"
+                @current-change="handlePageChange"
+                @size-change="handlePageSizeChange"
+              />
+            </div>
+          </el-card>
+        </div>
       </el-tab-pane>
 
       <el-tab-pane label="后台任务" name="task">
-        <el-card shadow="never" class="section-card animate-fade-in">
-          <template #header>
-            <SectionHeader :icon="Clock" title="后台任务概览">
-              <template #actions>
-                <span class="status-pill" :class="taskMeta.type">{{ taskMeta.label }}</span>
-              </template>
-            </SectionHeader>
-          </template>
+        <div class="section-stack">
+          <el-card shadow="never" class="section-card animate-fade-in">
+            <template #header>
+              <SectionHeader :icon="Clock" title="后台任务概览">
+                <template #actions>
+                  <span class="status-pill" :class="taskMeta.type">{{ taskMeta.label }}</span>
+                </template>
+              </SectionHeader>
+            </template>
 
-          <div class="task-overview">
-            <div class="task-overview-main">
-              <div class="task-overview-item">
-                <span class="task-overview-label">任务状态</span>
-                <strong>{{ taskMeta.label }}</strong>
+            <div class="task-overview">
+              <div class="task-overview-main">
+                <div class="task-overview-item">
+                  <span class="task-overview-label">任务状态</span>
+                  <strong>{{ taskMeta.label }}</strong>
+                </div>
+                <div class="task-overview-item">
+                  <span class="task-overview-label">已处理任务</span>
+                  <strong>{{ task?.processed_jobs || 0 }}</strong>
+                </div>
+                <div class="task-overview-item">
+                  <span class="task-overview-label">当前照片</span>
+                  <strong>{{ task?.current_photo_id ? `#${task.current_photo_id}` : '-' }}</strong>
+                </div>
               </div>
-              <div class="task-overview-item">
-                <span class="task-overview-label">已处理任务</span>
-                <strong>{{ task?.processed_jobs || 0 }}</strong>
-              </div>
-              <div class="task-overview-item">
-                <span class="task-overview-label">当前照片</span>
-                <strong>{{ task?.current_photo_id ? `#${task.current_photo_id}` : '-' }}</strong>
-              </div>
+              <el-text type="info" class="task-note">
+                人物后台处理会在扫描 / 重建后自动启动，这里主要用于查看进度、失败数和最近日志。
+              </el-text>
             </div>
-            <el-text type="info" class="task-note">
-              人物后台处理会在扫描 / 重建后自动启动，这里主要用于查看进度、失败数和最近日志。
-            </el-text>
-          </div>
-        </el-card>
+          </el-card>
 
-        <el-card shadow="never" class="section-card animate-fade-in animate-delay-1">
-          <template #header>
-            <SectionHeader :icon="DataLine" title="队列统计">
-              <template #actions>
-                <el-button size="small" plain class="mini-action-btn" @click="loadTaskData">刷新</el-button>
-              </template>
-            </SectionHeader>
-          </template>
+          <el-card shadow="never" class="section-card animate-fade-in animate-delay-1">
+            <template #header>
+              <SectionHeader :icon="DataLine" title="队列统计">
+                <template #actions>
+                  <el-button size="small" plain class="mini-action-btn" @click="loadTaskData">刷新</el-button>
+                </template>
+              </SectionHeader>
+            </template>
 
-          <div class="stats-grid">
-            <div class="stat-item"><span class="stat-label">总任务</span><strong>{{ stats.total }}</strong></div>
-            <div class="stat-item"><span class="stat-label">待处理</span><strong>{{ stats.pending + stats.queued }}</strong></div>
-            <div class="stat-item"><span class="stat-label">处理中</span><strong>{{ stats.processing }}</strong></div>
-            <div class="stat-item"><span class="stat-label">已完成</span><strong class="success">{{ stats.completed }}</strong></div>
-            <div class="stat-item"><span class="stat-label">失败</span><strong class="danger">{{ stats.failed }}</strong></div>
-            <div class="stat-item"><span class="stat-label">已取消</span><strong>{{ stats.cancelled }}</strong></div>
-          </div>
-        </el-card>
+            <div class="stats-grid">
+              <div class="stat-item"><span class="stat-label">总任务</span><strong>{{ stats.total }}</strong></div>
+              <div class="stat-item"><span class="stat-label">待处理</span><strong>{{ stats.pending + stats.queued }}</strong></div>
+              <div class="stat-item"><span class="stat-label">处理中</span><strong>{{ stats.processing }}</strong></div>
+              <div class="stat-item"><span class="stat-label">已完成</span><strong class="success">{{ stats.completed }}</strong></div>
+              <div class="stat-item"><span class="stat-label">失败</span><strong class="danger">{{ stats.failed }}</strong></div>
+              <div class="stat-item"><span class="stat-label">已取消</span><strong>{{ stats.cancelled }}</strong></div>
+            </div>
+          </el-card>
 
-        <el-card shadow="never" class="section-card animate-fade-in animate-delay-2">
-          <template #header>
-            <SectionHeader :icon="Document" title="最近日志">
-              <template #actions>
-                <el-button size="small" plain class="mini-action-btn" @click="loadTaskData">刷新</el-button>
-              </template>
-            </SectionHeader>
-          </template>
+          <el-card shadow="never" class="section-card animate-fade-in animate-delay-2">
+            <template #header>
+              <SectionHeader :icon="Document" title="最近日志">
+                <template #actions>
+                  <el-button size="small" plain class="mini-action-btn" @click="loadTaskData">刷新</el-button>
+                </template>
+              </SectionHeader>
+            </template>
 
-          <div class="background-log-body">
-            <pre v-if="backgroundLogs.length">{{ backgroundLogs.join('\n') }}</pre>
-            <div v-else class="background-log-empty">暂无人物后台任务日志</div>
-          </div>
-        </el-card>
+            <div class="background-log-body">
+              <pre v-if="backgroundLogs.length">{{ backgroundLogs.join('\n') }}</pre>
+              <div v-else class="background-log-empty">暂无人物后台任务日志</div>
+            </div>
+          </el-card>
+        </div>
       </el-tab-pane>
     </el-tabs>
   </div>
@@ -215,13 +216,6 @@ const categoryOptions = [
 ] satisfies Array<{ label: string; value: PersonCategory }>
 
 const taskMeta = computed(() => getPeopleTaskStatusMeta(task.value?.status))
-
-const formatTime = (value?: string) => {
-  if (!value) return '-'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '-'
-  return date.toLocaleString('zh-CN')
-}
 
 const categoryTagType = (category: PersonCategory) => {
   switch (category) {
@@ -355,8 +349,14 @@ onMounted(async () => {
   width: 160px;
 }
 
-.people-table :deep(.el-table__cell) {
-  vertical-align: middle;
+.people-grid-wrap {
+  min-height: 240px;
+}
+
+.people-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
 }
 
 .detail-btn {
@@ -379,31 +379,112 @@ onMounted(async () => {
   color: #999 !important;
 }
 
-.person-cell {
+.person-card {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  padding: 16px;
+  background: #fff;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.person-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(212, 107, 8, 0.28);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+}
+
+.person-card-header {
+  display: flex;
+  align-items: flex-start;
   gap: 12px;
 }
 
-.person-cell-main {
+.person-card-avatar {
+  flex-shrink: 0;
+}
+
+.person-card-main {
   min-width: 0;
-}
-
-.person-cell-title {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 8px;
-  margin-bottom: 4px;
+  flex: 1;
 }
 
-.person-name {
+.person-card-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.person-card-name {
   font-weight: 600;
   color: var(--color-text-primary);
+  line-height: 1.5;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
-.person-cell-meta {
-  font-size: 13px;
+.person-card-id {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--color-bg-soft);
   color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.person-card-category {
+  align-self: flex-start;
+}
+
+.person-card-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.person-card-stat {
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--color-bg-soft);
+  border: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.person-card-stat-label {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.person-card-stat-value {
+  color: var(--color-text-primary);
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.person-card-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.person-card-link {
+  color: #d46b08;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .pagination-wrap {
@@ -520,6 +601,10 @@ onMounted(async () => {
 }
 
 @media (max-width: 1200px) {
+  .people-card-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .stats-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -540,12 +625,26 @@ onMounted(async () => {
     padding-right: 18px;
   }
 
+  .people-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .stats-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .pagination-wrap {
     justify-content: center;
+  }
+}
+
+@media (max-width: 520px) {
+  .people-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .person-card-stats {
+    grid-template-columns: 1fr;
   }
 }
 </style>

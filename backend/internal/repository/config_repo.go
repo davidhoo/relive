@@ -33,36 +33,42 @@ func NewConfigRepository(db *gorm.DB) ConfigRepository {
 	return &configRepository{db: db}
 }
 
-// Get 获取配置
-func (r *configRepository) Get(key string) (*model.AppConfig, error) {
+func (r *configRepository) findByKey(db *gorm.DB, key string) (*model.AppConfig, error) {
 	var config model.AppConfig
-	err := r.db.Where("key = ?", key).First(&config).Error
-	if err != nil {
-		return nil, err
+	result := db.Where("key = ?", key).Limit(1).Find(&config)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, gorm.ErrRecordNotFound
 	}
 	return &config, nil
+}
+
+// Get 获取配置
+func (r *configRepository) Get(key string) (*model.AppConfig, error) {
+	return r.findByKey(r.db, key)
 }
 
 // Set 设置配置
 func (r *configRepository) Set(key string, value string) error {
 	// 先查找是否存在
-	var config model.AppConfig
-	err := r.db.Where("key = ?", key).First(&config).Error
+	config, err := r.findByKey(r.db, key)
 
 	if err == gorm.ErrRecordNotFound {
 		// 不存在，创建新记录
-		config = model.AppConfig{
+		newConfig := model.AppConfig{
 			Key:   key,
 			Value: value,
 		}
-		return r.db.Create(&config).Error
+		return r.db.Create(&newConfig).Error
 	} else if err != nil {
 		return err
 	}
 
 	// 存在，更新值
 	config.Value = value
-	return r.db.Save(&config).Error
+	return r.db.Save(config).Error
 }
 
 // Delete 删除配置
@@ -107,16 +113,15 @@ func (r *configRepository) SetBatch(configs map[string]string) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		for key, value := range configs {
 			// 先查找是否存在
-			var config model.AppConfig
-			err := tx.Where("key = ?", key).First(&config).Error
+			config, err := r.findByKey(tx, key)
 
 			if err == gorm.ErrRecordNotFound {
 				// 不存在，创建新记录
-				config = model.AppConfig{
+				newConfig := model.AppConfig{
 					Key:   key,
 					Value: value,
 				}
-				if err := tx.Create(&config).Error; err != nil {
+				if err := tx.Create(&newConfig).Error; err != nil {
 					return err
 				}
 			} else if err != nil {
@@ -124,7 +129,7 @@ func (r *configRepository) SetBatch(configs map[string]string) error {
 			} else {
 				// 存在，更新值
 				config.Value = value
-				if err := tx.Save(&config).Error; err != nil {
+				if err := tx.Save(config).Error; err != nil {
 					return err
 				}
 			}

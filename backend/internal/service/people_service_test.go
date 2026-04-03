@@ -494,6 +494,81 @@ func TestPeopleServiceCluster(t *testing.T) {
 		require.NoError(t, svc.StopBackground())
 	})
 
+	t.Run("中等相似度并入已有人物", func(t *testing.T) {
+		rootDir := t.TempDir()
+		newPhotoPath := createTestImageFile(t, rootDir, "medium-similarity.jpg")
+
+		svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{
+			responses: map[string]*mlclient.DetectFacesResponse{
+				newPhotoPath: {
+					Faces: []mlclient.DetectedFace{
+						{
+							BBox:         mlclient.BoundingBox{X: 0.15, Y: 0.15, Width: 0.2, Height: 0.2},
+							Confidence:   0.97,
+							QualityScore: 0.79,
+							Embedding:    []float32{0.89, 0.4559605, 0},
+						},
+					},
+					ProcessingTimeMS: 2,
+				},
+			},
+		})
+
+		photoRepo := repository.NewPhotoRepository(db)
+		personRepo := repository.NewPersonRepository(db)
+		faceRepo := repository.NewFaceRepository(db)
+		jobRepo := repository.NewPeopleJobRepository(db)
+
+		oldPhoto := &model.Photo{FilePath: filepath.Join(rootDir, "existing.jpg"), FileName: "existing.jpg", FileSize: 1, FileHash: "existing-medium", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+		newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: filepath.Base(newPhotoPath), FileSize: 1, FileHash: "medium-similarity", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+		require.NoError(t, photoRepo.Create(oldPhoto))
+		require.NoError(t, photoRepo.Create(newPhoto))
+
+		person := &model.Person{Category: model.PersonCategoryFamily}
+		require.NoError(t, personRepo.Create(person))
+		require.NoError(t, faceRepo.Create(&model.Face{
+			PhotoID:      oldPhoto.ID,
+			PersonID:     &person.ID,
+			BBoxX:        0.1,
+			BBoxY:        0.1,
+			BBoxWidth:    0.2,
+			BBoxHeight:   0.2,
+			Confidence:   0.96,
+			QualityScore: 0.82,
+			Embedding:    encodeEmbedding(t, []float32{1, 0, 0}),
+		}))
+		require.NoError(t, personRepo.RefreshStats(person.ID))
+		require.NoError(t, jobRepo.Create(&model.PeopleJob{
+			PhotoID:  newPhoto.ID,
+			FilePath: newPhoto.FilePath,
+			Status:   model.PeopleJobStatusQueued,
+			Source:   model.PeopleJobSourceScan,
+			Priority: 10,
+			QueuedAt: time.Now(),
+		}))
+
+		_, err := svc.StartBackground()
+		require.NoError(t, err)
+
+		waitForPeopleCondition(t, 3*time.Second, func() bool {
+			updated, getErr := photoRepo.GetByID(newPhoto.ID)
+			require.NoError(t, getErr)
+			return updated.FaceProcessStatus == model.FaceProcessStatusReady
+		})
+
+		faces, err := faceRepo.ListByPhotoID(newPhoto.ID)
+		require.NoError(t, err)
+		require.Len(t, faces, 1)
+		require.NotNil(t, faces[0].PersonID)
+		assert.Equal(t, person.ID, *faces[0].PersonID)
+
+		people, err := personRepo.ListAll()
+		require.NoError(t, err)
+		assert.Len(t, people, 1)
+
+		require.NoError(t, svc.StopBackground())
+	})
+
 	t.Run("边界样本新建人物", func(t *testing.T) {
 		rootDir := t.TempDir()
 		newPhotoPath := createTestImageFile(t, rootDir, "uncertain.jpg")

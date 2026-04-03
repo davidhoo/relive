@@ -21,27 +21,44 @@ import (
 )
 
 type stubPeopleService struct {
-	task                 *model.PeopleTask
-	stats                *model.PeopleStatsResponse
-	logs                 []string
-	updateCategoryPerson uint
-	updateCategoryValue  string
-	updateNamePerson     uint
-	updateNameValue      string
-	updateAvatarPerson   uint
-	updateAvatarFace     uint
-	mergeTargetPerson    uint
-	mergeSourcePeople    []uint
-	splitFaceIDs         []uint
-	splitResult          *model.Person
-	moveFaceIDs          []uint
-	moveTargetPerson     uint
-	err                  error
+	task                  *model.PeopleTask
+	stats                 *model.PeopleStatsResponse
+	logs                  []string
+	startResult           *model.PeopleTask
+	startCalled           int
+	startErr              error
+	enqueueByPathPath     string
+	enqueueByPathSource   string
+	enqueueByPathPriority int
+	enqueueByPathCount    int
+	enqueueByPathErr      error
+	updateCategoryPerson  uint
+	updateCategoryValue   string
+	updateNamePerson      uint
+	updateNameValue       string
+	updateAvatarPerson    uint
+	updateAvatarFace      uint
+	mergeTargetPerson     uint
+	mergeSourcePeople     []uint
+	splitFaceIDs          []uint
+	splitResult           *model.Person
+	moveFaceIDs           []uint
+	moveTargetPerson      uint
+	err                   error
 }
 
-func (s *stubPeopleService) StartBackground() (*model.PeopleTask, error) { return nil, nil }
-func (s *stubPeopleService) StopBackground() error                       { return nil }
-func (s *stubPeopleService) GetTaskStatus() *model.PeopleTask            { return s.task }
+func (s *stubPeopleService) StartBackground() (*model.PeopleTask, error) {
+	s.startCalled++
+	if s.startErr != nil {
+		return nil, s.startErr
+	}
+	if s.startResult != nil {
+		return s.startResult, nil
+	}
+	return &model.PeopleTask{Status: model.TaskStatusRunning}, nil
+}
+func (s *stubPeopleService) StopBackground() error            { return nil }
+func (s *stubPeopleService) GetTaskStatus() *model.PeopleTask { return s.task }
 func (s *stubPeopleService) GetStats() (*model.PeopleStatsResponse, error) {
 	if s.err != nil {
 		return nil, s.err
@@ -52,7 +69,15 @@ func (s *stubPeopleService) GetBackgroundLogs() []string { return s.logs }
 func (s *stubPeopleService) EnqueuePhoto(_ uint, _ string, _ int, _ bool) error {
 	return nil
 }
-func (s *stubPeopleService) EnqueueByPath(_ string, _ string, _ int) (int, error) { return 0, nil }
+func (s *stubPeopleService) EnqueueByPath(path string, source string, priority int) (int, error) {
+	s.enqueueByPathPath = path
+	s.enqueueByPathSource = source
+	s.enqueueByPathPriority = priority
+	if s.enqueueByPathErr != nil {
+		return 0, s.enqueueByPathErr
+	}
+	return s.enqueueByPathCount, nil
+}
 func (s *stubPeopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint) error {
 	if s.err != nil {
 		return s.err
@@ -115,6 +140,11 @@ type peopleListPayload struct {
 
 type backgroundLogsPayload struct {
 	Lines []string `json:"lines"`
+}
+
+type peopleRescanPayload struct {
+	Count             int  `json:"count"`
+	BackgroundStarted bool `json:"background_started"`
 }
 
 type peopleHandlerFixture struct {
@@ -433,6 +463,25 @@ func TestPeopleHandlerBackgroundLogs(t *testing.T) {
 	resp := decodeAPIResponse(t, rec)
 	payload := decodeResponseData[backgroundLogsPayload](t, resp)
 	assert.Equal(t, []string{"line1", "line2"}, payload.Lines)
+}
+
+func TestPeopleHandlerRescanByPath(t *testing.T) {
+	handler, svc, _, _ := newPeopleHandlerForTest(t)
+	svc.task = nil
+	svc.enqueueByPathCount = 12
+
+	rec := performJSONRequest(t, http.MethodPost, "/api/v1/people/rescan-by-path", []byte(`{"path":"/photos/family"}`), nil, handler.RescanByPath)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	require.True(t, resp.Success)
+	assert.Equal(t, 1, svc.startCalled)
+	assert.Equal(t, "/photos/family", svc.enqueueByPathPath)
+	assert.Equal(t, model.PeopleJobSourceManual, svc.enqueueByPathSource)
+	assert.Equal(t, 80, svc.enqueueByPathPriority)
+	payload := decodeResponseData[peopleRescanPayload](t, resp)
+	assert.Equal(t, 12, payload.Count)
+	assert.True(t, payload.BackgroundStarted)
 }
 
 func TestPeopleHandlerGetPhotoPeople(t *testing.T) {

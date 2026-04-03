@@ -455,6 +455,10 @@ type PeopleStatsResponse struct {
 	Cancelled  int64 `json:"cancelled"`
 }
 
+type PeopleBatchEnqueueRequest struct {
+	Path string `json:"path" binding:"required"`
+}
+
 type FaceResponse struct {
 	ID               uint       `json:"id"`
 	PhotoID          uint       `json:"photo_id"`

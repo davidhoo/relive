@@ -10,151 +10,155 @@
     <template v-if="person">
       <el-row :gutter="20">
         <el-col :xs="24" :lg="10">
-          <el-card shadow="never" class="section-card">
-            <template #header>
-              <SectionHeader :icon="User" title="人物信息" />
-            </template>
+          <div class="section-stack">
+            <el-card shadow="never" class="section-card">
+              <template #header>
+                <SectionHeader :icon="User" title="人物信息" />
+              </template>
 
-            <div class="summary-card">
-              <div class="summary-avatar">
-                <el-avatar :size="88" :src="avatarUrl">
-                  {{ getPersonAvatarFallback(person) }}
-                </el-avatar>
-                <div class="summary-avatar-text">
-                  <div class="summary-name">{{ personTitle }}</div>
-                  <div class="summary-subtitle">
-                    {{ getPersonCategoryLabel(person.category) }} · {{ person.face_count }} 张人脸 · {{ person.photo_count }} 张照片
-                  </div>
-                </div>
-              </div>
-
-              <div class="edit-grid">
-                <div class="edit-field">
-                  <span class="edit-label">人物姓名</span>
-                  <div class="edit-inline">
-                    <el-input v-model="editableName" placeholder="未命名人物" clearable />
-                    <el-button type="primary" :loading="nameSaving" @click="saveName">保存</el-button>
+              <div class="summary-card">
+                <div class="summary-avatar">
+                  <el-avatar :size="88" :src="avatarUrl">
+                    {{ getPersonAvatarFallback(person) }}
+                  </el-avatar>
+                  <div class="summary-avatar-text">
+                    <div class="summary-name">{{ personTitle }}</div>
+                    <div class="summary-subtitle">
+                      {{ getPersonCategoryLabel(person.category) }} · {{ person.face_count }} 张人脸 · {{ person.photo_count }} 张照片
+                    </div>
                   </div>
                 </div>
 
-                <div class="edit-field">
-                  <span class="edit-label">人物类别</span>
-                  <el-select v-model="editableCategory" class="category-select" @change="saveCategory">
-                    <el-option v-for="option in categoryOptions" :key="option.value" :label="option.label" :value="option.value" />
-                  </el-select>
+                <div class="edit-grid">
+                  <div class="edit-field">
+                    <span class="edit-label">人物姓名</span>
+                    <div class="edit-inline">
+                      <el-input v-model="editableName" placeholder="未命名人物" clearable />
+                      <el-button type="primary" :loading="nameSaving" @click="saveName">保存</el-button>
+                    </div>
+                  </div>
+
+                  <div class="edit-field">
+                    <span class="edit-label">人物类别</span>
+                    <el-select v-model="editableCategory" class="category-select" @change="saveCategory">
+                      <el-option v-for="option in categoryOptions" :key="option.value" :label="option.label" :value="option.value" />
+                    </el-select>
+                  </div>
+                </div>
+
+                <el-descriptions :column="1" border class="summary-descriptions">
+                  <el-descriptions-item label="人物 ID">{{ `#${person.id}` }}</el-descriptions-item>
+                  <el-descriptions-item label="代表头像">
+                    {{ person.representative_face_id ? `Face #${person.representative_face_id}` : '未设置' }}
+                  </el-descriptions-item>
+                  <el-descriptions-item label="创建时间">{{ formatTime(person.created_at) }}</el-descriptions-item>
+                  <el-descriptions-item label="更新时间">{{ formatTime(person.updated_at) }}</el-descriptions-item>
+                </el-descriptions>
+              </div>
+            </el-card>
+
+            <el-card shadow="never" class="section-card animate-delay-1">
+              <template #header>
+                <SectionHeader :icon="Operation" title="纠错操作" />
+              </template>
+
+              <div class="operation-list">
+                <div class="operation-item">
+                  <div>
+                    <div class="operation-title">拆分选中人脸</div>
+                    <div class="operation-desc">把当前选中的人脸拆成一个新人物，适合把误聚类的人脸拆出去。</div>
+                  </div>
+                  <el-button type="warning" plain :disabled="selectedFaceIds.length === 0" :loading="splitting" @click="splitSelectedFaces">
+                    拆分
+                  </el-button>
+                </div>
+
+                <div class="operation-item">
+                  <div>
+                    <div class="operation-title">移动到其他人物</div>
+                    <div class="operation-desc">把当前选中的人脸移动到已有人物，适合做误归属修正。</div>
+                  </div>
+                  <el-button plain :disabled="selectedFaceIds.length === 0 || candidatePeople.length === 0" @click="showMoveDialog = true">
+                    选择目标
+                  </el-button>
+                </div>
+
+                <div class="operation-item">
+                  <div>
+                    <div class="operation-title">合并其他人物到当前人物</div>
+                    <div class="operation-desc">从其他人物中选择若干个，并把它们全部并入当前人物。</div>
+                  </div>
+                  <el-button plain :disabled="candidatePeople.length === 0" @click="showMergeDialog = true">
+                    发起合并
+                  </el-button>
                 </div>
               </div>
-
-              <el-descriptions :column="1" border class="summary-descriptions">
-                <el-descriptions-item label="人物 ID">{{ `#${person.id}` }}</el-descriptions-item>
-                <el-descriptions-item label="代表头像">
-                  {{ person.representative_face_id ? `Face #${person.representative_face_id}` : '未设置' }}
-                </el-descriptions-item>
-                <el-descriptions-item label="创建时间">{{ formatTime(person.created_at) }}</el-descriptions-item>
-                <el-descriptions-item label="更新时间">{{ formatTime(person.updated_at) }}</el-descriptions-item>
-              </el-descriptions>
-            </div>
-          </el-card>
-
-          <el-card shadow="never" class="section-card animate-delay-1">
-            <template #header>
-              <SectionHeader :icon="Operation" title="纠错操作" />
-            </template>
-
-            <div class="operation-list">
-              <div class="operation-item">
-                <div>
-                  <div class="operation-title">拆分选中人脸</div>
-                  <div class="operation-desc">把当前选中的人脸拆成一个新人物，适合把误聚类的人脸拆出去。</div>
-                </div>
-                <el-button type="warning" plain :disabled="selectedFaceIds.length === 0" :loading="splitting" @click="splitSelectedFaces">
-                  拆分
-                </el-button>
-              </div>
-
-              <div class="operation-item">
-                <div>
-                  <div class="operation-title">移动到其他人物</div>
-                  <div class="operation-desc">把当前选中的人脸移动到已有人物，适合做误归属修正。</div>
-                </div>
-                <el-button plain :disabled="selectedFaceIds.length === 0 || candidatePeople.length === 0" @click="showMoveDialog = true">
-                  选择目标
-                </el-button>
-              </div>
-
-              <div class="operation-item">
-                <div>
-                  <div class="operation-title">合并其他人物到当前人物</div>
-                  <div class="operation-desc">从其他人物中选择若干个，并把它们全部并入当前人物。</div>
-                </div>
-                <el-button plain :disabled="candidatePeople.length === 0" @click="showMergeDialog = true">
-                  发起合并
-                </el-button>
-              </div>
-            </div>
-          </el-card>
+            </el-card>
+          </div>
         </el-col>
 
         <el-col :xs="24" :lg="14">
-          <el-card shadow="never" class="section-card">
-            <template #header>
-              <SectionHeader :icon="Crop" :title="`人脸样本（${faces.length}）`">
-                <template #actions>
-                  <el-tag size="small" effect="plain">
-                    已选择 {{ selectedFaceIds.length }} 张
-                  </el-tag>
-                </template>
-              </SectionHeader>
-            </template>
+          <div class="section-stack">
+            <el-card shadow="never" class="section-card">
+              <template #header>
+                <SectionHeader :icon="Crop" :title="`人脸样本（${faces.length}）`">
+                  <template #actions>
+                    <el-tag size="small" effect="plain">
+                      已选择 {{ selectedFaceIds.length }} 张
+                    </el-tag>
+                  </template>
+                </SectionHeader>
+              </template>
 
-            <el-empty v-if="faces.length === 0" description="暂无人脸样本" />
+              <el-empty v-if="faces.length === 0" description="暂无人脸样本" />
 
-            <div v-else class="face-grid">
-              <div v-for="face in faces" :key="face.id" class="face-card" :class="{ 'is-selected': selectedFaceIds.includes(face.id) }">
-                <div class="face-card-toolbar">
-                  <el-checkbox :model-value="selectedFaceIds.includes(face.id)" @change="toggleFace(face.id, $event as boolean)" />
-                  <el-tag v-if="person.representative_face_id === face.id" type="success" size="small">当前头像</el-tag>
-                </div>
+              <div v-else class="face-grid">
+                <div v-for="face in faces" :key="face.id" class="face-card" :class="{ 'is-selected': selectedFaceIds.includes(face.id) }">
+                  <div class="face-card-toolbar">
+                    <el-checkbox :model-value="selectedFaceIds.includes(face.id)" @change="toggleFace(face.id, $event as boolean)" />
+                    <el-tag v-if="person.representative_face_id === face.id" type="success" size="small">当前头像</el-tag>
+                  </div>
 
-                <img :src="faceThumbnail(face.id)" alt="face" class="face-image" />
+                  <img :src="faceThumbnail(face.id)" alt="face" class="face-image" />
 
-                <div class="face-meta">
-                  <span>{{ `Face #${face.id}` }}</span>
-                  <span>{{ `Photo #${face.photo_id}` }}</span>
-                </div>
+                  <div class="face-meta">
+                    <span>{{ `Face #${face.id}` }}</span>
+                    <span>{{ `Photo #${face.photo_id}` }}</span>
+                  </div>
 
-                <div class="face-meta-sub">
-                  <span>{{ `质量 ${(face.quality_score || 0).toFixed(2)}` }}</span>
-                  <span v-if="face.manual_locked">人工锁定</span>
-                </div>
+                  <div class="face-meta-sub">
+                    <span>{{ `质量 ${(face.quality_score || 0).toFixed(2)}` }}</span>
+                    <span v-if="face.manual_locked">人工锁定</span>
+                  </div>
 
-                <div class="face-actions">
-                  <el-button size="small" plain :disabled="person.representative_face_id === face.id" :loading="avatarSavingFaceId === face.id" @click="setAvatar(face.id)">
-                    设为头像
-                  </el-button>
-                  <el-button size="small" link @click="goToPhoto(face.photo_id)">查看照片</el-button>
+                  <div class="face-actions">
+                    <el-button size="small" plain :disabled="person.representative_face_id === face.id" :loading="avatarSavingFaceId === face.id" @click="setAvatar(face.id)">
+                      设为头像
+                    </el-button>
+                    <el-button size="small" link @click="goToPhoto(face.photo_id)">查看照片</el-button>
+                  </div>
                 </div>
               </div>
-            </div>
-          </el-card>
+            </el-card>
 
-          <el-card shadow="never" class="section-card animate-delay-1">
-            <template #header>
-              <SectionHeader :icon="Picture" :title="`关联照片（${photos.length}）`" />
-            </template>
+            <el-card shadow="never" class="section-card animate-delay-1">
+              <template #header>
+                <SectionHeader :icon="Picture" :title="`关联照片（${photos.length}）`" />
+              </template>
 
-            <el-empty v-if="photos.length === 0" description="暂无关联照片" />
+              <el-empty v-if="photos.length === 0" description="暂无关联照片" />
 
-            <div v-else class="photo-grid">
-              <button v-for="photo in photos" :key="photo.id" type="button" class="photo-card" @click="goToPhoto(photo.id)">
-                <img :src="photoThumbnail(photo.id)" :alt="photo.file_name || `photo-${photo.id}`" class="photo-image" />
-                <div class="photo-card-main">
-                  <div class="photo-title">{{ photo.caption || photo.file_name || `Photo #${photo.id}` }}</div>
-                  <div class="photo-subtitle">{{ formatTime(photo.taken_at || photo.created_at) }}</div>
-                </div>
-              </button>
-            </div>
-          </el-card>
+              <div v-else class="photo-grid">
+                <button v-for="photo in photos" :key="photo.id" type="button" class="photo-card" @click="goToPhoto(photo.id)">
+                  <img :src="photoThumbnail(photo.id)" :alt="photo.file_name || `photo-${photo.id}`" class="photo-image" />
+                  <div class="photo-card-main">
+                    <div class="photo-title">{{ photo.caption || photo.file_name || `Photo #${photo.id}` }}</div>
+                    <div class="photo-subtitle">{{ formatTime(photo.taken_at || photo.created_at) }}</div>
+                  </div>
+                </button>
+              </div>
+            </el-card>
+          </div>
         </el-col>
       </el-row>
     </template>
@@ -512,18 +516,18 @@ onMounted(async () => {
 
 .face-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .face-card {
   border: 1px solid var(--color-border);
   border-radius: 16px;
-  padding: 12px;
+  padding: 10px;
   background: #fff;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 
@@ -616,7 +620,10 @@ onMounted(async () => {
 }
 
 @media (max-width: 1200px) {
-  .face-grid,
+  .face-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
   .photo-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -640,8 +647,23 @@ onMounted(async () => {
     align-items: stretch;
   }
 
-  .face-grid,
+  .face-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .photo-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .face-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .face-grid {
     grid-template-columns: 1fr;
   }
 }

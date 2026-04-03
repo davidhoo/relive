@@ -99,3 +99,37 @@ security:
 		t.Fatalf("expected RELIVE_EXTERNAL_URL to override config, got %q", cfg.Server.ExternalURL)
 	}
 }
+
+func TestLoadLegacyMLConfigMapsToPeopleConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+
+	writeTestFile(t, configPath, `server:
+  host: "0.0.0.0"
+  port: 8080
+  mode: "debug"
+database:
+  type: "sqlite"
+  path: "/tmp/relive.db"
+  auto_migrate: true
+photos:
+  root_path: "/tmp/photos"
+security:
+  jwt_Secret: "base-secret"
+ml:
+  service_url: "http://localhost:5050"
+  timeout: 30
+`)
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.People.MLEndpoint != "http://localhost:5050" {
+		t.Fatalf("expected legacy ml.service_url to map to people.ml_endpoint, got %q", cfg.People.MLEndpoint)
+	}
+	if cfg.People.Timeout != 30 {
+		t.Fatalf("expected legacy ml.timeout to map to people.timeout, got %d", cfg.People.Timeout)
+	}
+}

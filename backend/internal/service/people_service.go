@@ -23,7 +23,7 @@ const (
 	peoplePriorityScan     = 50
 	peoplePriorityManual   = 80
 	peoplePriorityPassive  = 100
-	peopleClusterThreshold = 0.92
+	peopleClusterThreshold = 0.88
 )
 
 type PeopleMLClient interface {

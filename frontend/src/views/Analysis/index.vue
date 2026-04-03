@@ -9,237 +9,239 @@
       </template>
     </PageHeader>
 
-    <el-card shadow="never" class="section-card animate-fade-in">
-      <template #header>
-        <SectionHeader :icon="Cpu" title="分析引擎状态">
-          <template #actions>
-            <div class="header-actions-inline">
-              <span class="status-pill" :class="providerPillClass">AI {{ providerPillText }}</span>
-              <span class="status-pill" :class="runtimePillClass">{{ runtimePillText }}</span>
+    <div class="section-stack">
+      <el-card shadow="never" class="section-card animate-fade-in">
+        <template #header>
+          <SectionHeader :icon="Cpu" title="分析引擎状态">
+            <template #actions>
+              <div class="header-actions-inline">
+                <span class="status-pill" :class="providerPillClass">AI {{ providerPillText }}</span>
+                <span class="status-pill" :class="runtimePillClass">{{ runtimePillText }}</span>
+              </div>
+            </template>
+          </SectionHeader>
+        </template>
+
+        <el-alert
+          v-if="!providerInfo"
+          type="warning"
+          title="AI 服务未配置"
+          description="请先在配置管理中配置 AI Provider (Ollama/Qwen/OpenAI) 才能使用 AI 分析功能"
+          show-icon
+          :closable="false"
+          class="provider-alert"
+        />
+
+        <div class="runtime-inline-list">
+          <div v-if="providerInfo" class="runtime-inline-row">
+            <div class="runtime-inline-item">
+              <span class="runtime-inline-label">AI Provider</span>
+              <el-tag type="primary" effect="light" round>{{ providerInfo.name }}</el-tag>
             </div>
-          </template>
-        </SectionHeader>
-      </template>
-
-      <el-alert
-        v-if="!providerInfo"
-        type="warning"
-        title="AI 服务未配置"
-        description="请先在配置管理中配置 AI Provider (Ollama/Qwen/OpenAI) 才能使用 AI 分析功能"
-        show-icon
-        :closable="false"
-        class="provider-alert"
-      />
-
-      <div class="runtime-inline-list">
-        <div v-if="providerInfo" class="runtime-inline-row">
-          <div class="runtime-inline-item">
-            <span class="runtime-inline-label">AI Provider</span>
-            <el-tag type="primary" effect="light" round>{{ providerInfo.name }}</el-tag>
-          </div>
-          <div class="runtime-inline-item">
-            <span class="runtime-inline-label">服务状态</span>
-            <el-tag :type="providerInfo.is_available ? 'success' : 'danger'" effect="light" round>
-              {{ providerInfo.is_available ? '可用' : '不可用' }}
-            </el-tag>
-          </div>
-        </div>
-        <div class="runtime-inline-row">
-          <div class="runtime-inline-item">
-            <span class="runtime-inline-label">运行状态</span>
-            <el-tag :type="runtimeStatus?.is_active ? 'warning' : 'success'" effect="light" round>
-              {{ runtimeStatus?.is_active ? '已占用' : '空闲' }}
-            </el-tag>
-          </div>
-          <div class="runtime-inline-item">
-            <span class="runtime-inline-label">占用模式</span>
-            <span class="runtime-inline-value">{{ runtimeModeText }}</span>
-          </div>
-        </div>
-        <div v-if="runtimeStatus?.is_active" class="runtime-inline-row">
-          <div class="runtime-inline-item">
-            <span class="runtime-inline-label">占用实例</span>
-            <span class="runtime-inline-value mono">{{ runtimeStatus?.owner_id || '-' }}</span>
-          </div>
-          <div class="runtime-inline-item">
-            <span class="runtime-inline-label">开始时间</span>
-            <span class="runtime-inline-value">{{ formatTime(runtimeStatus?.started_at) }}</span>
-          </div>
-        </div>
-        <div class="runtime-inline-row runtime-inline-row-full">
-          <div class="runtime-inline-item runtime-inline-item-full">
-            <span class="runtime-inline-label">说明</span>
-            <span class="runtime-inline-value">{{ runtimeStatus?.message || '当前没有分析器占用运行权' }}</span>
-          </div>
-        </div>
-      </div>
-    </el-card>
-
-    <el-card shadow="never" class="section-card animate-fade-in animate-delay-1">
-      <template #header>
-        <SectionHeader :icon="MagicStick" title="批量分析" />
-      </template>
-
-      <div class="section-content">
-        <div class="control-row">
-          <div class="control-row-main">
-            <span class="control-label">分析数量</span>
-            <el-input-number
-              v-model="batchLimit"
-              :min="1"
-              :max="1000"
-              :step="10"
-              class="input-number-width-lg"
-            />
-            <el-button
-              type="primary"
-              size="large"
-              @click="handleBatchAnalyze"
-              :loading="analyzing"
-              :disabled="batchAnalyzeDisabled"
-              class="action-btn-primary"
-            >
-              {{ analyzing ? '分析中...' : '开始批量分析' }}
-            </el-button>
-          </div>
-          <el-text v-if="batchDisabledReason" type="info" class="inline-info-text">
-            {{ batchDisabledReason }}
-          </el-text>
-        </div>
-        <div class="inline-note">
-          批量分析将按照队列顺序处理未分析的照片，建议每次处理数量不超过 500 张，避免长时间占用资源。
-        </div>
-      </div>
-    </el-card>
-
-    <el-card shadow="never" class="section-card animate-fade-in animate-delay-2">
-      <template #header>
-        <SectionHeader :icon="MagicStick" title="后台分析">
-          <template #actions>
-            <span class="status-pill" :class="backgroundRunning ? 'warning' : 'success'">
-              {{ backgroundRunning ? '运行中' : '未运行' }}
-            </span>
-          </template>
-        </SectionHeader>
-      </template>
-
-      <div class="section-content">
-        <div class="control-row control-row-stack">
-          <div class="control-row-main">
-            <el-button
-              v-if="!backgroundRunning"
-              type="primary"
-              size="large"
-              @click="handleStartBackground"
-              :disabled="backgroundStartDisabled"
-              class="action-btn-primary"
-            >
-              开启后台分析
-            </el-button>
-            <el-button
-              v-else
-              type="danger"
-              size="large"
-              @click="handleStopBackground"
-              class="action-btn-danger"
-            >
-              停止后台分析
-            </el-button>
-          </div>
-          <el-text v-if="backgroundDisabledReason" type="info" class="inline-info-text">
-            {{ backgroundDisabledReason }}
-          </el-text>
-        </div>
-
-        <div class="inline-note">
-          后台分析会持续扫描未分析照片并自动处理，没有新照片时会短暂等待后继续轮询。
-        </div>
-
-        <div class="background-log-panel flat-log-panel">
-          <div class="background-log-header">
-            <span>任务日志（最后 100 行）</span>
-            <el-button size="small" plain class="mini-action-btn" @click="loadBackgroundLogs">刷新</el-button>
-          </div>
-          <div class="background-log-body" ref="logContainerRef">
-            <pre v-if="backgroundLogs.length">{{ backgroundLogs.join('\n') }}</pre>
-            <div v-else class="background-log-empty">暂无后台分析日志</div>
-          </div>
-        </div>
-      </div>
-    </el-card>
-
-    <el-card shadow="never" class="section-card animate-fade-in animate-delay-3" v-if="progress">
-      <template #header>
-        <SectionHeader :icon="DataLine" title="在线分析进度">
-          <template #actions>
-            <div class="header-actions-inline">
-              <span class="status-pill" :class="progressPillClass">{{ progressPillText }}</span>
-              <el-button size="small" plain class="mini-action-btn" @click="loadProgress">刷新</el-button>
+            <div class="runtime-inline-item">
+              <span class="runtime-inline-label">服务状态</span>
+              <el-tag :type="providerInfo.is_available ? 'success' : 'danger'" effect="light" round>
+                {{ providerInfo.is_available ? '可用' : '不可用' }}
+              </el-tag>
             </div>
-          </template>
-        </SectionHeader>
-      </template>
+          </div>
+          <div class="runtime-inline-row">
+            <div class="runtime-inline-item">
+              <span class="runtime-inline-label">运行状态</span>
+              <el-tag :type="runtimeStatus?.is_active ? 'warning' : 'success'" effect="light" round>
+                {{ runtimeStatus?.is_active ? '已占用' : '空闲' }}
+              </el-tag>
+            </div>
+            <div class="runtime-inline-item">
+              <span class="runtime-inline-label">占用模式</span>
+              <span class="runtime-inline-value">{{ runtimeModeText }}</span>
+            </div>
+          </div>
+          <div v-if="runtimeStatus?.is_active" class="runtime-inline-row">
+            <div class="runtime-inline-item">
+              <span class="runtime-inline-label">占用实例</span>
+              <span class="runtime-inline-value mono">{{ runtimeStatus?.owner_id || '-' }}</span>
+            </div>
+            <div class="runtime-inline-item">
+              <span class="runtime-inline-label">开始时间</span>
+              <span class="runtime-inline-value">{{ formatTime(runtimeStatus?.started_at) }}</span>
+            </div>
+          </div>
+          <div class="runtime-inline-row runtime-inline-row-full">
+            <div class="runtime-inline-item runtime-inline-item-full">
+              <span class="runtime-inline-label">说明</span>
+              <span class="runtime-inline-value">{{ runtimeStatus?.message || '当前没有分析器占用运行权' }}</span>
+            </div>
+          </div>
+        </div>
+      </el-card>
 
-      <div class="progress-summary-strip">
-        <div class="progress-summary-item">
-          <span class="progress-stat-label">总任务数</span>
-          <strong class="progress-stat-value">{{ progress.total }}</strong>
-        </div>
-        <div class="progress-summary-item">
-          <span class="progress-stat-label">已完成</span>
-          <strong class="progress-stat-value success">{{ progress.completed }}</strong>
-        </div>
-        <div class="progress-summary-item" :class="{ warning: progress.failed > 0 }">
-          <span class="progress-stat-label">失败</span>
-          <strong class="progress-stat-value danger">{{ progress.failed }}</strong>
-        </div>
-        <div class="progress-summary-item">
-          <span class="progress-stat-label">剩余</span>
-          <strong class="progress-stat-value">{{ remainingProgress }}</strong>
-        </div>
-      </div>
+      <el-card shadow="never" class="section-card animate-fade-in animate-delay-1">
+        <template #header>
+          <SectionHeader :icon="MagicStick" title="批量分析" />
+        </template>
 
-      <div class="progress-bar-inline">
-        <el-progress :percentage="progressPercentage" :status="progressStatus" :stroke-width="16" />
-      </div>
+        <div class="section-content">
+          <div class="control-row">
+            <div class="control-row-main">
+              <span class="control-label">分析数量</span>
+              <el-input-number
+                v-model="batchLimit"
+                :min="1"
+                :max="1000"
+                :step="10"
+                class="input-number-width-lg"
+              />
+              <el-button
+                type="primary"
+                size="large"
+                @click="handleBatchAnalyze"
+                :loading="analyzing"
+                :disabled="batchAnalyzeDisabled"
+                class="action-btn-primary"
+              >
+                {{ analyzing ? '分析中...' : '开始批量分析' }}
+              </el-button>
+            </div>
+            <el-text v-if="batchDisabledReason" type="info" class="inline-info-text">
+              {{ batchDisabledReason }}
+            </el-text>
+          </div>
+          <div class="inline-note">
+            批量分析将按照队列顺序处理未分析的照片，建议每次处理数量不超过 500 张，避免长时间占用资源。
+          </div>
+        </div>
+      </el-card>
 
-      <div class="runtime-inline-list progress-inline-list progress-table-shell">
-        <div class="runtime-inline-row">
-          <div class="runtime-inline-item">
-            <span class="runtime-inline-label">运行状态</span>
-            <el-tag :type="progress.is_running ? 'success' : 'info'" effect="light" round>
-              {{ progress.is_running ? '运行中' : '已停止' }}
-            </el-tag>
-          </div>
-          <div class="runtime-inline-item">
-            <span class="runtime-inline-label">当前照片</span>
-            <span class="runtime-inline-value mono">{{ progress.current_photo_id ? `Photo #${progress.current_photo_id}` : '-' }}</span>
-          </div>
-        </div>
-        <div class="runtime-inline-row">
-          <div class="runtime-inline-item">
-            <span class="runtime-inline-label">开始时间</span>
-            <span class="runtime-inline-value">{{ formatTime(progress.started_at) }}</span>
-          </div>
-          <div class="runtime-inline-item">
-            <span class="runtime-inline-label">运行模式</span>
-            <span class="runtime-inline-value">{{ progressModeText }}</span>
-          </div>
-        </div>
-        <div class="runtime-inline-row">
-          <div class="runtime-inline-item">
-            <span class="runtime-inline-label">当前状态</span>
-            <span class="runtime-inline-value">{{ progressStatusText }}</span>
-          </div>
-          <div class="runtime-inline-item">
-            <span class="runtime-inline-label">当前消息</span>
-            <span class="runtime-inline-value">{{ progress.current_message || '-' }}</span>
-          </div>
-        </div>
-      </div>
-    </el-card>
+      <el-card shadow="never" class="section-card animate-fade-in animate-delay-2">
+        <template #header>
+          <SectionHeader :icon="MagicStick" title="后台分析">
+            <template #actions>
+              <span class="status-pill" :class="backgroundRunning ? 'warning' : 'success'">
+                {{ backgroundRunning ? '运行中' : '未运行' }}
+              </span>
+            </template>
+          </SectionHeader>
+        </template>
 
-    <el-empty v-else description="暂无在线分析任务" />
+        <div class="section-content">
+          <div class="control-row control-row-stack">
+            <div class="control-row-main">
+              <el-button
+                v-if="!backgroundRunning"
+                type="primary"
+                size="large"
+                @click="handleStartBackground"
+                :disabled="backgroundStartDisabled"
+                class="action-btn-primary"
+              >
+                开启后台分析
+              </el-button>
+              <el-button
+                v-else
+                type="danger"
+                size="large"
+                @click="handleStopBackground"
+                class="action-btn-danger"
+              >
+                停止后台分析
+              </el-button>
+            </div>
+            <el-text v-if="backgroundDisabledReason" type="info" class="inline-info-text">
+              {{ backgroundDisabledReason }}
+            </el-text>
+          </div>
+
+          <div class="inline-note">
+            后台分析会持续扫描未分析照片并自动处理，没有新照片时会短暂等待后继续轮询。
+          </div>
+
+          <div class="background-log-panel flat-log-panel">
+            <div class="background-log-header">
+              <span>任务日志（最后 100 行）</span>
+              <el-button size="small" plain class="mini-action-btn" @click="loadBackgroundLogs">刷新</el-button>
+            </div>
+            <div class="background-log-body" ref="logContainerRef">
+              <pre v-if="backgroundLogs.length">{{ backgroundLogs.join('\n') }}</pre>
+              <div v-else class="background-log-empty">暂无后台分析日志</div>
+            </div>
+          </div>
+        </div>
+      </el-card>
+
+      <el-card shadow="never" class="section-card animate-fade-in animate-delay-3" v-if="progress">
+        <template #header>
+          <SectionHeader :icon="DataLine" title="在线分析进度">
+            <template #actions>
+              <div class="header-actions-inline">
+                <span class="status-pill" :class="progressPillClass">{{ progressPillText }}</span>
+                <el-button size="small" plain class="mini-action-btn" @click="loadProgress">刷新</el-button>
+              </div>
+            </template>
+          </SectionHeader>
+        </template>
+
+        <div class="progress-summary-strip">
+          <div class="progress-summary-item">
+            <span class="progress-stat-label">总任务数</span>
+            <strong class="progress-stat-value">{{ progress.total }}</strong>
+          </div>
+          <div class="progress-summary-item">
+            <span class="progress-stat-label">已完成</span>
+            <strong class="progress-stat-value success">{{ progress.completed }}</strong>
+          </div>
+          <div class="progress-summary-item" :class="{ warning: progress.failed > 0 }">
+            <span class="progress-stat-label">失败</span>
+            <strong class="progress-stat-value danger">{{ progress.failed }}</strong>
+          </div>
+          <div class="progress-summary-item">
+            <span class="progress-stat-label">剩余</span>
+            <strong class="progress-stat-value">{{ remainingProgress }}</strong>
+          </div>
+        </div>
+
+        <div class="progress-bar-inline">
+          <el-progress :percentage="progressPercentage" :status="progressStatus" :stroke-width="16" />
+        </div>
+
+        <div class="runtime-inline-list progress-inline-list progress-table-shell">
+          <div class="runtime-inline-row">
+            <div class="runtime-inline-item">
+              <span class="runtime-inline-label">运行状态</span>
+              <el-tag :type="progress.is_running ? 'success' : 'info'" effect="light" round>
+                {{ progress.is_running ? '运行中' : '已停止' }}
+              </el-tag>
+            </div>
+            <div class="runtime-inline-item">
+              <span class="runtime-inline-label">当前照片</span>
+              <span class="runtime-inline-value mono">{{ progress.current_photo_id ? `Photo #${progress.current_photo_id}` : '-' }}</span>
+            </div>
+          </div>
+          <div class="runtime-inline-row">
+            <div class="runtime-inline-item">
+              <span class="runtime-inline-label">开始时间</span>
+              <span class="runtime-inline-value">{{ formatTime(progress.started_at) }}</span>
+            </div>
+            <div class="runtime-inline-item">
+              <span class="runtime-inline-label">运行模式</span>
+              <span class="runtime-inline-value">{{ progressModeText }}</span>
+            </div>
+          </div>
+          <div class="runtime-inline-row">
+            <div class="runtime-inline-item">
+              <span class="runtime-inline-label">当前状态</span>
+              <span class="runtime-inline-value">{{ progressStatusText }}</span>
+            </div>
+            <div class="runtime-inline-item">
+              <span class="runtime-inline-label">当前消息</span>
+              <span class="runtime-inline-value">{{ progress.current_message || '-' }}</span>
+            </div>
+          </div>
+        </div>
+      </el-card>
+
+      <el-empty v-else description="暂无在线分析任务" />
+    </div>
   </div>
 </template>
 
@@ -553,6 +555,9 @@ watch(backgroundLogs, async () => {
 
 <style scoped>
 .analysis-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
   padding: var(--spacing-xl);
   background: var(--color-bg-primary);
   min-height: 100vh;
@@ -566,7 +571,6 @@ watch(backgroundLogs, async () => {
 }
 
 .section-card {
-  margin-bottom: var(--spacing-xl);
   border-radius: 24px;
   border: 1px solid var(--color-border);
   overflow: hidden;

@@ -30,6 +30,12 @@ body {
   position: relative;
 }
 
+.section-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
 .page-header {
   margin-bottom: var(--spacing-2xl);
 }

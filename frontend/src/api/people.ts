@@ -62,6 +62,10 @@ export const peopleApi = {
     return http.get<ApiResponse<PeopleBackgroundLogsResponse>>('/people/background/logs')
   },
 
+  rescanByPath(path: string) {
+    return http.post<ApiResponse<{ count: number; background_started: boolean }>>('/people/rescan-by-path', { path })
+  },
+
   getPhotoPeople(photoId: number) {
     return http.get<ApiResponse<PhotoPeopleResponse>>(`/photos/${photoId}/people`)
   },

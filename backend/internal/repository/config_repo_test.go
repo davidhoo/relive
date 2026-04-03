@@ -1,10 +1,17 @@
 package repository
 
 import (
+	"bytes"
+	"log"
+	"strings"
 	"testing"
 
+	"github.com/davidhoo/relive/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 func TestConfigRepo_SetAndGet(t *testing.T) {
@@ -39,6 +46,49 @@ func TestConfigRepo_Get_NotFound(t *testing.T) {
 
 	_, err := repo.Get("nonexistent")
 	require.Error(t, err)
+}
+
+func TestConfigRepo_Get_NotFound_DoesNotLogRecordNotFound(t *testing.T) {
+	var logBuf bytes.Buffer
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
+		Logger: gormlogger.New(log.New(&logBuf, "", 0), gormlogger.Config{
+			LogLevel:                  gormlogger.Info,
+			Colorful:                  false,
+			IgnoreRecordNotFoundError: false,
+		}),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, db.AutoMigrate(&model.AppConfig{}))
+	defer teardownTestDB(db)
+
+	repo := NewConfigRepository(db)
+
+	_, err = repo.Get("nonexistent")
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	assert.NotContains(t, strings.ToLower(logBuf.String()), "record not found")
+}
+
+func TestConfigRepo_Set_Create_DoesNotLogRecordNotFound(t *testing.T) {
+	var logBuf bytes.Buffer
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
+		Logger: gormlogger.New(log.New(&logBuf, "", 0), gormlogger.Config{
+			LogLevel:                  gormlogger.Info,
+			Colorful:                  false,
+			IgnoreRecordNotFoundError: false,
+		}),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, db.AutoMigrate(&model.AppConfig{}))
+	defer teardownTestDB(db)
+
+	repo := NewConfigRepository(db)
+
+	require.NoError(t, repo.Set("theme", "dark"))
+	assert.NotContains(t, strings.ToLower(logBuf.String()), "record not found")
 }
 
 func TestConfigRepo_Delete(t *testing.T) {
