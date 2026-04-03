@@ -240,7 +240,7 @@ const avatarUrl = computed(() => {
 
 const candidatePeople = computed(() => {
   if (!person.value) return []
-  return sortPeopleForDisplay(allPeople.value.filter(item => item.id !== person.value?.id))
+  return sortPeopleForDisplay(allPeople.value.filter(item => item.id !== person.value?.id && item.has_avatar))
 })
 
 const formatTime = (value?: string) => {

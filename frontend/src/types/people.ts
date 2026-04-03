@@ -22,6 +22,7 @@ export interface Person {
   name?: string
   category: PersonCategory
   representative_face_id?: number
+  has_avatar: boolean
   avatar_locked?: boolean
   face_count: number
   photo_count: number
