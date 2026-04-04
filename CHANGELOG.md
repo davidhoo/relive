@@ -34,6 +34,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **策略预览通道标签** — 移至分数行右对齐，避免标题截断
 - **开发环境启动** — ml-service 纳入本地 dev 启动流程
 
+### Upgrade Guide（从 v1.3.x 升级）
+
+v1.4.0 新增了 `relive-ml` 人脸检测微服务，**已有部署需要手动更新两个配置文件**才能启用人物功能。如果不需要人物识别功能，可跳过此步骤，其他功能不受影响。
+
+**第 1 步：更新 docker-compose 文件**
+
+在你的 `docker-compose.yml`（或 `docker-compose.prod.yml`）中添加 `relive-ml` 服务，并让 `relive` 服务依赖它：
+
+```yaml
+services:
+  relive-ml:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile
+    image: relive-ml:local
+    container_name: relive-ml
+    restart: unless-stopped
+    environment:
+      - RELIVE_ML_ONNX_DEVICE=cpu
+      - RELIVE_ML_MODEL_PACK=buffalo_sc
+    volumes:
+      - ./data/ml-models:/app/models   # InsightFace 模型缓存持久化
+    networks:
+      - relive-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5050/api/v1/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 120s              # 首次启动需下载模型，预留 2 分钟
+
+  relive:
+    depends_on:
+      - relive-ml                     # 添加此依赖
+    # ... 其余配置不变
+```
+
+完整示例参考 `docker-compose.prod.yml.example`。
+
+**第 2 步：更新 config.prod.yaml**
+
+在 `backend/config.prod.yaml` 末尾添加：
+
+```yaml
+people:
+  ml_endpoint: "http://relive-ml:5050"
+  timeout: 15
+```
+
+**第 3 步：重建并启动**
+
+```bash
+docker compose up -d --build
+```
+
+首次启动时 `relive-ml` 需要下载 InsightFace 模型（约 30MB），health check 设有 120 秒启动宽限期。等 `relive-ml` 状态变为 `healthy` 后，主服务才会启动。可通过 `docker compose ps` 确认两个容器均为 `Up (healthy)` 状态。
+
 ---
 
 ## [1.3.1] - 2026-03-25
