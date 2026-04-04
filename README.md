@@ -2,8 +2,10 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Status](https://img.shields.io/badge/Status-Usable-brightgreen)]()
-[![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go)]()
+[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)]()
 [![Vue](https://img.shields.io/badge/Vue-3.5+-4FC08D?logo=vue.js)]()
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)]()
+[![InsightFace](https://img.shields.io/badge/InsightFace-Face_AI-FF6F61)]()
 [![Version](https://img.shields.io/badge/Version-1.4.0-blue)]()
 [![OSHW](https://img.shields.io/badge/OSHW-oshwhub-blue?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6bTAgMThjLTQuNDEgMC04LTMuNTktOC04czMuNTktOCA4LTggOCAzLjU5IDggOC0zLjU5IDgtOCA4eiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=)](https://oshwhub.com/davidhoo/relive)
 
@@ -30,6 +32,7 @@ Relive 是一个自部署的照片回忆系统 —— 扫描你 NAS 中的照片
 - **AI 真正理解照片内容**：不只是看 EXIF，而是理解场景、人物、氛围，给出评分和描述
 - **支持多种 AI 部署方式**：本地模型、远程 GPU、云端 API，按需选择
 - **NAS 与 AI 主机可以分开部署**：通过 `relive-analyzer` 在另一台机器上批量分析
+- **认识照片里的人**：自动检测人脸、聚类归组，认出家人和朋友，让策展更有温度
 - **完整的可视化管理**：扫描路径、AI 配置、设备管理、展示策略，全部在 Web 后台完成
 
 ## 适合谁
@@ -232,6 +235,7 @@ make build-analyzer
 
 ### Web 管理后台
 - 浏览照片和分析结果
+- 人物管理：查看识别到的人物、命名、合并、设置头像
 - 管理扫描路径、提示词、AI Provider、设备和展示策略
 - 查看缩略图、地理编码、分析等后台任务状态
 
