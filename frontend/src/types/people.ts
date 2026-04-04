@@ -12,9 +12,12 @@ export interface Face {
   confidence?: number
   quality_score?: number
   thumbnail_path?: string
+  cluster_status?: string
+  cluster_score?: number
   manual_locked?: boolean
   manual_lock_reason?: string
   manual_locked_at?: string
+  recluster_generation?: number
 }
 
 export interface Person {

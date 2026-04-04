@@ -73,8 +73,10 @@ type AIConfig struct {
 
 // PeopleConfig 人物系统配置
 type PeopleConfig struct {
-	MLEndpoint string `yaml:"ml_endpoint"`
-	Timeout    int    `yaml:"timeout"`
+	MLEndpoint         string  `yaml:"ml_endpoint"`
+	Timeout            int     `yaml:"timeout"`
+	ReclusterThreshold float64 `yaml:"recluster_threshold"`
+	ReclusterMaxIter   int     `yaml:"recluster_max_iterations"`
 }
 
 // LegacyMLConfig 兼容旧版人物配置块

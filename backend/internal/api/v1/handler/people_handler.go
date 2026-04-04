@@ -274,12 +274,13 @@ func (h *PeopleHandler) MergePeople(c *gin.Context) {
 		return
 	}
 
-	if err := h.service.MergePeople(req.TargetPersonID, req.SourcePersonIDs); err != nil {
+	rc, err := h.service.MergePeople(req.TargetPersonID, req.SourcePersonIDs)
+	if err != nil {
 		writeServiceFailure(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, model.Response{Success: true, Message: "人物已合并"})
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "人物已合并", Data: rc})
 }
 
 func (h *PeopleHandler) SplitPerson(c *gin.Context) {
@@ -289,7 +290,7 @@ func (h *PeopleHandler) SplitPerson(c *gin.Context) {
 		return
 	}
 
-	person, err := h.service.SplitPerson(req.FaceIDs)
+	person, rc, err := h.service.SplitPerson(req.FaceIDs)
 	if err != nil {
 		writeServiceFailure(c, err)
 		return
@@ -298,7 +299,12 @@ func (h *PeopleHandler) SplitPerson(c *gin.Context) {
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
 		Message: "人物已拆分",
-		Data:    personToResponse(person, nil),
+		Data: gin.H{
+			"person":                  personToResponse(person, nil),
+			"recluster_evaluated":     rc.Evaluated,
+			"recluster_reassigned":    rc.Reassigned,
+			"recluster_iterations":    rc.Iterations,
+		},
 	})
 }
 
@@ -309,12 +315,13 @@ func (h *PeopleHandler) MoveFaces(c *gin.Context) {
 		return
 	}
 
-	if err := h.service.MoveFaces(req.FaceIDs, req.TargetPersonID); err != nil {
+	rc, err := h.service.MoveFaces(req.FaceIDs, req.TargetPersonID)
+	if err != nil {
 		writeServiceFailure(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, model.Response{Success: true, Message: "人脸已移动"})
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "人脸已移动", Data: rc})
 }
 
 func (h *PeopleHandler) GetTask(c *gin.Context) {
@@ -376,6 +383,35 @@ func (h *PeopleHandler) RescanByPath(c *gin.Context) {
 		Data: gin.H{
 			"count":              count,
 			"background_started": backgroundStarted,
+		},
+	})
+}
+
+func (h *PeopleHandler) ResetAllPeople(c *gin.Context) {
+	count, err := h.service.ResetAllPeople()
+	if err != nil {
+		writePeopleError(c, http.StatusInternalServerError, "RESET_FAILED", err.Error())
+		return
+	}
+
+	if _, err := h.service.StartBackground(); err != nil {
+		c.JSON(http.StatusOK, model.Response{
+			Success: true,
+			Message: "人物数据已重置，但后台任务启动失败，请手动启动",
+			Data: gin.H{
+				"photos_enqueued":    count,
+				"background_started": false,
+			},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "人物数据已重置，后台任务已启动",
+		Data: gin.H{
+			"photos_enqueued":    count,
+			"background_started": true,
 		},
 	})
 }
@@ -597,6 +633,8 @@ func faceToResponse(face *model.Face) model.FaceResponse {
 		Confidence:       face.Confidence,
 		QualityScore:     face.QualityScore,
 		ThumbnailPath:    face.ThumbnailPath,
+		ClusterStatus:    face.ClusterStatus,
+		ClusterScore:     face.ClusterScore,
 		ManualLocked:     face.ManualLocked,
 		ManualLockReason: face.ManualLockReason,
 		ManualLockedAt:   face.ManualLockedAt,

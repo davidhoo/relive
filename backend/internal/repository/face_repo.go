@@ -18,9 +18,12 @@ type FaceRepository interface {
 	ListByPersonID(personID uint) ([]*model.Face, error)
 	ListByIDs(ids []uint) ([]*model.Face, error)
 	ListAssigned() ([]*model.Face, error)
+	ListAssignedPersonIDs() ([]uint, error)
 	ListPending(limit int) ([]*model.Face, error)
 	ListTopByPersonIDs(personIDs []uint, perPerson int) ([]*model.Face, error)
 	ReassignFaces(faceIDs []uint, personID uint, reason string) error
+	ListLowConfidence(threshold float64, maxGeneration int) ([]*model.Face, error)
+	ResetForRecluster(ids []uint) error
 }
 
 type faceRepository struct {
@@ -92,6 +95,15 @@ func (r *faceRepository) ListAssigned() ([]*model.Face, error) {
 	return faces, err
 }
 
+func (r *faceRepository) ListAssignedPersonIDs() ([]uint, error) {
+	var ids []uint
+	err := r.db.Model(&model.Face{}).
+		Where("person_id IS NOT NULL").
+		Distinct("person_id").
+		Pluck("person_id", &ids).Error
+	return ids, err
+}
+
 func (r *faceRepository) ListPending(limit int) ([]*model.Face, error) {
 	var faces []*model.Face
 	query := r.db.Where("cluster_status = ?", model.FaceClusterStatusPending).Order("id ASC")
@@ -148,9 +160,31 @@ func (r *faceRepository) ReassignFaces(faceIDs []uint, personID uint, reason str
 	return r.db.Model(&model.Face{}).Where("id IN ?", faceIDs).Updates(map[string]interface{}{
 		"person_id":          personID,
 		"cluster_status":     model.FaceClusterStatusManual,
+		"cluster_score":      1.0,
 		"manual_locked":      true,
 		"manual_lock_reason": reason,
 		"manual_locked_at":   &now,
 		"clustered_at":       &now,
 	}).Error
+}
+
+func (r *faceRepository) ListLowConfidence(threshold float64, maxGeneration int) ([]*model.Face, error) {
+	var faces []*model.Face
+	err := r.db.Where("manual_locked = ? AND cluster_status = ? AND cluster_score < ? AND recluster_generation < ?",
+		false, model.FaceClusterStatusAssigned, threshold, maxGeneration).
+		Find(&faces).Error
+	return faces, err
+}
+
+func (r *faceRepository) ResetForRecluster(ids []uint) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return r.db.Model(&model.Face{}).
+		Where("id IN ? AND manual_locked = ?", ids, false).
+		Updates(map[string]interface{}{
+			"person_id":            nil,
+			"cluster_status":       model.FaceClusterStatusPending,
+			"recluster_generation": gorm.Expr("recluster_generation + 1"),
+		}).Error
 }

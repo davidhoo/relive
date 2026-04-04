@@ -122,6 +122,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.User{},
 		&model.ResultQueueItem{},
 		&model.Event{},
+		&model.CannotLinkConstraint{},
 	}
 
 	if err := migrateDeviceLastSeenColumn(db); err != nil {

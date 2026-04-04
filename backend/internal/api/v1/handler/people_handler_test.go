@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"image/color"
 	"net/http"
@@ -79,31 +80,31 @@ func (s *stubPeopleService) EnqueueByPath(path string, source string, priority i
 	}
 	return s.enqueueByPathCount, nil
 }
-func (s *stubPeopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint) error {
-	if s.err != nil {
-		return s.err
-	}
-	s.mergeTargetPerson = targetPersonID
-	s.mergeSourcePeople = append([]uint(nil), sourcePersonIDs...)
-	return nil
-}
-func (s *stubPeopleService) SplitPerson(faceIDs []uint) (*model.Person, error) {
+func (s *stubPeopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint) (*model.ReclusterResult, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
+	s.mergeTargetPerson = targetPersonID
+	s.mergeSourcePeople = append([]uint(nil), sourcePersonIDs...)
+	return &model.ReclusterResult{}, nil
+}
+func (s *stubPeopleService) SplitPerson(faceIDs []uint) (*model.Person, *model.ReclusterResult, error) {
+	if s.err != nil {
+		return nil, nil, s.err
+	}
 	s.splitFaceIDs = append([]uint(nil), faceIDs...)
 	if s.splitResult != nil {
-		return s.splitResult, nil
+		return s.splitResult, &model.ReclusterResult{}, nil
 	}
-	return &model.Person{ID: 99, Category: model.PersonCategoryStranger}, nil
+	return &model.Person{ID: 99, Category: model.PersonCategoryStranger}, &model.ReclusterResult{}, nil
 }
-func (s *stubPeopleService) MoveFaces(faceIDs []uint, targetPersonID uint) error {
+func (s *stubPeopleService) MoveFaces(faceIDs []uint, targetPersonID uint) (*model.ReclusterResult, error) {
 	if s.err != nil {
-		return s.err
+		return nil, s.err
 	}
 	s.moveFaceIDs = append([]uint(nil), faceIDs...)
 	s.moveTargetPerson = targetPersonID
-	return nil
+	return &model.ReclusterResult{}, nil
 }
 func (s *stubPeopleService) UpdatePersonCategory(personID uint, category string) error {
 	if s.err != nil {
@@ -129,7 +130,8 @@ func (s *stubPeopleService) UpdatePersonAvatar(personID uint, faceID uint) error
 	s.updateAvatarFace = faceID
 	return nil
 }
-func (s *stubPeopleService) HandleShutdown() error { return nil }
+func (s *stubPeopleService) HandleShutdown() error        { return nil }
+func (s *stubPeopleService) ResetAllPeople() (int, error) { return 0, nil }
 
 type peopleListPayload struct {
 	Items      []model.PersonResponse `json:"items"`
@@ -482,7 +484,11 @@ func TestPeopleHandlerSplit(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, []uint{8, 9}, svc.splitFaceIDs)
 	resp := decodeAPIResponse(t, rec)
-	person := decodeResponseData[model.PersonResponse](t, resp)
+	// Split now returns {person: ..., recluster_*: ...}
+	dataMap := decodeResponseData[map[string]interface{}](t, resp)
+	personJSON, _ := json.Marshal(dataMap["person"])
+	var person model.PersonResponse
+	require.NoError(t, json.Unmarshal(personJSON, &person))
 	assert.Equal(t, uint(55), person.ID)
 	assert.Equal(t, model.PersonCategoryAcquaintance, person.Category)
 }

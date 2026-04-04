@@ -24,11 +24,16 @@ const (
 	peoplePriorityScan     = 50
 	peoplePriorityManual   = 80
 	peoplePriorityPassive  = 100
-	peopleClusterThreshold = 0.88
-	peoplePrototypeCount   = 3
-	peopleLinkThreshold    = 0.72
-	peopleAttachThreshold  = 0.86
+	peopleClusterThreshold = 0.45
+	peoplePrototypeCount   = 5
+	peoplePrototypeCandidates = 10
+	peopleLinkThreshold    = 0.35
+	peopleAttachThreshold  = 0.50
 	peopleMinClusterFaces  = 2
+
+	// confirmedPersonDiscount lowers the attach threshold for persons with manual-locked faces,
+	// making it easier for new faces to join user-confirmed identities (e.g., family members).
+	confirmedPersonDiscount = 0.05
 )
 
 type PeopleMLClient interface {
@@ -43,9 +48,10 @@ type PeopleService interface {
 	GetBackgroundLogs() []string
 	EnqueuePhoto(photoID uint, source string, priority int, force bool) error
 	EnqueueByPath(path string, source string, priority int) (int, error)
-	MergePeople(targetPersonID uint, sourcePersonIDs []uint) error
-	SplitPerson(faceIDs []uint) (*model.Person, error)
-	MoveFaces(faceIDs []uint, targetPersonID uint) error
+	ResetAllPeople() (int, error)
+	MergePeople(targetPersonID uint, sourcePersonIDs []uint) (*model.ReclusterResult, error)
+	SplitPerson(faceIDs []uint) (*model.Person, *model.ReclusterResult, error)
+	MoveFaces(faceIDs []uint, targetPersonID uint) (*model.ReclusterResult, error)
 	UpdatePersonCategory(personID uint, category string) error
 	UpdatePersonName(personID uint, name string) error
 	UpdatePersonAvatar(personID uint, faceID uint) error
@@ -53,13 +59,14 @@ type PeopleService interface {
 }
 
 type peopleService struct {
-	db         *gorm.DB
-	photoRepo  repository.PhotoRepository
-	faceRepo   repository.FaceRepository
-	personRepo repository.PersonRepository
-	jobRepo    repository.PeopleJobRepository
-	config     *config.Config
-	client     PeopleMLClient
+	db             *gorm.DB
+	photoRepo      repository.PhotoRepository
+	faceRepo       repository.FaceRepository
+	personRepo     repository.PersonRepository
+	jobRepo        repository.PeopleJobRepository
+	cannotLinkRepo repository.CannotLinkRepository
+	config         *config.Config
+	client         PeopleMLClient
 
 	taskMutex       sync.RWMutex
 	task            *model.PeopleTask
@@ -75,15 +82,16 @@ type activePeopleTask struct {
 	stop   bool
 }
 
-func NewPeopleService(db *gorm.DB, photoRepo repository.PhotoRepository, faceRepo repository.FaceRepository, personRepo repository.PersonRepository, jobRepo repository.PeopleJobRepository, cfg *config.Config, client PeopleMLClient) PeopleService {
+func NewPeopleService(db *gorm.DB, photoRepo repository.PhotoRepository, faceRepo repository.FaceRepository, personRepo repository.PersonRepository, jobRepo repository.PeopleJobRepository, cannotLinkRepo repository.CannotLinkRepository, cfg *config.Config, client PeopleMLClient) PeopleService {
 	return &peopleService{
-		db:         db,
-		photoRepo:  photoRepo,
-		faceRepo:   faceRepo,
-		personRepo: personRepo,
-		jobRepo:    jobRepo,
-		config:     cfg,
-		client:     client,
+		db:             db,
+		photoRepo:      photoRepo,
+		faceRepo:       faceRepo,
+		personRepo:     personRepo,
+		jobRepo:        jobRepo,
+		cannotLinkRepo: cannotLinkRepo,
+		config:         cfg,
+		client:         client,
 	}
 }
 
@@ -202,76 +210,161 @@ func (s *peopleService) HandleShutdown() error {
 	return s.StopBackground()
 }
 
-func (s *peopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint) error {
-	affectedPhotoIDs, err := s.personRepo.MergeInto(targetPersonID, sourcePersonIDs)
+func (s *peopleService) ResetAllPeople() (int, error) {
+	s.taskMutex.RLock()
+	active := s.active
+	s.taskMutex.RUnlock()
+
+	if active != nil {
+		_ = s.StopBackground()
+		select {
+		case <-active.done:
+		case <-time.After(30 * time.Second):
+			return 0, fmt.Errorf("timeout waiting for background task to stop")
+		}
+	}
+
+	var count int
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("DELETE FROM faces").Error; err != nil {
+			return fmt.Errorf("delete faces: %w", err)
+		}
+		if err := tx.Exec("DELETE FROM people").Error; err != nil {
+			return fmt.Errorf("delete people: %w", err)
+		}
+		if err := tx.Exec("DELETE FROM people_jobs").Error; err != nil {
+			return fmt.Errorf("delete people_jobs: %w", err)
+		}
+		if err := tx.Exec("DELETE FROM cannot_link_constraints").Error; err != nil {
+			return fmt.Errorf("delete cannot_link_constraints: %w", err)
+		}
+		if err := tx.Model(&model.Photo{}).
+			Where("1 = 1").
+			Updates(map[string]interface{}{
+				"face_process_status": model.FaceProcessStatusNone,
+				"face_count":          0,
+				"top_person_category": "",
+			}).Error; err != nil {
+			return fmt.Errorf("reset photos: %w", err)
+		}
+		var affected int64
+		tx.Model(&model.Photo{}).Where("status != ?", model.PhotoStatusExcluded).Count(&affected)
+		count = int(affected)
+		return nil
+	})
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if err := s.syncPersonState(targetPersonID); err != nil {
-		return err
+
+	photos, err := s.photoRepo.ListAll()
+	if err != nil {
+		return count, fmt.Errorf("list photos for re-enqueue: %w", err)
 	}
-	return s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs)
+	enqueued := 0
+	for _, photo := range photos {
+		if photo.Status == model.PhotoStatusExcluded {
+			continue
+		}
+		if err := s.enqueuePhotoModel(photo, "reset", peoplePriorityScan, true); err != nil {
+			logger.Warnf("re-enqueue photo %d after reset failed: %v", photo.ID, err)
+			continue
+		}
+		enqueued++
+	}
+	logger.Infof("people reset complete: %d photos reset, %d jobs enqueued", count, enqueued)
+	return enqueued, nil
 }
 
-func (s *peopleService) SplitPerson(faceIDs []uint) (*model.Person, error) {
-	faces, err := s.faceRepo.ListByIDs(faceIDs)
+func (s *peopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint) (*model.ReclusterResult, error) {
+	affectedPhotoIDs, err := s.personRepo.MergeInto(targetPersonID, sourcePersonIDs)
 	if err != nil {
 		return nil, err
 	}
+	// Clean up cannot-link constraints for merged (deleted) persons
+	for _, sourceID := range sourcePersonIDs {
+		if err := s.cannotLinkRepo.DeleteByPersonID(sourceID); err != nil {
+			logger.Warnf("failed to clean cannot-link for merged person %d: %v", sourceID, err)
+		}
+	}
+	if err := s.syncPersonState(targetPersonID); err != nil {
+		return nil, err
+	}
+	if err := s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs); err != nil {
+		return nil, err
+	}
+	rc := s.triggerRecluster()
+	return &rc, nil
+}
+
+func (s *peopleService) SplitPerson(faceIDs []uint) (*model.Person, *model.ReclusterResult, error) {
+	faces, err := s.faceRepo.ListByIDs(faceIDs)
+	if err != nil {
+		return nil, nil, err
+	}
 	if len(faces) == 0 {
-		return nil, fmt.Errorf("faces not found")
+		return nil, nil, fmt.Errorf("faces not found")
 	}
 
 	var sourcePersonID uint
 	for _, face := range faces {
 		if face.PersonID == nil || *face.PersonID == 0 {
-			return nil, fmt.Errorf("face %d has no person", face.ID)
+			return nil, nil, fmt.Errorf("face %d has no person", face.ID)
 		}
 		if sourcePersonID == 0 {
 			sourcePersonID = *face.PersonID
 			continue
 		}
 		if sourcePersonID != *face.PersonID {
-			return nil, fmt.Errorf("split faces must belong to the same person")
+			return nil, nil, fmt.Errorf("split faces must belong to the same person")
 		}
 	}
 
 	sourcePerson, err := s.personRepo.GetByID(sourcePersonID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if sourcePerson == nil {
-		return nil, fmt.Errorf("source person not found")
+		return nil, nil, fmt.Errorf("source person not found")
 	}
 
 	newPerson := &model.Person{Category: sourcePerson.Category}
 	if err := s.personRepo.Create(newPerson); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := s.faceRepo.ReassignFaces(faceIDs, newPerson.ID, "split"); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if err := s.syncPersonState(sourcePersonID); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := s.syncPersonState(newPerson.ID); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := s.photoRepo.RecomputeTopPersonCategory(facePhotoIDs(faces)); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return s.personRepo.GetByID(newPerson.ID)
+	// Record cannot-link: source person and new person must not be merged
+	if err := s.cannotLinkRepo.Create(sourcePersonID, newPerson.ID); err != nil {
+		logger.Warnf("failed to create cannot-link constraint: %v", err)
+	}
+
+	person, err := s.personRepo.GetByID(newPerson.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	rc := s.triggerRecluster()
+	return person, &rc, nil
 }
 
-func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) error {
+func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) (*model.ReclusterResult, error) {
 	faces, err := s.faceRepo.ListByIDs(faceIDs)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(faces) == 0 {
-		return fmt.Errorf("faces not found")
+		return nil, fmt.Errorf("faces not found")
 	}
 
 	sourcePersonIDs := make(map[uint]struct{})
@@ -282,19 +375,23 @@ func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) error {
 	}
 
 	if err := s.faceRepo.ReassignFaces(faceIDs, targetPersonID, "move"); err != nil {
-		return err
+		return nil, err
 	}
 
 	if err := s.syncPersonState(targetPersonID); err != nil {
-		return err
+		return nil, err
 	}
 	for personID := range sourcePersonIDs {
 		if err := s.syncPersonState(personID); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
-	return s.photoRepo.RecomputeTopPersonCategory(facePhotoIDs(faces))
+	if err := s.photoRepo.RecomputeTopPersonCategory(facePhotoIDs(faces)); err != nil {
+		return nil, err
+	}
+	rc := s.triggerRecluster()
+	return &rc, nil
 }
 
 func (s *peopleService) UpdatePersonCategory(personID uint, category string) error {
@@ -679,26 +776,110 @@ func (s *peopleService) selectPersonPrototypes(faces []*model.Face, k int) map[u
 	}
 
 	for personID, personFaces := range grouped {
-		sort.Slice(personFaces, func(i, j int) bool {
-			if personFaces[i].ManualLocked != personFaces[j].ManualLocked {
-				return personFaces[i].ManualLocked
-			}
-			if personFaces[i].QualityScore != personFaces[j].QualityScore {
-				return personFaces[i].QualityScore > personFaces[j].QualityScore
-			}
-			if personFaces[i].Confidence != personFaces[j].Confidence {
-				return personFaces[i].Confidence > personFaces[j].Confidence
-			}
-			return personFaces[i].ID < personFaces[j].ID
-		})
-
-		if len(personFaces) > k {
-			personFaces = personFaces[:k]
-		}
-		prototypes[personID] = personFaces
+		prototypes[personID] = selectDiversePrototypes(personFaces, k)
 	}
 
 	return prototypes
+}
+
+// selectDiversePrototypes picks up to k faces maximizing embedding space coverage.
+// Manual-locked faces are always included first (they are user-confirmed anchors).
+// Remaining slots use farthest-first traversal for maximum diversity.
+func selectDiversePrototypes(faces []*model.Face, k int) []*model.Face {
+	if len(faces) == 0 {
+		return faces
+	}
+
+	// Sort: manual-locked first, then quality descending for deterministic baseline
+	sort.Slice(faces, func(i, j int) bool {
+		if faces[i].ManualLocked != faces[j].ManualLocked {
+			return faces[i].ManualLocked
+		}
+		if faces[i].QualityScore != faces[j].QualityScore {
+			return faces[i].QualityScore > faces[j].QualityScore
+		}
+		return faces[i].ID < faces[j].ID
+	})
+
+	if len(faces) <= k {
+		return faces
+	}
+
+	// Separate manual-locked and auto faces
+	var locked, auto []*model.Face
+	for _, f := range faces {
+		if f.ManualLocked {
+			locked = append(locked, f)
+		} else {
+			auto = append(auto, f)
+		}
+	}
+
+	// Sort locked by quality descending for determinism
+	sort.Slice(locked, func(i, j int) bool {
+		if locked[i].QualityScore != locked[j].QualityScore {
+			return locked[i].QualityScore > locked[j].QualityScore
+		}
+		return locked[i].ID < locked[j].ID
+	})
+
+	// Start with locked faces (up to k)
+	selected := make([]*model.Face, 0, k)
+	if len(locked) >= k {
+		return locked[:k]
+	}
+	selected = append(selected, locked...)
+
+	// Sort auto by quality descending
+	sort.Slice(auto, func(i, j int) bool {
+		if auto[i].QualityScore != auto[j].QualityScore {
+			return auto[i].QualityScore > auto[j].QualityScore
+		}
+		return auto[i].ID < auto[j].ID
+	})
+
+	// If no selected yet, seed with highest quality auto face
+	if len(selected) == 0 && len(auto) > 0 {
+		selected = append(selected, auto[0])
+		auto = auto[1:]
+	}
+
+	// Farthest-first: greedily pick the face most different from all selected
+	selectedEmbeddings := make([][]float32, 0, k)
+	for _, f := range selected {
+		selectedEmbeddings = append(selectedEmbeddings, decodeEmbedding(f.Embedding))
+	}
+
+	for len(selected) < k && len(auto) > 0 {
+		bestIdx := -1
+		bestMinSim := float64(2) // start higher than any cosine similarity
+
+		for i, candidate := range auto {
+			candEmb := decodeEmbedding(candidate.Embedding)
+			// Find minimum similarity to any already-selected prototype
+			minSim := float64(2)
+			for _, selEmb := range selectedEmbeddings {
+				sim := cosineSimilarity(candEmb, selEmb)
+				if sim < minSim {
+					minSim = sim
+				}
+			}
+			// Farthest-first: pick candidate with lowest min-similarity (most different)
+			if bestIdx == -1 || minSim < bestMinSim {
+				bestMinSim = minSim
+				bestIdx = i
+			}
+		}
+
+		if bestIdx < 0 {
+			break
+		}
+		selected = append(selected, auto[bestIdx])
+		selectedEmbeddings = append(selectedEmbeddings, decodeEmbedding(auto[bestIdx].Embedding))
+		auto = append(auto[:bestIdx], auto[bestIdx+1:]...)
+	}
+
+	return selected
 }
 
 func (s *peopleService) buildFaceGraph(faces []*model.Face, linkThreshold float64) map[uint][]uint {
@@ -825,6 +1006,26 @@ func (s *peopleService) attachComponentToExistingPerson(component []*model.Face,
 		return 0, -1, false
 	}
 
+	// Build cannot-link blocked set: collect previous person IDs from component faces,
+	// then look up which target persons are blocked via cannot-link constraints.
+	blockedPersons := make(map[uint]bool)
+	if s.cannotLinkRepo != nil {
+		prevPersonIDs := make(map[uint]bool)
+		for _, face := range component {
+			if face != nil && face.PersonID != nil && *face.PersonID != 0 {
+				prevPersonIDs[*face.PersonID] = true
+			}
+		}
+		for pid := range prevPersonIDs {
+			blocked, err := s.cannotLinkRepo.ListByPersonID(pid)
+			if err == nil {
+				for _, bid := range blocked {
+					blockedPersons[bid] = true
+				}
+			}
+		}
+	}
+
 	personIDs := make([]uint, 0, len(prototypes))
 	for personID := range prototypes {
 		personIDs = append(personIDs, personID)
@@ -834,6 +1035,9 @@ func (s *peopleService) attachComponentToExistingPerson(component []*model.Face,
 	bestPersonID := uint(0)
 	bestScore := -1.0
 	for _, personID := range personIDs {
+		if blockedPersons[personID] {
+			continue
+		}
 		score := s.scoreComponentAgainstPerson(component, prototypes[personID])
 		if score > bestScore {
 			bestScore = score
@@ -844,6 +1048,16 @@ func (s *peopleService) attachComponentToExistingPerson(component []*model.Face,
 	if bestScore >= attachThreshold {
 		return bestPersonID, bestScore, true
 	}
+
+	// Apply discount for confirmed persons (have manual-locked faces)
+	if bestPersonID != 0 && bestScore >= attachThreshold-confirmedPersonDiscount {
+		for _, proto := range prototypes[bestPersonID] {
+			if proto != nil && proto.ManualLocked {
+				return bestPersonID, bestScore, true
+			}
+		}
+	}
+
 	return 0, bestScore, false
 }
 
@@ -924,11 +1138,18 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 		return nil, nil, nil
 	}
 
-	assignedFaces, err := s.faceRepo.ListAssigned()
+	assignedPersonIDs, err := s.faceRepo.ListAssignedPersonIDs()
 	if err != nil {
 		return nil, nil, err
 	}
-	prototypes := s.selectPersonPrototypes(assignedFaces, peoplePrototypeCount)
+	var protoFaces []*model.Face
+	if len(assignedPersonIDs) > 0 {
+		protoFaces, err = s.faceRepo.ListTopByPersonIDs(assignedPersonIDs, peoplePrototypeCandidates)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	prototypes := s.selectPersonPrototypes(protoFaces, peoplePrototypeCount)
 
 	graph := s.buildFaceGraph(pendingFaces, peopleLinkThreshold)
 	components := s.findConnectedComponents(graph)
@@ -1010,6 +1231,94 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 	return mapKeys(affectedPersonIDs), mapKeys(affectedPhotoIDs), nil
 }
 
+// triggerRecluster re-evaluates low-confidence face assignments using current prototypes.
+// Called after manual corrections (merge/split/move) to propagate user feedback.
+func (s *peopleService) triggerRecluster() model.ReclusterResult {
+	threshold := s.config.People.ReclusterThreshold
+	if threshold <= 0 {
+		threshold = 0.55
+	}
+	maxIter := s.config.People.ReclusterMaxIter
+	if maxIter <= 0 {
+		maxIter = 3
+	}
+
+	result := model.ReclusterResult{}
+
+	for iter := 0; iter < maxIter; iter++ {
+		candidates, err := s.faceRepo.ListLowConfidence(threshold, maxIter)
+		if err != nil {
+			logger.Warnf("recluster: failed to list low confidence faces: %v", err)
+			break
+		}
+		if len(candidates) == 0 {
+			break
+		}
+
+		result.Evaluated += len(candidates)
+		result.Iterations = iter + 1
+
+		// Record current assignments for change detection
+		prevAssign := make(map[uint]uint, len(candidates))
+		candidateIDs := make([]uint, 0, len(candidates))
+		for _, f := range candidates {
+			candidateIDs = append(candidateIDs, f.ID)
+			if f.PersonID != nil {
+				prevAssign[f.ID] = *f.PersonID
+			}
+		}
+
+		// Reset to pending for re-clustering
+		if err := s.faceRepo.ResetForRecluster(candidateIDs); err != nil {
+			logger.Warnf("recluster: failed to reset faces: %v", err)
+			break
+		}
+
+		// Re-run incremental clustering with updated prototypes
+		affectedPersonIDs, affectedPhotoIDs, err := s.runIncrementalClustering()
+		if err != nil {
+			logger.Warnf("recluster: clustering failed: %v", err)
+			break
+		}
+
+		// Sync affected persons and photos
+		for _, pid := range affectedPersonIDs {
+			_ = s.syncPersonState(pid)
+		}
+		if len(affectedPhotoIDs) > 0 {
+			_ = s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs)
+		}
+		// Also sync persons that lost faces
+		for _, oldPID := range prevAssign {
+			_ = s.syncPersonState(oldPID)
+		}
+
+		// Count actual reassignments
+		reassigned := 0
+		for _, fid := range candidateIDs {
+			updated, err := s.faceRepo.GetByID(fid)
+			if err != nil {
+				continue
+			}
+			oldPID := prevAssign[fid]
+			newPID := uint(0)
+			if updated.PersonID != nil {
+				newPID = *updated.PersonID
+			}
+			if oldPID != newPID {
+				reassigned++
+			}
+		}
+		result.Reassigned += reassigned
+
+		if reassigned == 0 {
+			break // converged
+		}
+	}
+
+	return result
+}
+
 func (s *peopleService) syncPersonState(personID uint) error {
 	person, err := s.personRepo.GetByID(personID)
 	if err != nil {
@@ -1024,6 +1333,7 @@ func (s *peopleService) syncPersonState(personID uint) error {
 		return err
 	}
 	if len(faces) == 0 {
+		_ = s.cannotLinkRepo.DeleteByPersonID(personID)
 		return s.personRepo.Delete(personID)
 	}
 

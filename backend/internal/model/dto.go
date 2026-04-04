@@ -470,6 +470,8 @@ type FaceResponse struct {
 	Confidence       float64    `json:"confidence"`
 	QualityScore     float64    `json:"quality_score"`
 	ThumbnailPath    string     `json:"thumbnail_path,omitempty"`
+	ClusterStatus    string     `json:"cluster_status,omitempty"`
+	ClusterScore     float64    `json:"cluster_score"`
 	ManualLocked     bool       `json:"manual_locked"`
 	ManualLockReason string     `json:"manual_lock_reason,omitempty"`
 	ManualLockedAt   *time.Time `json:"manual_locked_at,omitempty"`
@@ -521,6 +523,13 @@ type SplitPersonRequest struct {
 type MoveFacesRequest struct {
 	FaceIDs        []uint `json:"face_ids" binding:"required,min=1"`
 	TargetPersonID uint   `json:"target_person_id" binding:"required"`
+}
+
+// ReclusterResult holds the outcome of an automatic re-clustering pass
+type ReclusterResult struct {
+	Evaluated  int `json:"recluster_evaluated"`
+	Reassigned int `json:"recluster_reassigned"`
+	Iterations int `json:"recluster_iterations"`
 }
 
 // ==================== Auth related DTOs ====================

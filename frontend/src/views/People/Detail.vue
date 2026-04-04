@@ -128,7 +128,10 @@
 
                   <div class="face-meta-sub">
                     <span>{{ `质量 ${(face.quality_score || 0).toFixed(2)}` }}</span>
-                    <span v-if="face.manual_locked">人工锁定</span>
+                    <el-tag v-if="face.manual_locked" type="success" size="small" effect="plain">人工确认</el-tag>
+                    <el-tag v-else-if="(face.cluster_score || 0) >= 0.55" type="success" size="small" effect="plain">{{ `${Math.round((face.cluster_score || 0) * 100)}%` }}</el-tag>
+                    <el-tag v-else-if="(face.cluster_score || 0) >= 0.45" type="warning" size="small" effect="plain">{{ `${Math.round((face.cluster_score || 0) * 100)}%` }}</el-tag>
+                    <el-tag v-else-if="face.cluster_score" type="danger" size="small" effect="plain">{{ `${Math.round((face.cluster_score || 0) * 100)}%` }}</el-tag>
                   </div>
 
                   <div class="face-actions">
@@ -369,13 +372,26 @@ const toggleFace = (faceId: number, checked: boolean) => {
   selectedFaceIds.value = selectedFaceIds.value.filter(id => id !== faceId)
 }
 
+const showReclusterResult = (data: any, baseMessage: string) => {
+  const evaluated = data?.recluster_evaluated || 0
+  const reassigned = data?.recluster_reassigned || 0
+  if (reassigned > 0) {
+    ElMessage.success(`${baseMessage}（已重新评估 ${evaluated} 张不确定人脸，${reassigned} 张已重新分配）`)
+  } else if (evaluated > 0) {
+    ElMessage.success(`${baseMessage}（已重新评估 ${evaluated} 张不确定人脸，无需调整）`)
+  } else {
+    ElMessage.success(baseMessage)
+  }
+}
+
 const splitSelectedFaces = async () => {
   if (selectedFaceIds.value.length === 0) return
   try {
     splitting.value = true
     const res = await peopleApi.split(selectedFaceIds.value)
-    const newPerson = res.data?.data
-    ElMessage.success('已拆分为新人物')
+    const data = res.data?.data as any
+    const newPerson = data?.person
+    showReclusterResult(data, '已拆分为新人物')
     if (newPerson?.id) {
       router.push(`/people/${newPerson.id}`)
       return
@@ -392,8 +408,8 @@ const confirmMoveFaces = async () => {
   if (!moveTargetPersonId.value || selectedFaceIds.value.length === 0) return
   try {
     moving.value = true
-    await peopleApi.moveFaces(selectedFaceIds.value, moveTargetPersonId.value)
-    ElMessage.success('人脸已移动到目标人物')
+    const res = await peopleApi.moveFaces(selectedFaceIds.value, moveTargetPersonId.value)
+    showReclusterResult(res.data?.data, '人脸已移动到目标人物')
     await loadData()
   } catch (error: any) {
     ElMessage.error(error.message || '移动人脸失败')
@@ -406,8 +422,8 @@ const confirmMerge = async () => {
   if (!person.value || mergeSourceIds.value.length === 0) return
   try {
     merging.value = true
-    await peopleApi.merge(person.value.id, mergeSourceIds.value)
-    ElMessage.success('人物已合并')
+    const res = await peopleApi.merge(person.value.id, mergeSourceIds.value)
+    showReclusterResult(res.data?.data, '人物已合并')
     await loadData()
   } catch (error: any) {
     ElMessage.error(error.message || '合并人物失败')

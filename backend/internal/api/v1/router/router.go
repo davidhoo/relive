@@ -197,6 +197,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 			people := authorized.Group("/people")
 			{
 				people.POST("/rescan-by-path", handlers.People.RescanByPath)
+				people.POST("/reset", handlers.People.ResetAllPeople)
 				people.GET("/task", handlers.People.GetTask)
 				people.GET("/stats", handlers.People.GetStats)
 				people.GET("/background/logs", handlers.People.GetBackgroundLogs)

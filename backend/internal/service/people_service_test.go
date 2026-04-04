@@ -85,6 +85,7 @@ func newPeopleServiceForTest(t *testing.T, client PeopleMLClient) (*peopleServic
 		repository.NewFaceRepository(db),
 		repository.NewPersonRepository(db),
 		repository.NewPeopleJobRepository(db),
+		repository.NewCannotLinkRepository(db),
 		cfg,
 		client,
 	).(*peopleService)
@@ -245,16 +246,15 @@ func TestPeopleService_SelectPersonPrototypes(t *testing.T) {
 	require.Len(t, prototypes[personOneID], 3)
 	require.Len(t, prototypes[personTwoID], 2)
 
-	assert.Equal(t, uint(102), prototypes[personOneID][0].ID)
-	assert.Equal(t, uint(104), prototypes[personOneID][1].ID)
-	assert.Equal(t, uint(105), prototypes[personOneID][2].ID)
-	assert.Equal(t, uint(202), prototypes[personTwoID][0].ID)
-	assert.Equal(t, uint(201), prototypes[personTwoID][1].ID)
+	assert.Equal(t, uint(102), prototypes[personOneID][0].ID) // manual-locked first
+	assert.Equal(t, uint(103), prototypes[personOneID][1].ID) // diversity-selected (no embeddings, falls to quality order)
+	assert.Equal(t, uint(104), prototypes[personOneID][2].ID)
+	assert.Equal(t, uint(201), prototypes[personTwoID][0].ID) // same quality, lower ID first
+	assert.Equal(t, uint(202), prototypes[personTwoID][1].ID)
 }
 
 func TestPeopleService_BuildFaceGraph(t *testing.T) {
 	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
-	const linkThreshold = 0.72
 
 	type graphBuilder interface {
 		buildFaceGraph(faces []*model.Face, linkThreshold float64) map[uint][]uint
@@ -263,15 +263,17 @@ func TestPeopleService_BuildFaceGraph(t *testing.T) {
 	builder, ok := any(svc).(graphBuilder)
 	require.True(t, ok)
 
+	// ArcFace cosine: same person ~0.4-0.7, different person ~0.0-0.3
+	// Use 3D vectors for clear separation between groups
 	faces := []*model.Face{
-		{ID: 1, Embedding: encodeEmbedding(t, []float32{1, 0})},
-		{ID: 2, Embedding: encodeEmbedding(t, []float32{0.8, 0.6})},
-		{ID: 3, Embedding: encodeEmbedding(t, []float32{0, 1})},
-		{ID: 4, Embedding: encodeEmbedding(t, []float32{0, 0.9})},
-		{ID: 5, Embedding: encodeEmbedding(t, []float32{-1, 0})},
+		{ID: 1, Embedding: encodeEmbedding(t, []float32{1, 0, 0})},
+		{ID: 2, Embedding: encodeEmbedding(t, []float32{0.9, 0.1, 0})},   // cosine with 1 ≈ 0.99
+		{ID: 3, Embedding: encodeEmbedding(t, []float32{0, 1, 0})},
+		{ID: 4, Embedding: encodeEmbedding(t, []float32{0, 0.9, 0.1})},   // cosine with 3 ≈ 0.99
+		{ID: 5, Embedding: encodeEmbedding(t, []float32{0, 0, 1})},       // orthogonal to both groups
 	}
 
-	graph := builder.buildFaceGraph(faces, linkThreshold)
+	graph := builder.buildFaceGraph(faces, peopleLinkThreshold)
 	require.Len(t, graph, 5)
 	assert.Equal(t, []uint{2}, graph[1])
 	assert.Equal(t, []uint{1}, graph[2])
@@ -282,7 +284,6 @@ func TestPeopleService_BuildFaceGraph(t *testing.T) {
 
 func TestPeopleService_FindFaceComponents(t *testing.T) {
 	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
-	const linkThreshold = 0.72
 
 	type graphExplorer interface {
 		buildFaceGraph(faces []*model.Face, linkThreshold float64) map[uint][]uint
@@ -293,14 +294,14 @@ func TestPeopleService_FindFaceComponents(t *testing.T) {
 	require.True(t, ok)
 
 	faces := []*model.Face{
-		{ID: 1, Embedding: encodeEmbedding(t, []float32{1, 0})},
-		{ID: 2, Embedding: encodeEmbedding(t, []float32{0.8, 0.6})},
-		{ID: 3, Embedding: encodeEmbedding(t, []float32{0, 1})},
-		{ID: 4, Embedding: encodeEmbedding(t, []float32{0, 0.9})},
-		{ID: 5, Embedding: encodeEmbedding(t, []float32{-1, 0})},
+		{ID: 1, Embedding: encodeEmbedding(t, []float32{1, 0, 0})},
+		{ID: 2, Embedding: encodeEmbedding(t, []float32{0.9, 0.1, 0})},
+		{ID: 3, Embedding: encodeEmbedding(t, []float32{0, 1, 0})},
+		{ID: 4, Embedding: encodeEmbedding(t, []float32{0, 0.9, 0.1})},
+		{ID: 5, Embedding: encodeEmbedding(t, []float32{0, 0, 1})},
 	}
 
-	graph := explorer.buildFaceGraph(faces, linkThreshold)
+	graph := explorer.buildFaceGraph(faces, peopleLinkThreshold)
 	components := explorer.findConnectedComponents(graph)
 
 	assert.Equal(t, []string{"1,2", "3,4", "5"}, normalizeFaceComponents(components))
@@ -308,7 +309,6 @@ func TestPeopleService_FindFaceComponents(t *testing.T) {
 
 func TestPeopleService_AttachComponentToExistingPerson(t *testing.T) {
 	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
-	const attachThreshold = 0.86
 
 	type componentAttacher interface {
 		scoreComponentAgainstPerson(component []*model.Face, prototypes []*model.Face) float64
@@ -322,42 +322,43 @@ func TestPeopleService_AttachComponentToExistingPerson(t *testing.T) {
 	personTwoID := uint(22)
 	prototypes := map[uint][]*model.Face{
 		personOneID: {
-			{ID: 101, PersonID: &personOneID, Embedding: encodeEmbedding(t, []float32{1, 0})},
-			{ID: 102, PersonID: &personOneID, Embedding: encodeEmbedding(t, []float32{0.97, 0.243})},
+			{ID: 101, PersonID: &personOneID, Embedding: encodeEmbedding(t, []float32{1, 0, 0})},
+			{ID: 102, PersonID: &personOneID, Embedding: encodeEmbedding(t, []float32{0.97, 0.243, 0})},
 		},
 		personTwoID: {
-			{ID: 201, PersonID: &personTwoID, Embedding: encodeEmbedding(t, []float32{0, 1})},
+			{ID: 201, PersonID: &personTwoID, Embedding: encodeEmbedding(t, []float32{0, 1, 0})},
 		},
 	}
 
 	t.Run("component attaches when score clears threshold", func(t *testing.T) {
 		component := []*model.Face{
-			{ID: 1, Embedding: encodeEmbedding(t, []float32{1, 0})},
-			{ID: 2, Embedding: encodeEmbedding(t, []float32{0.92, 0.392})},
+			{ID: 1, Embedding: encodeEmbedding(t, []float32{1, 0, 0})},
+			{ID: 2, Embedding: encodeEmbedding(t, []float32{0.92, 0.392, 0})},
 		}
 
 		score := attacher.scoreComponentAgainstPerson(component, prototypes[personOneID])
-		assert.Greater(t, score, attachThreshold)
+		assert.Greater(t, score, peopleAttachThreshold)
 
-		personID, attachScore, attached := attacher.attachComponentToExistingPerson(component, prototypes, attachThreshold)
+		personID, attachScore, attached := attacher.attachComponentToExistingPerson(component, prototypes, peopleAttachThreshold)
 		assert.True(t, attached)
 		assert.Equal(t, personOneID, personID)
 		assert.InDelta(t, score, attachScore, 0.0001)
 	})
 
 	t.Run("component stays unattached below threshold", func(t *testing.T) {
+		// {0, 0, 1} is orthogonal to both {1, 0, 0} and {0, 1, 0} — cosine = 0
 		component := []*model.Face{
-			{ID: 3, Embedding: encodeEmbedding(t, []float32{0.6, 0.8})},
-			{ID: 4, Embedding: encodeEmbedding(t, []float32{0.6, 0.8})},
+			{ID: 3, Embedding: encodeEmbedding(t, []float32{0, 0, 1})},
+			{ID: 4, Embedding: encodeEmbedding(t, []float32{0.1, 0.1, 0.99})},
 		}
 
 		personOneScore := attacher.scoreComponentAgainstPerson(component, prototypes[personOneID])
-		assert.Less(t, personOneScore, attachThreshold)
+		assert.Less(t, personOneScore, peopleAttachThreshold)
 
-		personID, attachScore, attached := attacher.attachComponentToExistingPerson(component, prototypes, attachThreshold)
+		personID, attachScore, attached := attacher.attachComponentToExistingPerson(component, prototypes, peopleAttachThreshold)
 		assert.False(t, attached)
 		assert.Zero(t, personID)
-		assert.Less(t, attachScore, attachThreshold)
+		assert.Less(t, attachScore, peopleAttachThreshold)
 	})
 }
 
@@ -705,7 +706,8 @@ func TestPeopleService_ManualLockedFacesAreStable(t *testing.T) {
 	}))
 	require.NoError(t, personRepo.RefreshStats(source.ID))
 	require.NoError(t, personRepo.RefreshStats(rival.ID))
-	require.NoError(t, svc.MoveFaces([]uint{face.ID}, target.ID))
+	_, err := svc.MoveFaces([]uint{face.ID}, target.ID)
+	require.NoError(t, err)
 
 	movedFace, err := faceRepo.GetByID(face.ID)
 	require.NoError(t, err)
@@ -785,7 +787,8 @@ func TestPeopleService_PrototypeRefreshAfterManualOps(t *testing.T) {
 	require.NoError(t, svc.syncPersonState(target.ID))
 	require.NoError(t, svc.syncPersonState(source.ID))
 
-	require.NoError(t, svc.MergePeople(target.ID, []uint{source.ID}))
+	_, err := svc.MergePeople(target.ID, []uint{source.ID})
+	require.NoError(t, err)
 
 	updatedMergedFace, err := faceRepo.GetByID(mergedFace.ID)
 	require.NoError(t, err)
@@ -1305,6 +1308,7 @@ func TestPhotoScanStartsPeopleBackground(t *testing.T) {
 		repository.NewFaceRepository(db),
 		repository.NewPersonRepository(db),
 		peopleJobRepo,
+		repository.NewCannotLinkRepository(db),
 		cfg,
 		&fakePeopleMLClient{
 			responses: map[string]*mlclient.DetectFacesResponse{
@@ -1440,6 +1444,7 @@ func TestPeopleServiceGeneratesFaceThumbnail(t *testing.T) {
 		repository.NewFaceRepository(db),
 		repository.NewPersonRepository(db),
 		repository.NewPeopleJobRepository(db),
+		repository.NewCannotLinkRepository(db),
 		cfg,
 		&fakePeopleMLClient{
 			responses: map[string]*mlclient.DetectFacesResponse{
@@ -1798,7 +1803,8 @@ func TestPeopleServiceMerge(t *testing.T) {
 	require.NoError(t, personRepo.RefreshStats(target.ID))
 	require.NoError(t, personRepo.RefreshStats(source.ID))
 
-	require.NoError(t, svc.MergePeople(target.ID, []uint{source.ID}))
+	_, err := svc.MergePeople(target.ID, []uint{source.ID})
+	require.NoError(t, err)
 
 	mergedFace, err := faceRepo.GetByID(sourceFace.ID)
 	require.NoError(t, err)
@@ -1881,7 +1887,7 @@ func TestPeopleServiceSplit(t *testing.T) {
 	require.NoError(t, personRepo.RefreshStats(person.ID))
 	require.NoError(t, photoRepo.RecomputeTopPersonCategory([]uint{photoA.ID, photoB.ID}))
 
-	newPerson, err := svc.SplitPerson([]uint{faceB.ID})
+	newPerson, _, err := svc.SplitPerson([]uint{faceB.ID})
 	require.NoError(t, err)
 	require.NotNil(t, newPerson)
 	assert.NotEqual(t, person.ID, newPerson.ID)
@@ -1936,7 +1942,8 @@ func TestPeopleServiceMoveFaces(t *testing.T) {
 	require.NoError(t, personRepo.RefreshStats(source.ID))
 	require.NoError(t, photoRepo.RecomputeTopPersonCategory([]uint{photo.ID}))
 
-	require.NoError(t, svc.MoveFaces([]uint{face.ID}, target.ID))
+	_, err := svc.MoveFaces([]uint{face.ID}, target.ID)
+	require.NoError(t, err)
 
 	updatedFace, err := faceRepo.GetByID(face.ID)
 	require.NoError(t, err)

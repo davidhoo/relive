@@ -34,6 +34,8 @@ type Face struct {
 	ManualLocked     bool       `gorm:"not null;default:false;index:idx_face_manual_locked" json:"manual_locked"`
 	ManualLockReason string     `gorm:"type:varchar(50)" json:"manual_lock_reason,omitempty"`
 	ManualLockedAt   *time.Time `json:"manual_locked_at,omitempty"`
+
+	ReclusterGeneration int `gorm:"not null;default:0" json:"recluster_generation"`
 }
 
 func (Face) TableName() string {

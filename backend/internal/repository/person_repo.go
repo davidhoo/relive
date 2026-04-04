@@ -107,6 +107,7 @@ func (r *personRepository) MergeInto(targetPersonID uint, sourcePersonIDs []uint
 			Updates(map[string]interface{}{
 				"person_id":          targetPersonID,
 				"cluster_status":     model.FaceClusterStatusManual,
+				"cluster_score":      1.0,
 				"manual_locked":      true,
 				"manual_lock_reason": "merge",
 				"manual_locked_at":   time.Now(),
