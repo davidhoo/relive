@@ -364,15 +364,12 @@ func applyCurationScoreAdjustments(candidates []curationCandidate, targetDate ti
 			c.adjScore *= cfg.CurationFreshnessPenalty
 		}
 
-		// 人物偏好：真实人物信号优先，标签仅作兜底
+		// 人物偏好：所有通道根据 TopPersonCategory 分级加分
+		// family=3x, friend=2x, acquaintance=0.5x, stranger=0
+		c.adjScore += personCategoryBonus(c.photo, cfg)
+		// people_spotlight 通道额外加分（保持通道特色）
 		if c.channel == "people_spotlight" {
-			if bonus := peopleSpotlightSignalBonus(c.photo, cfg); bonus > 0 {
-				c.adjScore += bonus
-			} else if c.event != nil && isPeopleRelated(c.event.PrimaryTag) {
-				c.adjScore += cfg.CurationPeopleBonus
-			}
-		} else if c.event != nil && isPeopleRelated(c.event.PrimaryTag) {
-			c.adjScore += cfg.CurationPeopleBonus
+			c.adjScore += peopleSpotlightChannelBonus(c.photo, cfg)
 		}
 
 		// 标签季节匹配
@@ -387,38 +384,39 @@ func applyCurationScoreAdjustments(candidates []curationCandidate, targetDate ti
 	}
 }
 
-// isPeopleRelated 判断标签是否与人物相关
-func isPeopleRelated(tag string) bool {
-	tag = strings.ToLower(tag)
-	peopleKeywords := []string{
-		"人物", "人像", "合影", "家人", "朋友", "孩子", "婚礼", "聚会",
-		"portrait", "people", "family", "friend", "wedding", "group",
-	}
-	for _, kw := range peopleKeywords {
-		if strings.Contains(tag, kw) {
-			return true
-		}
-	}
-	return false
-}
-
-func peopleSpotlightSignalBonus(photo *model.Photo, cfg model.DisplayStrategyConfig) float64 {
+// personCategoryBonus 根据照片中最高人物关系等级计算加分（所有通道通用）
+// family=3x, friend=2x, acquaintance=0.5x, stranger/空=0
+func personCategoryBonus(photo *model.Photo, cfg model.DisplayStrategyConfig) float64 {
 	if photo == nil || photo.TopPersonCategory == "" {
 		return 0
 	}
-
-	base := cfg.CurationPeopleBonus * 4
 	switch photo.TopPersonCategory {
 	case model.PersonCategoryFamily:
-		return base + 12
+		return cfg.CurationPeopleBonus * 3
 	case model.PersonCategoryFriend:
-		return base + 8
+		return cfg.CurationPeopleBonus * 2
 	case model.PersonCategoryAcquaintance:
-		return base + 4
-	case model.PersonCategoryStranger:
-		return base
+		return cfg.CurationPeopleBonus * 0.5
 	default:
-		return base
+		return 0
+	}
+}
+
+// peopleSpotlightChannelBonus people_spotlight 通道的额外加分
+// family=3x, friend=2x, acquaintance=1x, stranger=0
+func peopleSpotlightChannelBonus(photo *model.Photo, cfg model.DisplayStrategyConfig) float64 {
+	if photo == nil || photo.TopPersonCategory == "" {
+		return 0
+	}
+	switch photo.TopPersonCategory {
+	case model.PersonCategoryFamily:
+		return cfg.CurationPeopleBonus * 3
+	case model.PersonCategoryFriend:
+		return cfg.CurationPeopleBonus * 2
+	case model.PersonCategoryAcquaintance:
+		return cfg.CurationPeopleBonus * 1
+	default:
+		return 0
 	}
 }
 
