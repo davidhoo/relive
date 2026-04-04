@@ -4,7 +4,7 @@
 [![Status](https://img.shields.io/badge/Status-Usable-brightgreen)]()
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go)]()
 [![Vue](https://img.shields.io/badge/Vue-3.5+-4FC08D?logo=vue.js)]()
-[![Version](https://img.shields.io/badge/Version-1.3.1-blue)]()
+[![Version](https://img.shields.io/badge/Version-1.4.0-blue)]()
 [![OSHW](https://img.shields.io/badge/OSHW-oshwhub-blue?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6bTAgMThjLTQuNDEgMC04LTMuNTktOC04czMuNTktOCA4LTggOCAzLjU5IDggOC0zLjU5IDgtOCA4eiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=)](https://oshwhub.com/davidhoo/relive)
 
 > 你的 NAS 里存了多少照片？它们上一次被翻看是什么时候？
@@ -14,9 +14,10 @@
 
 Relive 是一个自部署的照片回忆系统 —— 扫描你 NAS 中的照片，用 AI 理解内容，然后每天在相框或屏幕上呈现值得重温的瞬间。
 
-它由四部分组成：
+它由五部分组成：
 - **Web 管理后台**：扫描照片、配置 AI、管理设备和展示策略
 - **后端服务**：处理照片分析、地理编码、缩略图生成等后台任务
+- **ml-service**：人脸检测微服务（基于 InsightFace），自动识别照片中的人物并聚类
 - **relive-analyzer**：独立的批量分析工具，适合在另一台 AI 主机上运行
 - **展示终端**：目前已支持 ESP32 墨水屏相框，未来可扩展到电脑屏保、移动端 App、微信小程序等
   - 🔧 硬件已开源：原理图、PCB、BOM 等均发布在 [立创开源硬件平台](https://oshwhub.com/davidhoo/relive)
@@ -45,6 +46,7 @@ Relive 是一个自部署的照片回忆系统 —— 扫描你 NAS 中的照片
 - ✅ 后端 API 与任务系统可用
 - ✅ `relive-analyzer` API 模式可用
 - ✅ 事件驱动型智能策展引擎（6 通道提名）
+- ✅ 人物识别与管理（人脸检测、自动聚类、手动纠正）
 - ✅ 照片级排除与手动旋转
 - ✅ ESP32 墨水屏相框固件（AP 配网、定时睡眠、双配置源）
 
@@ -196,6 +198,14 @@ make build-analyzer
 - 理解照片内容、人物、场景和氛围
 - 生成描述、短句、分类、标签与评分
 - 支持 Ollama / vLLM / Qwen / OpenAI / Hybrid
+
+### 人物识别与管理
+- 基于 InsightFace 的人脸检测，自动从照片中提取人脸特征
+- 向量相似度聚类，自动将同一人的照片归组
+- 支持迭代式反馈驱动的重聚类，越用越准
+- 人物管理界面：命名、合并、拆分、设置头像
+- 照片详情页展示识别到的人物
+- 人物亲密度自动融入策展引擎选图
 
 ### 往年今日 & 事件策展
 - 每天自动挑选历史上同一天或相近日期的照片
