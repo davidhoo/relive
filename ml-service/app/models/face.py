@@ -1,7 +1,6 @@
 import base64
+import os
 import time
-from pathlib import Path
-from urllib.request import urlopen
 
 import cv2
 import numpy as np
@@ -16,9 +15,7 @@ class FaceDetector:
         self.settings = settings
         self.embedding_size = settings.embedding_size
         self.default_confidence = settings.default_confidence
-        self.model_path = self._ensure_yunet_model()
-        self.detector = None
-        self.detector_input_size: tuple[int, int] | None = None
+        self.app = self._init_insightface()
 
     def detect(
         self,
@@ -59,49 +56,52 @@ class FaceDetector:
         return None
 
     def _detect_faces(self, frame: np.ndarray, min_confidence: float, max_faces: int) -> list[DetectedFace]:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        frame_height, frame_width = gray.shape[:2]
+        frame_height, frame_width = frame.shape[:2]
         if frame_width == 0 or frame_height == 0:
             return []
 
-        detector = self._get_detector(frame_width, frame_height)
         try:
-            _, detected = detector.detect(frame)
-        except cv2.error:
+            detected = self.app.get(frame)
+        except Exception:
             return []
 
-        if detected is None:
+        if not detected:
             return []
 
-        rows = sorted(detected.tolist(), key=lambda row: float(row[-1]), reverse=True)
+        detected = sorted(detected, key=lambda f: float(f.det_score), reverse=True)
+
         faces = []
-        for row in rows:
-            score = float(row[-1])
+        for face_obj in detected:
+            score = float(face_obj.det_score)
             if score < min_confidence:
                 continue
 
-            x, y, width, height = row[:4]
-            x = max(0, int(round(x)))
-            y = max(0, int(round(y)))
-            width = max(1, int(round(width)))
-            height = max(1, int(round(height)))
-
-            crop = gray[y:y + height, x:x + width]
-            if crop.size == 0:
+            x1, y1, x2, y2 = face_obj.bbox.astype(int)
+            x1 = max(0, x1)
+            y1 = max(0, y1)
+            x2 = min(frame_width, x2)
+            y2 = min(frame_height, y2)
+            width = x2 - x1
+            height = y2 - y1
+            if width <= 0 or height <= 0:
                 continue
 
             bbox = BoundingBox(
-                x=round(x / frame_width, 6),
-                y=round(y / frame_height, 6),
+                x=round(x1 / frame_width, 6),
+                y=round(y1 / frame_height, 6),
                 width=round(width / frame_width, 6),
                 height=round(height / frame_height, 6),
             )
+
+            embedding = self._extract_embedding(face_obj)
+            quality = self._estimate_quality(frame, x1, y1, width, height, frame_width, frame_height, score)
+
             faces.append(
                 DetectedFace(
                     bbox=bbox,
                     confidence=round(score, 6),
-                    quality_score=self._estimate_quality(crop, width, height, frame_width, frame_height, score),
-                    embedding=self._build_embedding(crop),
+                    quality_score=quality,
+                    embedding=embedding,
                 )
             )
             if len(faces) >= max_faces:
@@ -109,15 +109,31 @@ class FaceDetector:
 
         return faces
 
+    def _extract_embedding(self, face_obj) -> list[float]:
+        emb = face_obj.normed_embedding
+        if emb is None:
+            return [0.0] * self.embedding_size
+        result = emb.tolist()
+        if len(result) < self.embedding_size:
+            result.extend([0.0] * (self.embedding_size - len(result)))
+        elif len(result) > self.embedding_size:
+            result = result[: self.embedding_size]
+        return [round(float(v), 6) for v in result]
+
     def _estimate_quality(
         self,
-        crop: np.ndarray,
+        frame: np.ndarray,
+        x: int,
+        y: int,
         width: int,
         height: int,
         frame_width: int,
         frame_height: int,
         score: float,
     ) -> float:
+        crop = cv2.cvtColor(frame[y : y + height, x : x + width], cv2.COLOR_BGR2GRAY)
+        if crop.size == 0:
+            return round(score * 0.45, 6)
         area_ratio = (width * height) / float(frame_width * frame_height)
         sharpness = cv2.Laplacian(crop, cv2.CV_64F).var()
         normalized_area = min(max(area_ratio / 0.12, 0.0), 1.0)
@@ -125,44 +141,24 @@ class FaceDetector:
         normalized_score = min(max(score, 0.0), 1.0)
         return round((normalized_score * 0.45) + (normalized_area * 0.2) + (normalized_sharpness * 0.35), 6)
 
-    def _build_embedding(self, crop: np.ndarray) -> list[float]:
-        resized = cv2.resize(crop, (32, 16), interpolation=cv2.INTER_AREA)
-        normalized = (resized.astype(np.float32) / 127.5) - 1.0
-        flattened = normalized.flatten()
-        if flattened.size < self.embedding_size:
-            flattened = np.pad(flattened, (0, self.embedding_size - flattened.size))
-        elif flattened.size > self.embedding_size:
-            flattened = flattened[:self.embedding_size]
-        return [round(float(value), 6) for value in flattened]
+    def _init_insightface(self):
+        from insightface.app import FaceAnalysis
 
-    def _ensure_yunet_model(self) -> str:
-        cache_dir = Path(self.settings.model_cache_dir).expanduser()
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        model_path = cache_dir / self.settings.yunet_model_name
-        if model_path.exists():
-            return str(model_path)
+        providers = self._get_providers()
+        root = os.environ.get("INSIGHTFACE_HOME", self.settings.model_cache_dir)
+        os.makedirs(root, exist_ok=True)
 
-        tmp_path = model_path.with_suffix(model_path.suffix + ".tmp")
-        with urlopen(self.settings.yunet_model_url) as response:
-            tmp_path.write_bytes(response.read())
-        tmp_path.replace(model_path)
-        return str(model_path)
+        app = FaceAnalysis(
+            name=self.settings.model_pack,
+            root=root,
+            providers=providers,
+        )
+        det_size = self.settings.det_size
+        app.prepare(ctx_id=0, det_size=(det_size, det_size))
+        return app
 
-    def _get_detector(self, frame_width: int, frame_height: int):
-        input_size = (frame_width, frame_height)
-        if self.detector is None:
-            self.detector = cv2.FaceDetectorYN.create(
-                self.model_path,
-                "",
-                input_size,
-                self.settings.detector_score_threshold,
-                self.settings.detector_nms_threshold,
-                self.settings.detector_top_k,
-            )
-            self.detector_input_size = input_size
-            return self.detector
-
-        if self.detector_input_size != input_size:
-            self.detector.setInputSize(input_size)
-            self.detector_input_size = input_size
-        return self.detector
+    def _get_providers(self) -> list[str]:
+        device = self.settings.onnx_device.lower()
+        if device == "cuda":
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        return ["CPUExecutionProvider"]

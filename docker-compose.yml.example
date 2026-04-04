@@ -8,10 +8,12 @@ services:
     restart: unless-stopped
     environment:
       - RELIVE_ML_ONNX_DEVICE=cpu
+      - RELIVE_ML_MODEL_PACK=buffalo_sc
     volumes:
       # 与后端共享只读照片目录，供本机路径模式检测使用
       # - ./data/photos:/photos:ro
-      - ./data/ml-models:/root/.cache/relive-ml
+      # InsightFace 模型缓存持久化
+      - ./data/ml-models:/app/models
     networks:
       - relive-network
     healthcheck:
@@ -19,7 +21,7 @@ services:
       interval: 30s
       timeout: 3s
       retries: 3
-      start_period: 10s
+      start_period: 120s
 
   # Relive 统一服务（包含前端和后端）
   relive:
