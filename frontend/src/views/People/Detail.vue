@@ -455,8 +455,13 @@ const confirmMoveFaces = async () => {
   if (!moveTargetPersonId.value || selectedFaceIds.value.length === 0) return
   try {
     moving.value = true
+    const movedAll = selectedFaceIds.value.length === faces.value.length
     const res = await peopleApi.moveFaces(selectedFaceIds.value, moveTargetPersonId.value)
     showReclusterResult(res.data?.data, '人脸已移动到目标人物', true)
+    if (movedAll) {
+      router.push('/people')
+      return
+    }
     await loadData()
   } catch (error: any) {
     ElMessage.error(error.message || '移动人脸失败')
