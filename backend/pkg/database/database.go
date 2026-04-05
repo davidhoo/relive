@@ -171,6 +171,10 @@ func AutoMigrate(db *gorm.DB) error {
 		log.Printf("[database] warning: analysis pending index migration failed: %v", err)
 	}
 
+	if err := migratePeopleFeedbackIndexes(db); err != nil {
+		log.Printf("[database] warning: people feedback index migration failed: %v", err)
+	}
+
 	return nil
 }
 
@@ -420,6 +424,34 @@ func migrateAnalysisPendingIndex(db *gorm.DB) error {
 	}
 
 	log.Printf("[database] analysis pending index created")
+	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
+	return nil
+}
+
+func migratePeopleFeedbackIndexes(db *gorm.DB) error {
+	const migrationKey = "migration.people_feedback_indexes_v1"
+
+	var cfg model.AppConfig
+	if err := db.Where("key = ?", migrationKey).First(&cfg).Error; err == nil {
+		return nil
+	}
+
+	log.Printf("[database] creating people feedback indexes...")
+
+	indexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_faces_feedback_candidates
+			ON faces(manual_locked, cluster_status, recluster_generation, cluster_score)`,
+		`CREATE INDEX IF NOT EXISTS idx_faces_person_prototypes
+			ON faces(person_id, manual_locked DESC, quality_score DESC, confidence DESC, id ASC)`,
+	}
+
+	for _, indexSQL := range indexes {
+		if err := db.Exec(indexSQL).Error; err != nil {
+			return fmt.Errorf("create people feedback index: %w", err)
+		}
+	}
+
+	log.Printf("[database] people feedback indexes created")
 	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
 	return nil
 }

@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -267,10 +268,10 @@ func TestPeopleService_BuildFaceGraph(t *testing.T) {
 	// Use 3D vectors for clear separation between groups
 	faces := []*model.Face{
 		{ID: 1, Embedding: encodeEmbedding(t, []float32{1, 0, 0})},
-		{ID: 2, Embedding: encodeEmbedding(t, []float32{0.9, 0.1, 0})},   // cosine with 1 ≈ 0.99
+		{ID: 2, Embedding: encodeEmbedding(t, []float32{0.9, 0.1, 0})}, // cosine with 1 ≈ 0.99
 		{ID: 3, Embedding: encodeEmbedding(t, []float32{0, 1, 0})},
-		{ID: 4, Embedding: encodeEmbedding(t, []float32{0, 0.9, 0.1})},   // cosine with 3 ≈ 0.99
-		{ID: 5, Embedding: encodeEmbedding(t, []float32{0, 0, 1})},       // orthogonal to both groups
+		{ID: 4, Embedding: encodeEmbedding(t, []float32{0, 0.9, 0.1})}, // cosine with 3 ≈ 0.99
+		{ID: 5, Embedding: encodeEmbedding(t, []float32{0, 0, 1})},     // orthogonal to both groups
 	}
 
 	graph := builder.buildFaceGraph(faces, peopleLinkThreshold)
@@ -1956,6 +1957,203 @@ func TestPeopleServiceMoveFaces(t *testing.T) {
 	updatedPhoto, err := photoRepo.GetByID(photo.ID)
 	require.NoError(t, err)
 	assert.Equal(t, model.PersonCategoryFamily, updatedPhoto.TopPersonCategory)
+}
+
+func TestPeopleService_MergePeopleSchedulesFeedbackReclusterAsync(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	type feedbackSchedulerTestHooks interface {
+		setFeedbackReclusterHookForTest(func() model.ReclusterResult)
+		setFeedbackReclusterPollIntervalForTest(time.Duration)
+		scheduleFeedbackRecluster()
+	}
+
+	hooks, ok := any(svc).(feedbackSchedulerTestHooks)
+	require.True(t, ok, "expected async feedback recluster hooks to be available")
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+
+	targetPhoto := &model.Photo{FilePath: "/photos/manual-target.jpg", FileName: "manual-target.jpg", FileSize: 1, FileHash: "manual-target", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	sourcePhoto := &model.Photo{FilePath: "/photos/manual-source.jpg", FileName: "manual-source.jpg", FileSize: 1, FileHash: "manual-source", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(targetPhoto))
+	require.NoError(t, photoRepo.Create(sourcePhoto))
+
+	target := &model.Person{Category: model.PersonCategoryFamily}
+	source := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(target))
+	require.NoError(t, personRepo.Create(source))
+
+	targetFace := &model.Face{
+		PhotoID:       targetPhoto.ID,
+		PersonID:      &target.ID,
+		BBoxX:         0.1,
+		BBoxY:         0.1,
+		BBoxWidth:     0.2,
+		BBoxHeight:    0.2,
+		Confidence:    0.90,
+		QualityScore:  0.70,
+		Embedding:     encodeEmbedding(t, []float32{1, 0}),
+		ClusterStatus: model.FaceClusterStatusAssigned,
+		ClusterScore:  0.95,
+	}
+	mergedFace := &model.Face{
+		PhotoID:       sourcePhoto.ID,
+		PersonID:      &source.ID,
+		BBoxX:         0.2,
+		BBoxY:         0.2,
+		BBoxWidth:     0.2,
+		BBoxHeight:    0.2,
+		Confidence:    0.96,
+		QualityScore:  0.95,
+		Embedding:     encodeEmbedding(t, []float32{0, 1}),
+		ClusterStatus: model.FaceClusterStatusAssigned,
+		ClusterScore:  0.92,
+	}
+	require.NoError(t, faceRepo.Create(targetFace))
+	require.NoError(t, faceRepo.Create(mergedFace))
+	require.NoError(t, personRepo.RefreshStats(target.ID))
+	require.NoError(t, personRepo.RefreshStats(source.ID))
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	hooks.setFeedbackReclusterPollIntervalForTest(5 * time.Millisecond)
+	hooks.setFeedbackReclusterHookForTest(func() model.ReclusterResult {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		return model.ReclusterResult{Evaluated: 9, Reassigned: 3, Iterations: 1}
+	})
+	t.Cleanup(func() {
+		hooks.setFeedbackReclusterHookForTest(nil)
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	begin := time.Now()
+	rc, err := svc.MergePeople(target.ID, []uint{source.ID})
+	elapsed := time.Since(begin)
+	require.NoError(t, err)
+	require.NotNil(t, rc)
+	assert.Zero(t, rc.Evaluated)
+	assert.Zero(t, rc.Reassigned)
+	assert.Zero(t, rc.Iterations)
+	assert.Less(t, elapsed, 100*time.Millisecond)
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("expected background feedback recluster to start")
+	}
+
+	updatedMergedFace, err := faceRepo.GetByID(mergedFace.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedMergedFace)
+	require.NotNil(t, updatedMergedFace.PersonID)
+	assert.Equal(t, target.ID, *updatedMergedFace.PersonID)
+	assert.True(t, updatedMergedFace.ManualLocked)
+
+	select {
+	case <-release:
+	default:
+		close(release)
+	}
+}
+
+func TestPeopleService_FeedbackReclusterCoalescesRequests(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	type feedbackSchedulerTestHooks interface {
+		setFeedbackReclusterHookForTest(func() model.ReclusterResult)
+		setFeedbackReclusterPollIntervalForTest(time.Duration)
+		scheduleFeedbackRecluster()
+	}
+
+	hooks, ok := any(svc).(feedbackSchedulerTestHooks)
+	require.True(t, ok, "expected async feedback recluster hooks to be available")
+
+	var runs atomic.Int32
+	firstRunStarted := make(chan struct{}, 1)
+	releaseFirstRun := make(chan struct{})
+	hooks.setFeedbackReclusterPollIntervalForTest(5 * time.Millisecond)
+	hooks.setFeedbackReclusterHookForTest(func() model.ReclusterResult {
+		run := runs.Add(1)
+		if run == 1 {
+			select {
+			case firstRunStarted <- struct{}{}:
+			default:
+			}
+			<-releaseFirstRun
+		}
+		return model.ReclusterResult{Evaluated: 1}
+	})
+	t.Cleanup(func() {
+		hooks.setFeedbackReclusterHookForTest(nil)
+		select {
+		case <-releaseFirstRun:
+		default:
+			close(releaseFirstRun)
+		}
+	})
+
+	hooks.scheduleFeedbackRecluster()
+
+	select {
+	case <-firstRunStarted:
+	case <-time.After(time.Second):
+		t.Fatal("expected first feedback recluster run to start")
+	}
+
+	hooks.scheduleFeedbackRecluster()
+	hooks.scheduleFeedbackRecluster()
+
+	close(releaseFirstRun)
+	waitForPeopleCondition(t, time.Second, func() bool {
+		return runs.Load() >= 2
+	})
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, int32(2), runs.Load())
+}
+
+func TestPeopleService_FeedbackReclusterDefersWhileBackgroundRunning(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	type feedbackSchedulerTestHooks interface {
+		setFeedbackReclusterHookForTest(func() model.ReclusterResult)
+		setFeedbackReclusterPollIntervalForTest(time.Duration)
+		scheduleFeedbackRecluster()
+	}
+
+	hooks, ok := any(svc).(feedbackSchedulerTestHooks)
+	require.True(t, ok, "expected async feedback recluster hooks to be available")
+
+	var runs atomic.Int32
+	hooks.setFeedbackReclusterPollIntervalForTest(5 * time.Millisecond)
+	hooks.setFeedbackReclusterHookForTest(func() model.ReclusterResult {
+		runs.Add(1)
+		return model.ReclusterResult{Evaluated: 1}
+	})
+	t.Cleanup(func() {
+		hooks.setFeedbackReclusterHookForTest(nil)
+	})
+
+	svc.setBackgroundBusy(true)
+
+	hooks.scheduleFeedbackRecluster()
+	time.Sleep(40 * time.Millisecond)
+	assert.Zero(t, runs.Load())
+
+	svc.setBackgroundBusy(false)
+
+	waitForPeopleCondition(t, time.Second, func() bool {
+		return runs.Load() == 1
+	})
 }
 
 func TestPeopleServiceCategoryBackfillsPhotos(t *testing.T) {

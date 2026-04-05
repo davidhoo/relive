@@ -21,15 +21,16 @@ import (
 )
 
 const (
-	peoplePriorityScan     = 50
-	peoplePriorityManual   = 80
-	peoplePriorityPassive  = 100
-	peopleClusterThreshold = 0.45
-	peoplePrototypeCount   = 5
-	peoplePrototypeCandidates = 10
-	peopleLinkThreshold    = 0.35
-	peopleAttachThreshold  = 0.50
-	peopleMinClusterFaces  = 2
+	peoplePriorityScan         = 50
+	peoplePriorityManual       = 80
+	peoplePriorityPassive      = 100
+	peopleClusterThreshold     = 0.45
+	peoplePrototypeCount       = 5
+	peoplePrototypeCandidates  = 10
+	peopleLinkThreshold        = 0.35
+	peopleAttachThreshold      = 0.50
+	peopleMinClusterFaces      = 2
+	peopleFeedbackPollInterval = 250 * time.Millisecond
 
 	// confirmedPersonDiscount lowers the attach threshold for persons with manual-locked faces,
 	// making it easier for new faces to join user-confirmed identities (e.g., family members).
@@ -68,11 +69,19 @@ type peopleService struct {
 	config         *config.Config
 	client         PeopleMLClient
 
-	taskMutex       sync.RWMutex
-	task            *model.PeopleTask
-	active          *activePeopleTask
-	backgroundLogMu sync.RWMutex
-	backgroundLogs  []string
+	taskMutex        sync.RWMutex
+	task             *model.PeopleTask
+	active           *activePeopleTask
+	backgroundLogMu  sync.RWMutex
+	backgroundLogs   []string
+	backgroundBusyMu sync.RWMutex
+	backgroundBusy   bool
+
+	feedbackMu            sync.Mutex
+	feedbackRunning       bool
+	feedbackPending       bool
+	feedbackPollInterval  time.Duration
+	feedbackReclusterHook func() model.ReclusterResult
 }
 
 type activePeopleTask struct {
@@ -84,14 +93,15 @@ type activePeopleTask struct {
 
 func NewPeopleService(db *gorm.DB, photoRepo repository.PhotoRepository, faceRepo repository.FaceRepository, personRepo repository.PersonRepository, jobRepo repository.PeopleJobRepository, cannotLinkRepo repository.CannotLinkRepository, cfg *config.Config, client PeopleMLClient) PeopleService {
 	return &peopleService{
-		db:             db,
-		photoRepo:      photoRepo,
-		faceRepo:       faceRepo,
-		personRepo:     personRepo,
-		jobRepo:        jobRepo,
-		cannotLinkRepo: cannotLinkRepo,
-		config:         cfg,
-		client:         client,
+		db:                   db,
+		photoRepo:            photoRepo,
+		faceRepo:             faceRepo,
+		personRepo:           personRepo,
+		jobRepo:              jobRepo,
+		cannotLinkRepo:       cannotLinkRepo,
+		config:               cfg,
+		client:               client,
+		feedbackPollInterval: peopleFeedbackPollInterval,
 	}
 }
 
@@ -292,8 +302,8 @@ func (s *peopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint)
 	if err := s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs); err != nil {
 		return nil, err
 	}
-	rc := s.triggerRecluster()
-	return &rc, nil
+	s.scheduleFeedbackRecluster()
+	return &model.ReclusterResult{}, nil
 }
 
 func (s *peopleService) SplitPerson(faceIDs []uint) (*model.Person, *model.ReclusterResult, error) {
@@ -354,8 +364,8 @@ func (s *peopleService) SplitPerson(faceIDs []uint) (*model.Person, *model.Reclu
 	if err != nil {
 		return nil, nil, err
 	}
-	rc := s.triggerRecluster()
-	return person, &rc, nil
+	s.scheduleFeedbackRecluster()
+	return person, &model.ReclusterResult{}, nil
 }
 
 func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) (*model.ReclusterResult, error) {
@@ -390,8 +400,8 @@ func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) (*model.R
 	if err := s.photoRepo.RecomputeTopPersonCategory(facePhotoIDs(faces)); err != nil {
 		return nil, err
 	}
-	rc := s.triggerRecluster()
-	return &rc, nil
+	s.scheduleFeedbackRecluster()
+	return &model.ReclusterResult{}, nil
 }
 
 func (s *peopleService) UpdatePersonCategory(personID uint, category string) error {
@@ -505,7 +515,10 @@ func (s *peopleService) runBackground(active *activePeopleTask) {
 			continue
 		}
 
-		if err := s.processJob(job); err != nil {
+		s.setBackgroundBusy(true)
+		err = s.processJob(job)
+		s.setBackgroundBusy(false)
+		if err != nil {
 			s.appendBackgroundLog(fmt.Sprintf("处理人物任务 %d 失败：%v", job.ID, err))
 		}
 
@@ -707,6 +720,81 @@ func (s *peopleService) appendBackgroundLog(message string) {
 	if len(s.backgroundLogs) > 100 {
 		s.backgroundLogs = s.backgroundLogs[len(s.backgroundLogs)-100:]
 	}
+}
+
+func (s *peopleService) scheduleFeedbackRecluster() {
+	s.feedbackMu.Lock()
+	s.feedbackPending = true
+	if s.feedbackRunning {
+		s.feedbackMu.Unlock()
+		return
+	}
+	s.feedbackRunning = true
+	s.feedbackMu.Unlock()
+
+	go s.runFeedbackReclusterLoop()
+}
+
+func (s *peopleService) runFeedbackReclusterLoop() {
+	for {
+		if s.shouldDelayFeedbackRecluster() {
+			time.Sleep(s.feedbackReclusterPollIntervalValue())
+			continue
+		}
+
+		s.feedbackMu.Lock()
+		if !s.feedbackPending {
+			s.feedbackRunning = false
+			s.feedbackMu.Unlock()
+			return
+		}
+		s.feedbackPending = false
+		hook := s.feedbackReclusterHook
+		s.feedbackMu.Unlock()
+
+		startedAt := time.Now()
+		var result model.ReclusterResult
+		if hook != nil {
+			result = hook()
+		} else {
+			result = s.triggerRecluster()
+		}
+		logger.Infof("feedback recluster complete: evaluated=%d reassigned=%d iterations=%d elapsed=%s",
+			result.Evaluated, result.Reassigned, result.Iterations, time.Since(startedAt).Round(time.Millisecond))
+	}
+}
+
+func (s *peopleService) shouldDelayFeedbackRecluster() bool {
+	s.backgroundBusyMu.RLock()
+	defer s.backgroundBusyMu.RUnlock()
+	return s.backgroundBusy
+}
+
+func (s *peopleService) feedbackReclusterPollIntervalValue() time.Duration {
+	s.feedbackMu.Lock()
+	defer s.feedbackMu.Unlock()
+	if s.feedbackPollInterval <= 0 {
+		return peopleFeedbackPollInterval
+	}
+	return s.feedbackPollInterval
+}
+
+func (s *peopleService) setFeedbackReclusterHookForTest(hook func() model.ReclusterResult) {
+	s.feedbackMu.Lock()
+	defer s.feedbackMu.Unlock()
+	s.feedbackReclusterHook = hook
+}
+
+func (s *peopleService) setFeedbackReclusterPollIntervalForTest(interval time.Duration) {
+	s.feedbackMu.Lock()
+	defer s.feedbackMu.Unlock()
+	s.feedbackPollInterval = interval
+}
+
+func (s *peopleService) setBackgroundBusy(busy bool) {
+	s.backgroundBusyMu.Lock()
+	defer s.backgroundBusyMu.Unlock()
+	s.backgroundBusy = busy
 }
 
 func (s *peopleService) generateFaceThumbnail(photo *model.Photo, bbox mlclient.BoundingBox) (string, error) {

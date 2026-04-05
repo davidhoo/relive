@@ -124,3 +124,20 @@ func TestAutoMigrateAddsPeopleColumns(t *testing.T) {
 		}
 	}
 }
+
+func TestAutoMigrateAddsPeopleFeedbackIndexes(t *testing.T) {
+	db := openMigratedTestDB(t)
+
+	for _, indexName := range []string{
+		"idx_faces_feedback_candidates",
+		"idx_faces_person_prototypes",
+	} {
+		var count int64
+		if err := db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?", indexName).Scan(&count).Error; err != nil {
+			t.Fatalf("query index %s: %v", indexName, err)
+		}
+		if count != 1 {
+			t.Fatalf("expected index %s to exist after migration", indexName)
+		}
+	}
+}

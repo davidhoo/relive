@@ -372,13 +372,15 @@ const toggleFace = (faceId: number, checked: boolean) => {
   selectedFaceIds.value = selectedFaceIds.value.filter(id => id !== faceId)
 }
 
-const showReclusterResult = (data: any, baseMessage: string) => {
+const showReclusterResult = (data: any, baseMessage: string, asyncFollowUp = false) => {
   const evaluated = data?.recluster_evaluated || 0
   const reassigned = data?.recluster_reassigned || 0
   if (reassigned > 0) {
     ElMessage.success(`${baseMessage}（已重新评估 ${evaluated} 张不确定人脸，${reassigned} 张已重新分配）`)
   } else if (evaluated > 0) {
     ElMessage.success(`${baseMessage}（已重新评估 ${evaluated} 张不确定人脸，无需调整）`)
+  } else if (asyncFollowUp) {
+    ElMessage.success(`${baseMessage}，后台将继续重新评估不确定人脸`)
   } else {
     ElMessage.success(baseMessage)
   }
@@ -391,7 +393,7 @@ const splitSelectedFaces = async () => {
     const res = await peopleApi.split(selectedFaceIds.value)
     const data = res.data?.data as any
     const newPerson = data?.person
-    showReclusterResult(data, '已拆分为新人物')
+    showReclusterResult(data, '已拆分为新人物', true)
     if (newPerson?.id) {
       router.push(`/people/${newPerson.id}`)
       return
@@ -409,7 +411,7 @@ const confirmMoveFaces = async () => {
   try {
     moving.value = true
     const res = await peopleApi.moveFaces(selectedFaceIds.value, moveTargetPersonId.value)
-    showReclusterResult(res.data?.data, '人脸已移动到目标人物')
+    showReclusterResult(res.data?.data, '人脸已移动到目标人物', true)
     await loadData()
   } catch (error: any) {
     ElMessage.error(error.message || '移动人脸失败')
@@ -423,7 +425,7 @@ const confirmMerge = async () => {
   try {
     merging.value = true
     const res = await peopleApi.merge(person.value.id, mergeSourceIds.value)
-    showReclusterResult(res.data?.data, '人物已合并')
+    showReclusterResult(res.data?.data, '人物已合并', true)
     await loadData()
   } catch (error: any) {
     ElMessage.error(error.message || '合并人物失败')
