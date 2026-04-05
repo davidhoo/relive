@@ -93,6 +93,16 @@
                   </el-button>
                 </div>
 
+                <div class="operation-item">
+                  <div>
+                    <div class="operation-title">合并当前人物到其他人物</div>
+                    <div class="operation-desc">将当前人物并入选定的目标人物，当前人物将被删除。</div>
+                  </div>
+                  <el-button plain :disabled="candidatePeople.length === 0" @click="showMergeIntoDialog = true">
+                    选择目标
+                  </el-button>
+                </div>
+
                 <div class="operation-item operation-item-danger">
                   <div>
                     <div class="operation-title">解散此人物</div>
@@ -215,6 +225,26 @@
         <el-button type="primary" :disabled="mergeSourceIds.length === 0" :loading="merging" @click="confirmMerge">确认合并</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="showMergeIntoDialog" title="合并当前人物到其他人物" width="560px">
+      <el-select v-model="mergeIntoTargetId" filterable class="dialog-select" placeholder="选择目标人物（当前人物将并入该人物）">
+        <el-option v-for="candidate in candidatePeople" :key="candidate.id" :label="candidateLabel(candidate)" :value="candidate.id">
+          <div class="candidate-option">
+            <el-avatar :size="34" :src="candidateAvatarUrl(candidate)">
+              {{ getPersonAvatarFallback(candidate) }}
+            </el-avatar>
+            <div class="candidate-option-body">
+              <div class="candidate-option-title">{{ candidate.name?.trim() || `未命名人物 #${candidate.id}` }}</div>
+              <div class="candidate-option-subtitle">{{ getPersonCategoryLabel(candidate.category) }}</div>
+            </div>
+          </div>
+        </el-option>
+      </el-select>
+      <template #footer>
+        <el-button @click="showMergeIntoDialog = false">取消</el-button>
+        <el-button type="primary" :disabled="!mergeIntoTargetId" :loading="mergingInto" @click="confirmMergeInto">确认合并</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -249,12 +279,14 @@ const categorySaving = ref(false)
 const splitting = ref(false)
 const moving = ref(false)
 const merging = ref(false)
+const mergingInto = ref(false)
 const dissolving = ref(false)
 const showMoveDialog = ref(false)
 const showMergeDialog = ref(false)
+const showMergeIntoDialog = ref(false)
 const moveTargetPersonId = ref<number>()
 const mergeSourceIds = ref<number[]>([])
-
+const mergeIntoTargetId = ref<number>()
 const categoryOptions = [
   { label: '家人', value: 'family' },
   { label: '亲友', value: 'friend' },
@@ -442,6 +474,20 @@ const confirmMerge = async () => {
     ElMessage.error(error.message || '合并人物失败')
   } finally {
     merging.value = false
+  }
+}
+
+const confirmMergeInto = async () => {
+  if (!person.value || !mergeIntoTargetId.value) return
+  try {
+    mergingInto.value = true
+    await peopleApi.merge(mergeIntoTargetId.value, [person.value.id])
+    ElMessage.success('当前人物已合并到目标人物')
+    router.push(`/people/${mergeIntoTargetId.value}`)
+  } catch (error: any) {
+    ElMessage.error(error.message || '合并人物失败')
+  } finally {
+    mergingInto.value = false
   }
 }
 
