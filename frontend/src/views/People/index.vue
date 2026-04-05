@@ -201,7 +201,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { Clock, DataLine, Document, Search, User } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -211,6 +211,7 @@ import { peopleApi } from '@/api/people'
 import type { PeopleStats, PeopleTask, Person, PersonCategory } from '@/types/people'
 import { getPeopleTaskStatusMeta, getPersonAvatarFallback, getPersonCategoryLabel, sortPeopleForDisplay } from './peopleHelpers'
 
+const route = useRoute()
 const router = useRouter()
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
 
@@ -236,11 +237,20 @@ const filters = reactive<{
   search: string
   category?: PersonCategory
 }>({
-  page: 1,
-  page_size: 20,
-  search: '',
-  category: undefined,
+  page: Number(route.query.page) || 1,
+  page_size: Number(route.query.page_size) || 20,
+  search: (route.query.search as string) || '',
+  category: (route.query.category as PersonCategory) || undefined,
 })
+
+const syncFiltersToQuery = () => {
+  const query: Record<string, string> = {}
+  if (filters.page > 1) query.page = String(filters.page)
+  if (filters.page_size !== 20) query.page_size = String(filters.page_size)
+  if (filters.search) query.search = filters.search
+  if (filters.category) query.category = filters.category
+  router.replace({ query })
+}
 
 const categoryOptions = [
   { label: '家人', value: 'family' },
@@ -273,6 +283,7 @@ const getFaceThumbnail = (faceId?: number) => {
 
 const loadPeople = async () => {
   peopleLoading.value = true
+  syncFiltersToQuery()
   try {
     const res = await peopleApi.getList({
       page: filters.page,
