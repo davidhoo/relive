@@ -134,31 +134,36 @@
 
               <div v-else class="face-grid">
                 <div v-for="face in faces" :key="face.id" class="face-card" :class="{ 'is-selected': selectedFaceIds.includes(face.id) }">
-                  <div class="face-card-toolbar">
-                    <el-checkbox :model-value="selectedFaceIds.includes(face.id)" @change="toggleFace(face.id, $event as boolean)" />
-                    <el-tag v-if="person.representative_face_id === face.id" type="success" size="small">当前头像</el-tag>
+                  <div class="face-image-wrap">
+                    <img :src="faceThumbnail(face.id)" alt="face" class="face-image" />
+                    <el-checkbox class="face-checkbox" :model-value="selectedFaceIds.includes(face.id)" @change="toggleFace(face.id, $event as boolean)" />
                   </div>
-
-                  <img :src="faceThumbnail(face.id)" alt="face" class="face-image" />
-
-                  <div class="face-meta">
-                    <span>{{ `Face #${face.id}` }}</span>
-                    <span>{{ `Photo #${face.photo_id}` }}</span>
-                  </div>
-
-                  <div class="face-meta-sub">
-                    <span>{{ `质量 ${(face.quality_score || 0).toFixed(2)}` }}</span>
-                    <el-tag v-if="face.manual_locked" type="success" size="small" effect="plain">人工确认</el-tag>
-                    <el-tag v-else-if="(face.cluster_score || 0) >= 0.55" type="success" size="small" effect="plain">{{ `${Math.round((face.cluster_score || 0) * 100)}%` }}</el-tag>
-                    <el-tag v-else-if="(face.cluster_score || 0) >= 0.45" type="warning" size="small" effect="plain">{{ `${Math.round((face.cluster_score || 0) * 100)}%` }}</el-tag>
-                    <el-tag v-else-if="face.cluster_score" type="danger" size="small" effect="plain">{{ `${Math.round((face.cluster_score || 0) * 100)}%` }}</el-tag>
-                  </div>
-
-                  <div class="face-actions">
-                    <el-button size="small" plain :disabled="person.representative_face_id === face.id" :loading="avatarSavingFaceId === face.id" @click="setAvatar(face.id)">
-                      设为头像
-                    </el-button>
-                    <el-button size="small" link @click="goToPhoto(face.photo_id)">查看照片</el-button>
+                  <div class="face-info">
+                    <div class="face-info-row">
+                      <span class="face-info-id">{{ `#${face.id}` }}</span>
+                      <el-tag v-if="person.representative_face_id === face.id" type="success" size="small">头像</el-tag>
+                    </div>
+                    <div class="face-info-row">
+                      <el-tooltip content="人脸图像质量评分" placement="top">
+                        <span class="face-info-quality">{{ `质量 ${(face.quality_score || 0).toFixed(2)}` }}</span>
+                      </el-tooltip>
+                      <el-tooltip v-if="face.manual_locked" content="用户已人工确认归属" placement="top">
+                        <span class="face-info-tag tag-success">人工</span>
+                      </el-tooltip>
+                      <el-tooltip v-else-if="face.cluster_score" :content="`聚类置信度 ${Math.round((face.cluster_score || 0) * 100)}%，越高表示归属越可靠`" placement="top">
+                        <span class="face-info-tag" :class="(face.cluster_score || 0) >= 0.55 ? 'tag-success' : (face.cluster_score || 0) >= 0.45 ? 'tag-warning' : 'tag-danger'">{{ `${Math.round((face.cluster_score || 0) * 100)}%` }}</span>
+                      </el-tooltip>
+                    </div>
+                    <div class="face-info-actions">
+                      <el-tooltip :content="person.representative_face_id === face.id ? '已是当前头像' : '将此人脸设为人物代表头像'" placement="top">
+                        <el-button size="small" plain :disabled="person.representative_face_id === face.id || avatarSavingFaceId === face.id" @click="setAvatar(face.id)">
+                          {{ avatarSavingFaceId === face.id ? '设置中' : '头像' }}
+                        </el-button>
+                      </el-tooltip>
+                      <el-tooltip content="查看此人脸所在的原始照片" placement="top">
+                        <el-button size="small" plain @click="goToPhoto(face.photo_id)">照片</el-button>
+                      </el-tooltip>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -672,62 +677,98 @@ onMounted(async () => {
 
 .face-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .face-card {
-  border: 1px solid var(--color-border);
-  border-radius: 16px;
-  padding: 10px;
+  border: 2px solid transparent;
+  border-radius: 10px;
   background: #fff;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+  overflow: hidden;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .face-card.is-selected {
   border-color: var(--color-primary);
-  box-shadow: 0 8px 18px rgba(84, 112, 198, 0.12);
-  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(84, 112, 198, 0.15);
 }
 
-.face-card-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+.face-image-wrap {
+  position: relative;
 }
 
 .face-image {
   width: 100%;
   aspect-ratio: 1;
   object-fit: cover;
-  border-radius: 12px;
+  display: block;
   background: var(--color-bg-soft);
 }
 
-.face-meta,
-.face-meta-sub {
+.face-checkbox {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  z-index: 1;
+}
+
+.face-info {
   display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px 4px;
+}
+
+.face-info-row {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 4px;
+  min-height: 20px;
+}
+
+.face-info-id {
   font-size: 12px;
-}
-
-.face-meta {
-  color: var(--color-text-primary);
   font-weight: 600;
+  color: var(--color-text-primary);
 }
 
-.face-meta-sub {
+.face-info-quality {
+  font-size: 11px;
   color: var(--color-text-secondary);
 }
 
-.face-actions {
+.face-info-tag {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.face-info-tag.tag-success {
+  color: #67c23a;
+}
+
+.face-info-tag.tag-warning {
+  color: #e6a23c;
+}
+
+.face-info-tag.tag-danger {
+  color: #f56c6c;
+}
+
+.face-info-actions {
   display: flex;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.face-info-actions .el-button {
+  flex: 1;
+  font-size: 11px;
+  padding: 4px 0;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .photo-grid {
@@ -820,7 +861,7 @@ onMounted(async () => {
 
 @media (max-width: 480px) {
   .face-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

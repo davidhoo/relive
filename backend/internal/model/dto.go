@@ -336,6 +336,7 @@ type CountDerivedStatusByPathsResponse struct {
 // In-memory 任务状态常量（ThumbnailTask / GeocodeTask 共用）
 const (
 	TaskStatusRunning  = "running"
+	TaskStatusIdle     = "idle"
 	TaskStatusStopping = "stopping"
 	TaskStatusStopped  = "stopped"
 )

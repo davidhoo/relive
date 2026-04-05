@@ -52,35 +52,21 @@
                   class="person-card"
                   @click="goToDetail(personItem.id)"
                 >
-                  <div class="person-card-header">
-                    <el-avatar :size="56" :src="getFaceThumbnail(personItem.representative_face_id)" class="person-card-avatar">
-                      {{ getPersonAvatarFallback(personItem) }}
-                    </el-avatar>
+                  <el-avatar :size="44" :src="getFaceThumbnail(personItem.representative_face_id)" class="person-card-avatar">
+                    {{ getPersonAvatarFallback(personItem) }}
+                  </el-avatar>
 
-                    <div class="person-card-main">
-                      <div class="person-card-title-row">
-                        <span class="person-card-name">{{ getPersonName(personItem) }}</span>
-                        <span class="person-card-id">{{ `#${personItem.id}` }}</span>
-                      </div>
-                      <el-tag :type="categoryTagType(personItem.category)" effect="light" size="small" class="person-card-category">
+                  <div class="person-card-body">
+                    <div class="person-card-title-row">
+                      <span class="person-card-name">{{ getPersonName(personItem) }}</span>
+                      <span class="person-card-id">{{ `#${personItem.id}` }}</span>
+                    </div>
+                    <div class="person-card-meta">
+                      <el-tag :type="categoryTagType(personItem.category)" effect="light" size="small">
                         {{ getPersonCategoryLabel(personItem.category) }}
                       </el-tag>
+                      <span class="person-card-counts">{{ personItem.photo_count }} 照片 · {{ personItem.face_count }} 人脸</span>
                     </div>
-                  </div>
-
-                  <div class="person-card-stats">
-                    <div class="person-card-stat">
-                      <span class="person-card-stat-label">照片</span>
-                      <strong class="person-card-stat-value">{{ personItem.photo_count }}</strong>
-                    </div>
-                    <div class="person-card-stat">
-                      <span class="person-card-stat-label">人脸</span>
-                      <strong class="person-card-stat-value">{{ personItem.face_count }}</strong>
-                    </div>
-                  </div>
-
-                  <div class="person-card-footer">
-                    <span class="person-card-link">查看详情</span>
                   </div>
                 </button>
               </div>
@@ -106,11 +92,11 @@
         <div class="section-stack">
           <el-card shadow="never" class="section-card animate-fade-in">
             <template #header>
-              <SectionHeader :icon="Clock" title="后台任务概览">
+              <SectionHeader :icon="Clock" title="Worker 控制">
                 <template #actions>
                   <span class="status-pill" :class="taskMeta.type">{{ taskMeta.label }}</span>
                   <el-button
-                    v-if="!taskRunning && !taskStopping"
+                    v-if="!workerActive"
                     size="small"
                     type="primary"
                     :loading="starting"
@@ -142,46 +128,31 @@
               </SectionHeader>
             </template>
 
-            <div class="task-overview">
-              <div class="task-overview-main">
-                <div class="task-overview-item">
-                  <span class="task-overview-label">任务状态</span>
-                  <strong>{{ taskMeta.label }}</strong>
+            <div class="task-body">
+              <div v-if="queuePending > 0" class="queue-progress">
+                <div class="queue-progress-header">
+                  <span>队列进度</span>
+                  <span class="queue-progress-numbers">{{ stats.completed }} / {{ stats.completed + queuePending }}</span>
                 </div>
-                <div class="task-overview-item">
-                  <span class="task-overview-label">已处理任务</span>
-                  <strong>{{ task?.processed_jobs || 0 }}</strong>
+                <el-progress :percentage="queueProgressPercent" :stroke-width="10" :show-text="false" />
+                <div class="queue-progress-detail">
+                  待处理 {{ queuePending }}<template v-if="stats.failed > 0"> · <span class="danger">失败 {{ stats.failed }}</span></template>
                 </div>
-                <div class="task-overview-item">
-                  <span class="task-overview-label">当前照片</span>
-                  <strong>{{ task?.current_photo_id ? `#${task.current_photo_id}` : '-' }}</strong>
-                </div>
+              </div>
+              <div v-else class="queue-empty">
+                队列已清空，等待新任务入队
+              </div>
+
+              <div class="task-summary">
+                <span>累计完成 <strong>{{ stats.completed }}</strong></span>
+                <span v-if="stats.failed > 0"> · 失败 <strong class="danger">{{ stats.failed }}</strong></span>
               </div>
             </div>
           </el-card>
 
           <el-card shadow="never" class="section-card animate-fade-in animate-delay-1">
             <template #header>
-              <SectionHeader :icon="DataLine" title="队列统计">
-                <template #actions>
-                  <el-button size="small" plain class="mini-action-btn" @click="loadTaskData">刷新</el-button>
-                </template>
-              </SectionHeader>
-            </template>
-
-            <div class="stats-grid">
-              <div class="stat-item"><span class="stat-label">总任务</span><strong>{{ stats.total }}</strong></div>
-              <div class="stat-item"><span class="stat-label">待处理</span><strong>{{ stats.pending + stats.queued }}</strong></div>
-              <div class="stat-item"><span class="stat-label">处理中</span><strong>{{ stats.processing }}</strong></div>
-              <div class="stat-item"><span class="stat-label">已完成</span><strong class="success">{{ stats.completed }}</strong></div>
-              <div class="stat-item"><span class="stat-label">失败</span><strong class="danger">{{ stats.failed }}</strong></div>
-              <div class="stat-item"><span class="stat-label">已取消</span><strong>{{ stats.cancelled }}</strong></div>
-            </div>
-          </el-card>
-
-          <el-card shadow="never" class="section-card animate-fade-in animate-delay-2">
-            <template #header>
-              <SectionHeader :icon="Document" title="最近日志">
+              <SectionHeader :icon="Document" title="最近活动">
                 <template #actions>
                   <el-button size="small" plain class="mini-action-btn" @click="loadTaskData">刷新</el-button>
                 </template>
@@ -190,7 +161,7 @@
 
             <div ref="logContainerRef" class="background-log-body">
               <pre v-if="backgroundLogs.length">{{ backgroundLogs.join('\n') }}</pre>
-              <div v-else class="background-log-empty">暂无人物后台任务日志</div>
+              <div v-else class="background-log-empty">暂无最近活动记录</div>
             </div>
           </el-card>
         </div>
@@ -202,7 +173,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Clock, DataLine, Document, Search, User } from '@element-plus/icons-vue'
+import { Clock, Document, Search, User } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import PageHeader from '@/components/PageHeader.vue'
@@ -228,8 +199,19 @@ const resetting = ref(false)
 const logContainerRef = ref<HTMLElement | null>(null)
 let taskTimer: number | null = null
 
-const taskRunning = computed(() => task.value?.status === 'running')
+const workerActive = computed(() => {
+  const s = task.value?.status
+  return s === 'running' || s === 'idle' || s === 'stopping'
+})
 const taskStopping = computed(() => task.value?.status === 'stopping')
+
+const queuePending = computed(() => stats.value.pending + stats.value.queued + stats.value.processing)
+const queueProgressPercent = computed(() => {
+  const done = stats.value.completed
+  const total = done + queuePending.value
+  if (total === 0) return 0
+  return Math.round((done / total) * 100)
+})
 
 const filters = reactive<{
   page: number
@@ -464,8 +446,8 @@ onBeforeUnmount(() => {
 
 .people-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
 }
 
 .detail-btn {
@@ -491,109 +473,72 @@ onBeforeUnmount(() => {
 .person-card {
   width: 100%;
   border: 1px solid var(--color-border);
-  border-radius: 16px;
-  padding: 16px;
+  border-radius: 14px;
+  padding: 14px;
   background: #fff;
   display: flex;
-  flex-direction: column;
-  gap: 14px;
+  align-items: center;
+  gap: 12px;
   text-align: left;
   cursor: pointer;
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 }
 
 .person-card:hover {
-  transform: translateY(-2px);
+  transform: translateY(-1px);
   border-color: rgba(212, 107, 8, 0.28);
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
-}
-
-.person-card-header {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.07);
 }
 
 .person-card-avatar {
   flex-shrink: 0;
 }
 
-.person-card-main {
+.person-card-body {
   min-width: 0;
+  flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  flex: 1;
+  gap: 6px;
 }
 
 .person-card-title-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
 .person-card-name {
   font-weight: 600;
+  font-size: 14px;
   color: var(--color-text-primary);
-  line-height: 1.5;
+  line-height: 1.4;
   min-width: 0;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .person-card-id {
   flex-shrink: 0;
-  padding: 2px 8px;
+  padding: 1px 6px;
   border-radius: 999px;
   background: var(--color-bg-soft);
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
 }
 
-.person-card-category {
-  align-self: flex-start;
-}
-
-.person-card-stats {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.person-card-stat {
-  padding: 12px;
-  border-radius: 12px;
-  background: var(--color-bg-soft);
-  border: 1px solid var(--color-border);
+.person-card-meta {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 8px;
 }
 
-.person-card-stat-label {
+.person-card-counts {
+  font-size: 12px;
   color: var(--color-text-secondary);
-  font-size: 12px;
-}
-
-.person-card-stat-value {
-  color: var(--color-text-primary);
-  font-size: 18px;
-  line-height: 1.2;
-}
-
-.person-card-footer {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.person-card-link {
-  color: #d46b08;
-  font-size: 13px;
-  font-weight: 600;
 }
 
 .pagination-wrap {
@@ -602,30 +547,48 @@ onBeforeUnmount(() => {
   margin-top: 20px;
 }
 
-.task-overview {
+.task-body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 }
 
-.task-overview-main {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+.queue-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.task-overview-item {
-  padding: 16px 18px;
-  border-radius: 14px;
-  background: var(--color-bg-soft);
-  border: 1px solid var(--color-border);
+.queue-progress-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--color-text-secondary);
 }
 
-.task-overview-label {
-  display: block;
+.queue-progress-numbers {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.queue-progress-detail {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.queue-empty {
+  padding: 16px 0;
   color: var(--color-text-secondary);
   font-size: 13px;
-  margin-bottom: 8px;
+}
+
+.task-summary {
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: var(--color-bg-soft);
+  border: 1px solid var(--color-border);
+  font-size: 13px;
+  color: var(--color-text-secondary);
 }
 
 .status-pill {
@@ -645,46 +608,12 @@ onBeforeUnmount(() => {
   background: rgba(230, 162, 60, 0.12);
 }
 
-.status-pill.success {
-  color: #67c23a;
-  background: rgba(103, 194, 58, 0.12);
-}
-
-.status-pill.danger {
-  color: #f56c6c;
-  background: rgba(245, 108, 108, 0.12);
-}
-
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.stat-item {
-  padding: 16px 18px;
-  border-radius: 14px;
-  background: var(--color-bg-soft);
-  border: 1px solid var(--color-border);
-}
-
-.stat-label {
-  display: block;
-  color: var(--color-text-secondary);
-  font-size: 13px;
-  margin-bottom: 6px;
-}
-
-.success {
-  color: #67c23a;
-}
-
 .danger {
   color: #f56c6c;
 }
 
 .background-log-body {
-  max-height: 280px;
+  max-height: 360px;
   overflow: auto;
   padding: 16px 18px;
   border-radius: 14px;
@@ -709,14 +638,6 @@ onBeforeUnmount(() => {
   .people-card-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
-
-  .stats-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .task-overview-main {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 768px) {
@@ -734,10 +655,6 @@ onBeforeUnmount(() => {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .stats-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .pagination-wrap {
     justify-content: center;
   }
@@ -745,10 +662,6 @@ onBeforeUnmount(() => {
 
 @media (max-width: 520px) {
   .people-card-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .person-card-stats {
     grid-template-columns: 1fr;
   }
 }

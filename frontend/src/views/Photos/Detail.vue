@@ -173,10 +173,9 @@
                 class="people-status-alert"
               />
 
-              <el-empty
-                v-if="photoPeopleGroups.length === 0"
-                :description="photoPeopleEmptyText"
-              />
+              <div v-if="photoPeopleGroups.length === 0" class="people-empty-compact">
+                {{ photoPeopleEmptyText }}
+              </div>
 
               <div v-else class="photo-people-groups">
                 <div v-for="group in photoPeopleGroups" :key="group.category" class="photo-people-group">
@@ -995,6 +994,12 @@ h4 {
 
 .people-status-alert {
   margin-top: 4px;
+}
+
+.people-empty-compact {
+  padding: 12px 0;
+  color: #909399;
+  font-size: 13px;
 }
 
 .photo-people-groups {

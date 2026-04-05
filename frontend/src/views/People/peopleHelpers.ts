@@ -45,13 +45,11 @@ export function sortPeopleForDisplay<T extends Pick<Person, 'category' | 'photo_
 export function getPeopleTaskStatusMeta(status?: string): TaskStatusMeta {
   switch (status) {
     case 'running':
-      return { label: '运行中', type: 'warning' }
+      return { label: '处理中', type: 'warning' }
+    case 'idle':
+      return { label: '空闲等待', type: 'info' }
     case 'stopping':
       return { label: '停止中', type: 'warning' }
-    case 'completed':
-      return { label: '已完成', type: 'success' }
-    case 'failed':
-      return { label: '失败', type: 'danger' }
     default:
       return { label: '未运行', type: 'info' }
   }

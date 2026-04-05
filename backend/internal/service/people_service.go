@@ -587,10 +587,12 @@ func (s *peopleService) runBackground(active *activePeopleTask) {
 			continue
 		}
 		if job == nil {
+			s.setTaskStatus(model.TaskStatusIdle)
 			time.Sleep(300 * time.Millisecond)
 			continue
 		}
 
+		s.setTaskStatus(model.TaskStatusRunning)
 		s.setBackgroundBusy(true)
 		err = s.processJob(job)
 		s.setBackgroundBusy(false)
@@ -615,6 +617,7 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 
 	now := time.Now()
 	if photo == nil || photo.Status == model.PhotoStatusExcluded {
+		s.appendBackgroundLog(fmt.Sprintf("照片 #%d 已排除，跳过", job.PhotoID))
 		return s.jobRepo.UpdateFields(job.ID, map[string]interface{}{
 			"status":       model.PeopleJobStatusCancelled,
 			"completed_at": &now,
@@ -626,6 +629,7 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 		return err
 	}
 	if hasManualLockedFaces(existingFaces) {
+		s.appendBackgroundLog(fmt.Sprintf("照片 #%d 已有人工确认，跳过", photo.ID))
 		if err := s.photoRepo.RecomputeTopPersonCategory([]uint{photo.ID}); err != nil {
 			return err
 		}
@@ -677,6 +681,7 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 	}
 
 	if len(result.Faces) == 0 {
+		s.appendBackgroundLog(fmt.Sprintf("照片 #%d 无人脸", photo.ID))
 		return s.db.Transaction(func(tx *gorm.DB) error {
 			if err := tx.Where("photo_id = ?", photo.ID).Delete(&model.Face{}).Error; err != nil {
 				return err
@@ -775,6 +780,8 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 		return err
 	}
 
+	s.appendBackgroundLog(fmt.Sprintf("照片 #%d 检测到 %d 张人脸", photo.ID, len(createdFaces)))
+
 	return s.jobRepo.UpdateFields(job.ID, map[string]interface{}{
 		"status":       model.PeopleJobStatusCompleted,
 		"last_error":   "",
@@ -871,6 +878,14 @@ func (s *peopleService) setBackgroundBusy(busy bool) {
 	s.backgroundBusyMu.Lock()
 	defer s.backgroundBusyMu.Unlock()
 	s.backgroundBusy = busy
+}
+
+func (s *peopleService) setTaskStatus(status string) {
+	s.taskMutex.Lock()
+	defer s.taskMutex.Unlock()
+	if s.task != nil && s.task.Status != model.TaskStatusStopping {
+		s.task.Status = status
+	}
 }
 
 func (s *peopleService) generateFaceThumbnail(photo *model.Photo, bbox mlclient.BoundingBox) (string, error) {
