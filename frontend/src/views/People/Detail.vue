@@ -326,8 +326,10 @@ const resetSelections = () => {
   selectedFaceIds.value = []
   moveTargetPersonId.value = undefined
   mergeSourceIds.value = []
+  mergeIntoTargetId.value = undefined
   showMoveDialog.value = false
   showMergeDialog.value = false
+  showMergeIntoDialog.value = false
 }
 
 const loadCandidatePeople = async () => {

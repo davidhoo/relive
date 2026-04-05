@@ -98,6 +98,13 @@ func NewPeopleService(db *gorm.DB, photoRepo repository.PhotoRepository, faceRep
 		logger.Errorf("Failed to interrupt non-terminal people jobs: %v", err)
 	}
 
+	// 重置被中断任务遗留的 stuck 照片状态（pending/processing → none）
+	if err := db.Model(&model.Photo{}).
+		Where("face_process_status IN ?", []string{model.FaceProcessStatusPending, model.FaceProcessStatusProcessing}).
+		Update("face_process_status", model.FaceProcessStatusNone).Error; err != nil {
+		logger.Errorf("Failed to reset stuck photo face_process_status on startup: %v", err)
+	}
+
 	return &peopleService{
 		db:                   db,
 		photoRepo:            photoRepo,
@@ -495,6 +502,9 @@ func (s *peopleService) DissolvePerson(personID uint) (int, error) {
 	if err := s.personRepo.Delete(personID); err != nil {
 		return 0, fmt.Errorf("delete person %d: %w", personID, err)
 	}
+
+	// 异步触发重聚类，让 pending 人脸被重新分配
+	s.scheduleFeedbackRecluster()
 
 	return len(faces), nil
 }
@@ -1467,6 +1477,19 @@ func (s *peopleService) triggerRecluster() model.ReclusterResult {
 
 		if reassigned == 0 {
 			break // converged
+		}
+	}
+
+	// Also cluster any remaining pending faces (e.g., from DissolvePerson)
+	affectedPersonIDs, affectedPhotoIDs, err := s.runIncrementalClustering()
+	if err != nil {
+		logger.Warnf("recluster: pending face clustering failed: %v", err)
+	} else {
+		for _, pid := range affectedPersonIDs {
+			_ = s.syncPersonState(pid)
+		}
+		if len(affectedPhotoIDs) > 0 {
+			_ = s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs)
 		}
 	}
 
