@@ -173,11 +173,7 @@
                 class="people-status-alert"
               />
 
-              <div v-if="photoPeopleGroups.length === 0" class="people-empty-compact">
-                {{ photoPeopleEmptyText }}
-              </div>
-
-              <div v-else class="photo-people-groups">
+              <div v-if="photoPeopleGroups.length > 0" class="photo-people-groups">
                 <div v-for="group in photoPeopleGroups" :key="group.category" class="photo-people-group">
                   <div class="photo-people-group-header">
                     <h4>{{ group.label }}</h4>
@@ -403,19 +399,6 @@ const buildPhotoPeopleFallback = (): Pick<PhotoPeopleResponse, 'face_process_sta
 const photoPeopleStatus = computed(() => photoPeople.value?.face_process_status || buildPhotoPeopleFallback()?.face_process_status || 'none')
 const photoPeopleGroups = computed(() => groupPhotoPeopleByCategory(photoPeople.value))
 const photoPeopleSummaryLabel = computed(() => getPhotoPeopleSummaryLabel(photoPeople.value || buildPhotoPeopleFallback()))
-const photoPeopleEmptyText = computed(() => {
-  switch (photoPeopleStatus.value) {
-    case 'none':
-      return '尚未生成人物结果'
-    case 'no_face':
-      return '未检测到人脸'
-    case 'failed':
-      return '人物识别失败'
-    default:
-      return photoPeopleSummaryLabel.value
-  }
-})
-
 // 统一管理所有轮询定时器，离开页面时清理
 const activeTimers: ReturnType<typeof setInterval | typeof setTimeout>[] = []
 const addTimer = (id: ReturnType<typeof setInterval | typeof setTimeout>) => {
@@ -994,12 +977,6 @@ h4 {
 
 .people-status-alert {
   margin-top: 4px;
-}
-
-.people-empty-compact {
-  padding: 12px 0;
-  color: #909399;
-  font-size: 13px;
 }
 
 .photo-people-groups {
