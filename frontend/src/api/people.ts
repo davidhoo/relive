@@ -74,6 +74,10 @@ export const peopleApi = {
     return http.post<ApiResponse<{ photos_enqueued: number; background_started: boolean }>>('/people/reset')
   },
 
+  dissolvePerson(id: number) {
+    return http.post<ApiResponse<{ faces_released: number }>>(`/people/${id}/dissolve`)
+  },
+
   rescanByPath(path: string) {
     return http.post<ApiResponse<{ count: number; background_started: boolean }>>('/people/rescan-by-path', { path })
   },

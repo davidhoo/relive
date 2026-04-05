@@ -56,6 +56,7 @@ type PeopleService interface {
 	UpdatePersonCategory(personID uint, category string) error
 	UpdatePersonName(personID uint, name string) error
 	UpdatePersonAvatar(personID uint, faceID uint) error
+	DissolvePerson(personID uint) (int, error)
 	HandleShutdown() error
 }
 
@@ -436,6 +437,66 @@ func (s *peopleService) UpdatePersonAvatar(personID uint, faceID uint) error {
 		"representative_face_id": faceID,
 		"avatar_locked":          true,
 	})
+}
+
+// DissolvePerson 解散指定人物：将其所有人脸（含人工确认）打回 pending，删除人物记录和约束。
+// 返回被释放的人脸数量。不触发自动重聚类，由后台任务自然处理。
+func (s *peopleService) DissolvePerson(personID uint) (int, error) {
+	person, err := s.personRepo.GetByID(personID)
+	if err != nil {
+		return 0, err
+	}
+	if person == nil {
+		return 0, fmt.Errorf("person %d not found", personID)
+	}
+
+	faces, err := s.faceRepo.ListByPersonID(personID)
+	if err != nil {
+		return 0, fmt.Errorf("list faces for person %d: %w", personID, err)
+	}
+
+	if len(faces) > 0 {
+		faceIDs := make([]uint, len(faces))
+		photoIDs := make(map[uint]bool)
+		for i, f := range faces {
+			faceIDs[i] = f.ID
+			photoIDs[f.PhotoID] = true
+		}
+
+		// 强制重置所有人脸（含 manual_locked）回 pending 状态
+		if err := s.faceRepo.UpdateClusterFields(faceIDs, map[string]interface{}{
+			"person_id":            nil,
+			"cluster_status":       model.FaceClusterStatusPending,
+			"cluster_score":        0,
+			"manual_locked":        false,
+			"manual_lock_reason":   "",
+			"manual_locked_at":     nil,
+			"recluster_generation": 0,
+		}); err != nil {
+			return 0, fmt.Errorf("reset faces for person %d: %w", personID, err)
+		}
+
+		// 更新受影响照片的 top_person_category
+		affectedPhotoIDs := make([]uint, 0, len(photoIDs))
+		for pid := range photoIDs {
+			affectedPhotoIDs = append(affectedPhotoIDs, pid)
+		}
+		if err := s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs); err != nil {
+			logger.Warnf("recompute top person category after dissolve person %d: %v", personID, err)
+		}
+	}
+
+	// 删除 cannot-link 约束
+	if err := s.cannotLinkRepo.DeleteByPersonID(personID); err != nil {
+		logger.Warnf("delete cannot-link for dissolved person %d: %v", personID, err)
+	}
+
+	// 删除人物记录
+	if err := s.personRepo.Delete(personID); err != nil {
+		return 0, fmt.Errorf("delete person %d: %w", personID, err)
+	}
+
+	return len(faces), nil
 }
 
 func (s *peopleService) enqueuePhotoModel(photo *model.Photo, source string, priority int, force bool) error {

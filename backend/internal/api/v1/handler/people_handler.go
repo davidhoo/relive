@@ -267,6 +267,25 @@ func (h *PeopleHandler) UpdatePersonAvatar(c *gin.Context) {
 	c.JSON(http.StatusOK, model.Response{Success: true, Message: "人物头像已更新"})
 }
 
+func (h *PeopleHandler) DissolvePerson(c *gin.Context) {
+	personID, ok := parseUintParam(c, "id", "Invalid person ID")
+	if !ok {
+		return
+	}
+
+	faceCount, err := h.service.DissolvePerson(personID)
+	if err != nil {
+		writeServiceFailure(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "人物已解散，人脸将由系统重新聚类",
+		Data:    gin.H{"faces_released": faceCount},
+	})
+}
+
 func (h *PeopleHandler) MergePeople(c *gin.Context) {
 	var req model.MergePeopleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

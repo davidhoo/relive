@@ -213,6 +213,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				people.PATCH("/:id/category", handlers.People.UpdatePersonCategory)
 				people.PATCH("/:id/name", handlers.People.UpdatePersonName)
 				people.PATCH("/:id/avatar", handlers.People.UpdatePersonAvatar)
+				people.POST("/:id/dissolve", handlers.People.DissolvePerson)
 			}
 
 			thumbnails := authorized.Group("/thumbnails")

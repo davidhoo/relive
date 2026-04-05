@@ -92,6 +92,16 @@
                     发起合并
                   </el-button>
                 </div>
+
+                <div class="operation-item operation-item-danger">
+                  <div>
+                    <div class="operation-title">解散此人物</div>
+                    <div class="operation-desc">将所有人脸打回未聚类状态，删除当前人物。系统将自动重新聚类。</div>
+                  </div>
+                  <el-button type="danger" plain :loading="dissolving" @click="handleDissolve">
+                    解散
+                  </el-button>
+                </div>
               </div>
             </el-card>
           </div>
@@ -212,7 +222,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Crop, Operation, Picture, User } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
@@ -239,6 +249,7 @@ const categorySaving = ref(false)
 const splitting = ref(false)
 const moving = ref(false)
 const merging = ref(false)
+const dissolving = ref(false)
 const showMoveDialog = ref(false)
 const showMergeDialog = ref(false)
 const moveTargetPersonId = ref<number>()
@@ -434,6 +445,29 @@ const confirmMerge = async () => {
   }
 }
 
+const handleDissolve = async () => {
+  if (!person.value) return
+  try {
+    await ElMessageBox.confirm(
+      `确认解散「${person.value.name?.trim() || `人物 #${person.value.id}`}」？所有 ${person.value.face_count} 张人脸将回到未聚类状态，由系统重新自动聚类。此操作不可撤销。`,
+      '解散人物确认',
+      { confirmButtonText: '确认解散', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  dissolving.value = true
+  try {
+    const res = await peopleApi.dissolvePerson(person.value.id)
+    ElMessage.success(`人物已解散，${res.data?.data?.faces_released || 0} 张人脸已释放`)
+    router.push('/people')
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || error.message || '解散人物失败')
+  } finally {
+    dissolving.value = false
+  }
+}
+
 const goToPhoto = (photoId: number) => {
   router.push(`/photos/${photoId}`)
 }
@@ -564,6 +598,11 @@ onMounted(async () => {
   border-radius: 14px;
   background: var(--color-bg-soft);
   border: 1px solid var(--color-border);
+}
+
+.operation-item-danger {
+  border-color: rgba(245, 108, 108, 0.3);
+  background: rgba(245, 108, 108, 0.04);
 }
 
 .operation-title {
