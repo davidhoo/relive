@@ -62,6 +62,18 @@ export const peopleApi = {
     return http.get<ApiResponse<PeopleBackgroundLogsResponse>>('/people/background/logs')
   },
 
+  startBackground() {
+    return http.post<ApiResponse<PeopleTask>>('/people/background/start')
+  },
+
+  stopBackground() {
+    return http.post<ApiResponse<void>>('/people/background/stop')
+  },
+
+  resetAllPeople() {
+    return http.post<ApiResponse<{ photos_enqueued: number; background_started: boolean }>>('/people/reset')
+  },
+
   rescanByPath(path: string) {
     return http.post<ApiResponse<{ count: number; background_started: boolean }>>('/people/rescan-by-path', { path })
   },

@@ -129,6 +129,11 @@ func main() {
 			logger.Warnf("Failed to notify geocode task service shutdown: %v", err)
 		}
 	}
+	if services.People != nil {
+		if err := services.People.HandleShutdown(); err != nil {
+			logger.Warnf("Failed to notify people service shutdown: %v", err)
+		}
+	}
 
 	// 优雅关闭服务器
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -109,6 +109,35 @@
               <SectionHeader :icon="Clock" title="后台任务概览">
                 <template #actions>
                   <span class="status-pill" :class="taskMeta.type">{{ taskMeta.label }}</span>
+                  <el-button
+                    v-if="!taskRunning && !taskStopping"
+                    size="small"
+                    type="primary"
+                    :loading="starting"
+                    @click="handleStart"
+                  >
+                    启动任务
+                  </el-button>
+                  <el-button
+                    v-else
+                    size="small"
+                    type="danger"
+                    :loading="stopping"
+                    :disabled="taskStopping"
+                    @click="handleStop"
+                  >
+                    {{ taskStopping ? '停止中...' : '停止任务' }}
+                  </el-button>
+                  <el-button
+                    size="small"
+                    type="danger"
+                    plain
+                    :loading="resetting"
+                    :disabled="taskStopping"
+                    @click="handleReset"
+                  >
+                    全量重建
+                  </el-button>
                 </template>
               </SectionHeader>
             </template>
@@ -128,9 +157,6 @@
                   <strong>{{ task?.current_photo_id ? `#${task.current_photo_id}` : '-' }}</strong>
                 </div>
               </div>
-              <el-text type="info" class="task-note">
-                人物后台处理会在扫描 / 重建后自动启动，这里主要用于查看进度、失败数和最近日志。
-              </el-text>
             </div>
           </el-card>
 
@@ -162,7 +188,7 @@
               </SectionHeader>
             </template>
 
-            <div class="background-log-body">
+            <div ref="logContainerRef" class="background-log-body">
               <pre v-if="backgroundLogs.length">{{ backgroundLogs.join('\n') }}</pre>
               <div v-else class="background-log-empty">暂无人物后台任务日志</div>
             </div>
@@ -174,10 +200,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Clock, DataLine, Document, Search, User } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
@@ -195,6 +221,14 @@ const stats = ref<PeopleStats>({ total: 0, pending: 0, queued: 0, processing: 0,
 const backgroundLogs = ref<string[]>([])
 const people = ref<Person[]>([])
 const total = ref(0)
+const starting = ref(false)
+const stopping = ref(false)
+const resetting = ref(false)
+const logContainerRef = ref<HTMLElement | null>(null)
+let taskTimer: number | null = null
+
+const taskRunning = computed(() => task.value?.status === 'running')
+const taskStopping = computed(() => task.value?.status === 'stopping')
 
 const filters = reactive<{
   page: number
@@ -299,6 +333,62 @@ const refreshCurrentTab = async () => {
   await loadPeople()
 }
 
+const handleStart = async () => {
+  starting.value = true
+  try {
+    await peopleApi.startBackground()
+    ElMessage.success('人物后台任务已启动')
+    await loadTaskData()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || error.message || '启动失败')
+  } finally {
+    starting.value = false
+  }
+}
+
+const handleStop = async () => {
+  stopping.value = true
+  try {
+    await peopleApi.stopBackground()
+    ElMessage.success('停止请求已发送')
+    await loadTaskData()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || error.message || '停止失败')
+  } finally {
+    stopping.value = false
+  }
+}
+
+const handleReset = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '全量重建将清除所有人物数据（人物、人脸、聚类结果），并重新对所有照片进行人脸检测与聚类。此操作不可撤销，确定继续？',
+      '全量重建确认',
+      { confirmButtonText: '确认重建', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  resetting.value = true
+  try {
+    const res = await peopleApi.resetAllPeople()
+    const data = res.data?.data
+    ElMessage.success(`人物数据已重置，已入队 ${data?.photos_enqueued || 0} 张照片`)
+    await loadTaskData()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || error.message || '重建失败')
+  } finally {
+    resetting.value = false
+  }
+}
+
+watch(backgroundLogs, async () => {
+  await nextTick()
+  if (logContainerRef.value) {
+    logContainerRef.value.scrollTop = logContainerRef.value.scrollHeight
+  }
+})
+
 watch(activeTab, async (tab) => {
   if (tab === 'task') {
     await loadTaskData()
@@ -307,6 +397,14 @@ watch(activeTab, async (tab) => {
 
 onMounted(async () => {
   await Promise.all([loadPeople(), loadTaskData()])
+  taskTimer = window.setInterval(loadTaskData, 5000)
+})
+
+onBeforeUnmount(() => {
+  if (taskTimer) {
+    clearInterval(taskTimer)
+    taskTimer = null
+  }
 })
 </script>
 
@@ -517,10 +615,6 @@ onMounted(async () => {
   color: var(--color-text-secondary);
   font-size: 13px;
   margin-bottom: 8px;
-}
-
-.task-note {
-  line-height: 1.7;
 }
 
 .status-pill {

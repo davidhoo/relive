@@ -324,6 +324,23 @@ func (h *PeopleHandler) MoveFaces(c *gin.Context) {
 	c.JSON(http.StatusOK, model.Response{Success: true, Message: "人脸已移动", Data: rc})
 }
 
+func (h *PeopleHandler) StartBackground(c *gin.Context) {
+	task, err := h.service.StartBackground()
+	if err != nil {
+		c.JSON(http.StatusConflict, model.Response{Success: false, Error: &model.ErrorInfo{Code: "START_FAILED", Message: err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "人物后台任务已启动", Data: task})
+}
+
+func (h *PeopleHandler) StopBackground(c *gin.Context) {
+	if err := h.service.StopBackground(); err != nil {
+		c.JSON(http.StatusConflict, model.Response{Success: false, Error: &model.ErrorInfo{Code: "STOP_FAILED", Message: err.Error()}})
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "人物后台任务停止请求已发送"})
+}
+
 func (h *PeopleHandler) GetTask(c *gin.Context) {
 	c.JSON(http.StatusOK, model.Response{Success: true, Data: h.service.GetTaskStatus()})
 }

@@ -92,6 +92,11 @@ type activePeopleTask struct {
 }
 
 func NewPeopleService(db *gorm.DB, photoRepo repository.PhotoRepository, faceRepo repository.FaceRepository, personRepo repository.PersonRepository, jobRepo repository.PeopleJobRepository, cannotLinkRepo repository.CannotLinkRepository, cfg *config.Config, client PeopleMLClient) PeopleService {
+	// 清理上次异常退出遗留的非终态任务
+	if err := jobRepo.InterruptNonTerminal("task interrupted because service restarted"); err != nil {
+		logger.Errorf("Failed to interrupt non-terminal people jobs: %v", err)
+	}
+
 	return &peopleService{
 		db:                   db,
 		photoRepo:            photoRepo,

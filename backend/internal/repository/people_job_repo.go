@@ -25,6 +25,7 @@ type PeopleJobRepository interface {
 	GetActiveByPhotoID(photoID uint) (*model.PeopleJob, error)
 	ClaimNextJob() (*model.PeopleJob, error)
 	CancelPendingJobs() (int64, error)
+	InterruptNonTerminal(message string) error
 	GetStats() (*PeopleJobStats, error)
 	DeleteTerminalBefore(cutoff time.Time) (int64, error)
 }
@@ -111,6 +112,21 @@ func (r *peopleJobRepository) CancelPendingJobs() (int64, error) {
 		return 0, result.Error
 	}
 	return result.RowsAffected, nil
+}
+
+func (r *peopleJobRepository) InterruptNonTerminal(message string) error {
+	now := time.Now()
+	result := r.db.Model(&model.PeopleJob{}).
+		Where("status IN ?", []string{model.PeopleJobStatusPending, model.PeopleJobStatusQueued, model.PeopleJobStatusProcessing}).
+		Updates(map[string]interface{}{
+			"status":       model.PeopleJobStatusCancelled,
+			"last_error":   message,
+			"completed_at": &now,
+		})
+	if result.Error != nil {
+		return fmt.Errorf("interrupt non-terminal people jobs: %w", result.Error)
+	}
+	return nil
 }
 
 func (r *peopleJobRepository) GetStats() (*PeopleJobStats, error) {
