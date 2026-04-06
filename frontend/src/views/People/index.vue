@@ -325,7 +325,10 @@ const handlePageSizeChange = async (pageSize: number) => {
 }
 
 const goToDetail = (personId: number) => {
-  router.push(`/people/${personId}`)
+  router.push({
+    path: `/people/${personId}`,
+    query: { ...route.query }
+  })
 }
 
 const refreshCurrentTab = async () => {

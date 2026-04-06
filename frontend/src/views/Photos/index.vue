@@ -1144,6 +1144,7 @@ const resetSearch = () => {
   filterGPS.value = ''
   filterStatus.value = ''
   currentPage.value = 1
+  syncStateToURL()
   loadPhotos()
 }
 
@@ -1197,11 +1198,13 @@ const loadPhotos = async () => {
 // 搜索处理
 const handleSearch = () => {
   currentPage.value = 1
+  syncStateToURL()
   loadPhotos()
 }
 
 // 分页处理
 const handlePageChange = () => {
+  syncStateToURL()
   loadPhotos()
 }
 
@@ -1333,6 +1336,7 @@ const handleCategoryClick = (value: string) => {
     filterCategory.value = value
   }
   currentPage.value = 1
+  syncStateToURL()
   loadPhotos()
 }
 
@@ -1345,6 +1349,7 @@ const handleTagClick = (value: string) => {
     filterTag.value = value
   }
   currentPage.value = 1
+  syncStateToURL()
   loadPhotos()
 }
 
@@ -1364,6 +1369,7 @@ const handlePathClick = (row: ScanPathConfig) => {
     searchQuery.value = row.path
   }
   currentPage.value = 1
+  syncStateToURL()
   loadPhotos()
 }
 
@@ -1378,6 +1384,7 @@ const handleRecycleBinClick = () => {
     filterTag.value = ''
   }
   currentPage.value = 1
+  syncStateToURL()
   loadPhotos()
 }
 
@@ -1737,8 +1744,51 @@ onMounted(() => {
     filterTag.value = String(query.tag)
   }
 
+  // 如果 URL 没有 query 参数但有本地存储的状态，恢复它
+  // 或者同步当前状态到 URL（确保浏览器返回按钮能正常工作）
+  syncStateToURL()
+
   loadPhotos()
 })
+
+// 将当前状态同步到 URL（不触发路由跳转）
+const syncStateToURL = () => {
+  const query: any = {}
+
+  // 分页参数（只有非默认值才写入 URL）
+  if (currentPage.value > 1) {
+    query.page = String(currentPage.value)
+  }
+  if (pageSize.value !== 20) {
+    query.pageSize = String(pageSize.value)
+  }
+
+  // 筛选条件
+  if (filterAnalyzed.value) {
+    query.analyzed = filterAnalyzed.value
+  }
+  if (filterThumbnail.value) {
+    query.has_thumbnail = filterThumbnail.value
+  }
+  if (filterGPS.value) {
+    query.has_gps = filterGPS.value
+  }
+  if (filterStatus.value) {
+    query.status = filterStatus.value
+  }
+  if (searchQuery.value) {
+    query.search = searchQuery.value
+  }
+  if (filterCategory.value) {
+    query.category = filterCategory.value
+  }
+  if (filterTag.value) {
+    query.tag = filterTag.value
+  }
+
+  // 使用 replace 而不是 push，避免增加历史记录
+  router.replace({ path: '/photos', query })
+}
 
 onBeforeUnmount(() => {
   if (scanProgressTimer) {

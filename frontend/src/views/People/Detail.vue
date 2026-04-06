@@ -531,7 +531,21 @@ const goToPhoto = (photoId: number) => {
 }
 
 const goBack = () => {
-  router.push('/people')
+  const query = route.query
+  // 如果有分页或筛选参数，返回到对应状态的列表页
+  if (query.page || query.page_size || query.search || query.category) {
+    router.push({
+      path: '/people',
+      query: {
+        ...(query.page && { page: query.page }),
+        ...(query.page_size && { page_size: query.page_size }),
+        ...(query.search && { search: query.search }),
+        ...(query.category && { category: query.category }),
+      }
+    })
+  } else {
+    router.push('/people')
+  }
 }
 
 watch(() => route.params.id, async () => {
