@@ -1512,6 +1512,13 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 
 		if attached {
 			now := time.Now()
+			// Track previous person IDs to sync their state after face move
+			prevPersonIDs := make(map[uint]struct{})
+			for _, face := range component {
+				if face != nil && face.PersonID != nil && *face.PersonID != 0 {
+					prevPersonIDs[*face.PersonID] = struct{}{}
+				}
+			}
 			if err := s.faceRepo.UpdateClusterFields(faceIDs(component), map[string]interface{}{
 				"person_id":      personID,
 				"cluster_status": model.FaceClusterStatusAssigned,
@@ -1530,6 +1537,10 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 				face.ClusteredAt = &now
 			}
 			affectedPersonIDs[personID] = struct{}{}
+			// Also sync previous persons that lost faces
+			for pid := range prevPersonIDs {
+				affectedPersonIDs[pid] = struct{}{}
+			}
 			for _, photoID := range facePhotoIDs(component) {
 				affectedPhotoIDs[photoID] = struct{}{}
 			}
