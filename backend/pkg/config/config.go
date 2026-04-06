@@ -77,6 +77,8 @@ type PeopleConfig struct {
 	Timeout            int     `yaml:"timeout"`
 	ReclusterThreshold float64 `yaml:"recluster_threshold"`
 	ReclusterMaxIter   int     `yaml:"recluster_max_iterations"`
+	LinkThreshold      float64 `yaml:"link_threshold"`
+	AttachThreshold    float64 `yaml:"attach_threshold"`
 }
 
 // LegacyMLConfig 兼容旧版人物配置块

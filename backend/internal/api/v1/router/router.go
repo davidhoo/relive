@@ -199,6 +199,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 				people.POST("/background/start", handlers.People.StartBackground)
 				people.POST("/background/stop", handlers.People.StopBackground)
 				people.POST("/rescan-by-path", handlers.People.RescanByPath)
+				people.POST("/enqueue-unprocessed", handlers.People.EnqueueUnprocessed)
 				people.POST("/reset", handlers.People.ResetAllPeople)
 				people.GET("/task", handlers.People.GetTask)
 				people.GET("/stats", handlers.People.GetStats)

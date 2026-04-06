@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"mime"
 	"net/http"
 	"os"
@@ -388,37 +389,33 @@ func (h *PeopleHandler) RescanByPath(c *gin.Context) {
 		return
 	}
 
-	backgroundStarted := false
-	task := h.service.GetTaskStatus()
-	if task != nil && task.Status == model.TaskStatusStopping {
-		writePeopleError(c, http.StatusConflict, "START_FAILED", "人物后台任务正在停止中，请稍后重试")
-		return
-	}
-	if task == nil || task.Status == model.TaskStatusStopped {
-		if _, err := h.service.StartBackground(); err != nil {
-			writePeopleError(c, http.StatusConflict, "START_FAILED", err.Error())
-			return
-		}
-		backgroundStarted = true
-	}
-
 	count, err := h.service.EnqueueByPath(req.Path, model.PeopleJobSourceManual, 80)
 	if err != nil {
 		writePeopleError(c, http.StatusInternalServerError, "ENQUEUE_FAILED", err.Error())
 		return
 	}
 
-	message := "人物重扫任务已加入队列"
-	if backgroundStarted {
-		message = "人物后台任务已启动，并已加入重扫队列"
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "人物重扫任务已加入队列",
+		Data: gin.H{
+			"count": count,
+		},
+	})
+}
+
+func (h *PeopleHandler) EnqueueUnprocessed(c *gin.Context) {
+	count, err := h.service.EnqueueUnprocessed()
+	if err != nil {
+		writePeopleError(c, http.StatusInternalServerError, "ENQUEUE_FAILED", err.Error())
+		return
 	}
 
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
-		Message: message,
+		Message: fmt.Sprintf("已入队 %d 张未处理照片", count),
 		Data: gin.H{
-			"count":              count,
-			"background_started": backgroundStarted,
+			"enqueued": count,
 		},
 	})
 }

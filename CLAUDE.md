@@ -410,3 +410,17 @@ geocode:
   offline:
     max_distance: 100
 ```
+
+## Frontend UI Guidelines
+
+### Element Plus Button Usage
+
+To ensure consistent contrast and visual hierarchy:
+
+| Type | Usage | Example |
+|------|-------|---------|
+| `type="primary"` (solid) | Primary actions: start, create, save, detect unprocessed | 启动任务, 检测未处理照片 |
+| `type="default"` | Secondary actions: cancel, back | 取消, 返回 |
+| `type="danger"` | Destructive actions: delete, reset, stop | 全量重建, 停止任务 |
+
+**Avoid using `plain` for primary actions** — it reduces contrast and makes buttons hard to read. Use `plain` only for secondary/tertiary actions that need to be visually de-emphasized.

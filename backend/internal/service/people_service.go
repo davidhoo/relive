@@ -27,8 +27,8 @@ const (
 	peopleClusterThreshold     = 0.45
 	peoplePrototypeCount       = 5
 	peoplePrototypeCandidates  = 10
-	peopleLinkThreshold        = 0.35
-	peopleAttachThreshold      = 0.50
+	defaultLinkThreshold       = 0.65
+	defaultAttachThreshold     = 0.70
 	peopleMinClusterFaces      = 2
 	peopleFeedbackPollInterval = 250 * time.Millisecond
 
@@ -49,6 +49,7 @@ type PeopleService interface {
 	GetBackgroundLogs() []string
 	EnqueuePhoto(photoID uint, source string, priority int, force bool) error
 	EnqueueByPath(path string, source string, priority int) (int, error)
+	EnqueueUnprocessed() (int, error)
 	ResetAllPeople() (int, error)
 	MergePeople(targetPersonID uint, sourcePersonIDs []uint) (*model.ReclusterResult, error)
 	SplitPerson(faceIDs []uint) (*model.Person, *model.ReclusterResult, error)
@@ -116,6 +117,22 @@ func NewPeopleService(db *gorm.DB, photoRepo repository.PhotoRepository, faceRep
 		client:               client,
 		feedbackPollInterval: peopleFeedbackPollInterval,
 	}
+}
+
+// linkThreshold returns the configured face graph link threshold, defaulting to 0.65.
+func (s *peopleService) linkThreshold() float64 {
+	if s.config != nil && s.config.People.LinkThreshold > 0 {
+		return s.config.People.LinkThreshold
+	}
+	return defaultLinkThreshold
+}
+
+// attachThreshold returns the configured person attach threshold, defaulting to 0.70.
+func (s *peopleService) attachThreshold() float64 {
+	if s.config != nil && s.config.People.AttachThreshold > 0 {
+		return s.config.People.AttachThreshold
+	}
+	return defaultAttachThreshold
 }
 
 func (s *peopleService) StartBackground() (*model.PeopleTask, error) {
@@ -215,6 +232,24 @@ func (s *peopleService) EnqueueByPath(path string, source string, priority int) 
 		}
 		if err := s.enqueuePhotoModel(photo, source, priority, false); err != nil {
 			logger.Warnf("enqueue people by path failed for photo %d: %v", photo.ID, err)
+			continue
+		}
+		count++
+	}
+
+	return count, nil
+}
+
+func (s *peopleService) EnqueueUnprocessed() (int, error) {
+	photos, err := s.photoRepo.ListByFaceStatus(model.FaceProcessStatusNone)
+	if err != nil {
+		return 0, err
+	}
+
+	count := 0
+	for _, photo := range photos {
+		if err := s.enqueuePhotoModel(photo, model.PeopleJobSourceManual, peoplePriorityManual, false); err != nil {
+			logger.Warnf("enqueue unprocessed people failed for photo %d: %v", photo.ID, err)
 			continue
 		}
 		count++
@@ -680,9 +715,12 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 		result = &mlclient.DetectFacesResponse{}
 	}
 
+	// 在 zero-faces 分支前计算，确保删除旧 faces 后能刷新受影响的 person
+	previousPersonIDs := personIDsFromFaces(existingFaces)
+
 	if len(result.Faces) == 0 {
 		s.appendBackgroundLog(fmt.Sprintf("照片 #%d 无人脸", photo.ID))
-		return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := s.db.Transaction(func(tx *gorm.DB) error {
 			if err := tx.Where("photo_id = ?", photo.ID).Delete(&model.Face{}).Error; err != nil {
 				return err
 			}
@@ -698,10 +736,18 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 				"last_error":   "",
 				"completed_at": &now,
 			}).Error
-		})
+		}); err != nil {
+			return err
+		}
+		// 刷新受影响的 person 统计（无剩余人脸时会自动删除 person）
+		for _, pid := range previousPersonIDs {
+			if err := s.syncPersonState(pid); err != nil {
+				logger.Warnf("sync person %d state after zero-faces detection: %v", pid, err)
+			}
+		}
+		return nil
 	}
 
-	previousPersonIDs := personIDsFromFaces(existingFaces)
 	createdFaces := make([]*model.Face, 0, len(result.Faces))
 	for _, detected := range result.Faces {
 		embeddingPayload, err := json.Marshal(detected.Embedding)
@@ -1330,7 +1376,7 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 	}
 	prototypes := s.selectPersonPrototypes(protoFaces, peoplePrototypeCount)
 
-	graph := s.buildFaceGraph(pendingFaces, peopleLinkThreshold)
+	graph := s.buildFaceGraph(pendingFaces, s.linkThreshold())
 	components := s.findConnectedComponents(graph)
 	pendingByID := make(map[uint]*model.Face, len(pendingFaces))
 	for _, face := range pendingFaces {
@@ -1356,7 +1402,7 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 			continue
 		}
 
-		personID, score, attached := s.attachComponentToExistingPerson(component, prototypes, peopleAttachThreshold)
+		personID, score, attached := s.attachComponentToExistingPerson(component, prototypes, s.attachThreshold())
 		componentScore := nonNegativeScore(score)
 
 		if attached {

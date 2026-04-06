@@ -116,6 +116,15 @@
                   </el-button>
                   <el-button
                     size="small"
+                    type="primary"
+                    :loading="enqueueing"
+                    :disabled="taskStopping"
+                    @click="handleEnqueueUnprocessed"
+                  >
+                    检测未处理照片
+                  </el-button>
+                  <el-button
+                    size="small"
                     type="danger"
                     plain
                     :loading="resetting"
@@ -196,6 +205,7 @@ const total = ref(0)
 const starting = ref(false)
 const stopping = ref(false)
 const resetting = ref(false)
+const enqueueing = ref(false)
 const logContainerRef = ref<HTMLElement | null>(null)
 let taskTimer: number | null = null
 
@@ -372,6 +382,20 @@ const handleReset = async () => {
     ElMessage.error(error.response?.data?.error?.message || error.message || '重建失败')
   } finally {
     resetting.value = false
+  }
+}
+
+const handleEnqueueUnprocessed = async () => {
+  enqueueing.value = true
+  try {
+    const res = await peopleApi.enqueueUnprocessed()
+    const data = res.data?.data
+    ElMessage.success(`已入队 ${data?.enqueued || 0} 张未处理照片`)
+    await loadTaskData()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || error.message || '入队失败')
+  } finally {
+    enqueueing.value = false
   }
 }
 

@@ -86,6 +86,9 @@ type PhotoRepository interface {
 	UpdateCategory(id uint, category string) error
 	RecomputeTopPersonCategory(photoIDs []uint) error
 
+	// 人物系统
+	ListByFaceStatus(status string) ([]*model.Photo, error)
+
 	// 手动旋转
 	UpdateManualRotation(id uint, rotation int) error
 
@@ -645,6 +648,12 @@ func (r *photoRepository) ListByPathPrefix(prefix string) ([]*model.Photo, error
 	}
 
 	err := r.db.Where(condition, values...).Find(&photos).Error
+	return photos, err
+}
+
+func (r *photoRepository) ListByFaceStatus(status string) ([]*model.Photo, error) {
+	var photos []*model.Photo
+	err := r.db.Where("face_process_status = ? AND status = ?", status, model.PhotoStatusActive).Find(&photos).Error
 	return photos, err
 }
 
