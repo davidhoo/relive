@@ -68,7 +68,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	if cfg != nil && cfg.People.MLEndpoint != "" {
 		peopleClient = mlclient.New(cfg.People.MLEndpoint, time.Duration(cfg.People.Timeout)*time.Second)
 	}
-	peopleService := NewPeopleService(db, repos.Photo, repos.Face, repos.Person, repos.PeopleJob, repos.CannotLink, cfg, peopleClient)
+	peopleService := NewPeopleService(db, repos.Photo, repos.Face, repos.Person, repos.PeopleJob, repos.CannotLink, cfg, peopleClient, runtimeService)
 	photoService.SetPeopleService(peopleService)
 	displayService := NewDisplayService(db, repos.Photo, repos.DisplayRecord, repos.Device, repos.Event, configService, cfg)
 

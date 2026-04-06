@@ -135,6 +135,25 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 			analyzer.POST("/runtime/release", handlers.Analyzer.ReleaseRuntime)
 		}
 
+		// 人物 Worker 相关（API Key 认证，离线人物检测使用）
+		peopleWorker := v1.Group("/people/worker")
+		peopleWorker.Use(middleware.APIKeyAuth(services.Device))
+		{
+			peopleWorker.GET("/tasks", handlers.People.GetWorkerTasks)
+			peopleWorker.POST("/tasks/:task_id/heartbeat", handlers.People.HeartbeatWorkerTask)
+			peopleWorker.POST("/tasks/:task_id/release", handlers.People.ReleaseWorkerTask)
+			peopleWorker.POST("/results", handlers.People.SubmitWorkerResults)
+		}
+
+		// 人物运行时租约（API Key 认证）
+		peopleRuntime := v1.Group("/people/runtime")
+		peopleRuntime.Use(middleware.APIKeyAuth(services.Device))
+		{
+			peopleRuntime.POST("/acquire", handlers.People.AcquirePeopleRuntime)
+			peopleRuntime.POST("/heartbeat", handlers.People.HeartbeatPeopleRuntime)
+			peopleRuntime.POST("/release", handlers.People.ReleasePeopleRuntime)
+		}
+
 		// 图片访问（JWT 或 API Key 认证）
 		photoAuth := v1.Group("")
 		photoAuth.Use(middleware.PhotoAuth(services.Auth, services.Device))

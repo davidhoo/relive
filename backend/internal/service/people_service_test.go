@@ -89,6 +89,7 @@ func newPeopleServiceForTest(t *testing.T, client PeopleMLClient) (*peopleServic
 		repository.NewCannotLinkRepository(db),
 		cfg,
 		client,
+		nil, // runtimeService not needed for these tests
 	).(*peopleService)
 
 	return svc, db
@@ -274,7 +275,7 @@ func TestPeopleService_BuildFaceGraph(t *testing.T) {
 		{ID: 5, Embedding: encodeEmbedding(t, []float32{0, 0, 1})},     // orthogonal to both groups
 	}
 
-	graph := builder.buildFaceGraph(faces, peopleLinkThreshold)
+	graph := builder.buildFaceGraph(faces, 0.65) // defaultLinkThreshold
 	require.Len(t, graph, 5)
 	assert.Equal(t, []uint{2}, graph[1])
 	assert.Equal(t, []uint{1}, graph[2])
@@ -302,7 +303,7 @@ func TestPeopleService_FindFaceComponents(t *testing.T) {
 		{ID: 5, Embedding: encodeEmbedding(t, []float32{0, 0, 1})},
 	}
 
-	graph := explorer.buildFaceGraph(faces, peopleLinkThreshold)
+	graph := explorer.buildFaceGraph(faces, 0.65) // defaultLinkThreshold
 	components := explorer.findConnectedComponents(graph)
 
 	assert.Equal(t, []string{"1,2", "3,4", "5"}, normalizeFaceComponents(components))
@@ -338,9 +339,9 @@ func TestPeopleService_AttachComponentToExistingPerson(t *testing.T) {
 		}
 
 		score := attacher.scoreComponentAgainstPerson(component, prototypes[personOneID])
-		assert.Greater(t, score, peopleAttachThreshold)
+		assert.Greater(t, score, 0.70) // defaultAttachThreshold
 
-		personID, attachScore, attached := attacher.attachComponentToExistingPerson(component, prototypes, peopleAttachThreshold)
+		personID, attachScore, attached := attacher.attachComponentToExistingPerson(component, prototypes, 0.70) // defaultAttachThreshold
 		assert.True(t, attached)
 		assert.Equal(t, personOneID, personID)
 		assert.InDelta(t, score, attachScore, 0.0001)
@@ -354,12 +355,12 @@ func TestPeopleService_AttachComponentToExistingPerson(t *testing.T) {
 		}
 
 		personOneScore := attacher.scoreComponentAgainstPerson(component, prototypes[personOneID])
-		assert.Less(t, personOneScore, peopleAttachThreshold)
+		assert.Less(t, personOneScore, 0.70) // defaultAttachThreshold
 
-		personID, attachScore, attached := attacher.attachComponentToExistingPerson(component, prototypes, peopleAttachThreshold)
+		personID, attachScore, attached := attacher.attachComponentToExistingPerson(component, prototypes, 0.70) // defaultAttachThreshold
 		assert.False(t, attached)
 		assert.Zero(t, personID)
-		assert.Less(t, attachScore, peopleAttachThreshold)
+		assert.Less(t, attachScore, 0.70) // defaultAttachThreshold
 	})
 }
 
@@ -559,7 +560,7 @@ func TestPeopleService_ProcessJobUsesIncrementalClustering(t *testing.T) {
 	require.NotNil(t, faces[0].PersonID)
 	assert.Equal(t, person.ID, *faces[0].PersonID)
 	assert.Equal(t, model.FaceClusterStatusAssigned, faces[0].ClusterStatus)
-	assert.GreaterOrEqual(t, faces[0].ClusterScore, peopleAttachThreshold)
+	assert.GreaterOrEqual(t, faces[0].ClusterScore, 0.70) // defaultAttachThreshold
 	require.NotNil(t, faces[0].ClusteredAt)
 
 	updatedPhoto, err := photoRepo.GetByID(newPhoto.ID)
@@ -623,7 +624,7 @@ func TestPeopleService_SingleUncertainFaceStaysPending(t *testing.T) {
 	require.Len(t, faces, 1)
 	assert.Nil(t, faces[0].PersonID)
 	assert.Equal(t, model.FaceClusterStatusPending, faces[0].ClusterStatus)
-	assert.Less(t, faces[0].ClusterScore, peopleAttachThreshold)
+	assert.Less(t, faces[0].ClusterScore, 0.70) // defaultAttachThreshold
 	require.NotNil(t, faces[0].ClusteredAt)
 
 	updatedPhoto, err := photoRepo.GetByID(photo.ID)
@@ -1316,6 +1317,7 @@ func TestPhotoScanStartsPeopleBackground(t *testing.T) {
 				activePath: {Faces: nil, ProcessingTimeMS: 3},
 			},
 		},
+		nil,
 	).(*peopleService)
 	photoSvc.SetPeopleService(peopleSvc)
 
@@ -1462,6 +1464,7 @@ func TestPeopleServiceGeneratesFaceThumbnail(t *testing.T) {
 				},
 			},
 		},
+		nil,
 	).(*peopleService)
 
 	photoRepo := repository.NewPhotoRepository(db)

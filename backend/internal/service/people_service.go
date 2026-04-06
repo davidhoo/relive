@@ -59,6 +59,7 @@ type PeopleService interface {
 	UpdatePersonAvatar(personID uint, faceID uint) error
 	DissolvePerson(personID uint) (int, error)
 	HandleShutdown() error
+	ApplyDetectionResult(job *model.PeopleJob, photo *model.Photo, result *model.PeopleDetectionResult) error
 }
 
 type peopleService struct {
@@ -70,6 +71,7 @@ type peopleService struct {
 	cannotLinkRepo repository.CannotLinkRepository
 	config         *config.Config
 	client         PeopleMLClient
+	runtimeService AnalysisRuntimeService
 
 	taskMutex        sync.RWMutex
 	task             *model.PeopleTask
@@ -93,7 +95,7 @@ type activePeopleTask struct {
 	stop   bool
 }
 
-func NewPeopleService(db *gorm.DB, photoRepo repository.PhotoRepository, faceRepo repository.FaceRepository, personRepo repository.PersonRepository, jobRepo repository.PeopleJobRepository, cannotLinkRepo repository.CannotLinkRepository, cfg *config.Config, client PeopleMLClient) PeopleService {
+func NewPeopleService(db *gorm.DB, photoRepo repository.PhotoRepository, faceRepo repository.FaceRepository, personRepo repository.PersonRepository, jobRepo repository.PeopleJobRepository, cannotLinkRepo repository.CannotLinkRepository, cfg *config.Config, client PeopleMLClient, runtimeService AnalysisRuntimeService) PeopleService {
 	// 清理上次异常退出遗留的非终态任务
 	if err := jobRepo.InterruptNonTerminal("task interrupted because service restarted"); err != nil {
 		logger.Errorf("Failed to interrupt non-terminal people jobs: %v", err)
@@ -115,6 +117,7 @@ func NewPeopleService(db *gorm.DB, photoRepo repository.PhotoRepository, faceRep
 		cannotLinkRepo:       cannotLinkRepo,
 		config:               cfg,
 		client:               client,
+		runtimeService:       runtimeService,
 		feedbackPollInterval: peopleFeedbackPollInterval,
 	}
 }
@@ -139,9 +142,25 @@ func (s *peopleService) StartBackground() (*model.PeopleTask, error) {
 	if s.client == nil {
 		return nil, fmt.Errorf("people ml client not configured")
 	}
+
+	// Acquire people runtime lease
+	if s.runtimeService != nil {
+		lease, err := s.runtimeService.Acquire(model.GlobalPeopleResourceKey, model.AnalysisOwnerTypeBackground, "local", "local background task")
+		if err != nil {
+			if err == ErrAnalysisRuntimeBusy {
+				return nil, fmt.Errorf("people runtime busy (owned by %s/%s)", lease.OwnerType, lease.OwnerID)
+			}
+			return nil, fmt.Errorf("failed to acquire people runtime lease: %w", err)
+		}
+	}
+
 	s.taskMutex.Lock()
 	defer s.taskMutex.Unlock()
 	if s.active != nil {
+		// Release lease since task is already running
+		if s.runtimeService != nil {
+			s.runtimeService.Release(model.GlobalPeopleResourceKey, model.AnalysisOwnerTypeBackground, "local")
+		}
 		return nil, fmt.Errorf("people task already running")
 	}
 
@@ -174,7 +193,7 @@ func (s *peopleService) StopBackground() error {
 		close(s.active.stopCh)
 	}
 	s.active.mu.Unlock()
-	if s.task != nil && s.task.Status == model.TaskStatusRunning {
+	if s.task != nil && (s.task.Status == model.TaskStatusRunning || s.task.Status == model.TaskStatusIdle) {
 		s.task.Status = model.TaskStatusStopping
 		s.appendBackgroundLog("收到停止请求，等待当前人物任务处理完成")
 	}
@@ -594,7 +613,35 @@ func (s *peopleService) enqueuePhotoModel(photo *model.Photo, source string, pri
 }
 
 func (s *peopleService) runBackground(active *activePeopleTask) {
+	// Heartbeat ticker for runtime lease
+	var heartbeatTicker *time.Ticker
+	var heartbeatStopCh chan struct{}
+	if s.runtimeService != nil {
+		heartbeatTicker = time.NewTicker(10 * time.Second)
+		heartbeatStopCh = make(chan struct{})
+		go func() {
+			for {
+				select {
+				case <-heartbeatTicker.C:
+					s.runtimeService.Heartbeat(model.GlobalPeopleResourceKey, model.AnalysisOwnerTypeBackground, "local")
+				case <-heartbeatStopCh:
+					return
+				}
+			}
+		}()
+	}
+
 	defer func() {
+		// Stop heartbeat goroutine
+		if heartbeatTicker != nil {
+			heartbeatTicker.Stop()
+			close(heartbeatStopCh)
+		}
+		// Release runtime lease
+		if s.runtimeService != nil {
+			s.runtimeService.Release(model.GlobalPeopleResourceKey, model.AnalysisOwnerTypeBackground, "local")
+		}
+
 		now := time.Now()
 		s.taskMutex.Lock()
 		if s.task != nil && (s.task.Status == model.TaskStatusRunning || s.task.Status == model.TaskStatusStopping) {
@@ -645,15 +692,35 @@ func (s *peopleService) runBackground(active *activePeopleTask) {
 }
 
 func (s *peopleService) processJob(job *model.PeopleJob) error {
-	photo, err := s.photoRepo.GetByID(job.PhotoID)
+	photo, skip, err := s.preflightCheck(job)
 	if err != nil {
 		return err
+	}
+	if skip {
+		return nil
+	}
+
+	result, err := s.detectFacesLocally(photo)
+	if err != nil {
+		return err
+	}
+
+	// Convert mlclient result to model result
+	detectionResult := convertMLResultToModel(result)
+	return s.ApplyDetectionResult(job, photo, detectionResult)
+}
+
+// preflightCheck performs pre-flight checks and returns the photo, whether to skip, and any error.
+func (s *peopleService) preflightCheck(job *model.PeopleJob) (*model.Photo, bool, error) {
+	photo, err := s.photoRepo.GetByID(job.PhotoID)
+	if err != nil {
+		return nil, false, err
 	}
 
 	now := time.Now()
 	if photo == nil || photo.Status == model.PhotoStatusExcluded {
 		s.appendBackgroundLog(fmt.Sprintf("照片 #%d 已排除，跳过", job.PhotoID))
-		return s.jobRepo.UpdateFields(job.ID, map[string]interface{}{
+		return nil, true, s.jobRepo.UpdateFields(job.ID, map[string]interface{}{
 			"status":       model.PeopleJobStatusCancelled,
 			"completed_at": &now,
 		})
@@ -661,14 +728,14 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 
 	existingFaces, err := s.faceRepo.ListByPhotoID(photo.ID)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 	if hasManualLockedFaces(existingFaces) {
 		s.appendBackgroundLog(fmt.Sprintf("照片 #%d 已有人工确认，跳过", photo.ID))
 		if err := s.photoRepo.RecomputeTopPersonCategory([]uint{photo.ID}); err != nil {
-			return err
+			return nil, false, err
 		}
-		return s.jobRepo.UpdateFields(job.ID, map[string]interface{}{
+		return nil, true, s.jobRepo.UpdateFields(job.ID, map[string]interface{}{
 			"status":       model.PeopleJobStatusCompleted,
 			"last_error":   "",
 			"completed_at": &now,
@@ -678,9 +745,14 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 	if err := s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
 		"face_process_status": model.FaceProcessStatusProcessing,
 	}); err != nil {
-		return err
+		return nil, false, err
 	}
 
+	return photo, false, nil
+}
+
+// detectFacesLocally performs face detection using the local ML client.
+func (s *peopleService) detectFacesLocally(photo *model.Photo) (*mlclient.DetectFacesResponse, error) {
 	processor := util.NewImageProcessor(1024, 85)
 	processedImage, processErr := processor.ProcessForAI(photo.FilePath)
 	if processErr != nil {
@@ -704,18 +776,25 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 		}); updateErr != nil {
 			logger.Warnf("update photo %d failed status after people detect error failed: %v", photo.ID, updateErr)
 		}
-		return s.jobRepo.UpdateFields(job.ID, map[string]interface{}{
-			"status":       model.PeopleJobStatusFailed,
-			"last_error":   detectErr.Error(),
-			"completed_at": &now,
-		})
+		return nil, detectErr
 	}
 
 	if result == nil {
 		result = &mlclient.DetectFacesResponse{}
 	}
 
-	// 在 zero-faces 分支前计算，确保删除旧 faces 后能刷新受影响的 person
+	return result, nil
+}
+
+// ApplyDetectionResult applies detection results: deletes old faces, creates new ones, runs clustering.
+// This method is used by both local processing and remote worker submission.
+func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.Photo, result *model.PeopleDetectionResult) error {
+	now := time.Now()
+
+	existingFaces, err := s.faceRepo.ListByPhotoID(photo.ID)
+	if err != nil {
+		return err
+	}
 	previousPersonIDs := personIDsFromFaces(existingFaces)
 
 	if len(result.Faces) == 0 {
@@ -739,7 +818,6 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 		}); err != nil {
 			return err
 		}
-		// 刷新受影响的 person 统计（无剩余人脸时会自动删除 person）
 		for _, pid := range previousPersonIDs {
 			if err := s.syncPersonState(pid); err != nil {
 				logger.Warnf("sync person %d state after zero-faces detection: %v", pid, err)
@@ -833,6 +911,33 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 		"last_error":   "",
 		"completed_at": &now,
 	})
+}
+
+// convertMLResultToModel converts mlclient.DetectFacesResponse to model.PeopleDetectionResult
+func convertMLResultToModel(result *mlclient.DetectFacesResponse) *model.PeopleDetectionResult {
+	if result == nil {
+		return &model.PeopleDetectionResult{Faces: []model.PeopleDetectionFace{}}
+	}
+
+	faces := make([]model.PeopleDetectionFace, len(result.Faces))
+	for i, f := range result.Faces {
+		faces[i] = model.PeopleDetectionFace{
+			BBox: model.BoundingBox{
+				X:      f.BBox.X,
+				Y:      f.BBox.Y,
+				Width:  f.BBox.Width,
+				Height: f.BBox.Height,
+			},
+			Confidence:   f.Confidence,
+			QualityScore: f.QualityScore,
+			Embedding:    f.Embedding,
+		}
+	}
+
+	return &model.PeopleDetectionResult{
+		Faces:            faces,
+		ProcessingTimeMS: result.ProcessingTimeMS,
+	}
 }
 
 func (s *peopleService) resetBackgroundLogs() {
@@ -934,7 +1039,7 @@ func (s *peopleService) setTaskStatus(status string) {
 	}
 }
 
-func (s *peopleService) generateFaceThumbnail(photo *model.Photo, bbox mlclient.BoundingBox) (string, error) {
+func (s *peopleService) generateFaceThumbnail(photo *model.Photo, bbox model.BoundingBox) (string, error) {
 	if photo == nil {
 		return "", fmt.Errorf("photo is nil")
 	}

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
@@ -25,15 +26,17 @@ type PeopleHandler struct {
 	personRepo repository.PersonRepository
 	faceRepo   repository.FaceRepository
 	photoRepo  repository.PhotoRepository
+	jobRepo    repository.PeopleJobRepository
 	cfg        *config.Config
 }
 
-func NewPeopleHandler(service service.PeopleService, personRepo repository.PersonRepository, faceRepo repository.FaceRepository, photoRepo repository.PhotoRepository, cfg *config.Config) *PeopleHandler {
+func NewPeopleHandler(service service.PeopleService, personRepo repository.PersonRepository, faceRepo repository.FaceRepository, photoRepo repository.PhotoRepository, jobRepo repository.PeopleJobRepository, cfg *config.Config) *PeopleHandler {
 	return &PeopleHandler{
 		service:    service,
 		personRepo: personRepo,
 		faceRepo:   faceRepo,
 		photoRepo:  photoRepo,
+		jobRepo:    jobRepo,
 		cfg:        cfg,
 	}
 }
@@ -765,4 +768,247 @@ func thumbnailRoot(cfg *config.Config) string {
 		return cfg.Photos.ThumbnailPath
 	}
 	return "./data/thumbnails"
+}
+
+// ==================== People Worker API Methods ====================
+
+// GetWorkerTasks 获取人物检测任务列表（API Key认证）
+func (h *PeopleHandler) GetWorkerTasks(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	if limit <= 0 || limit > 50 {
+		limit = 10
+	}
+
+	workerID := c.GetHeader("X-Worker-ID")
+	if workerID == "" {
+		workerID = "unknown-worker"
+	}
+
+	// 获取设备信息
+	_, exists := c.Get("device_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, model.Response{Success: false, Error: &model.ErrorInfo{Code: "UNAUTHORIZED", Message: "Device context missing"}})
+		return
+	}
+
+	// TODO: 检查 people runtime lease 是否已被当前 worker 获取
+	// 暂时跳过 runtime lease 检查，等待后续实现
+
+	// 获取待处理任务
+	lockUntil := time.Now().Add(5 * time.Minute)
+	jobs, err := h.jobRepo.ClaimNextRemote(workerID, limit, lockUntil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INTERNAL_ERROR", Message: err.Error()}})
+		return
+	}
+
+	// 构建任务响应
+	tasks := make([]model.PeopleWorkerTask, 0, len(jobs))
+	for _, job := range jobs {
+		photo, err := h.photoRepo.GetByID(job.PhotoID)
+		if err != nil || photo == nil {
+			continue
+		}
+
+		// 检查照片是否有人工锁定的人脸
+		faces, _ := h.faceRepo.ListByPhotoID(photo.ID)
+		if hasManualLockedFaces(faces) {
+			// 跳过此任务，释放锁
+			h.jobRepo.ReleaseRemote(job.ID, workerID, "manual_locked", false)
+			continue
+		}
+
+		downloadURL := fmt.Sprintf("%s/api/v1/photos/%d/file", requestBaseURL(c), photo.ID)
+
+		tasks = append(tasks, model.PeopleWorkerTask{
+			ID:            job.ID,
+			JobID:         job.ID,
+			PhotoID:       photo.ID,
+			FilePath:      photo.FilePath,
+			DownloadURL:   downloadURL,
+			Width:         photo.Width,
+			Height:        photo.Height,
+			LockExpiresAt: job.LockExpiresAt,
+		})
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Data:    model.PeopleWorkerTasksResponse{Tasks: tasks},
+	})
+}
+
+// HeartbeatWorkerTask 任务心跳（API Key认证）
+func (h *PeopleHandler) HeartbeatWorkerTask(c *gin.Context) {
+	taskID, err := strconv.ParseUint(c.Param("task_id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_TASK_ID", Message: err.Error()}})
+		return
+	}
+
+	workerID := c.GetHeader("X-Worker-ID")
+	if workerID == "" {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "MISSING_WORKER_ID", Message: "X-Worker-ID header required"}})
+		return
+	}
+
+	var req model.PeopleWorkerHeartbeatRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: err.Error()}})
+		return
+	}
+
+	lockUntil := time.Now().Add(5 * time.Minute)
+	if err := h.jobRepo.HeartbeatRemote(uint(taskID), workerID, req.Progress, req.StatusMessage, lockUntil); err != nil {
+		c.JSON(http.StatusConflict, model.Response{Success: false, Error: &model.ErrorInfo{Code: "HEARTBEAT_FAILED", Message: err.Error()}})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Data:    model.PeopleWorkerHeartbeatResponse{LockExpiresAt: lockUntil},
+	})
+}
+
+// ReleaseWorkerTask 释放任务（API Key认证）
+func (h *PeopleHandler) ReleaseWorkerTask(c *gin.Context) {
+	taskID, err := strconv.ParseUint(c.Param("task_id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_TASK_ID", Message: err.Error()}})
+		return
+	}
+
+	workerID := c.GetHeader("X-Worker-ID")
+	if workerID == "" {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "MISSING_WORKER_ID", Message: "X-Worker-ID header required"}})
+		return
+	}
+
+	var req model.PeopleWorkerReleaseTaskRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: err.Error()}})
+		return
+	}
+
+	if err := h.jobRepo.ReleaseRemote(uint(taskID), workerID, req.Reason, req.RetryLater); err != nil {
+		c.JSON(http.StatusConflict, model.Response{Success: false, Error: &model.ErrorInfo{Code: "RELEASE_FAILED", Message: err.Error()}})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "Task released"})
+}
+
+// SubmitWorkerResults 提交检测结果（API Key认证）
+func (h *PeopleHandler) SubmitWorkerResults(c *gin.Context) {
+	workerID := c.GetHeader("X-Worker-ID")
+	if workerID == "" {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "MISSING_WORKER_ID", Message: "X-Worker-ID header required"}})
+		return
+	}
+
+	var req model.PeopleWorkerSubmitResultsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: err.Error()}})
+		return
+	}
+
+	processed := 0
+	errors := make([]string, 0)
+
+	for _, result := range req.Results {
+		// 获取任务
+		job, err := h.jobRepo.GetByID(result.TaskID)
+		if err != nil || job == nil {
+			errors = append(errors, fmt.Sprintf("task %d not found", result.TaskID))
+			continue
+		}
+
+		// 验证 worker 拥有此任务
+		if job.WorkerID != workerID {
+			errors = append(errors, fmt.Sprintf("task %d not owned by this worker", result.TaskID))
+			continue
+		}
+
+		// 获取照片
+		photo, err := h.photoRepo.GetByID(result.PhotoID)
+		if err != nil || photo == nil {
+			errors = append(errors, fmt.Sprintf("photo %d not found", result.PhotoID))
+			continue
+		}
+
+		// 应用检测结果
+		if err := h.service.ApplyDetectionResult(job, photo, &result); err != nil {
+			errors = append(errors, fmt.Sprintf("task %d: %v", result.TaskID, err))
+			continue
+		}
+
+		processed++
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Data: model.PeopleWorkerSubmitResultsResponse{
+			Processed: processed,
+			Errors:    errors,
+		},
+	})
+}
+
+// AcquirePeopleRuntime 获取人物运行时租约（API Key认证）
+func (h *PeopleHandler) AcquirePeopleRuntime(c *gin.Context) {
+	var req model.PeopleWorkerRuntimeLeaseRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: err.Error()}})
+		return
+	}
+
+	// TODO: 实现 people runtime lease 获取
+	// 暂时返回成功，等待后续实现
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "People runtime acquired",
+		Data: model.PeopleWorkerRuntimeLeaseResponse{
+			LeaseExpiresAt: time.Now().Add(30 * time.Second),
+		},
+	})
+}
+
+// HeartbeatPeopleRuntime 续约人物运行时租约（API Key认证）
+func (h *PeopleHandler) HeartbeatPeopleRuntime(c *gin.Context) {
+	var req model.PeopleWorkerRuntimeLeaseRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: err.Error()}})
+		return
+	}
+
+	// TODO: 实现 people runtime lease 心跳
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "People runtime heartbeat updated",
+		Data: model.PeopleWorkerRuntimeLeaseResponse{
+			LeaseExpiresAt: time.Now().Add(30 * time.Second),
+		},
+	})
+}
+
+// ReleasePeopleRuntime 释放人物运行时租约（API Key认证）
+func (h *PeopleHandler) ReleasePeopleRuntime(c *gin.Context) {
+	var req model.PeopleWorkerRuntimeLeaseRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: err.Error()}})
+		return
+	}
+
+	// TODO: 实现 people runtime lease 释放
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "People runtime released"})
+}
+
+// hasManualLockedFaces 检查是否有人工锁定的人脸
+func hasManualLockedFaces(faces []*model.Face) bool {
+	for _, face := range faces {
+		if face != nil && face.ManualLocked {
+			return true
+		}
+	}
+	return false
 }

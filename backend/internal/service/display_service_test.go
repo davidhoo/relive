@@ -103,6 +103,7 @@ func (r *stubPhotoRepo) GetAdjacent(id uint, analyzed *bool, hasThumbnail *bool,
 func (r *stubPhotoRepo) GetScatteredHighQuality(minBeauty int, excludeIDs []uint, limit int) ([]*model.Photo, error) {
 	return nil, nil
 }
+func (r *stubPhotoRepo) ListByFaceStatus(status string) ([]*model.Photo, error) { return nil, nil }
 
 func TestNormalizeDisplayStrategyConfig_MergesSmartIntoOnThisDay(t *testing.T) {
 	cfg := &model.DisplayStrategyConfig{Algorithm: "smart"}

@@ -6,12 +6,16 @@ import (
 	"gorm.io/gorm"
 )
 
-const GlobalAnalysisResourceKey = "global_analysis"
+const (
+	GlobalAnalysisResourceKey = "global_analysis"
+	GlobalPeopleResourceKey   = "global_people"
+)
 
 const (
-	AnalysisOwnerTypeBatch      = "batch"
-	AnalysisOwnerTypeBackground = "background"
-	AnalysisOwnerTypeAnalyzer   = "analyzer"
+	AnalysisOwnerTypeBatch       = "batch"
+	AnalysisOwnerTypeBackground  = "background"
+	AnalysisOwnerTypeAnalyzer    = "analyzer"
+	AnalysisOwnerTypePeopleWorker = "people_worker"
 
 	AnalysisRuntimeStatusIdle    = "idle"
 	AnalysisRuntimeStatusRunning = "running"
@@ -23,7 +27,7 @@ type AnalysisRuntimeLease struct {
 	UpdatedAt       time.Time      `json:"updated_at"`
 	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
 	ResourceKey     string         `gorm:"type:varchar(64);not null;uniqueIndex:idx_runtime_resource" json:"resource_key"`
-	OwnerType       string         `gorm:"type:varchar(32);not null;default:idle;check:chk_runtime_owner_type,owner_type IN ('idle','batch','background','analyzer')" json:"owner_type"`
+	OwnerType       string         `gorm:"type:varchar(32);not null;default:idle;check:chk_runtime_owner_type,owner_type IN ('idle','batch','background','analyzer','people_worker')" json:"owner_type"`
 	OwnerID         string         `gorm:"type:varchar(128)" json:"owner_id"`
 	Status          string         `gorm:"type:varchar(16);not null;default:idle;check:chk_runtime_status,status IN ('idle','running')" json:"status"`
 	Message         string         `gorm:"type:varchar(255)" json:"message"`

@@ -33,6 +33,13 @@ type PeopleJob struct {
 	StartedAt       *time.Time `json:"started_at,omitempty"`
 	CompletedAt     *time.Time `json:"completed_at,omitempty"`
 	LastRequestedAt *time.Time `gorm:"index" json:"last_requested_at,omitempty"`
+
+	// Remote worker lease fields
+	WorkerID        string     `gorm:"type:varchar(100);index" json:"worker_id,omitempty"`
+	LockExpiresAt   *time.Time `gorm:"index" json:"lock_expires_at,omitempty"`
+	LastHeartbeatAt *time.Time `json:"last_heartbeat_at,omitempty"`
+	Progress        int        `gorm:"default:0" json:"progress"`
+	StatusMessage   string     `gorm:"type:text" json:"status_message,omitempty"`
 }
 
 func (PeopleJob) TableName() string {
