@@ -385,7 +385,9 @@ func (w *PeopleWorker) detectFaces(imageData []byte, imagePath string) ([]model.
 	}
 
 	// 发送请求到 ML 服务
-	req, err := http.NewRequestWithContext(ctx, "POST", w.config.ML.Endpoint+"/detect_faces", bytes.NewReader(jsonBody))
+	url := w.config.ML.Endpoint + "/api/v1/detect-faces"
+	logger.Debugf("Calling ML service: %s", url)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, 0, fmt.Errorf("create request: %w", err)
 	}

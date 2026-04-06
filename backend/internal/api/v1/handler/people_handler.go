@@ -818,7 +818,7 @@ func (h *PeopleHandler) GetWorkerTasks(c *gin.Context) {
 			continue
 		}
 
-		downloadURL := fmt.Sprintf("%s/api/v1/photos/%d/file", requestBaseURL(c), photo.ID)
+		downloadURL := fmt.Sprintf("%s/api/v1/photos/%d/image", requestBaseURL(c), photo.ID)
 
 		tasks = append(tasks, model.PeopleWorkerTask{
 			ID:            job.ID,
