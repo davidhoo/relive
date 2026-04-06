@@ -35,6 +35,12 @@ const (
 	// confirmedPersonDiscount lowers the attach threshold for persons with manual-locked faces,
 	// making it easier for new faces to join user-confirmed identities (e.g., family members).
 	confirmedPersonDiscount = 0.05
+
+	// Clustering optimization constants to prevent CPU overload on NAS
+	// See: https://github.com/davidhoo/relive/issues/XXX
+	peopleClusteringBatchSize     = 50   // Max pending faces to cluster at once
+	peopleClusteringInterval      = 100  // Milliseconds to sleep after clustering
+	peopleClusteringTaskInterval  = 5    // Cluster every N tasks (0 = always)
 )
 
 type PeopleMLClient interface {
@@ -86,6 +92,10 @@ type peopleService struct {
 	feedbackPending       bool
 	feedbackPollInterval  time.Duration
 	feedbackReclusterHook func() model.ReclusterResult
+
+	// Clustering rate limiting to prevent CPU overload
+	clusteringTaskCounter   int
+	clusteringTaskCounterMu sync.Mutex
 }
 
 type activePeopleTask struct {
@@ -876,16 +886,30 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 		return err
 	}
 
-	affectedPersonIDs, affectedPhotoIDs, clusterErr := s.runIncrementalClustering()
-	if clusterErr != nil {
-		if updateErr := s.jobRepo.UpdateFields(job.ID, map[string]interface{}{
-			"status":       model.PeopleJobStatusFailed,
-			"last_error":   clusterErr.Error(),
-			"completed_at": &now,
-		}); updateErr != nil {
-			logger.Warnf("update people job %d failed after clustering error: %v", job.ID, updateErr)
+	// Rate limiting: only cluster every N tasks to prevent CPU overload
+	// This is especially important for NAS devices with limited CPU resources
+	s.clusteringTaskCounterMu.Lock()
+	s.clusteringTaskCounter++
+	shouldCluster := peopleClusteringTaskInterval <= 0 || s.clusteringTaskCounter >= peopleClusteringTaskInterval
+	if shouldCluster {
+		s.clusteringTaskCounter = 0
+	}
+	s.clusteringTaskCounterMu.Unlock()
+
+	var affectedPersonIDs, affectedPhotoIDs []uint
+	var clusterErr error
+	if shouldCluster {
+		affectedPersonIDs, affectedPhotoIDs, clusterErr = s.runIncrementalClustering()
+		if clusterErr != nil {
+			if updateErr := s.jobRepo.UpdateFields(job.ID, map[string]interface{}{
+				"status":       model.PeopleJobStatusFailed,
+				"last_error":   clusterErr.Error(),
+				"completed_at": &now,
+			}); updateErr != nil {
+				logger.Warnf("update people job %d failed after clustering error: %v", job.ID, updateErr)
+			}
+			return clusterErr
 		}
-		return clusterErr
 	}
 
 	for _, personID := range previousPersonIDs {
@@ -1460,13 +1484,17 @@ func (s *peopleService) createPersonFromComponent(component []*model.Face, score
 }
 
 func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
-	pendingFaces, err := s.faceRepo.ListPending(0)
+	pendingFaces, err := s.faceRepo.ListPending(peopleClusteringBatchSize)
 	if err != nil {
 		return nil, nil, err
 	}
 	if len(pendingFaces) == 0 {
 		return nil, nil, nil
 	}
+
+	// Rate limiting: sleep after clustering to prevent CPU overload on NAS
+	// This allows API requests to be processed between clustering batches
+	defer time.Sleep(peopleClusteringInterval * time.Millisecond)
 
 	assignedPersonIDs, err := s.faceRepo.ListAssignedPersonIDs()
 	if err != nil {
