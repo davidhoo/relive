@@ -134,7 +134,7 @@ func (w *PeopleWorker) checkMLService() error {
 	defer cancel()
 
 	// 尝试调用 ML 服务的健康检查端点
-	req, err := http.NewRequestWithContext(ctx, "GET", w.config.ML.Endpoint+"/health", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", w.config.ML.Endpoint+"/api/v1/health", nil)
 	if err != nil {
 		return err
 	}
