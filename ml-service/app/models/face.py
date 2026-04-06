@@ -148,6 +148,11 @@ class FaceDetector:
         root = os.environ.get("INSIGHTFACE_HOME", self.settings.model_cache_dir)
         os.makedirs(root, exist_ok=True)
 
+        # 打印使用的 provider（方便调试）
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"InsightFace using providers: {providers}")
+
         app = FaceAnalysis(
             name=self.settings.model_pack,
             root=root,
@@ -158,7 +163,22 @@ class FaceDetector:
         return app
 
     def _get_providers(self) -> list[str]:
+        import platform
+
         device = self.settings.onnx_device.lower()
+
+        # macOS Apple Silicon - 优先使用 CoreML
+        if platform.system() == "Darwin" and platform.machine() == "arm64":
+            # 检查 CoreML 是否可用
+            try:
+                import onnxruntime as ort
+                available_providers = ort.get_available_providers()
+                if "CoreMLExecutionProvider" in available_providers:
+                    return ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+            except Exception:
+                pass
+            return ["CPUExecutionProvider"]
+
         if device == "cuda":
             return ["CUDAExecutionProvider", "CPUExecutionProvider"]
         return ["CPUExecutionProvider"]
