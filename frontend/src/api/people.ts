@@ -79,7 +79,7 @@ export const peopleApi = {
   },
 
   rescanByPath(path: string) {
-    return http.post<ApiResponse<{ count: number }>>('/people/rescan-by-path', { path })
+    return http.post<ApiResponse<{ count: number; background_started?: boolean }>>('/people/rescan-by-path', { path })
   },
 
   enqueueUnprocessed() {
