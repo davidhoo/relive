@@ -7,10 +7,12 @@
 - 版本：`VERSION`
 - 后端路由：`backend/internal/api/v1/router/router.go`
 - analyzer CLI：`backend/cmd/relive-analyzer/main.go`
+- people-worker CLI：`backend/cmd/relive-people-worker/main.go`
 - 前端路由：`frontend/src/router/index.ts`
 - 源码部署模板：`docker-compose.yml.example`
 - 镜像部署模板：`docker-compose.prod.yml.example`
 - analyzer 模板：`analyzer.yaml.example`
+- people-worker 模板：`people-worker.yaml.example`
 - 配置职责：`docs/CONFIGURATION.md`
 - 生成配置：`backend/config.dev.yaml.example` / `backend/config.prod.yaml.example`
 
@@ -42,6 +44,12 @@ make clean
 make build-analyzer
 ./backend/bin/relive-analyzer check -config analyzer.yaml
 ./backend/bin/relive-analyzer analyze -config analyzer.yaml
+
+# people-worker (Mac M4 人脸检测加速)
+make build-people-worker
+./backend/bin/relive-people-worker gen-config > people-worker.yaml
+./backend/bin/relive-people-worker check -config people-worker.yaml
+./backend/bin/relive-people-worker run -config people-worker.yaml
 ```
 
 注：若同一台机器同时存在 `docker-compose.yml` 和 `docker-compose.prod.yml`，`make logs` / `make stop` / `make restart` 默认优先作用于 `docker-compose.yml`。排查镜像部署时，优先显式使用 `docker compose -f docker-compose.prod.yml ...`。
@@ -85,6 +93,16 @@ make build-analyzer
 - `GET /api/v1/photos/:id/people`
 - `GET /api/v1/faces/:id/thumbnail`
 
+## People Worker API (API Key 认证)
+
+- `GET /api/v1/people/worker/tasks` - 获取待处理任务
+- `POST /api/v1/people/worker/tasks/:task_id/heartbeat` - 任务心跳
+- `POST /api/v1/people/worker/tasks/:task_id/release` - 释放任务
+- `POST /api/v1/people/worker/results` - 提交检测结果
+- `POST /api/v1/people/runtime/acquire` - 获取运行时租约
+- `POST /api/v1/people/runtime/heartbeat` - 运行时心跳
+- `POST /api/v1/people/runtime/release` - 释放运行时租约
+
 ## 展示策略补充
 
 - `photos.top_person_category` 会作为照片层人物信号参与展示排序
@@ -95,7 +113,14 @@ make build-analyzer
 
 - 使用 API 模式
 - 不再以 `export.db` 作为默认工作流
-- 认证依赖“设备管理”中创建出来的 `api_key`
+- 认证依赖”设备管理”中创建出来的 `api_key`
+
+## 当前 people-worker 说明
+
+- 用于 Mac M4 等高性能设备加速人脸检测
+- 需要本地运行 `relive-ml` 服务
+- 与 `relive-analyzer` 可以同时运行
+- 详见 `docs/PEOPLE_WORKER_API_MODE.md`
 
 ## 阅读顺序
 

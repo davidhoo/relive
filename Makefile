@@ -40,7 +40,8 @@ help:
 	@echo "  make clean            - 清理构建文件"
 	@echo ""
 	@echo "工具:"
-	@echo "  make build-analyzer   - 构建离线分析工具"
+	@echo "  make build-analyzer       - 构建离线分析工具"
+	@echo "  make build-people-worker  - 构建人物检测 Worker（Mac M4）"
 	@echo ""
 
 # 开发环境
@@ -118,3 +119,9 @@ build-analyzer: sync-version
 analyzer: build-analyzer
 	@echo "运行离线分析工具..."
 	cd backend && ./bin/relive-analyzer
+
+# 构建人物检测 Worker
+build-people-worker: sync-version
+	@echo "构建人物检测 Worker..."
+	cd backend && make build-people-worker
+	@echo "构建完成: backend/bin/relive-people-worker"

@@ -3,6 +3,7 @@
 # 变量
 APP_NAME=relive
 ANALYZER_NAME=relive-analyzer
+PEOPLE_WORKER_NAME=relive-people-worker
 VERSION=$(shell cat ../VERSION 2>/dev/null || echo "dev")
 BUILD_TIME=$(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 GIT_COMMIT=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -11,7 +12,7 @@ GIT_COMMIT=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 LDFLAGS=-ldflags "-X github.com/davidhoo/relive/pkg/version.BuildTime=${BUILD_TIME} -X github.com/davidhoo/relive/pkg/version.GitCommit=${GIT_COMMIT}"
 
 # 默认目标：构建所有
-all: build build-analyzer
+all: build build-analyzer build-people-worker
 
 # 构建主程序
 build:
@@ -26,6 +27,13 @@ build-analyzer:
 	@mkdir -p bin
 	go build ${LDFLAGS} -o bin/$(ANALYZER_NAME) ./cmd/relive-analyzer
 	@echo "Build complete: bin/$(ANALYZER_NAME)"
+
+# 构建人物检测 Worker
+build-people-worker:
+	@echo "Building $(PEOPLE_WORKER_NAME)..."
+	@mkdir -p bin
+	go build ${LDFLAGS} -o bin/$(PEOPLE_WORKER_NAME) ./cmd/relive-people-worker
+	@echo "Build complete: bin/$(PEOPLE_WORKER_NAME)"
 
 # 运行主程序
 run:
@@ -92,9 +100,10 @@ docker-run:
 # 帮助
 help:
 	@echo "Relive Development Commands:"
-	@echo "  make build          - Build the main application (bin/relive)"
-	@echo "  make build-analyzer - Build the analyzer tool (bin/relive-analyzer)"
-	@echo "  make all            - Build both main and analyzer"
+	@echo "  make build              - Build the main application (bin/relive)"
+	@echo "  make build-analyzer     - Build the analyzer tool (bin/relive-analyzer)"
+	@echo "  make build-people-worker - Build the people worker (bin/relive-people-worker)"
+	@echo "  make all                - Build all binaries"
 	@echo "  make run            - Run the main application"
 	@echo "  make run-analyzer   - Run the analyzer (help)"
 	@echo "  make test           - Run tests"

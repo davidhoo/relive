@@ -1,0 +1,53 @@
+# relive-people-worker 配置示例
+# 用于 Mac M4 等高性能设备离线执行人脸检测
+#
+# 使用方法:
+# 1. 复制此文件: cp people-worker.yaml.example people-worker.yaml
+# 2. 编辑配置，设置正确的 endpoint 和 api_key
+# 3. 运行检查: ./relive-people-worker check -config people-worker.yaml
+# 4. 启动 Worker: ./relive-people-worker run -config people-worker.yaml
+
+server:
+  # NAS 服务端地址
+  endpoint: "http://nas:8080"
+  # API Key（用于认证）
+  # 可以从环境变量读取: "${RELIVE_API_KEY}"
+  api_key: "your-api-key-here"
+  # API 请求超时（秒）
+  timeout: 30
+
+people_worker:
+  # Worker 实例ID（用于标识，可选）
+  worker_id: "mac-m4"
+  # 并发处理数（M4 Mac 推荐 4-8）
+  workers: 4
+  # 每批获取任务数
+  fetch_limit: 10
+  # 重试次数
+  retry_count: 3
+  # 重试延迟（秒）
+  retry_delay: 5
+
+ml:
+  # relive-ml 服务地址（本地运行）
+  endpoint: "http://localhost:5050"
+  # 人脸检测超时（秒）
+  timeout: 15
+
+download:
+  # 临时文件目录
+  temp_dir: "~/.relive-people-worker/temp"
+  # 下载超时（秒）
+  timeout: 30
+  # 最大并发下载
+  max_concurrent: 4
+  # 下载重试次数
+  retry_count: 3
+
+logging:
+  # 日志级别: debug, info, warn, error
+  level: "info"
+  # 输出到控制台
+  console: true
+  # 日志文件路径（空表示不写入文件）
+  file: ""
