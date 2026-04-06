@@ -2284,3 +2284,208 @@ func TestPeopleServiceManualAvatarWins(t *testing.T) {
 
 	require.NoError(t, svc.StopBackground())
 }
+
+// TestPeopleService_ApplyDetectionResult_EmptyFaceListCompletesSuccessfully verifies that photos with no faces
+// are properly marked as no_face and job is completed.
+func TestPeopleService_ApplyDetectionResult_EmptyFaceListCompletesSuccessfully(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	photoRepo := repository.NewPhotoRepository(db)
+	jobRepo := repository.NewPeopleJobRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+
+	photo := &model.Photo{
+		FilePath: "/photos/no-face.jpg",
+		FileName: "no-face.jpg",
+		FileSize: 1,
+		FileHash: "hash-no-face",
+		Width:    100,
+		Height:   100,
+		Status:   model.PhotoStatusActive,
+	}
+	require.NoError(t, photoRepo.Create(photo))
+
+	job := &model.PeopleJob{
+		PhotoID:  photo.ID,
+		FilePath: photo.FilePath,
+		Status:   model.PeopleJobStatusProcessing,
+		Source:   model.PeopleJobSourceManual,
+		WorkerID: "worker-1",
+		Priority: 10,
+		QueuedAt: time.Now(),
+	}
+	require.NoError(t, jobRepo.Create(job))
+
+	result := &model.PeopleDetectionResult{
+		Faces: []model.PeopleDetectionFace{},
+	}
+
+	err := svc.ApplyDetectionResult(job, photo, result)
+	require.NoError(t, err)
+
+	updatedPhoto, err := photoRepo.GetByID(photo.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedPhoto)
+	assert.Equal(t, model.FaceProcessStatusNoFace, updatedPhoto.FaceProcessStatus)
+	assert.Equal(t, 0, updatedPhoto.FaceCount)
+
+	faces, err := faceRepo.ListByPhotoID(photo.ID)
+	require.NoError(t, err)
+	assert.Empty(t, faces)
+
+	updatedJob, err := jobRepo.GetByID(job.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedJob)
+	assert.Equal(t, model.PeopleJobStatusCompleted, updatedJob.Status)
+	assert.NotNil(t, updatedJob.CompletedAt)
+}
+
+// TestPeopleService_ApplyDetectionResult_WithFacesCreatesFacesAndCompletes verifies that detection results
+// with faces properly create face records and complete the job.
+func TestPeopleService_ApplyDetectionResult_WithFacesCreatesFacesAndCompletes(t *testing.T) {
+	rootDir := t.TempDir()
+	photoPath := createTestImageFile(t, rootDir, "with-faces.jpg")
+
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	svc.config.Photos.ThumbnailPath = filepath.Join(rootDir, ".thumbnails")
+
+	photoRepo := repository.NewPhotoRepository(db)
+	jobRepo := repository.NewPeopleJobRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+
+	photo := &model.Photo{
+		FilePath: photoPath,
+		FileName: "with-faces.jpg",
+		FileSize: 1,
+		FileHash: "hash-with-faces",
+		Width:    320,
+		Height:   320,
+		Status:   model.PhotoStatusActive,
+	}
+	require.NoError(t, photoRepo.Create(photo))
+
+	job := &model.PeopleJob{
+		PhotoID:  photo.ID,
+		FilePath: photo.FilePath,
+		Status:   model.PeopleJobStatusProcessing,
+		Source:   model.PeopleJobSourceManual,
+		WorkerID: "worker-1",
+		Priority: 10,
+		QueuedAt: time.Now(),
+	}
+	require.NoError(t, jobRepo.Create(job))
+
+	result := &model.PeopleDetectionResult{
+		Faces: []model.PeopleDetectionFace{
+			{
+				BBox:         model.BoundingBox{X: 0.1, Y: 0.1, Width: 0.2, Height: 0.2},
+				Confidence:   0.95,
+				QualityScore: 0.88,
+				Embedding:    []float32{1, 0, 0},
+			},
+			{
+				BBox:         model.BoundingBox{X: 0.5, Y: 0.5, Width: 0.2, Height: 0.2},
+				Confidence:   0.93,
+				QualityScore: 0.85,
+				Embedding:    []float32{0, 1, 0},
+			},
+		},
+	}
+
+	err := svc.ApplyDetectionResult(job, photo, result)
+	require.NoError(t, err)
+
+	updatedPhoto, err := photoRepo.GetByID(photo.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedPhoto)
+	assert.Equal(t, model.FaceProcessStatusReady, updatedPhoto.FaceProcessStatus)
+	assert.Equal(t, 2, updatedPhoto.FaceCount)
+
+	faces, err := faceRepo.ListByPhotoID(photo.ID)
+	require.NoError(t, err)
+	require.Len(t, faces, 2)
+
+	updatedJob, err := jobRepo.GetByID(job.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedJob)
+	assert.Equal(t, model.PeopleJobStatusCompleted, updatedJob.Status)
+}
+
+// TestPeopleService_ApplyDetectionResult_CleansUpOldFaces verifies that old faces are deleted
+// and person state is synced when new detection result is applied.
+func TestPeopleService_ApplyDetectionResult_CleansUpOldFaces(t *testing.T) {
+	rootDir := t.TempDir()
+	photoPath := createTestImageFile(t, rootDir, "cleanup-test.jpg")
+
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	svc.config.Photos.ThumbnailPath = filepath.Join(rootDir, ".thumbnails")
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+	jobRepo := repository.NewPeopleJobRepository(db)
+
+	photo := &model.Photo{
+		FilePath: photoPath,
+		FileName: "cleanup-test.jpg",
+		FileSize: 1,
+		FileHash: "hash-cleanup",
+		Width:    320,
+		Height:   320,
+		Status:   model.PhotoStatusActive,
+	}
+	require.NoError(t, photoRepo.Create(photo))
+
+	person := &model.Person{Category: model.PersonCategoryFamily}
+	require.NoError(t, personRepo.Create(person))
+
+	oldFace := &model.Face{
+		PhotoID:       photo.ID,
+		PersonID:      &person.ID,
+		BBoxX:         0.1,
+		BBoxY:         0.1,
+		BBoxWidth:     0.2,
+		BBoxHeight:    0.2,
+		Confidence:    0.90,
+		QualityScore:  0.80,
+		Embedding:     encodeEmbedding(t, []float32{0.5, 0.5}),
+		ClusterStatus: model.FaceClusterStatusAssigned,
+	}
+	require.NoError(t, faceRepo.Create(oldFace))
+	require.NoError(t, personRepo.RefreshStats(person.ID))
+
+	job := &model.PeopleJob{
+		PhotoID:  photo.ID,
+		FilePath: photo.FilePath,
+		Status:   model.PeopleJobStatusProcessing,
+		Source:   model.PeopleJobSourceManual,
+		WorkerID: "worker-1",
+		Priority: 10,
+		QueuedAt: time.Now(),
+	}
+	require.NoError(t, jobRepo.Create(job))
+
+	result := &model.PeopleDetectionResult{
+		Faces: []model.PeopleDetectionFace{
+			{
+				BBox:         model.BoundingBox{X: 0.3, Y: 0.3, Width: 0.2, Height: 0.2},
+				Confidence:   0.97,
+				QualityScore: 0.90,
+				Embedding:    []float32{1, 0, 0},
+			},
+		},
+	}
+
+	err := svc.ApplyDetectionResult(job, photo, result)
+	require.NoError(t, err)
+
+	faces, err := faceRepo.ListByPhotoID(photo.ID)
+	require.NoError(t, err)
+	require.Len(t, faces, 1)
+	assert.NotEqual(t, oldFace.ID, faces[0].ID)
+
+	// Person should be deleted because all faces were removed and syncPersonState cleans up empty persons
+	updatedPerson, err := personRepo.GetByID(person.ID)
+	require.NoError(t, err)
+	assert.Nil(t, updatedPerson)
+}
