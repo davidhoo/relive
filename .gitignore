@@ -70,6 +70,7 @@ esp32/.vscode
 esp32/build/
 backend/relive
 backend/relive-analyzer
+backend/relive-people-worker
 
 # Config files with sensitive data
 analyzer.yaml
