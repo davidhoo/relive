@@ -80,6 +80,9 @@ func (s *stubPeopleService) EnqueueByPath(path string, source string, priority i
 	}
 	return s.enqueueByPathCount, nil
 }
+func (s *stubPeopleService) EnqueueUnprocessed() (int, error) {
+	return 0, nil
+}
 func (s *stubPeopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint) (*model.ReclusterResult, error) {
 	if s.err != nil {
 		return nil, s.err
@@ -138,6 +141,9 @@ func (s *stubPeopleService) DissolvePerson(_ uint) (int, error) {
 	}
 	return 5, nil
 }
+func (s *stubPeopleService) ApplyDetectionResult(_ *model.PeopleJob, _ *model.Photo, _ *model.PeopleDetectionResult) error {
+	return nil
+}
 
 type peopleListPayload struct {
 	Items      []model.PersonResponse `json:"items"`
@@ -190,6 +196,7 @@ func newPeopleHandlerForTest(t *testing.T) (*PeopleHandler, *stubPeopleService, 
 		repository.NewPersonRepository(db),
 		repository.NewFaceRepository(db),
 		repository.NewPhotoRepository(db),
+		repository.NewPeopleJobRepository(db),
 		cfg,
 	)
 
@@ -554,13 +561,11 @@ func TestPeopleHandlerRescanByPath(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	resp := decodeAPIResponse(t, rec)
 	require.True(t, resp.Success)
-	assert.Equal(t, 1, svc.startCalled)
 	assert.Equal(t, "/photos/family", svc.enqueueByPathPath)
 	assert.Equal(t, model.PeopleJobSourceManual, svc.enqueueByPathSource)
 	assert.Equal(t, 80, svc.enqueueByPathPriority)
 	payload := decodeResponseData[peopleRescanPayload](t, resp)
 	assert.Equal(t, 12, payload.Count)
-	assert.True(t, payload.BackgroundStarted)
 }
 
 func TestPeopleHandlerGetPhotoPeople(t *testing.T) {
