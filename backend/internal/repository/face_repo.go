@@ -106,7 +106,11 @@ func (r *faceRepository) ListAssignedPersonIDs() ([]uint, error) {
 
 func (r *faceRepository) ListPending(limit int) ([]*model.Face, error) {
 	var faces []*model.Face
-	query := r.db.Where("cluster_status = ?", model.FaceClusterStatusPending).Order("id ASC")
+	query := r.db.
+		Where("cluster_status = ?", model.FaceClusterStatusPending).
+		Order("clustered_at IS NOT NULL ASC").
+		Order("clustered_at ASC").
+		Order("id ASC")
 	if limit > 0 {
 		query = query.Limit(limit)
 	}

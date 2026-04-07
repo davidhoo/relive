@@ -112,6 +112,65 @@ func TestFaceRepository_ListPending(t *testing.T) {
 	assert.Equal(t, model.FaceClusterStatusPending, faces[0].ClusterStatus)
 }
 
+func TestFaceRepository_ListPending_PrioritizesNeverClusteredFaces(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	type pendingLister interface {
+		ListPending(limit int) ([]*model.Face, error)
+	}
+
+	faceRepo, ok := NewFaceRepository(db).(pendingLister)
+	require.True(t, ok)
+
+	retriedOld := &model.Face{
+		PhotoID:       1,
+		BBoxX:         0.1,
+		BBoxY:         0.1,
+		BBoxWidth:     0.2,
+		BBoxHeight:    0.2,
+		Confidence:    0.95,
+		QualityScore:  0.90,
+		ClusterStatus: model.FaceClusterStatusPending,
+		ClusterScore:  0.10,
+		ClusteredAt:   ptrTime(time.Now().Add(-3 * time.Hour)),
+	}
+	neverClustered := &model.Face{
+		PhotoID:       2,
+		BBoxX:         0.2,
+		BBoxY:         0.2,
+		BBoxWidth:     0.2,
+		BBoxHeight:    0.2,
+		Confidence:    0.94,
+		QualityScore:  0.89,
+		ClusterStatus: model.FaceClusterStatusPending,
+		ClusterScore:  0.0,
+		ClusteredAt:   nil,
+	}
+	retriedRecent := &model.Face{
+		PhotoID:       3,
+		BBoxX:         0.3,
+		BBoxY:         0.3,
+		BBoxWidth:     0.2,
+		BBoxHeight:    0.2,
+		Confidence:    0.93,
+		QualityScore:  0.88,
+		ClusterStatus: model.FaceClusterStatusPending,
+		ClusterScore:  0.20,
+		ClusteredAt:   ptrTime(time.Now().Add(-1 * time.Hour)),
+	}
+
+	require.NoError(t, db.Create(retriedOld).Error)
+	require.NoError(t, db.Create(neverClustered).Error)
+	require.NoError(t, db.Create(retriedRecent).Error)
+
+	faces, err := faceRepo.ListPending(2)
+	require.NoError(t, err)
+	require.Len(t, faces, 2)
+	assert.Equal(t, neverClustered.ID, faces[0].ID)
+	assert.Equal(t, retriedOld.ID, faces[1].ID)
+}
+
 func TestFaceRepository_ListTopByPersonIDs(t *testing.T) {
 	db := setupTestDB(t)
 	defer teardownTestDB(db)
