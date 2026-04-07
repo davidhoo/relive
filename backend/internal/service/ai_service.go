@@ -605,23 +605,24 @@ func (s *aiService) analyzePhotoInternal(photoID uint, force bool) error {
 		}
 	}
 
-	// 更新照片记录
 	now := time.Now()
-	photo.AIAnalyzed = true
-	photo.AIProvider = s.provider.Name() // 保存 AI 提供商名称
-	photo.Description = result.Description
-	photo.Caption = caption
-	photo.MainCategory = result.MainCategory
-	photo.Tags = result.Tags
-	photo.MemoryScore = int(result.MemoryScore)
-	photo.BeautyScore = int(result.BeautyScore)
-	photo.ScoreReason = result.Reason
-	photo.AnalyzedAt = &now
+	memoryScore := int(result.MemoryScore)
+	beautyScore := int(result.BeautyScore)
+	overallScore := model.CalcOverallScore(memoryScore, beautyScore)
 
-	// 计算综合评分
-	photo.OverallScore = model.CalcOverallScore(photo.MemoryScore, photo.BeautyScore)
-
-	if err := s.photoRepo.Update(photo); err != nil {
+	if err := s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
+		"ai_analyzed":   true,
+		"ai_provider":   s.provider.Name(),
+		"description":   result.Description,
+		"caption":       caption,
+		"main_category": result.MainCategory,
+		"tags":          result.Tags,
+		"memory_score":  memoryScore,
+		"beauty_score":  beautyScore,
+		"overall_score": overallScore,
+		"score_reason":  result.Reason,
+		"analyzed_at":   &now,
+	}); err != nil {
 		return fmt.Errorf("update photo: %w", err)
 	}
 
@@ -633,7 +634,7 @@ func (s *aiService) analyzePhotoInternal(photoID uint, force bool) error {
 	}
 
 	logger.Infof("Photo %d analyzed successfully (2 sessions): memory=%d, beauty=%d, overall=%d, caption=%s",
-		photoID, photo.MemoryScore, photo.BeautyScore, photo.OverallScore, caption)
+		photoID, memoryScore, beautyScore, overallScore, caption)
 
 	return nil
 }
@@ -1210,19 +1211,23 @@ func (s *aiService) analyzeInBatchesAsync(task *AnalyzeTask, photos []*model.Pho
 				}
 
 				now := time.Now()
-				photo.AIAnalyzed = true
-				photo.AIProvider = result.Provider
-				photo.Description = result.Description
-				photo.Caption = caption
-				photo.MainCategory = result.MainCategory
-				photo.Tags = result.Tags
-				photo.MemoryScore = int(result.MemoryScore)
-				photo.BeautyScore = int(result.BeautyScore)
-				photo.ScoreReason = result.Reason
-				photo.AnalyzedAt = &now
-				photo.OverallScore = model.CalcOverallScore(photo.MemoryScore, photo.BeautyScore)
+				memoryScore := int(result.MemoryScore)
+				beautyScore := int(result.BeautyScore)
+				overallScore := model.CalcOverallScore(memoryScore, beautyScore)
 
-				if err := s.photoRepo.Update(photo); err != nil {
+				if err := s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
+					"ai_analyzed":   true,
+					"ai_provider":   result.Provider,
+					"description":   result.Description,
+					"caption":       caption,
+					"main_category": result.MainCategory,
+					"tags":          result.Tags,
+					"memory_score":  memoryScore,
+					"beauty_score":  beautyScore,
+					"overall_score": overallScore,
+					"score_reason":  result.Reason,
+					"analyzed_at":   &now,
+				}); err != nil {
 					logger.Errorf("[Task %s] Failed to update photo %d: %v", task.ID, photo.ID, err)
 					failedCount++
 					if task.Mode == model.AnalysisOwnerTypeBackground {

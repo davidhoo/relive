@@ -564,8 +564,7 @@ func (s *photoService) processScanFile(ctx context.Context, jobID string, task s
 
 	if rebuild {
 		photo.ID = existing.ID
-		s.preserveAnalysisFields(existing, photo)
-		if err := s.repo.Update(photo); err != nil {
+		if err := s.repo.UpdateFields(photo.ID, s.scanUpdateFields(photo)); err != nil {
 			logger.Errorf("[Task %s] Update photo failed: %v", jobID, err)
 			progress.incrementSkipped(1)
 		} else {
@@ -580,8 +579,7 @@ func (s *photoService) processScanFile(ctx context.Context, jobID string, task s
 
 	if existing.FileHash != photo.FileHash {
 		photo.ID = existing.ID
-		s.preserveAnalysisFields(existing, photo)
-		if err := s.repo.Update(photo); err != nil {
+		if err := s.repo.UpdateFields(photo.ID, s.scanUpdateFields(photo)); err != nil {
 			logger.Errorf("[Task %s] Update photo failed: %v", jobID, err)
 			progress.incrementSkipped(1)
 		} else {
@@ -606,33 +604,43 @@ func (s *photoService) canReuseExistingPhoto(existing *model.Photo, info os.File
 	return existing.FileModTime.Equal(info.ModTime())
 }
 
-func (s *photoService) preserveAnalysisFields(existing, photo *model.Photo) {
-	if existing == nil || photo == nil {
-		return
+func (s *photoService) scanUpdateFields(photo *model.Photo) map[string]interface{} {
+	fields := map[string]interface{}{
+		"file_path":        photo.FilePath,
+		"file_name":        photo.FileName,
+		"file_size":        photo.FileSize,
+		"file_hash":        photo.FileHash,
+		"file_mod_time":    photo.FileModTime,
+		"file_create_time": photo.FileCreateTime,
+		"taken_at":         photo.TakenAt,
+		"camera_model":     photo.CameraModel,
+		"width":            photo.Width,
+		"height":           photo.Height,
+		"orientation":      photo.Orientation,
+		"gps_latitude":     photo.GPSLatitude,
+		"gps_longitude":    photo.GPSLongitude,
+		"location":         photo.Location,
+		"country":          photo.Country,
+		"province":         photo.Province,
+		"city":             photo.City,
+		"district":         photo.District,
+		"street":           photo.Street,
+		"poi":              photo.POI,
 	}
-	photo.Status = existing.Status
-	photo.ThumbnailPath = existing.ThumbnailPath
-	photo.ThumbnailStatus = existing.ThumbnailStatus
-	photo.ThumbnailGeneratedAt = existing.ThumbnailGeneratedAt
-	photo.GeocodeStatus = existing.GeocodeStatus
-	photo.GeocodeProvider = existing.GeocodeProvider
-	photo.GeocodedAt = existing.GeocodedAt
-	photo.FaceProcessStatus = existing.FaceProcessStatus
-	photo.FaceCount = existing.FaceCount
-	photo.TopPersonCategory = existing.TopPersonCategory
-	if existing.Description != "" {
-		photo.Description = existing.Description
-		photo.MainCategory = existing.MainCategory
-		photo.Tags = existing.Tags
+
+	if photo.ThumbnailPath != "" || photo.ThumbnailStatus != "" || photo.ThumbnailGeneratedAt != nil {
+		fields["thumbnail_path"] = photo.ThumbnailPath
+		fields["thumbnail_status"] = photo.ThumbnailStatus
+		fields["thumbnail_generated_at"] = photo.ThumbnailGeneratedAt
 	}
-	photo.AIAnalyzed = existing.AIAnalyzed
-	photo.AnalyzedAt = existing.AnalyzedAt
-	photo.AIProvider = existing.AIProvider
-	photo.Caption = existing.Caption
-	photo.MemoryScore = existing.MemoryScore
-	photo.BeautyScore = existing.BeautyScore
-	photo.OverallScore = existing.OverallScore
-	photo.ScoreReason = existing.ScoreReason
+
+	if photo.GeocodeStatus != "" || photo.GeocodeProvider != "" || photo.GeocodedAt != nil {
+		fields["geocode_status"] = photo.GeocodeStatus
+		fields["geocode_provider"] = photo.GeocodeProvider
+		fields["geocoded_at"] = photo.GeocodedAt
+	}
+
+	return fields
 }
 
 func (s *photoService) enqueueGeocodeForPhoto(photo *model.Photo, source string, priority int) {

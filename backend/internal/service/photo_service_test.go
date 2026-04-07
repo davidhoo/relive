@@ -383,6 +383,105 @@ func TestPhotoService_StartRebuild_PreservesPeopleFieldsForExistingPhoto(t *test
 	}
 }
 
+func TestPhotoService_StartRebuild_DoesNotOverwriteDerivedFieldsUpdatedDuringScan(t *testing.T) {
+	rootDir := t.TempDir()
+	service, _ := newAutoScanTestService(t, rootDir)
+
+	filePath := filepath.Join(rootDir, "existing.jpg")
+	require.NoError(t, os.WriteFile(filePath, []byte("test"), 0o644))
+
+	info, err := os.Stat(filePath)
+	require.NoError(t, err)
+
+	now := time.Now()
+	existing := &model.Photo{
+		FilePath:          filePath,
+		FileName:          filepath.Base(filePath),
+		FileSize:          info.Size(),
+		FileHash:          "existing-hash",
+		Width:             100,
+		Height:            100,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+		FileModTime:       &now,
+		FaceProcessStatus: model.FaceProcessStatusNoFace,
+		FaceCount:         0,
+		AIAnalyzed:        false,
+	}
+	require.NoError(t, service.repo.Create(existing))
+
+	processStarted := make(chan struct{})
+	processRelease := make(chan struct{})
+	service.processPhotoFunc = func(filePath string, info os.FileInfo) (*model.Photo, error) {
+		close(processStarted)
+		<-processRelease
+
+		now := time.Now()
+		return &model.Photo{
+			FilePath:        filePath,
+			FileName:        filepath.Base(filePath),
+			FileSize:        info.Size(),
+			FileHash:        "updated-hash",
+			Width:           640,
+			Height:          480,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+			FileModTime:     &now,
+			ThumbnailPath:   "derived/new-thumb.jpg",
+			ThumbnailStatus: model.ThumbnailStatusPending,
+			GeocodeStatus:   model.GeocodeStatusNone,
+		}, nil
+	}
+
+	if _, err := service.StartRebuild(rootDir); err != nil {
+		t.Fatalf("start rebuild: %v", err)
+	}
+
+	select {
+	case <-processStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("processPhoto was not called")
+	}
+
+	require.NoError(t, service.repo.UpdateFields(existing.ID, map[string]interface{}{
+		"face_process_status": model.FaceProcessStatusReady,
+		"face_count":          2,
+		"top_person_category": model.PersonCategoryFamily,
+		"ai_analyzed":         true,
+		"description":         "fresh ai description",
+		"caption":             "fresh ai caption",
+		"main_category":       "人物",
+		"memory_score":        88,
+		"beauty_score":        77,
+		"overall_score":       84,
+		"score_reason":        "fresh ai reason",
+	}))
+
+	close(processRelease)
+
+	task := waitForTaskStatus(t, service, map[string]bool{model.ScanJobStatusCompleted: true}, 3*time.Second)
+	if task.SkippedFiles != 0 {
+		t.Fatalf("expected rebuild to update existing photo without skip, got skipped=%d", task.SkippedFiles)
+	}
+
+	updated, err := service.repo.GetByID(existing.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.FaceProcessStatusReady, updated.FaceProcessStatus)
+	assert.Equal(t, 2, updated.FaceCount)
+	assert.Equal(t, model.PersonCategoryFamily, updated.TopPersonCategory)
+	assert.True(t, updated.AIAnalyzed)
+	assert.Equal(t, "fresh ai description", updated.Description)
+	assert.Equal(t, "fresh ai caption", updated.Caption)
+	assert.Equal(t, "人物", updated.MainCategory)
+	assert.Equal(t, 88, updated.MemoryScore)
+	assert.Equal(t, 77, updated.BeautyScore)
+	assert.Equal(t, 84, updated.OverallScore)
+	assert.Equal(t, "fresh ai reason", updated.ScoreReason)
+	assert.Equal(t, "updated-hash", updated.FileHash)
+	assert.Equal(t, 640, updated.Width)
+	assert.Equal(t, 480, updated.Height)
+}
+
 func waitForTaskStatus(t *testing.T, service *photoService, statuses map[string]bool, timeout time.Duration) *model.ScanTask {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
