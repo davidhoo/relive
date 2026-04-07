@@ -92,6 +92,10 @@ func newPeopleServiceForTest(t *testing.T, client PeopleMLClient) (*peopleServic
 		nil, // runtimeService not needed for these tests
 	).(*peopleService)
 
+	// Reset clustering task counter to ensure clustering runs on first job
+	// This is needed because tests expect immediate clustering behavior
+	svc.clusteringTaskCounter = peopleClusteringTaskInterval
+
 	return svc, db
 }
 
@@ -944,6 +948,10 @@ func TestPeopleService_PendingFacesBecomeAssignedWhenMoreEvidenceArrives(t *test
 	assert.Nil(t, firstFaces[0].PersonID)
 	assert.Equal(t, model.FaceClusterStatusPending, firstFaces[0].ClusterStatus)
 
+	// Reset clustering counter to ensure second job also triggers clustering
+	// This is needed because the test expects faces to be linked across jobs
+	svc.clusteringTaskCounter = peopleClusteringTaskInterval
+
 	require.NoError(t, svc.processJob(secondJob))
 
 	firstFaces, err = faceRepo.ListByPhotoID(firstPhoto.ID)
@@ -1172,6 +1180,11 @@ func TestPeopleService_CrossPhotoComponentCreatesPerson(t *testing.T) {
 	require.NoError(t, jobRepo.Create(secondJob))
 
 	require.NoError(t, svc.processJob(firstJob))
+
+	// Reset clustering counter to ensure second job also triggers clustering
+	// This is needed because the test expects faces to be linked across jobs
+	svc.clusteringTaskCounter = peopleClusteringTaskInterval
+
 	require.NoError(t, svc.processJob(secondJob))
 
 	firstFaces, err := faceRepo.ListByPhotoID(firstPhoto.ID)
@@ -1265,6 +1278,13 @@ func TestPeopleServiceBackground(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, faces, 1)
 
+	// Wait for job to be marked as completed (processJob may still be running after photo is updated)
+	waitForPeopleCondition(t, 3*time.Second, func() bool {
+		stats, err := svc.GetStats()
+		require.NoError(t, err)
+		return stats.Completed == 1
+	})
+
 	stats, err := svc.GetStats()
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), stats.Total)
@@ -1319,6 +1339,8 @@ func TestPhotoScanStartsPeopleBackground(t *testing.T) {
 		},
 		nil,
 	).(*peopleService)
+	// Reset clustering counter to ensure clustering runs
+	peopleSvc.clusteringTaskCounter = peopleClusteringTaskInterval
 	photoSvc.SetPeopleService(peopleSvc)
 
 	excludedInfo, err := os.Stat(excludedPath)
@@ -1336,15 +1358,29 @@ func TestPhotoScanStartsPeopleBackground(t *testing.T) {
 	}
 	require.NoError(t, photoRepo.Create(excludedPhoto))
 
-	_, err = photoSvc.StartScan(rootDir)
+	task, err := photoSvc.StartScan(rootDir)
 	require.NoError(t, err)
+	require.NotNil(t, task)
+	t.Logf("Started scan, task ID=%s, status=%s, waiting for completion...", task.ID, task.Status)
+
+	// Give goroutine time to start and update status
+	time.Sleep(200 * time.Millisecond)
+
+	// Check current status
+	currentTask := photoSvc.GetScanTask()
+	if currentTask != nil {
+		t.Logf("After sleep, scan task status: %s", currentTask.Status)
+	} else {
+		t.Logf("After sleep, GetScanTask returned nil")
+	}
+
 	waitForTaskStatus(t, photoSvc, map[string]bool{model.ScanJobStatusCompleted: true}, 3*time.Second)
 
 	waitForPeopleCondition(t, 3*time.Second, func() bool {
 		task := peopleSvc.GetTaskStatus()
 		stats, statsErr := peopleSvc.GetStats()
 		require.NoError(t, statsErr)
-		return task != nil && task.Status == model.TaskStatusRunning && stats.Total == 1 && stats.Completed == 1
+		return task != nil && (task.Status == model.TaskStatusRunning || task.Status == model.TaskStatusIdle) && stats.Total == 1 && stats.Completed == 1
 	})
 
 	activePhoto, err := photoRepo.GetByFilePath(activePath)
@@ -1569,7 +1605,8 @@ func TestPeopleServiceCluster(t *testing.T) {
 		waitForPeopleCondition(t, 3*time.Second, func() bool {
 			updated, getErr := photoRepo.GetByID(newPhoto.ID)
 			require.NoError(t, getErr)
-			return updated.FaceProcessStatus == model.FaceProcessStatusReady
+			return updated.FaceProcessStatus == model.FaceProcessStatusReady &&
+				updated.TopPersonCategory == model.PersonCategoryFamily
 		})
 
 		faces, err := faceRepo.ListByPhotoID(newPhoto.ID)

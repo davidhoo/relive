@@ -1198,22 +1198,46 @@ func selectDiversePrototypes(faces []*model.Face, k int) []*model.Face {
 		auto = auto[1:]
 	}
 
-	// Farthest-first: greedily pick the face most different from all selected
-	selectedEmbeddings := make([][]float32, 0, k)
+	// Pre-decode embeddings for selected faces (nil embeddings are preserved with nil slice)
+	selectedEmbeddings := make([]faceWithEmbedding, 0, k)
 	for _, f := range selected {
-		selectedEmbeddings = append(selectedEmbeddings, decodeEmbedding(f.Embedding))
+		emb := decodeEmbedding(f.Embedding)
+		var norm float64
+		if emb != nil {
+			norm = calculateNorm(emb)
+		}
+		selectedEmbeddings = append(selectedEmbeddings, faceWithEmbedding{
+			face:      f,
+			embedding: emb,
+			norm:      norm,
+		})
 	}
 
-	for len(selected) < k && len(auto) > 0 {
+	// Pre-decode embeddings for auto faces (nil embeddings are preserved)
+	autoWithEmb := make([]faceWithEmbedding, 0, len(auto))
+	for _, f := range auto {
+		emb := decodeEmbedding(f.Embedding)
+		var norm float64
+		if emb != nil {
+			norm = calculateNorm(emb)
+		}
+		autoWithEmb = append(autoWithEmb, faceWithEmbedding{
+			face:      f,
+			embedding: emb,
+			norm:      norm,
+		})
+	}
+
+	// Farthest-first: greedily pick the face most different from all selected
+	for len(selected) < k && len(autoWithEmb) > 0 {
 		bestIdx := -1
 		bestMinSim := float64(2) // start higher than any cosine similarity
 
-		for i, candidate := range auto {
-			candEmb := decodeEmbedding(candidate.Embedding)
+		for i, candidate := range autoWithEmb {
 			// Find minimum similarity to any already-selected prototype
 			minSim := float64(2)
-			for _, selEmb := range selectedEmbeddings {
-				sim := cosineSimilarity(candEmb, selEmb)
+			for _, sel := range selectedEmbeddings {
+				sim := cosineSimilarityPrecomputed(candidate.embedding, candidate.norm, sel.embedding, sel.norm)
 				if sim < minSim {
 					minSim = sim
 				}
@@ -1228,9 +1252,9 @@ func selectDiversePrototypes(faces []*model.Face, k int) []*model.Face {
 		if bestIdx < 0 {
 			break
 		}
-		selected = append(selected, auto[bestIdx])
-		selectedEmbeddings = append(selectedEmbeddings, decodeEmbedding(auto[bestIdx].Embedding))
-		auto = append(auto[:bestIdx], auto[bestIdx+1:]...)
+		selected = append(selected, autoWithEmb[bestIdx].face)
+		selectedEmbeddings = append(selectedEmbeddings, autoWithEmb[bestIdx])
+		autoWithEmb = append(autoWithEmb[:bestIdx], autoWithEmb[bestIdx+1:]...)
 	}
 
 	return selected
@@ -1238,6 +1262,7 @@ func selectDiversePrototypes(faces []*model.Face, k int) []*model.Face {
 
 func (s *peopleService) buildFaceGraph(faces []*model.Face, linkThreshold float64) map[uint][]uint {
 	graph := make(map[uint][]uint, len(faces))
+	// First pass: initialize graph for all valid faces (preserve current semantics)
 	for _, face := range faces {
 		if face == nil || face.ID == 0 {
 			continue
@@ -1245,22 +1270,22 @@ func (s *peopleService) buildFaceGraph(faces []*model.Face, linkThreshold float6
 		graph[face.ID] = []uint{}
 	}
 
-	for i := 0; i < len(faces); i++ {
-		if faces[i] == nil || faces[i].ID == 0 {
-			continue
-		}
-		for j := i + 1; j < len(faces); j++ {
-			if faces[j] == nil || faces[j].ID == 0 {
-				continue
-			}
+	// Pre-decode embeddings for all faces with valid embeddings
+	faceEmbeddings := decodeFacesWithEmbeddings(faces)
 
-			score := cosineSimilarity(decodeEmbedding(faces[i].Embedding), decodeEmbedding(faces[j].Embedding))
+	// Second pass: build edges using pre-decoded embeddings
+	for i := 0; i < len(faceEmbeddings); i++ {
+		for j := i + 1; j < len(faceEmbeddings); j++ {
+			score := cosineSimilarityPrecomputed(
+				faceEmbeddings[i].embedding, faceEmbeddings[i].norm,
+				faceEmbeddings[j].embedding, faceEmbeddings[j].norm,
+			)
 			if score < linkThreshold {
 				continue
 			}
 
-			graph[faces[i].ID] = append(graph[faces[i].ID], faces[j].ID)
-			graph[faces[j].ID] = append(graph[faces[j].ID], faces[i].ID)
+			graph[faceEmbeddings[i].face.ID] = append(graph[faceEmbeddings[i].face.ID], faceEmbeddings[j].face.ID)
+			graph[faceEmbeddings[j].face.ID] = append(graph[faceEmbeddings[j].face.ID], faceEmbeddings[i].face.ID)
 		}
 	}
 
@@ -1322,21 +1347,37 @@ func (s *peopleService) scoreComponentAgainstPerson(component []*model.Face, pro
 		return -1
 	}
 
+	// Pre-decode embeddings for component faces
+	componentWithEmb := decodeFacesWithEmbeddings(component)
+	if len(componentWithEmb) == 0 {
+		return -1
+	}
+
+	// Pre-decode embeddings for prototypes
+	prototypesWithEmb := decodeFacesWithEmbeddings(prototypes)
+	if len(prototypesWithEmb) == 0 {
+		return -1
+	}
+
+	return s.scoreComponentAgainstPersonWithEmbeddings(componentWithEmb, prototypesWithEmb)
+}
+
+// scoreComponentAgainstPersonWithEmbeddings computes score using pre-decoded embeddings.
+func (s *peopleService) scoreComponentAgainstPersonWithEmbeddings(component []faceWithEmbedding, prototypes []faceWithEmbedding) float64 {
+	if len(component) == 0 || len(prototypes) == 0 {
+		return -1
+	}
+
 	var total float64
 	var scored int
 
 	for _, face := range component {
-		if face == nil {
-			continue
-		}
-
 		bestScore := -1.0
-		embedding := decodeEmbedding(face.Embedding)
-		for _, prototype := range prototypes {
-			if prototype == nil {
-				continue
-			}
-			score := cosineSimilarity(embedding, decodeEmbedding(prototype.Embedding))
+		for _, proto := range prototypes {
+			score := cosineSimilarityPrecomputed(
+				face.embedding, face.norm,
+				proto.embedding, proto.norm,
+			)
 			if score > bestScore {
 				bestScore = score
 			}
@@ -1360,6 +1401,10 @@ func (s *peopleService) attachComponentToExistingPerson(component []*model.Face,
 		return 0, -1, false
 	}
 
+	// Pre-decode embeddings for component faces
+	componentWithEmb := decodeFacesWithEmbeddings(component)
+	// Note: componentWithEmb may contain faces with nil embeddings
+
 	// Build cannot-link blocked set: collect previous person IDs from component faces,
 	// then look up which target persons are blocked via cannot-link constraints.
 	blockedPersons := make(map[uint]bool)
@@ -1380,8 +1425,30 @@ func (s *peopleService) attachComponentToExistingPerson(component []*model.Face,
 		}
 	}
 
-	personIDs := make([]uint, 0, len(prototypes))
-	for personID := range prototypes {
+	// Pre-decode embeddings for all prototypes (once per call)
+	prototypesWithEmb := make(map[uint][]faceWithEmbedding, len(prototypes))
+	for personID, protoFaces := range prototypes {
+		prototypesWithEmb[personID] = decodeFacesWithEmbeddings(protoFaces)
+	}
+
+	return s.attachComponentToExistingPersonWithEmbeddings(componentWithEmb, prototypesWithEmb, blockedPersons, prototypes, attachThreshold)
+}
+
+// attachComponentToExistingPersonWithEmbeddings is the core logic using pre-decoded embeddings.
+// prototypesWithEmb contains pre-decoded embeddings; prototypesOriginal is needed for ManualLocked check.
+func (s *peopleService) attachComponentToExistingPersonWithEmbeddings(
+	component []faceWithEmbedding,
+	prototypesWithEmb map[uint][]faceWithEmbedding,
+	blockedPersons map[uint]bool,
+	prototypesOriginal map[uint][]*model.Face,
+	attachThreshold float64,
+) (uint, float64, bool) {
+	if len(component) == 0 || len(prototypesWithEmb) == 0 {
+		return 0, -1, false
+	}
+
+	personIDs := make([]uint, 0, len(prototypesWithEmb))
+	for personID := range prototypesWithEmb {
 		personIDs = append(personIDs, personID)
 	}
 	sort.Slice(personIDs, func(i, j int) bool { return personIDs[i] < personIDs[j] })
@@ -1392,7 +1459,7 @@ func (s *peopleService) attachComponentToExistingPerson(component []*model.Face,
 		if blockedPersons[personID] {
 			continue
 		}
-		score := s.scoreComponentAgainstPerson(component, prototypes[personID])
+		score := s.scoreComponentAgainstPersonWithEmbeddings(component, prototypesWithEmb[personID])
 		if score > bestScore {
 			bestScore = score
 			bestPersonID = personID
@@ -1405,8 +1472,8 @@ func (s *peopleService) attachComponentToExistingPerson(component []*model.Face,
 
 	// Apply discount for confirmed persons (have manual-locked faces)
 	if bestPersonID != 0 && bestScore >= attachThreshold-confirmedPersonDiscount {
-		for _, proto := range prototypes[bestPersonID] {
-			if proto != nil && proto.ManualLocked {
+		for _, proto := range prototypesOriginal[bestPersonID] {
+			if proto.ManualLocked {
 				return bestPersonID, bestScore, true
 			}
 		}
@@ -1509,6 +1576,12 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 	}
 	prototypes := s.selectPersonPrototypes(protoFaces, peoplePrototypeCount)
 
+	// Pre-decode all prototype embeddings once (optimization: avoid repeated json.Unmarshal)
+	prototypesWithEmb := make(map[uint][]faceWithEmbedding, len(prototypes))
+	for personID, protoList := range prototypes {
+		prototypesWithEmb[personID] = decodeFacesWithEmbeddings(protoList)
+	}
+
 	graph := s.buildFaceGraph(pendingFaces, s.linkThreshold())
 	components := s.findConnectedComponents(graph)
 	pendingByID := make(map[uint]*model.Face, len(pendingFaces))
@@ -1535,7 +1608,33 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 			continue
 		}
 
-		personID, score, attached := s.attachComponentToExistingPerson(component, prototypes, s.attachThreshold())
+		// Pre-decode component embeddings
+		componentWithEmb := decodeFacesWithEmbeddings(component)
+		// Note: componentWithEmb may contain faces with nil embeddings, which is handled correctly
+		// by scoreComponentAgainstPersonWithEmbeddings (returns -1 for nil embeddings)
+
+		// Build cannot-link blocked set
+		blockedPersons := make(map[uint]bool)
+		if s.cannotLinkRepo != nil {
+			prevPersonIDs := make(map[uint]bool)
+			for _, face := range component {
+				if face != nil && face.PersonID != nil && *face.PersonID != 0 {
+					prevPersonIDs[*face.PersonID] = true
+				}
+			}
+			for pid := range prevPersonIDs {
+				blocked, err := s.cannotLinkRepo.ListByPersonID(pid)
+				if err == nil {
+					for _, bid := range blocked {
+						blockedPersons[bid] = true
+					}
+				}
+			}
+		}
+
+		personID, score, attached := s.attachComponentToExistingPersonWithEmbeddings(
+			componentWithEmb, prototypesWithEmb, blockedPersons, prototypes, s.attachThreshold(),
+		)
 		componentScore := nonNegativeScore(score)
 
 		if attached {
@@ -1871,4 +1970,58 @@ func cosineSimilarity(a, b []float32) float64 {
 		return -1
 	}
 	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
+}
+
+// faceWithEmbedding holds a face with its pre-decoded embedding and precomputed norm.
+// Used to avoid repeated json.Unmarshal in clustering algorithms.
+type faceWithEmbedding struct {
+	face      *model.Face
+	embedding []float32
+	norm      float64
+}
+
+// decodeFacesWithEmbeddings pre-decodes embeddings for all faces.
+// Returns all non-nil faces with their embeddings (embedding may be nil).
+func decodeFacesWithEmbeddings(faces []*model.Face) []faceWithEmbedding {
+	result := make([]faceWithEmbedding, 0, len(faces))
+	for _, f := range faces {
+		if f == nil {
+			continue
+		}
+		emb := decodeEmbedding(f.Embedding)
+		var norm float64
+		if emb != nil {
+			norm = calculateNorm(emb)
+		}
+		result = append(result, faceWithEmbedding{
+			face:      f,
+			embedding: emb,
+			norm:      norm,
+		})
+	}
+	return result
+}
+
+// calculateNorm computes the L2 norm of a vector.
+func calculateNorm(v []float32) float64 {
+	var sum float64
+	for _, x := range v {
+		f := float64(x)
+		sum += f * f
+	}
+	return math.Sqrt(sum)
+}
+
+// cosineSimilarityPrecomputed computes cosine similarity using precomputed norms.
+// This avoids recalculating norms in tight loops.
+func cosineSimilarityPrecomputed(a []float32, normA float64, b []float32, normB float64) float64 {
+	if len(a) == 0 || len(a) != len(b) || normA == 0 || normB == 0 {
+		return -1
+	}
+
+	var dot float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+	}
+	return dot / (normA * normB)
 }
