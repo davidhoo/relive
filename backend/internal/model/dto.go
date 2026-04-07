@@ -441,19 +441,24 @@ type GeocodeBatchEnqueueRequest struct {
 type PeopleTask struct {
 	Status         string     `json:"status"`
 	CurrentPhotoID uint       `json:"current_photo_id,omitempty"`
+	CurrentPhase   string     `json:"current_phase,omitempty"`
+	CurrentMessage string     `json:"current_message,omitempty"`
 	ProcessedJobs  int64      `json:"processed_jobs"`
 	StartedAt      *time.Time `json:"started_at,omitempty"`
 	StoppedAt      *time.Time `json:"stopped_at,omitempty"`
 }
 
 type PeopleStatsResponse struct {
-	Total      int64 `json:"total"`
-	Pending    int64 `json:"pending"`
-	Queued     int64 `json:"queued"`
-	Processing int64 `json:"processing"`
-	Completed  int64 `json:"completed"`
-	Failed     int64 `json:"failed"`
-	Cancelled  int64 `json:"cancelled"`
+	Total                      int64 `json:"total"`
+	Pending                    int64 `json:"pending"`
+	Queued                     int64 `json:"queued"`
+	Processing                 int64 `json:"processing"`
+	Completed                  int64 `json:"completed"`
+	Failed                     int64 `json:"failed"`
+	Cancelled                  int64 `json:"cancelled"`
+	PendingFacesTotal          int64 `json:"pending_faces_total"`
+	PendingFacesNeverClustered int64 `json:"pending_faces_never_clustered"`
+	PendingFacesRetried        int64 `json:"pending_faces_retried"`
 }
 
 type PeopleBatchEnqueueRequest struct {

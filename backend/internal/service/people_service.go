@@ -38,9 +38,9 @@ const (
 
 	// Clustering optimization constants to prevent CPU overload on NAS
 	// See: https://github.com/davidhoo/relive/issues/XXX
-	peopleClusteringBatchSize     = 50   // Max pending faces to cluster at once
-	peopleClusteringInterval      = 100  // Milliseconds to sleep after clustering
-	peopleClusteringTaskInterval  = 5    // Cluster every N tasks (0 = always)
+	peopleClusteringBatchSize    = 50  // Max pending faces to cluster at once
+	peopleClusteringInterval     = 100 // Milliseconds to sleep after clustering
+	peopleClusteringTaskInterval = 5   // Cluster every N tasks (0 = always)
 )
 
 type PeopleMLClient interface {
@@ -176,8 +176,10 @@ func (s *peopleService) StartBackground() (*model.PeopleTask, error) {
 
 	now := time.Now()
 	task := &model.PeopleTask{
-		Status:    model.TaskStatusRunning,
-		StartedAt: &now,
+		Status:         model.TaskStatusRunning,
+		CurrentPhase:   "idle",
+		CurrentMessage: "等待任务入队",
+		StartedAt:      &now,
 	}
 	active := &activePeopleTask{
 		stopCh: make(chan struct{}),
@@ -221,14 +223,21 @@ func (s *peopleService) GetStats() (*model.PeopleStatsResponse, error) {
 	if err != nil {
 		return nil, err
 	}
+	pendingFaceStats, err := s.faceRepo.GetPendingStats()
+	if err != nil {
+		return nil, err
+	}
 	return &model.PeopleStatsResponse{
-		Total:      stats.Total,
-		Pending:    stats.Pending,
-		Queued:     stats.Queued,
-		Processing: stats.Processing,
-		Completed:  stats.Completed,
-		Failed:     stats.Failed,
-		Cancelled:  stats.Cancelled,
+		Total:                      stats.Total,
+		Pending:                    stats.Pending,
+		Queued:                     stats.Queued,
+		Processing:                 stats.Processing,
+		Completed:                  stats.Completed,
+		Failed:                     stats.Failed,
+		Cancelled:                  stats.Cancelled,
+		PendingFacesTotal:          pendingFaceStats.Total,
+		PendingFacesNeverClustered: pendingFaceStats.NeverClustered,
+		PendingFacesRetried:        pendingFaceStats.Retried,
 	}, nil
 }
 
@@ -679,12 +688,32 @@ func (s *peopleService) runBackground(active *activePeopleTask) {
 			continue
 		}
 		if job == nil {
-			s.setTaskStatus(model.TaskStatusIdle)
-			time.Sleep(300 * time.Millisecond)
+			pendingFaceStats, statsErr := s.faceRepo.GetPendingStats()
+			if statsErr != nil {
+				s.appendBackgroundLog(fmt.Sprintf("查询待聚类人脸失败：%v", statsErr))
+				time.Sleep(300 * time.Millisecond)
+				continue
+			}
+			if pendingFaceStats.Total == 0 {
+				s.setTaskState(model.TaskStatusIdle, "idle", "队列已清空，等待新任务入队", nil)
+				time.Sleep(300 * time.Millisecond)
+				continue
+			}
+
+			s.setTaskState(model.TaskStatusRunning, "clustering",
+				fmt.Sprintf("正在处理 %d 张待聚类人脸", pendingFaceStats.Total), nil)
+			s.setBackgroundBusy(true)
+			err = s.processPendingFaces()
+			s.setBackgroundBusy(false)
+			if err != nil {
+				s.appendBackgroundLog(fmt.Sprintf("处理待聚类人脸失败：%v", err))
+				time.Sleep(300 * time.Millisecond)
+			}
 			continue
 		}
 
-		s.setTaskStatus(model.TaskStatusRunning)
+		s.setTaskState(model.TaskStatusRunning, "detecting",
+			fmt.Sprintf("正在处理照片 #%d", job.PhotoID), &job.PhotoID)
 		s.setBackgroundBusy(true)
 		err = s.processJob(job)
 		s.setBackgroundBusy(false)
@@ -718,6 +747,25 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 	// Convert mlclient result to model result
 	detectionResult := convertMLResultToModel(result)
 	return s.ApplyDetectionResult(job, photo, detectionResult)
+}
+
+func (s *peopleService) processPendingFaces() error {
+	affectedPersonIDs, affectedPhotoIDs, err := s.runIncrementalClustering()
+	if err != nil {
+		return err
+	}
+
+	for _, personID := range affectedPersonIDs {
+		if err := s.syncPersonState(personID); err != nil {
+			return err
+		}
+	}
+	if len(affectedPhotoIDs) > 0 {
+		if err := s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // preflightCheck performs pre-flight checks and returns the photo, whether to skip, and any error.
@@ -1073,6 +1121,24 @@ func (s *peopleService) setTaskStatus(status string) {
 	defer s.taskMutex.Unlock()
 	if s.task != nil && s.task.Status != model.TaskStatusStopping {
 		s.task.Status = status
+	}
+}
+
+func (s *peopleService) setTaskState(status string, phase string, message string, photoID *uint) {
+	s.taskMutex.Lock()
+	defer s.taskMutex.Unlock()
+	if s.task == nil {
+		return
+	}
+	if s.task.Status != model.TaskStatusStopping {
+		s.task.Status = status
+	}
+	s.task.CurrentPhase = phase
+	s.task.CurrentMessage = message
+	if photoID != nil {
+		s.task.CurrentPhotoID = *photoID
+	} else {
+		s.task.CurrentPhotoID = 0
 	}
 }
 

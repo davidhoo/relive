@@ -20,10 +20,17 @@ type FaceRepository interface {
 	ListAssigned() ([]*model.Face, error)
 	ListAssignedPersonIDs() ([]uint, error)
 	ListPending(limit int) ([]*model.Face, error)
+	GetPendingStats() (*PendingFaceStats, error)
 	ListTopByPersonIDs(personIDs []uint, perPerson int) ([]*model.Face, error)
 	ReassignFaces(faceIDs []uint, personID uint, reason string) error
 	ListLowConfidence(threshold float64, maxGeneration int) ([]*model.Face, error)
 	ResetForRecluster(ids []uint) error
+}
+
+type PendingFaceStats struct {
+	Total          int64 `json:"total"`
+	NeverClustered int64 `json:"never_clustered"`
+	Retried        int64 `json:"retried"`
 }
 
 type faceRepository struct {
@@ -116,6 +123,22 @@ func (r *faceRepository) ListPending(limit int) ([]*model.Face, error) {
 	}
 	err := query.Find(&faces).Error
 	return faces, err
+}
+
+func (r *faceRepository) GetPendingStats() (*PendingFaceStats, error) {
+	stats := &PendingFaceStats{}
+	err := r.db.Model(&model.Face{}).
+		Select(`
+			COUNT(*) AS total,
+			SUM(CASE WHEN clustered_at IS NULL THEN 1 ELSE 0 END) AS never_clustered,
+			SUM(CASE WHEN clustered_at IS NOT NULL THEN 1 ELSE 0 END) AS retried
+		`).
+		Where("cluster_status = ?", model.FaceClusterStatusPending).
+		Scan(stats).Error
+	if err != nil {
+		return nil, err
+	}
+	return stats, nil
 }
 
 func (r *faceRepository) ListTopByPersonIDs(personIDs []uint, perPerson int) ([]*model.Face, error) {

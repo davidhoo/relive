@@ -152,6 +152,24 @@
                 队列已清空，等待新任务入队
               </div>
 
+              <div v-if="clusteringPending > 0" class="queue-progress">
+                <div class="queue-progress-header">
+                  <span>聚类积压</span>
+                  <span class="queue-progress-numbers">{{ clusteringPending }}</span>
+                </div>
+                <div class="queue-progress-detail">
+                  未聚类 {{ stats.pending_faces_never_clustered }} · 已重试 {{ stats.pending_faces_retried }}
+                </div>
+              </div>
+              <div v-else class="queue-empty">
+                没有待聚类人脸积压
+              </div>
+
+              <div v-if="task?.current_message" class="task-phase">
+                <span class="task-phase-label">{{ taskPhaseLabel }}</span>
+                <span class="task-phase-message">{{ task.current_message }}</span>
+              </div>
+
               <div class="task-summary">
                 <span>累计完成 <strong>{{ stats.completed }}</strong></span>
                 <span v-if="stats.failed > 0"> · 失败 <strong class="danger">{{ stats.failed }}</strong></span>
@@ -198,7 +216,18 @@ const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/a
 const activeTab = ref<'people' | 'task'>('people')
 const peopleLoading = ref(false)
 const task = ref<PeopleTask | null>(null)
-const stats = ref<PeopleStats>({ total: 0, pending: 0, queued: 0, processing: 0, completed: 0, failed: 0, cancelled: 0 })
+const stats = ref<PeopleStats>({
+  total: 0,
+  pending: 0,
+  queued: 0,
+  processing: 0,
+  completed: 0,
+  failed: 0,
+  cancelled: 0,
+  pending_faces_total: 0,
+  pending_faces_never_clustered: 0,
+  pending_faces_retried: 0,
+})
 const backgroundLogs = ref<string[]>([])
 const people = ref<Person[]>([])
 const total = ref(0)
@@ -216,6 +245,7 @@ const workerActive = computed(() => {
 const taskStopping = computed(() => task.value?.status === 'stopping')
 
 const queuePending = computed(() => stats.value.pending + stats.value.queued + stats.value.processing)
+const clusteringPending = computed(() => stats.value.pending_faces_total)
 const queueProgressPercent = computed(() => {
   const done = stats.value.completed
   const total = done + queuePending.value
@@ -251,7 +281,17 @@ const categoryOptions = [
   { label: '路人', value: 'stranger' },
 ] satisfies Array<{ label: string; value: PersonCategory }>
 
-const taskMeta = computed(() => getPeopleTaskStatusMeta(task.value?.status))
+const taskMeta = computed(() => getPeopleTaskStatusMeta(task.value))
+const taskPhaseLabel = computed(() => {
+  switch (task.value?.current_phase) {
+    case 'clustering':
+      return '聚类阶段'
+    case 'detecting':
+      return '检测阶段'
+    default:
+      return '当前状态'
+  }
+})
 
 const categoryTagType = (category: PersonCategory) => {
   switch (category) {
@@ -616,6 +656,23 @@ onBeforeUnmount(() => {
   border: 1px solid var(--color-border);
   font-size: 13px;
   color: var(--color-text-secondary);
+}
+
+.task-phase {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.task-phase-label {
+  color: var(--color-text-secondary);
+}
+
+.task-phase-message {
+  color: var(--color-text-primary);
+  font-weight: 500;
 }
 
 .status-pill {

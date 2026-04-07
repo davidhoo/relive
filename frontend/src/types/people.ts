@@ -44,6 +44,8 @@ export interface PeopleListParams {
 export interface PeopleTask {
   status?: string
   current_photo_id?: number
+  current_phase?: 'detecting' | 'clustering' | 'idle' | string
+  current_message?: string
   processed_jobs: number
   started_at?: string
   stopped_at?: string
@@ -57,6 +59,9 @@ export interface PeopleStats {
   completed: number
   failed: number
   cancelled: number
+  pending_faces_total: number
+  pending_faces_never_clustered: number
+  pending_faces_retried: number
 }
 
 export interface PeopleBackgroundLogsResponse {

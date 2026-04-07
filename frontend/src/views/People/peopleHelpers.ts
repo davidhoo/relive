@@ -1,4 +1,4 @@
-import type { Person, PersonCategory } from '../../types/people.js'
+import type { PeopleTask, Person, PersonCategory } from '../../types/people.js'
 
 export interface TaskStatusMeta {
   label: string
@@ -42,17 +42,23 @@ export function sortPeopleForDisplay<T extends Pick<Person, 'category' | 'photo_
   })
 }
 
-export function getPeopleTaskStatusMeta(status?: string): TaskStatusMeta {
-  switch (status) {
-    case 'running':
-      return { label: '处理中', type: 'warning' }
-    case 'idle':
-      return { label: '空闲等待', type: 'info' }
-    case 'stopping':
-      return { label: '停止中', type: 'warning' }
-    default:
-      return { label: '未运行', type: 'info' }
+export function getPeopleTaskStatusMeta(task?: Pick<PeopleTask, 'status' | 'current_phase'> | null): TaskStatusMeta {
+  const status = task?.status
+  const phase = task?.current_phase
+
+  if (status === 'stopping') {
+    return { label: '停止中', type: 'warning' }
   }
+  if (status === 'running' && phase === 'clustering') {
+    return { label: '聚类处理中', type: 'warning' }
+  }
+  if (status === 'running') {
+    return { label: '检测处理中', type: 'warning' }
+  }
+  if (status === 'idle') {
+    return { label: '空闲等待', type: 'info' }
+  }
+  return { label: '未运行', type: 'info' }
 }
 
 export function getPersonAvatarFallback(person: Pick<Person, 'name' | 'category'>): string {

@@ -171,6 +171,57 @@ func TestFaceRepository_ListPending_PrioritizesNeverClusteredFaces(t *testing.T)
 	assert.Equal(t, retriedOld.ID, faces[1].ID)
 }
 
+func TestFaceRepository_GetPendingStats(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	type pendingStatsGetter interface {
+		GetPendingStats() (*PendingFaceStats, error)
+	}
+
+	faceRepo, ok := NewFaceRepository(db).(pendingStatsGetter)
+	require.True(t, ok)
+
+	require.NoError(t, db.Create(&model.Face{
+		PhotoID:       1,
+		BBoxX:         0.1,
+		BBoxY:         0.1,
+		BBoxWidth:     0.2,
+		BBoxHeight:    0.2,
+		Confidence:    0.95,
+		QualityScore:  0.9,
+		ClusterStatus: model.FaceClusterStatusPending,
+	}).Error)
+	require.NoError(t, db.Create(&model.Face{
+		PhotoID:       2,
+		BBoxX:         0.2,
+		BBoxY:         0.2,
+		BBoxWidth:     0.2,
+		BBoxHeight:    0.2,
+		Confidence:    0.94,
+		QualityScore:  0.89,
+		ClusterStatus: model.FaceClusterStatusPending,
+		ClusteredAt:   ptrTime(time.Now().Add(-time.Hour)),
+	}).Error)
+	require.NoError(t, db.Create(&model.Face{
+		PhotoID:       3,
+		BBoxX:         0.3,
+		BBoxY:         0.3,
+		BBoxWidth:     0.2,
+		BBoxHeight:    0.2,
+		Confidence:    0.93,
+		QualityScore:  0.88,
+		ClusterStatus: model.FaceClusterStatusAssigned,
+	}).Error)
+
+	stats, err := faceRepo.GetPendingStats()
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	assert.Equal(t, int64(2), stats.Total)
+	assert.Equal(t, int64(1), stats.NeverClustered)
+	assert.Equal(t, int64(1), stats.Retried)
+}
+
 func TestFaceRepository_ListTopByPersonIDs(t *testing.T) {
 	db := setupTestDB(t)
 	defer teardownTestDB(db)

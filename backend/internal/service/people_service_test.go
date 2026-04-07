@@ -1461,6 +1461,89 @@ func TestPeopleServiceMarksNoFaceReady(t *testing.T) {
 	require.NoError(t, svc.StopBackground())
 }
 
+func TestPeopleService_BackgroundDrainsPendingFacesWithoutJobs(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	faceRepo := repository.NewFaceRepository(db)
+
+	pendingFace := &model.Face{
+		PhotoID:       1,
+		BBoxX:         0.1,
+		BBoxY:         0.1,
+		BBoxWidth:     0.2,
+		BBoxHeight:    0.2,
+		Confidence:    0.92,
+		QualityScore:  0.81,
+		ClusterStatus: model.FaceClusterStatusPending,
+		Embedding:     encodeEmbedding(t, []float32{1, 0, 0}),
+	}
+	require.NoError(t, faceRepo.Create(pendingFace))
+
+	_, err := svc.StartBackground()
+	require.NoError(t, err)
+
+	waitForPeopleCondition(t, 3*time.Second, func() bool {
+		updatedFace, getErr := faceRepo.GetByID(pendingFace.ID)
+		require.NoError(t, getErr)
+		task := svc.GetTaskStatus()
+		return updatedFace != nil &&
+			updatedFace.ClusteredAt != nil &&
+			updatedFace.ClusterStatus == model.FaceClusterStatusPending &&
+			task != nil &&
+			(task.CurrentPhase == "clustering" || task.Status == model.TaskStatusIdle)
+	})
+
+	updatedFace, err := faceRepo.GetByID(pendingFace.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updatedFace)
+	require.NotNil(t, updatedFace.ClusteredAt)
+	assert.Equal(t, model.FaceClusterStatusPending, updatedFace.ClusterStatus)
+
+	task := svc.GetTaskStatus()
+	require.NotNil(t, task)
+	assert.Contains(t, []string{"clustering", "idle"}, task.CurrentPhase)
+
+	require.NoError(t, svc.StopBackground())
+	waitForPeopleCondition(t, 3*time.Second, func() bool {
+		task := svc.GetTaskStatus()
+		return task != nil && task.Status == model.TaskStatusStopped
+	})
+}
+
+func TestPeopleService_GetStatsIncludesPendingFaceBacklog(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	faceRepo := repository.NewFaceRepository(db)
+
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID:       1,
+		BBoxX:         0.1,
+		BBoxY:         0.1,
+		BBoxWidth:     0.2,
+		BBoxHeight:    0.2,
+		Confidence:    0.95,
+		QualityScore:  0.8,
+		ClusterStatus: model.FaceClusterStatusPending,
+	}))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID:       2,
+		BBoxX:         0.2,
+		BBoxY:         0.2,
+		BBoxWidth:     0.2,
+		BBoxHeight:    0.2,
+		Confidence:    0.94,
+		QualityScore:  0.79,
+		ClusterStatus: model.FaceClusterStatusPending,
+		ClusteredAt:   ptrTime(time.Now().Add(-time.Hour)),
+	}))
+
+	stats, err := svc.GetStats()
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), stats.PendingFacesTotal)
+	assert.Equal(t, int64(1), stats.PendingFacesNeverClustered)
+	assert.Equal(t, int64(1), stats.PendingFacesRetried)
+}
+
 func TestPeopleServiceGeneratesFaceThumbnail(t *testing.T) {
 	rootDir := t.TempDir()
 	photoPath := filepath.Join(rootDir, "face-source.jpg")
