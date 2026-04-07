@@ -62,9 +62,15 @@ func BenchmarkPeopleClustering(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		// 模拟完整的聚类流程
+		// 模拟完整的聚类流程（使用优化后的预解码路径）
 		graph := svc.buildFaceGraph(pendingFaces, svc.linkThreshold())
 		components := svc.findConnectedComponents(graph)
+
+		// 预解码所有 prototype embeddings 一次（生产优化）
+		prototypesWithEmb := make(map[uint][]faceWithEmbedding, len(prototypes))
+		for personID, protoList := range prototypes {
+			prototypesWithEmb[personID] = decodeFacesWithEmbeddings(protoList)
+		}
 
 		for _, componentIDs := range components {
 			component := make([]*model.Face, 0, len(componentIDs))
@@ -76,9 +82,20 @@ func BenchmarkPeopleClustering(b *testing.B) {
 					}
 				}
 			}
-			if len(component) > 0 {
-				svc.attachComponentToExistingPerson(component, prototypes, svc.attachThreshold())
+			if len(component) == 0 {
+				continue
 			}
+
+			// 使用优化路径：预解码 component embeddings
+			componentWithEmb := decodeFacesWithEmbeddings(component)
+			if len(componentWithEmb) == 0 {
+				continue
+			}
+
+			blockedPersons := make(map[uint]bool)
+			svc.attachComponentToExistingPersonWithEmbeddings(
+				componentWithEmb, prototypesWithEmb, blockedPersons, prototypes, svc.attachThreshold(),
+			)
 		}
 	}
 }
