@@ -2441,6 +2441,10 @@ func TestPeopleService_ApplyDetectionResult_WithFacesCreatesFacesAndCompletes(t 
 	faces, err := faceRepo.ListByPhotoID(photo.ID)
 	require.NoError(t, err)
 	require.Len(t, faces, 2)
+	for _, face := range faces {
+		require.NotEmpty(t, face.ThumbnailPath)
+		require.FileExists(t, filepath.Join(svc.config.Photos.ThumbnailPath, face.ThumbnailPath))
+	}
 
 	updatedJob, err := jobRepo.GetByID(job.ID)
 	require.NoError(t, err)

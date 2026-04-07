@@ -10,37 +10,75 @@ import (
 	"github.com/disintegration/imaging"
 )
 
+var openFaceThumbnailImage = OpenImage
+
+type FaceThumbnailSpec struct {
+	BBoxX      float64
+	BBoxY      float64
+	BBoxWidth  float64
+	BBoxHeight float64
+}
+
 func GenerateFaceThumbnail(filePath string, outputRoot string, bboxX, bboxY, bboxWidth, bboxHeight float64) (string, error) {
-	img, err := OpenImage(filePath)
+	paths, err := GenerateFaceThumbnails(filePath, outputRoot, []FaceThumbnailSpec{
+		{
+			BBoxX:      bboxX,
+			BBoxY:      bboxY,
+			BBoxWidth:  bboxWidth,
+			BBoxHeight: bboxHeight,
+		},
+	})
 	if err != nil {
-		return "", fmt.Errorf("open image for face thumbnail: %w", err)
+		return "", err
+	}
+	if len(paths) == 0 {
+		return "", fmt.Errorf("no face thumbnail generated")
+	}
+	return paths[0], nil
+}
+
+func GenerateFaceThumbnails(filePath string, outputRoot string, specs []FaceThumbnailSpec) ([]string, error) {
+	if len(specs) == 0 {
+		return nil, nil
 	}
 
+	img, err := openFaceThumbnailImage(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("open image for face thumbnail: %w", err)
+	}
+	return generateFaceThumbnailsFromImage(img, filePath, outputRoot, specs)
+}
+
+func generateFaceThumbnailsFromImage(img image.Image, filePath string, outputRoot string, specs []FaceThumbnailSpec) ([]string, error) {
 	bounds := img.Bounds()
 	width := bounds.Dx()
 	height := bounds.Dy()
 	if width <= 0 || height <= 0 {
-		return "", fmt.Errorf("invalid image bounds")
+		return nil, fmt.Errorf("invalid image bounds")
 	}
 
-	cropRect := buildFaceCropRect(width, height, bboxX, bboxY, bboxWidth, bboxHeight)
-	faceImage := imaging.Crop(img, cropRect)
-	faceImage = imaging.Fill(faceImage, 256, 256, imaging.Center, imaging.Lanczos)
+	paths := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		cropRect := buildFaceCropRect(width, height, spec.BBoxX, spec.BBoxY, spec.BBoxWidth, spec.BBoxHeight)
+		faceImage := imaging.Crop(img, cropRect)
+		faceImage = imaging.Fill(faceImage, 256, 256, imaging.Center, imaging.Lanczos)
 
-	relPath := filepath.Join("faces", GenerateDerivedImagePath(fmt.Sprintf(
-		"face:%s:%0.6f:%0.6f:%0.6f:%0.6f",
-		filePath, bboxX, bboxY, bboxWidth, bboxHeight,
-	)))
-	fullPath := filepath.Join(outputRoot, relPath)
+		relPath := filepath.Join("faces", GenerateDerivedImagePath(fmt.Sprintf(
+			"face:%s:%0.6f:%0.6f:%0.6f:%0.6f",
+			filePath, spec.BBoxX, spec.BBoxY, spec.BBoxWidth, spec.BBoxHeight,
+		)))
+		fullPath := filepath.Join(outputRoot, relPath)
 
-	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-		return "", fmt.Errorf("create face thumbnail dir: %w", err)
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			return nil, fmt.Errorf("create face thumbnail dir: %w", err)
+		}
+		if err := imaging.Save(faceImage, fullPath, imaging.JPEGQuality(90)); err != nil {
+			return nil, fmt.Errorf("save face thumbnail: %w", err)
+		}
+		paths = append(paths, relPath)
 	}
-	if err := imaging.Save(faceImage, fullPath, imaging.JPEGQuality(90)); err != nil {
-		return "", fmt.Errorf("save face thumbnail: %w", err)
-	}
 
-	return relPath, nil
+	return paths, nil
 }
 
 func buildFaceCropRect(width, height int, bboxX, bboxY, bboxWidth, bboxHeight float64) image.Rectangle {

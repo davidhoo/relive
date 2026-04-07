@@ -837,12 +837,25 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 	}
 
 	createdFaces := make([]*model.Face, 0, len(result.Faces))
+	thumbnailSpecs := make([]util.FaceThumbnailSpec, 0, len(result.Faces))
 	for _, detected := range result.Faces {
+		thumbnailSpecs = append(thumbnailSpecs, util.FaceThumbnailSpec{
+			BBoxX:      detected.BBox.X,
+			BBoxY:      detected.BBox.Y,
+			BBoxWidth:  detected.BBox.Width,
+			BBoxHeight: detected.BBox.Height,
+		})
+	}
+	thumbnailPaths, err := util.GenerateFaceThumbnails(photo.FilePath, s.faceThumbnailRoot(), thumbnailSpecs)
+	if err != nil {
+		return err
+	}
+	if len(thumbnailPaths) != len(result.Faces) {
+		return fmt.Errorf("expected %d face thumbnail paths, got %d", len(result.Faces), len(thumbnailPaths))
+	}
+
+	for i, detected := range result.Faces {
 		embeddingPayload, err := json.Marshal(detected.Embedding)
-		if err != nil {
-			return err
-		}
-		thumbnailPath, err := s.generateFaceThumbnail(photo, detected.BBox)
 		if err != nil {
 			return err
 		}
@@ -855,7 +868,7 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 			Confidence:    detected.Confidence,
 			QualityScore:  detected.QualityScore,
 			Embedding:     embeddingPayload,
-			ThumbnailPath: thumbnailPath,
+			ThumbnailPath: thumbnailPaths[i],
 			ClusterStatus: model.FaceClusterStatusPending,
 			ClusterScore:  0,
 			ClusteredAt:   nil,
