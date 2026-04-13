@@ -2,8 +2,8 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 >
-> **Status:** Candidate
-> **Note:** The corresponding code changes were rolled back from `main`. Keep this plan as a future option, not as the current implementation roadmap.
+> **Status:** Superseded
+> **Note:** This plan is discarded. The current startup model (`make dev`, `make deploy`, `make deploy-image`) is already clear enough; do not treat this file as active backlog.
 
 **Goal:** Make `make dev`, `make deploy`, and `docker compose up -d` all bring up the complete required service stack while preserving local frontend HMR in development.
 

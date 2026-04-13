@@ -34,14 +34,14 @@
 - `docs/plans/event-driven-curation.md`：Phase 0 / 1 / 2a / 2b / 2c 已完成，其余阶段当前搁置
 
 ### Candidate / Future Option
-- `docs/plans/2026-04-01-startup-unification-design.md`
-- `docs/plans/2026-04-01-startup-unification.md`
 - `docs/plans/face-recognition-vector-db.md`
 
 ### Review Only
 - `docs/plans/2026-04-05-runtime-state-and-graceful-restart-review.md`
 
 ### Superseded
+- `docs/plans/2026-04-01-startup-unification-design.md`
+- `docs/plans/2026-04-01-startup-unification.md`
 - `docs/plans/2026-04-01-photo-detail-face-list.md`
 - `docs/plans/2026-04-03-people-cluster-threshold-design.md`
 - `docs/plans/2026-04-03-people-cluster-threshold.md`

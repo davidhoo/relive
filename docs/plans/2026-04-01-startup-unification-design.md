@@ -2,8 +2,8 @@
 
 **Date:** 2026-04-01
 
-> **Status:** Candidate
-> **Note:** The corresponding code changes were rolled back from `main`. Keep this document as a future option, not as a description of the current runtime.
+> **Status:** Superseded
+> **Note:** This proposal is discarded. The current startup model (`make dev`, `make deploy`, `make deploy-image`) is already clear enough; do not treat this document as active backlog.
 
 **Problem**
 
