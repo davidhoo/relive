@@ -252,4 +252,4 @@ Error: unauthorized
 ./backend/bin/relive-people-worker version
 ```
 
-兼容的 NAS 后端版本：v1.3.0+
+兼容的 NAS 后端版本：v1.5.0+

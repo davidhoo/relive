@@ -83,7 +83,7 @@ func runVersion() {
 	fmt.Printf("relive-people-worker version %s\n", version.Version)
 	fmt.Printf("Build time: %s\n", version.BuildTime)
 	fmt.Printf("Git commit: %s\n", version.GitCommit)
-	fmt.Println("\nAPI Mode - Compatible with Relive Server v1.3.0+")
+	fmt.Println("\nAPI Mode - Compatible with Relive Server v1.5.0+")
 	fmt.Println("Optimized for Apple Silicon (M4 Mac recommended)")
 }
 
