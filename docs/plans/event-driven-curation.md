@@ -1,7 +1,8 @@
 # 事件驱动型智能策展方案
 
 > 日期：2026-03-16
-> 状态：Phase 0 + Phase 1 + Phase 2a/2b/2c 已完成，其余搁置
+> **Status:** Partially Completed
+> **Note:** Phase 0 + Phase 1 + Phase 2a/2b/2c have landed on `main`; remaining phases are currently shelved and should not be treated as active backlog by default.
 
 ## 目标
 

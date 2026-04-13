@@ -1,6 +1,9 @@
 # People Cluster Threshold Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+>
+> **Status:** Superseded
+> **Note:** A later clustering redesign replaced this one-constant threshold change; do not treat this plan as current backlog.
 
 **Goal:** 将人物归属阈值从 `0.92` 轻微放松到 `0.88`，减少同一人物被拆成多个分组的情况。
 

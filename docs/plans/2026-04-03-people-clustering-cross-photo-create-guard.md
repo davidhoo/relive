@@ -1,6 +1,9 @@
 # People Clustering Cross-Photo Create Guard Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+>
+> **Status:** Completed
+> **Note:** Implemented on `main`; retained for historical traceability.
 
 **Goal:** 防止同一张照片里的多张人脸仅凭单图内部证据就自动创建新人物。
 

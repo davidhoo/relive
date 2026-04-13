@@ -1,5 +1,8 @@
 # Photo Detail Face List Implementation Plan
 
+> **Status:** Superseded
+> **Note:** This local draft was absorbed by `docs/plans/2026-04-02-people-system.md`; do not treat it as active backlog.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Show detected face crops in the photo detail page sidebar, with confidence and clustering status.

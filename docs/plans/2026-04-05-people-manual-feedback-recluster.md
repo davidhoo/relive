@@ -1,6 +1,9 @@
 # People Manual Feedback Recluster Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+>
+> **Status:** Completed
+> **Note:** Implemented on `main`; retained for historical traceability.
 
 **Goal:** 让人物手工合并、拆分、移动操作立即返回，避免同步全局重聚类阻塞页面，同时保留后台反馈式重聚类能力。
 

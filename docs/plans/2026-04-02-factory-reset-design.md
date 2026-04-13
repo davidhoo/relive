@@ -2,6 +2,9 @@
 
 **Date:** 2026-04-02
 
+> **Status:** Completed
+> **Note:** The factory reset flow described here has landed on `main`; keep this document for historical traceability.
+
 ## Problem
 
 当前系统还原依赖手写表名单清库。随着业务表、任务表、事件表、`photo_tags`、FTS 虚拟表和触发器持续增加，这个方案天然会漏，维护成本会越来越高。

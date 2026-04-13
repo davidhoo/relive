@@ -1,6 +1,9 @@
 # Immich-lite People Clustering Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+>
+> **Status:** Completed
+> **Note:** Implemented on `main`; retained for historical traceability.
 
 **Goal:** 将当前人物归属逻辑从“单脸阈值匹配”升级为更接近 Immich 的增量聚类流程，提高自动聚类准确率并减少碎片人物。
 

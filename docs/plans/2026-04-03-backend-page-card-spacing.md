@@ -1,6 +1,9 @@
 # Backend Page Card Spacing Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+>
+> **Status:** Completed
+> **Note:** Implemented on `main`; retained for historical traceability.
 
 **Goal:** 修复人物管理页卡片贴合问题，并统一人物页与 AI 分析页的纵向卡片间距模型。
 

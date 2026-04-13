@@ -1,6 +1,9 @@
 # People Merge Avatar Candidates Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+>
+> **Status:** Completed
+> **Note:** Implemented on `main`; retained for historical traceability.
 
 **Goal:** 让人物详情页的 move/merge 候选列表只展示有头像的人物，并在下拉选项中直接显示头像。
 

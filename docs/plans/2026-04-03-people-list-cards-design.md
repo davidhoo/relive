@@ -1,5 +1,8 @@
 # People List Cards Design
 
+> **Status:** Completed
+> **Note:** The people list card layout described here has landed on `main`; keep this document for historical traceability.
+
 **Goal:** 将人物管理页中的人物列表从表格改为高密度多列卡片列表，提升空间利用率。
 
 **Scope:** `frontend/src/views/People/index.vue`

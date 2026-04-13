@@ -2,7 +2,8 @@
 
 **日期**: 2026-04-06
 **问题**: NAS 上人物聚类 CPU 占用过高（200%），影响正常服务
-**状态**: 待讨论
+> **Status:** Superseded
+> **Note:** This first-pass optimization proposal was replaced by `docs/plans/2026-04-07-people-clustering-optimization-v2.md`; do not treat it as current backlog.
 
 ---
 

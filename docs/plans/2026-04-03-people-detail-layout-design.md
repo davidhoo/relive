@@ -1,5 +1,8 @@
 # People Detail Layout Design
 
+> **Status:** Completed
+> **Note:** The detail-page layout changes described here have landed on `main`; keep this document for historical traceability.
+
 **Goal:** 修复人物详情页左右列内 card 纵向贴合的问题，并降低人脸样本区域的单卡片尺寸，让样本区更紧凑。
 
 **Scope:** `frontend/src/views/People/Detail.vue`

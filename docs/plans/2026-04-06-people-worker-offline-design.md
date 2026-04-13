@@ -2,6 +2,9 @@
 
 **Date:** 2026-04-06
 
+> **Status:** Completed
+> **Note:** The offline `people-worker` architecture described here has landed on `main`; keep this document for historical traceability.
+
 **Problem**
 
 当前人物处理链路默认由 NAS 上的后端直接调用 `relive-ml` 做人脸检测与 embedding 提取。这个模式在“`relive-ml` 跟后端部署在同机或同 Compose 网络”时可用，但它天然偏向 NAS 本地算力。

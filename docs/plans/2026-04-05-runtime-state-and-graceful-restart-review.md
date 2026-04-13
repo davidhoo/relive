@@ -1,6 +1,9 @@
 # Runtime State And Graceful Restart Review Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+>
+> **Status:** Review Only
+> **Note:** This is an audit/decision memo for future work, not an active implementation backlog item.
 
 **Goal:** 保存本轮关于“进程内运行态”和“优雅重启”风险的审计结论，供后续评审时决定是否值得投入优化。
 

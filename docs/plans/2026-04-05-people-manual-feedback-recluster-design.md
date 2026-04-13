@@ -1,5 +1,8 @@
 # People Manual Feedback Recluster Design
 
+> **Status:** Completed
+> **Note:** The async manual-feedback recluster flow described here has landed on `main`; keep this document for historical traceability.
+
 **Goal:** 让人物详情页中的手工合并、拆分、移动操作不再被同步全局重聚类阻塞；核心数据变更立即完成并返回，后续低置信度人脸重评估改为后台串行执行。
 
 **Scope:** `backend/internal/service/people_service.go`、`backend/internal/service/people_service_test.go`、`backend/internal/repository/face_repo.go`、`backend/pkg/database/database.go`、`frontend/src/views/People/Detail.vue`；本次不重写聚类算法，不新增独立后台任务表，不改现有 merge/split/move 请求结构。

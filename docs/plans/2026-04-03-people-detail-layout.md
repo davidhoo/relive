@@ -1,6 +1,9 @@
 # People Detail Layout Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+>
+> **Status:** Completed
+> **Note:** Implemented on `main`; retained for historical traceability.
 
 **Goal:** 修复人物详情页列内卡片挤在一起的问题，并让人脸样本区域更紧凑。
 

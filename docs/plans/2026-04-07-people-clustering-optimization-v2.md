@@ -2,7 +2,8 @@
 
 **日期**: 2026-04-07
 **问题**: NAS 上人物聚类 CPU 占用过高（200%），API 响应变慢
-**状态**: 基于 pprof 分析，准备实施（已 Code Review）
+> **Status:** Completed
+> **Note:** The pre-decoding optimization path described here has landed on `main`; deferred options in this document remain intentionally unimplemented.
 
 ---
 

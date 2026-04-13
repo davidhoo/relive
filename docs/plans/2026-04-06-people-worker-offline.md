@@ -1,6 +1,9 @@
 # People Worker Offline Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+>
+> **Status:** Completed
+> **Note:** Implemented on `main`; retained for historical traceability.
 
 **Goal:** Add an offline `people-worker` that runs on a Mac, downloads photos from the NAS backend, performs face detection and embedding extraction via local `relive-ml`, and submits detection results back to the NAS for storage, thumbnail generation, and clustering.
 

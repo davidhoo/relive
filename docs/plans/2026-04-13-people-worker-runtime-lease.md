@@ -1,6 +1,9 @@
 # People Worker Runtime Lease Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+>
+> **Status:** Completed
+> **Note:** Implemented on `main`; retained for historical traceability.
 
 **Goal:** Make remote `relive-people-worker` instances participate in the same `global_people` runtime lease as the local backend people background task.
 

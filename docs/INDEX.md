@@ -19,9 +19,64 @@
 - `docs/GOTCHAS.md`：踩坑经验（GORM/SQLite/Vue/ESP32 常见陷阱）
 
 ### 设计方案
-- `docs/plans/2026-04-02-people-system-design.md`：当前批准的人物系统产品定义
-- `docs/plans/2026-04-02-people-system.md`：人物系统实施计划
-- `docs/plans/event-driven-curation.md`：事件驱动型智能策展方案
+- `docs/plans/2026-04-02-people-system-design.md`：当前人物系统一期定义（已落地）
+- `docs/plans/2026-04-02-people-system.md`：人物系统实施计划（已完成）
+- `docs/plans/event-driven-curation.md`：事件驱动型智能策展方案（分阶段落地，剩余阶段已搁置）
+
+## Plan Status
+
+查询“还有哪些计划中的工作没做”时，默认只把 `Pending` 视为活动 backlog；应跳过 `Completed`、`Review Only`、`Superseded`，并把 `Candidate` 仅视为未来选项而非当前承诺路线。
+
+### Pending
+- 当前 `docs/plans/` 下没有已批准但尚未实现的 `Pending` 计划文件
+
+### Partially Completed
+- `docs/plans/event-driven-curation.md`：Phase 0 / 1 / 2a / 2b / 2c 已完成，其余阶段当前搁置
+
+### Candidate / Future Option
+- `docs/plans/2026-04-01-startup-unification-design.md`
+- `docs/plans/2026-04-01-startup-unification.md`
+- `docs/plans/face-recognition-vector-db.md`
+
+### Review Only
+- `docs/plans/2026-04-05-runtime-state-and-graceful-restart-review.md`
+
+### Superseded
+- `docs/plans/2026-04-01-photo-detail-face-list.md`
+- `docs/plans/2026-04-03-people-cluster-threshold-design.md`
+- `docs/plans/2026-04-03-people-cluster-threshold.md`
+- `docs/plans/2026-04-06-people-clustering-optimization.md`
+
+### Completed
+- `docs/plans/2026-04-02-factory-reset-design.md`
+- `docs/plans/2026-04-02-factory-reset.md`
+- `docs/plans/2026-04-02-make-entrypoints-design.md`
+- `docs/plans/2026-04-02-make-entrypoints.md`
+- `docs/plans/2026-04-02-people-system-design.md`
+- `docs/plans/2026-04-02-people-system.md`
+- `docs/plans/2026-04-03-backend-page-card-spacing-design.md`
+- `docs/plans/2026-04-03-backend-page-card-spacing.md`
+- `docs/plans/2026-04-03-immich-lite-people-clustering-design.md`
+- `docs/plans/2026-04-03-immich-lite-people-clustering.md`
+- `docs/plans/2026-04-03-people-clustering-cross-photo-create-guard-design.md`
+- `docs/plans/2026-04-03-people-clustering-cross-photo-create-guard.md`
+- `docs/plans/2026-04-03-people-detail-layout-design.md`
+- `docs/plans/2026-04-03-people-detail-layout.md`
+- `docs/plans/2026-04-03-people-list-cards-design.md`
+- `docs/plans/2026-04-03-people-list-cards.md`
+- `docs/plans/2026-04-03-people-merge-avatar-candidates-design.md`
+- `docs/plans/2026-04-03-people-merge-avatar-candidates.md`
+- `docs/plans/2026-04-03-people-rescan-by-path-design.md`
+- `docs/plans/2026-04-03-people-rescan-by-path.md`
+- `docs/plans/2026-04-05-people-manual-feedback-recluster-design.md`
+- `docs/plans/2026-04-05-people-manual-feedback-recluster.md`
+- `docs/plans/2026-04-06-people-worker-offline-design.md`
+- `docs/plans/2026-04-06-people-worker-offline.md`
+- `docs/plans/2026-04-07-people-clustering-drain-and-visibility.md`
+- `docs/plans/2026-04-07-people-clustering-optimization-v2.md`
+- `docs/plans/2026-04-07-people-face-thumbnail-batch-design.md`
+- `docs/plans/2026-04-07-people-face-thumbnail-batch.md`
+- `docs/plans/2026-04-13-people-worker-runtime-lease.md`
 
 ## 当前实现文档
 

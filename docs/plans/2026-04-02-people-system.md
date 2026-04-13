@@ -1,6 +1,9 @@
 # People System Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+>
+> **Status:** Completed
+> **Note:** Implemented on `main`; retained for historical traceability.
 
 **Goal:** Build the first production-ready people system for Relive: async face detection, person clustering and correction, people-first management UI, photo-detail people visibility, and photo-level display weighting.
 

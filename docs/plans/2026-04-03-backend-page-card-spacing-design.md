@@ -1,5 +1,8 @@
 # Backend Page Card Spacing Design
 
+> **Status:** Completed
+> **Note:** The spacing/layout changes described here have landed on `main`; keep this document for historical traceability.
+
 **Goal:** 统一后台页面纵向卡片之间的间距模型，修复人物管理页中 tab 内容区卡片挤在一起的问题，并让同类页面使用一致的布局方式。
 
 **Scope:** `frontend/src/views/People/index.vue`、`frontend/src/views/Analysis/index.vue`、`frontend/src/assets/styles/common.css`

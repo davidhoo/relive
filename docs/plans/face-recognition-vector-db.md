@@ -1,9 +1,8 @@
 # 人像识别 + 向量数据库 + 智能裁切 方案
 
 > 日期：2026-03-31
-> 状态：方案已定，待实施
->
-> 说明：这是候选实施方案，当前主分支尚未落地该设计。
+> **Status:** Candidate
+> **Note:** This is a candidate design only. The current `main` branch does not implement this approach.
 
 ## 背景
 

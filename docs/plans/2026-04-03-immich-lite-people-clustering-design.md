@@ -1,5 +1,8 @@
 # Immich-lite People Clustering Design
 
+> **Status:** Completed
+> **Note:** The clustering redesign described here has landed on `main`; keep this document for historical traceability.
+
 **Goal:** 将当前“单脸对单脸 + 单阈值”的人物归属逻辑升级为更接近 Immich 的增量聚类流程，让自动聚类成为主流程、人工修正成为辅助流程。
 
 **Scope:** `backend/internal/service/people_service.go` 及相关 model/repository/test 文件；本阶段不引入向量数据库，继续基于现有 SQLite + GORM 实现。

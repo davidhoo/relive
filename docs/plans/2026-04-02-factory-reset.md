@@ -1,6 +1,9 @@
 # Factory Reset Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+>
+> **Status:** Completed
+> **Note:** Implemented on `main`; retained for historical traceability.
 
 **Goal:** Replace table-by-table system reset with a SQLite file deletion flow that runs on next startup and returns the system to a true factory state.
 

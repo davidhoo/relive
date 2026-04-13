@@ -1,6 +1,9 @@
 # Make Entrypoints Cleanup Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+>
+> **Status:** Completed
+> **Note:** Implemented on `main`; retained for historical traceability.
 
 **Goal:** Reduce the root Make interface to a small approved command set, make `make dev` non-interactive, split source deployment from image deployment, and align docs/tests with that contract.
 

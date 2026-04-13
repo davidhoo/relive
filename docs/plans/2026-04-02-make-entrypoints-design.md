@@ -2,6 +2,9 @@
 
 **Date:** 2026-04-02
 
+> **Status:** Completed
+> **Note:** The approved root Make/public entrypoint cleanup has landed on `main`; keep this document for historical traceability.
+
 ## Problem
 
 The current root `Makefile` exposes too many mixed-purpose targets:

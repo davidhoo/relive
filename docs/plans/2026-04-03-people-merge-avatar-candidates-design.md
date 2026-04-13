@@ -1,5 +1,8 @@
 # People Merge Avatar Candidates Design
 
+> **Status:** Completed
+> **Note:** The move/merge avatar candidate improvements described here have landed on `main`; keep this document for historical traceability.
+
 **Goal:** 在人物详情页的“移动到其他人物”和“合并其他人物到当前人物”选择器中，只展示有头像的人物，并让候选项直接显示头像，避免用户只能看到“未命名人物 #310 · 路人”这类难以辨认的文本。
 
 **Scope:** `backend/internal/model/dto.go`、`backend/internal/api/v1/handler/people_handler.go`、`frontend/src/types/people.ts`、`frontend/src/views/People/Detail.vue`；本次不修改 merge/move API 请求结构，不改其它页面的人物选择器。

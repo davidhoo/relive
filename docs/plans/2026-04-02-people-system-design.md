@@ -1,7 +1,9 @@
 # People System Design
 
 **Date:** 2026-04-02
-**Status:** approved product definition
+> **Status:** Completed
+> **Note:** The approved phase-one people system described here has landed on `main`.
+
 **Supersedes:** `docs/plans/face-recognition-vector-db.md`, `docs/plans/2026-04-01-photo-detail-face-list.md` (partial)
 
 ## Problem

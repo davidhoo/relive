@@ -1,5 +1,8 @@
 # People Clustering Cross-Photo Create Guard Design
 
+> **Status:** Completed
+> **Note:** The cross-photo creation guard described here has landed on `main`; keep this document for historical traceability.
+
 **Goal:** 减少多人合照导致的误并，同时保留“单张新脸可以附着到已有 Person”的能力。
 
 **Scope:** `backend/internal/service/people_service.go` 与对应测试；本次不修改数据模型、不新增配置项、不改变现有 attach 阈值。

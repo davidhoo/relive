@@ -1,6 +1,9 @@
 # People List Cards Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+>
+> **Status:** Completed
+> **Note:** Implemented on `main`; retained for historical traceability.
 
 **Goal:** 将人物管理页的人物列表从表格改为高密度卡片网格，提升空间利用率。
 

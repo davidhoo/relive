@@ -2,7 +2,8 @@
 
 **Date:** 2026-04-01
 
-> **Status:** Candidate only. The corresponding code changes were rolled back from the main branch. Keep this document as a future option, not as a description of the current runtime.
+> **Status:** Candidate
+> **Note:** The corresponding code changes were rolled back from `main`. Keep this document as a future option, not as a description of the current runtime.
 
 **Problem**
 

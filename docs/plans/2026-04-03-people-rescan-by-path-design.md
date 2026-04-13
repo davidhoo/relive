@@ -1,5 +1,8 @@
 # People Rescan By Path Design
 
+> **Status:** Completed
+> **Note:** The path-level people rescan entry described here has landed on `main`; keep this document for historical traceability.
+
 **Goal:** 在“照片管理 > 扫描路径”中新增“人物重扫”入口，使用户无需先去做照片重建，也能对某个路径重新触发人物扫描/聚类后台任务。
 
 **Scope:** `backend/internal/api/v1/handler/people_handler.go`、`backend/internal/api/v1/router/router.go`、`backend/internal/model/dto.go`、`backend/internal/api/v1/handler/people_handler_test.go`、`frontend/src/api/people.ts`、`frontend/src/views/Photos/index.vue`

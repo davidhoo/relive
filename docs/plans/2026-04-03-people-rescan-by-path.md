@@ -1,6 +1,9 @@
 # People Rescan By Path Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+>
+> **Status:** Completed
+> **Note:** Implemented on `main`; retained for historical traceability.
 
 **Goal:** 在扫描路径列表中增加“人物重扫”按钮，点击后对该路径重新入队人物任务并自动启动人物后台。
 

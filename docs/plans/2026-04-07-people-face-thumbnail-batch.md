@@ -1,6 +1,9 @@
 # People Face Thumbnail Batch Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+>
+> **Status:** Completed
+> **Note:** Implemented on `main`; retained for historical traceability.
 
 **Goal:** Reuse one decoded source image per photo when generating multiple face thumbnails during people detection result application.
 

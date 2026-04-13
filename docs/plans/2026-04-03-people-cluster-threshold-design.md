@@ -1,5 +1,8 @@
 # People Cluster Threshold Design
 
+> **Status:** Superseded
+> **Note:** The later clustering redesign replaced this one-constant threshold adjustment; do not treat this document as current backlog.
+
 **Goal:** 轻微放松人物归属阈值，让相似但未达到当前极高阈值的人脸更容易并入已有人物。
 
 **Scope:** `backend/internal/service/people_service.go`、`backend/internal/service/people_service_test.go`

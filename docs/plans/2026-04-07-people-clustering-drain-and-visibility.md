@@ -1,6 +1,9 @@
 # People Clustering Drain And Visibility Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+>
+> **Status:** Completed
+> **Note:** Implemented on `main`; retained for historical traceability.
 
 **Goal:** 让人物后台在没有新 `people_jobs` 时也能持续清空 `pending faces`，并在后台任务页展示聚类 backlog 与当前阶段。
 

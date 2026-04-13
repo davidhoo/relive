@@ -2,6 +2,9 @@
 
 **Date:** 2026-04-07
 
+> **Status:** Completed
+> **Note:** The single-open face thumbnail batch path described here has landed on `main`; keep this document for historical traceability.
+
 **Problem:** `ApplyDetectionResult` currently regenerates each face thumbnail by reopening the same source image once per detected face. On NAS hardware, this adds avoidable CPU cost during offline people processing.
 
 **Goal:** Decode each source photo once per detection result and reuse that decoded image for all face thumbnail crops, without changing thumbnail paths, crop rules, or clustering behavior.
