@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/davidhoo/relive/internal/factoryreset"
+	"github.com/davidhoo/relive/internal/lifecycle"
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/service"
 	"github.com/davidhoo/relive/pkg/config"
@@ -22,15 +23,20 @@ import (
 type SystemHandler struct {
 	systemService service.SystemService
 	cfg           *config.Config
+	lifecycle     *lifecycle.State
 	startTime     time.Time
 	scheduleExit  func(time.Duration)
 }
 
 // NewSystemHandler 创建系统处理器
-func NewSystemHandler(systemService service.SystemService, cfg *config.Config) *SystemHandler {
+func NewSystemHandler(systemService service.SystemService, cfg *config.Config, lifecycleState *lifecycle.State) *SystemHandler {
+	if lifecycleState == nil {
+		lifecycleState = lifecycle.NewState()
+	}
 	return &SystemHandler{
 		systemService: systemService,
 		cfg:           cfg,
+		lifecycle:     lifecycleState,
 		startTime:     time.Now(),
 		scheduleExit: func(delay time.Duration) {
 			go func() {
@@ -71,6 +77,55 @@ func (h *SystemHandler) Health(c *gin.Context) {
 			Timestamp: time.Now(),
 		},
 		Message: "System is healthy",
+	})
+}
+
+// Readiness 就绪检查
+// @Summary 就绪检查
+// @Description 检查系统是否仍可继续接收新流量
+// @Tags system
+// @Produce json
+// @Success 200 {object} model.Response{data=model.SystemHealthResponse}
+// @Failure 500 {object} model.Response
+// @Failure 503 {object} model.Response{data=model.SystemHealthResponse}
+// @Router /api/v1/system/readiness [get]
+func (h *SystemHandler) Readiness(c *gin.Context) {
+	if err := h.systemService.Ping(); err != nil {
+		c.JSON(http.StatusInternalServerError, model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "DATABASE_ERROR",
+				Message: "Database ping failed",
+			},
+		})
+		return
+	}
+
+	uptime := int64(time.Since(h.startTime).Seconds())
+	data := model.SystemHealthResponse{
+		Status:    "ready",
+		Version:   version.Version,
+		Uptime:    uptime,
+		Timestamp: time.Now(),
+	}
+
+	if h.lifecycle != nil && h.lifecycle.IsDraining() {
+		data.Status = "draining"
+		c.JSON(http.StatusServiceUnavailable, model.Response{
+			Success: false,
+			Data:    data,
+			Error: &model.ErrorInfo{
+				Code:    "SYSTEM_DRAINING",
+				Message: "System is draining and not accepting new requests",
+			},
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Data:    data,
+		Message: "System is ready",
 	})
 }
 

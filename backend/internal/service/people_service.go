@@ -90,6 +90,8 @@ type peopleService struct {
 	feedbackMu            sync.Mutex
 	feedbackRunning       bool
 	feedbackPending       bool
+	feedbackShutdown      bool
+	feedbackStopCh        chan struct{}
 	feedbackPollInterval  time.Duration
 	feedbackReclusterHook func() model.ReclusterResult
 
@@ -128,6 +130,7 @@ func NewPeopleService(db *gorm.DB, photoRepo repository.PhotoRepository, faceRep
 		config:               cfg,
 		client:               client,
 		runtimeService:       runtimeService,
+		feedbackStopCh:       make(chan struct{}),
 		feedbackPollInterval: peopleFeedbackPollInterval,
 	}
 }
@@ -297,6 +300,8 @@ func (s *peopleService) EnqueueUnprocessed() (int, error) {
 }
 
 func (s *peopleService) HandleShutdown() error {
+	s.stopFeedbackRecluster()
+
 	s.taskMutex.RLock()
 	active := s.active
 	s.taskMutex.RUnlock()
@@ -1043,6 +1048,10 @@ func (s *peopleService) appendBackgroundLog(message string) {
 
 func (s *peopleService) scheduleFeedbackRecluster() {
 	s.feedbackMu.Lock()
+	if s.feedbackShutdown {
+		s.feedbackMu.Unlock()
+		return
+	}
 	s.feedbackPending = true
 	if s.feedbackRunning {
 		s.feedbackMu.Unlock()
@@ -1056,12 +1065,26 @@ func (s *peopleService) scheduleFeedbackRecluster() {
 
 func (s *peopleService) runFeedbackReclusterLoop() {
 	for {
+		if s.feedbackStopRequested() {
+			s.markFeedbackLoopStopped()
+			return
+		}
+
 		if s.shouldDelayFeedbackRecluster() {
-			time.Sleep(s.feedbackReclusterPollIntervalValue())
+			if s.waitFeedbackPollIntervalOrStop() {
+				s.markFeedbackLoopStopped()
+				return
+			}
 			continue
 		}
 
 		s.feedbackMu.Lock()
+		if s.feedbackShutdown {
+			s.feedbackPending = false
+			s.feedbackRunning = false
+			s.feedbackMu.Unlock()
+			return
+		}
 		if !s.feedbackPending {
 			s.feedbackRunning = false
 			s.feedbackMu.Unlock()
@@ -1081,6 +1104,63 @@ func (s *peopleService) runFeedbackReclusterLoop() {
 		logger.Infof("feedback recluster complete: evaluated=%d reassigned=%d iterations=%d elapsed=%s",
 			result.Evaluated, result.Reassigned, result.Iterations, time.Since(startedAt).Round(time.Millisecond))
 	}
+}
+
+func (s *peopleService) stopFeedbackRecluster() {
+	s.feedbackMu.Lock()
+	s.feedbackPending = false
+	s.feedbackShutdown = true
+	stopCh := s.feedbackStopCh
+	s.feedbackStopCh = nil
+	s.feedbackMu.Unlock()
+
+	if stopCh != nil {
+		close(stopCh)
+	}
+}
+
+func (s *peopleService) feedbackStopRequested() bool {
+	s.feedbackMu.Lock()
+	stopCh := s.feedbackStopCh
+	s.feedbackMu.Unlock()
+	if stopCh == nil {
+		return true
+	}
+
+	select {
+	case <-stopCh:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *peopleService) waitFeedbackPollIntervalOrStop() bool {
+	interval := s.feedbackReclusterPollIntervalValue()
+
+	s.feedbackMu.Lock()
+	stopCh := s.feedbackStopCh
+	s.feedbackMu.Unlock()
+	if stopCh == nil {
+		return true
+	}
+
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
+	select {
+	case <-stopCh:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+func (s *peopleService) markFeedbackLoopStopped() {
+	s.feedbackMu.Lock()
+	defer s.feedbackMu.Unlock()
+	s.feedbackRunning = false
+	s.feedbackPending = false
 }
 
 func (s *peopleService) shouldDelayFeedbackRecluster() bool {

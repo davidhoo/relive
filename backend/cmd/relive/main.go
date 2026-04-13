@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/davidhoo/relive/internal/factoryreset"
+	"github.com/davidhoo/relive/internal/lifecycle"
 	"github.com/davidhoo/relive/internal/api/v1/router"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/database"
@@ -67,11 +68,13 @@ func main() {
 	}
 	logger.Info("Database initialized successfully")
 
+	appState := lifecycle.NewState()
+
 	// 设置 Gin 模式
 	gin.SetMode(cfg.Server.Mode)
 
 	// 初始化路由（同时获取服务集合）
-	r, services := router.Setup(db, cfg)
+	r, services := router.Setup(db, cfg, appState)
 
 	// 启动定时任务调度器
 	services.Scheduler.Start()
@@ -111,36 +114,18 @@ func main() {
 
 	logger.Info("Shutting down server...")
 
-	// 停止调度器
-	services.Scheduler.Stop()
+	notifyShutdown(appState, services.Scheduler, services.AI, services.EventClustering, services.Photo, services.Thumbnail, services.GeocodeTask, services.People)
 
-	if services.Photo != nil {
-		if err := services.Photo.HandleShutdown(); err != nil {
-			logger.Warnf("Failed to notify photo service shutdown: %v", err)
-		}
-	}
-	if services.Thumbnail != nil {
-		if err := services.Thumbnail.HandleShutdown(); err != nil {
-			logger.Warnf("Failed to notify thumbnail service shutdown: %v", err)
-		}
-	}
-	if services.GeocodeTask != nil {
-		if err := services.GeocodeTask.HandleShutdown(); err != nil {
-			logger.Warnf("Failed to notify geocode task service shutdown: %v", err)
-		}
-	}
-	if services.People != nil {
-		if err := services.People.HandleShutdown(); err != nil {
-			logger.Warnf("Failed to notify people service shutdown: %v", err)
-		}
-	}
-
-	// 优雅关闭服务器
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := srv.Shutdown(ctx); err != nil {
+	httpCtx, httpCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer httpCancel()
+	if err := srv.Shutdown(httpCtx); err != nil {
 		logger.Errorf("Server forced to shutdown: %v", err)
+	}
+
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer drainCancel()
+	if err := waitForShutdownDrain(drainCtx, services.AI, services.EventClustering, services.Photo, services.Thumbnail, services.GeocodeTask, services.People); err != nil {
+		logger.Warnf("Shutdown drain timed out: %v", err)
 	}
 
 	logger.Info("Server exited")

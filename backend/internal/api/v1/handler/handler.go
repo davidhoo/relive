@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"github.com/davidhoo/relive/internal/lifecycle"
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/internal/service"
 	"github.com/davidhoo/relive/pkg/config"
@@ -24,12 +25,12 @@ type Handlers struct {
 }
 
 // NewHandlers 创建所有处理器
-func NewHandlers(db *gorm.DB, services *service.Services, repos *repository.Repositories, cfg *config.Config) *Handlers {
+func NewHandlers(db *gorm.DB, services *service.Services, repos *repository.Repositories, cfg *config.Config, appState *lifecycle.State) *Handlers {
 	// 创建设备处理器
 	deviceHandler := NewDeviceHandler(services.Device)
 
 	handlers := &Handlers{
-		System:    NewSystemHandler(services.System, cfg),
+		System:    NewSystemHandler(services.System, cfg, appState),
 		Photo:     NewPhotoHandler(services.Photo, services.Thumbnail, services.GeocodeTask, services.Config, cfg),
 		People:    NewPeopleHandler(services.People, repos.Person, repos.Face, repos.Photo, repos.PeopleJob, cfg),
 		Thumbnail: NewThumbnailHandler(services.Thumbnail),

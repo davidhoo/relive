@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/davidhoo/relive/internal/lifecycle"
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/service"
 	"github.com/davidhoo/relive/pkg/config"
@@ -76,7 +77,7 @@ func TestSystemHandlerReset_SchedulesFactoryReset(t *testing.T) {
 			Type: "sqlite",
 			Path: dbPath,
 		},
-	})
+	}, lifecycle.NewState())
 
 	exitScheduled := make(chan time.Duration, 1)
 	h.scheduleExit = func(delay time.Duration) {
@@ -115,7 +116,7 @@ func TestSystemHandlerReset_RejectsNonSQLite(t *testing.T) {
 			Type: "postgres",
 			Path: "/tmp/relive.db",
 		},
-	})
+	}, lifecycle.NewState())
 	h.scheduleExit = func(delay time.Duration) {
 		t.Fatalf("did not expect exit scheduling for non-sqlite reset, got %v", delay)
 	}
@@ -133,9 +134,59 @@ func TestSystemHandler_Health_Success(t *testing.T) {
 	defer sqlDB.Close()
 
 	svc := service.NewSystemService(db)
-	h := NewSystemHandler(svc, &config.Config{})
+	h := NewSystemHandler(svc, &config.Config{}, lifecycle.NewState())
 	rec := performJSONRequest(t, http.MethodGet, "/api/v1/system/health", nil, nil, h.Health)
 	assert.Equal(t, http.StatusOK, rec.Code)
 	resp := decodeAPIResponse(t, rec)
 	assert.True(t, resp.Success)
+}
+
+func TestSystemHandler_Readiness_Ready(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	sqlDB, _ := db.DB()
+	defer sqlDB.Close()
+
+	state := lifecycle.NewState()
+	h := NewSystemHandler(service.NewSystemService(db), &config.Config{}, state)
+
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/system/readiness", nil, nil, h.Readiness)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	resp := decodeAPIResponse(t, rec)
+	assert.True(t, resp.Success)
+}
+
+func TestSystemHandler_Readiness_Draining(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	sqlDB, _ := db.DB()
+	defer sqlDB.Close()
+
+	state := lifecycle.NewState()
+	state.BeginDraining()
+	h := NewSystemHandler(service.NewSystemService(db), &config.Config{}, state)
+
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/system/readiness", nil, nil, h.Readiness)
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+}
+
+func TestSystemHandler_Health_StaysHealthyWhileDraining(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	sqlDB, _ := db.DB()
+	defer sqlDB.Close()
+
+	state := lifecycle.NewState()
+	state.BeginDraining()
+	h := NewSystemHandler(service.NewSystemService(db), &config.Config{}, state)
+
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/system/health", nil, nil, h.Health)
+	assert.Equal(t, http.StatusOK, rec.Code)
 }

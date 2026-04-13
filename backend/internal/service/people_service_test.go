@@ -2279,6 +2279,40 @@ func TestPeopleService_FeedbackReclusterDefersWhileBackgroundRunning(t *testing.
 	})
 }
 
+func TestPeopleService_HandleShutdownStopsPendingFeedbackRecluster(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	type feedbackSchedulerTestHooks interface {
+		setFeedbackReclusterHookForTest(func() model.ReclusterResult)
+		setFeedbackReclusterPollIntervalForTest(time.Duration)
+		scheduleFeedbackRecluster()
+	}
+
+	hooks, ok := any(svc).(feedbackSchedulerTestHooks)
+	require.True(t, ok, "expected async feedback recluster hooks to be available")
+
+	var runs atomic.Int32
+	hooks.setFeedbackReclusterPollIntervalForTest(5 * time.Millisecond)
+	hooks.setFeedbackReclusterHookForTest(func() model.ReclusterResult {
+		runs.Add(1)
+		return model.ReclusterResult{Evaluated: 1}
+	})
+	t.Cleanup(func() {
+		hooks.setFeedbackReclusterHookForTest(nil)
+		svc.setBackgroundBusy(false)
+	})
+
+	svc.setBackgroundBusy(true)
+	hooks.scheduleFeedbackRecluster()
+	time.Sleep(30 * time.Millisecond)
+
+	require.NoError(t, svc.HandleShutdown())
+
+	svc.setBackgroundBusy(false)
+	time.Sleep(50 * time.Millisecond)
+	assert.Zero(t, runs.Load())
+}
+
 func TestPeopleServiceCategoryBackfillsPhotos(t *testing.T) {
 	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
 

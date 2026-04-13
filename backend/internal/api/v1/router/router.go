@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/davidhoo/relive/internal/api/v1/handler"
+	"github.com/davidhoo/relive/internal/lifecycle"
 	"github.com/davidhoo/relive/internal/middleware"
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/internal/service"
@@ -18,7 +19,7 @@ import (
 )
 
 // Setup 设置路由，返回 gin 引擎和服务集合
-func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
+func Setup(db *gorm.DB, cfg *config.Config, appState *lifecycle.State) (*gin.Engine, *service.Services) {
 	r := gin.New()
 
 	// 中间件
@@ -86,7 +87,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 	services := service.NewServices(repos, cfg, db)
 
 	// 初始化 Handlers
-	handlers := handler.NewHandlers(db, services, repos, cfg)
+	handlers := handler.NewHandlers(db, services, repos, cfg, appState)
 
 	// API 路由组
 	v1 := r.Group("/api/v1")
@@ -105,6 +106,7 @@ func Setup(db *gorm.DB, cfg *config.Config) (*gin.Engine, *service.Services) {
 		system := v1.Group("/system")
 		{
 			system.GET("/health", handlers.System.Health)
+			system.GET("/readiness", handlers.System.Readiness)
 			system.GET("/environment", handlers.System.Environment)
 		}
 

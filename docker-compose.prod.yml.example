@@ -29,6 +29,7 @@ services:
     image: davidhu/relive:latest
     container_name: relive
     restart: unless-stopped
+    stop_grace_period: 60s
     depends_on:
       - relive-ml
     # Synology 兼容版 4 核 NAS 推荐：

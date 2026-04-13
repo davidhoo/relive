@@ -76,6 +76,8 @@
 - `docs/plans/2026-04-07-people-clustering-optimization-v2.md`
 - `docs/plans/2026-04-07-people-face-thumbnail-batch-design.md`
 - `docs/plans/2026-04-07-people-face-thumbnail-batch.md`
+- `docs/plans/2026-04-13-graceful-restart-draining-design.md`
+- `docs/plans/2026-04-13-graceful-restart-draining.md`
 - `docs/plans/2026-04-13-people-worker-runtime-lease.md`
 
 ## 当前实现文档

@@ -59,6 +59,7 @@
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/v1/system/health` | 健康检查 |
+| GET | `/api/v1/system/readiness` | 就绪检查（draining 时返回 503） |
 | GET | `/api/v1/system/environment` | 运行环境信息 |
 
 健康检查示例：
