@@ -22,12 +22,13 @@ import (
 )
 
 type PeopleHandler struct {
-	service    service.PeopleService
-	personRepo repository.PersonRepository
-	faceRepo   repository.FaceRepository
-	photoRepo  repository.PhotoRepository
-	jobRepo    repository.PeopleJobRepository
-	cfg        *config.Config
+	service        service.PeopleService
+	personRepo     repository.PersonRepository
+	faceRepo       repository.FaceRepository
+	photoRepo      repository.PhotoRepository
+	jobRepo        repository.PeopleJobRepository
+	runtimeService service.AnalysisRuntimeService
+	cfg            *config.Config
 }
 
 func NewPeopleHandler(service service.PeopleService, personRepo repository.PersonRepository, faceRepo repository.FaceRepository, photoRepo repository.PhotoRepository, jobRepo repository.PeopleJobRepository, cfg *config.Config) *PeopleHandler {
@@ -39,6 +40,10 @@ func NewPeopleHandler(service service.PeopleService, personRepo repository.Perso
 		jobRepo:    jobRepo,
 		cfg:        cfg,
 	}
+}
+
+func (h *PeopleHandler) SetRuntimeService(runtimeService service.AnalysisRuntimeService) {
+	h.runtimeService = runtimeService
 }
 
 func (h *PeopleHandler) ListPeople(c *gin.Context) {
@@ -323,10 +328,10 @@ func (h *PeopleHandler) SplitPerson(c *gin.Context) {
 		Success: true,
 		Message: "人物已拆分",
 		Data: gin.H{
-			"person":                  personToResponse(person, nil),
-			"recluster_evaluated":     rc.Evaluated,
-			"recluster_reassigned":    rc.Reassigned,
-			"recluster_iterations":    rc.Iterations,
+			"person":               personToResponse(person, nil),
+			"recluster_evaluated":  rc.Evaluated,
+			"recluster_reassigned": rc.Reassigned,
+			"recluster_iterations": rc.Iterations,
 		},
 	})
 }
@@ -791,8 +796,32 @@ func (h *PeopleHandler) GetWorkerTasks(c *gin.Context) {
 		return
 	}
 
-	// TODO: 检查 people runtime lease 是否已被当前 worker 获取
-	// 暂时跳过 runtime lease 检查，等待后续实现
+	if h.runtimeService == nil {
+		c.JSON(http.StatusInternalServerError, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INTERNAL_ERROR", Message: "People runtime service not configured"}})
+		return
+	}
+
+	status, err := h.runtimeService.GetStatus(model.GlobalPeopleResourceKey)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INTERNAL_ERROR", Message: err.Error()}})
+		return
+	}
+	if !status.IsActive {
+		c.JSON(http.StatusConflict, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "PEOPLE_RUNTIME_NOT_ACQUIRED", Message: "People worker must acquire runtime before fetching tasks"},
+			Data:    status,
+		})
+		return
+	}
+	if status.OwnerType != model.AnalysisOwnerTypePeopleWorker || status.OwnerID != workerID {
+		c.JSON(http.StatusConflict, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "PEOPLE_RUNTIME_BUSY", Message: "Another people runtime is already running"},
+			Data:    status,
+		})
+		return
+	}
 
 	// 获取待处理任务
 	lockUntil := time.Now().Add(5 * time.Minute)
@@ -961,14 +990,40 @@ func (h *PeopleHandler) AcquirePeopleRuntime(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: err.Error()}})
 		return
 	}
+	if strings.TrimSpace(req.WorkerID) == "" {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: "worker_id is required"}})
+		return
+	}
+	if h.runtimeService == nil {
+		c.JSON(http.StatusInternalServerError, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INTERNAL_ERROR", Message: "People runtime service not configured"}})
+		return
+	}
 
-	// TODO: 实现 people runtime lease 获取
-	// 暂时返回成功，等待后续实现
+	lease, err := h.runtimeService.Acquire(
+		model.GlobalPeopleResourceKey,
+		model.AnalysisOwnerTypePeopleWorker,
+		req.WorkerID,
+		"people worker runtime acquired",
+	)
+	if err != nil {
+		if errors.Is(err, service.ErrAnalysisRuntimeBusy) {
+			status, _ := h.runtimeService.GetStatus(model.GlobalPeopleResourceKey)
+			c.JSON(http.StatusConflict, model.Response{
+				Success: false,
+				Error:   &model.ErrorInfo{Code: "PEOPLE_RUNTIME_BUSY", Message: "Another people runtime is already running"},
+				Data:    status,
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INTERNAL_ERROR", Message: err.Error()}})
+		return
+	}
+
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
 		Message: "People runtime acquired",
 		Data: model.PeopleWorkerRuntimeLeaseResponse{
-			LeaseExpiresAt: time.Now().Add(30 * time.Second),
+			LeaseExpiresAt: *lease.LeaseExpiresAt,
 		},
 	})
 }
@@ -980,13 +1035,31 @@ func (h *PeopleHandler) HeartbeatPeopleRuntime(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: err.Error()}})
 		return
 	}
+	if strings.TrimSpace(req.WorkerID) == "" {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: "worker_id is required"}})
+		return
+	}
+	if h.runtimeService == nil {
+		c.JSON(http.StatusInternalServerError, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INTERNAL_ERROR", Message: "People runtime service not configured"}})
+		return
+	}
 
-	// TODO: 实现 people runtime lease 心跳
+	lease, err := h.runtimeService.Heartbeat(model.GlobalPeopleResourceKey, model.AnalysisOwnerTypePeopleWorker, req.WorkerID)
+	if err != nil {
+		status, _ := h.runtimeService.GetStatus(model.GlobalPeopleResourceKey)
+		c.JSON(http.StatusConflict, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "PEOPLE_RUNTIME_OWNED_BY_OTHER", Message: err.Error()},
+			Data:    status,
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
 		Message: "People runtime heartbeat updated",
 		Data: model.PeopleWorkerRuntimeLeaseResponse{
-			LeaseExpiresAt: time.Now().Add(30 * time.Second),
+			LeaseExpiresAt: *lease.LeaseExpiresAt,
 		},
 	})
 }
@@ -998,8 +1071,25 @@ func (h *PeopleHandler) ReleasePeopleRuntime(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: err.Error()}})
 		return
 	}
+	if strings.TrimSpace(req.WorkerID) == "" {
+		c.JSON(http.StatusBadRequest, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INVALID_REQUEST", Message: "worker_id is required"}})
+		return
+	}
+	if h.runtimeService == nil {
+		c.JSON(http.StatusInternalServerError, model.Response{Success: false, Error: &model.ErrorInfo{Code: "INTERNAL_ERROR", Message: "People runtime service not configured"}})
+		return
+	}
 
-	// TODO: 实现 people runtime lease 释放
+	if err := h.runtimeService.Release(model.GlobalPeopleResourceKey, model.AnalysisOwnerTypePeopleWorker, req.WorkerID); err != nil {
+		status, _ := h.runtimeService.GetStatus(model.GlobalPeopleResourceKey)
+		c.JSON(http.StatusConflict, model.Response{
+			Success: false,
+			Error:   &model.ErrorInfo{Code: "PEOPLE_RUNTIME_OWNED_BY_OTHER", Message: err.Error()},
+			Data:    status,
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, model.Response{Success: true, Message: "People runtime released"})
 }
 

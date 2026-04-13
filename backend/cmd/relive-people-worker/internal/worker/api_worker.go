@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -34,17 +35,20 @@ type PeopleWorker struct {
 	// 运行时租约
 	runtimeLeaseAcquired bool
 	runtimeHeartbeatStop chan struct{}
+	runtimeLeaseLost     atomic.Bool
 
 	// 工作控制
-	ctx    context.Context
-	cancel context.CancelFunc
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	ctx      context.Context
+	cancel   context.CancelFunc
+	stopCh   chan struct{}
+	stopOnce sync.Once
+	wg       sync.WaitGroup
 
 	// 统计
 	tasksProcessed int64
 	tasksFailed    int64
 	facesDetected  int64
+	inFlightTasks  atomic.Int64
 }
 
 // NewPeopleWorker 创建 People Worker
@@ -194,7 +198,9 @@ func (w *PeopleWorker) Run() error {
 
 // Stop 停止 Worker
 func (w *PeopleWorker) Stop() {
-	close(w.stopCh)
+	w.stopOnce.Do(func() {
+		close(w.stopCh)
+	})
 }
 
 // handleSignals 处理系统信号
@@ -253,6 +259,10 @@ func (w *PeopleWorker) runtimeHeartbeatLoop() {
 			_, err := w.apiClient.HeartbeatRuntime(ctx)
 			cancel()
 			if err != nil {
+				if client.IsPeopleRuntimeConflict(err) {
+					w.handleRuntimeLeaseLost(err)
+					return
+				}
 				logger.Warnf("Runtime heartbeat failed: %v", err)
 			}
 		}
@@ -269,12 +279,19 @@ func (w *PeopleWorker) fetchLoop() {
 		case <-w.ctx.Done():
 			return
 		case <-ticker.C:
+			if w.runtimeLeaseLost.Load() {
+				return
+			}
 			// 当队列较小时获取新任务
 			if w.taskManager.QueueSize() < w.config.PeopleWorker.FetchLimit {
 				ctx, cancel := context.WithTimeout(w.ctx, 30*time.Second)
 				_, err := w.taskManager.FetchTasks(ctx, w.config.PeopleWorker.FetchLimit)
 				cancel()
 				if err != nil {
+					if client.IsPeopleRuntimeConflict(err) {
+						w.handleRuntimeLeaseLost(err)
+						return
+					}
 					logger.Warnf("Failed to fetch tasks: %v", err)
 				}
 			}
@@ -304,13 +321,43 @@ func (w *PeopleWorker) processLoop(workerID int) {
 		}
 
 		// 处理任务
+		w.inFlightTasks.Add(1)
 		if err := w.processTask(task); err != nil {
 			logger.Errorf("Failed to process task %d: %v", task.ID, err)
 			w.tasksFailed++
 		} else {
 			w.tasksProcessed++
 		}
+		w.inFlightTasks.Add(-1)
+		w.maybeStopAfterDrain()
 	}
+}
+
+func (w *PeopleWorker) handleRuntimeLeaseLost(err error) {
+	if !w.runtimeLeaseLost.CompareAndSwap(false, true) {
+		return
+	}
+
+	w.runtimeLeaseAcquired = false
+	logger.Warnf("People runtime lease lost, entering drain mode: %v", err)
+	w.maybeStopAfterDrain()
+}
+
+func (w *PeopleWorker) maybeStopAfterDrain() {
+	if !w.runtimeLeaseLost.Load() {
+		return
+	}
+
+	queueSize := 0
+	if w.taskManager != nil {
+		queueSize = w.taskManager.QueueSize()
+	}
+	if queueSize > 0 || w.inFlightTasks.Load() > 0 {
+		return
+	}
+
+	logger.Info("People runtime lease lost and local queue drained, stopping worker")
+	w.Stop()
 }
 
 // processTask 处理单个任务
@@ -373,10 +420,10 @@ func (w *PeopleWorker) detectFaces(imageData []byte, imagePath string) ([]model.
 
 	// 构建请求
 	reqBody := map[string]interface{}{
-		"image_base64": imageBase64,
-		"image_path":   imagePath,
+		"image_base64":   imageBase64,
+		"image_path":     imagePath,
 		"min_confidence": 0.5,
-		"max_faces":    20,
+		"max_faces":      20,
 	}
 
 	jsonBody, err := json.Marshal(reqBody)
@@ -421,4 +468,3 @@ func (w *PeopleWorker) detectFaces(imageData []byte, imagePath string) ([]model.
 
 	return result.Faces, processingTime, nil
 }
-

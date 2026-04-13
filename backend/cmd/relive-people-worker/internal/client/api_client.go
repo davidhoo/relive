@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
@@ -27,6 +29,45 @@ type APIClient struct {
 	httpClient *http.Client
 	retryCount int
 	retryDelay time.Duration
+}
+
+type APIError struct {
+	StatusCode int
+	Code       string
+	Message    string
+	RawBody    string
+}
+
+func (e *APIError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	if e.Code != "" && e.Message != "" {
+		return fmt.Sprintf("HTTP %d %s: %s", e.StatusCode, e.Code, e.Message)
+	}
+	if e.Message != "" {
+		return fmt.Sprintf("HTTP %d: %s", e.StatusCode, e.Message)
+	}
+	if e.RawBody != "" {
+		return fmt.Sprintf("HTTP %d: %s", e.StatusCode, e.RawBody)
+	}
+	return fmt.Sprintf("HTTP %d", e.StatusCode)
+}
+
+func IsPeopleRuntimeConflict(err error) bool {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	if apiErr.StatusCode != http.StatusConflict {
+		return false
+	}
+	switch apiErr.Code {
+	case "PEOPLE_RUNTIME_BUSY", "PEOPLE_RUNTIME_OWNED_BY_OTHER", "PEOPLE_RUNTIME_NOT_ACQUIRED":
+		return true
+	default:
+		return strings.HasPrefix(apiErr.Code, "PEOPLE_RUNTIME_")
+	}
 }
 
 // ClientOption 客户端配置选项
@@ -168,7 +209,17 @@ func parseResponse(resp *http.Response, result interface{}) error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		apiErr := &APIError{
+			StatusCode: resp.StatusCode,
+			RawBody:    string(body),
+			Message:    string(body),
+		}
+		var response model.Response
+		if err := json.Unmarshal(body, &response); err == nil && response.Error != nil {
+			apiErr.Code = response.Error.Code
+			apiErr.Message = response.Error.Message
+		}
+		return apiErr
 	}
 
 	if result != nil {

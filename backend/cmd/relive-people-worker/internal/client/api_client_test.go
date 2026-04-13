@@ -157,6 +157,36 @@ func TestAPIClient_AcquireRuntime(t *testing.T) {
 	assert.True(t, lease.LeaseExpiresAt.After(time.Now()))
 }
 
+func TestAPIClient_HeartbeatRuntimeReturnsAPIErrorOnConflict(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(model.Response{
+			Success: false,
+			Error: &model.ErrorInfo{
+				Code:    "PEOPLE_RUNTIME_OWNED_BY_OTHER",
+				Message: "analysis runtime owned by other",
+			},
+			Data: model.AnalysisRuntimeStatusResponse{
+				ResourceKey: model.GlobalPeopleResourceKey,
+				Status:      model.AnalysisRuntimeStatusRunning,
+				OwnerType:   model.AnalysisOwnerTypePeopleWorker,
+				OwnerID:     "other-worker",
+				IsActive:    true,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewAPIClient(server.URL, "test-api-key", WithWorkerID("test-worker"))
+	_, err := client.HeartbeatRuntime(context.Background())
+
+	require.Error(t, err)
+	var apiErr *APIError
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusConflict, apiErr.StatusCode)
+	assert.Equal(t, "PEOPLE_RUNTIME_OWNED_BY_OTHER", apiErr.Code)
+}
+
 func TestAPIClient_ReleaseRuntime(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/v1/people/runtime/release", r.URL.Path)

@@ -44,6 +44,7 @@ func NewHandlers(db *gorm.DB, services *service.Services, repos *repository.Repo
 
 	// AI Handler - 即使 AI 服务未配置也创建，以便配置变更后动态更新
 	handlers.AI = NewAIHandler(services.AI, services.AnalysisRuntime)
+	handlers.People.SetRuntimeService(services.AnalysisRuntime)
 
 	// 设置 ConfigHandler 对 AIHandler 的引用，用于配置变更后热重载
 	handlers.Config.SetAIHandler(handlers.AI)

@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"image/color"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
+	"github.com/davidhoo/relive/internal/service"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/disintegration/imaging"
 	"github.com/gin-gonic/gin"
@@ -178,7 +181,7 @@ func newPeopleHandlerForTest(t *testing.T) (*PeopleHandler, *stubPeopleService, 
 
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Photo{}, &model.Person{}, &model.Face{}, &model.PeopleJob{}))
+	require.NoError(t, db.AutoMigrate(&model.Photo{}, &model.Person{}, &model.Face{}, &model.PeopleJob{}, &model.AnalysisRuntimeLease{}))
 
 	cfg := &config.Config{
 		Photos: config.PhotosConfig{
@@ -201,6 +204,43 @@ func newPeopleHandlerForTest(t *testing.T) (*PeopleHandler, *stubPeopleService, 
 	)
 
 	return handler, serviceStub, db, cfg
+}
+
+func newPeopleHandlerWithRuntimeForTest(t *testing.T) (*PeopleHandler, service.AnalysisRuntimeService, *gorm.DB) {
+	t.Helper()
+
+	handler, _, db, _ := newPeopleHandlerForTest(t)
+	runtimeService := service.NewAnalysisRuntimeService(db)
+	handler.runtimeService = runtimeService
+	return handler, runtimeService, db
+}
+
+func performWorkerRequest(
+	t *testing.T,
+	method string,
+	path string,
+	body []byte,
+	params gin.Params,
+	headers map[string]string,
+	deviceID uint,
+	fn func(*gin.Context),
+) *httptest.ResponseRecorder {
+	t.Helper()
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = params
+	ctx.Request = httptest.NewRequest(method, path, bytes.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	for key, value := range headers {
+		ctx.Request.Header.Set(key, value)
+	}
+	if deviceID != 0 {
+		ctx.Set("device_id", deviceID)
+	}
+
+	fn(ctx)
+	return recorder
 }
 
 func seedPeopleHandlerFixture(t *testing.T, db *gorm.DB) peopleHandlerFixture {
@@ -644,4 +684,87 @@ func TestPeopleHandlerStatsError(t *testing.T) {
 	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/stats", nil, nil, handler.GetStats)
 
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+func TestPeopleHandlerAcquirePeopleRuntime(t *testing.T) {
+	handler, runtimeService, _ := newPeopleHandlerWithRuntimeForTest(t)
+
+	rec := performJSONRequest(t, http.MethodPost, "/api/v1/people/runtime/acquire", []byte(`{"worker_id":"worker-1"}`), nil, handler.AcquirePeopleRuntime)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	require.True(t, resp.Success)
+	lease := decodeResponseData[model.PeopleWorkerRuntimeLeaseResponse](t, resp)
+	assert.False(t, lease.LeaseExpiresAt.IsZero())
+
+	status, err := runtimeService.GetStatus(model.GlobalPeopleResourceKey)
+	require.NoError(t, err)
+	require.True(t, status.IsActive)
+	assert.Equal(t, model.AnalysisOwnerTypePeopleWorker, status.OwnerType)
+	assert.Equal(t, "worker-1", status.OwnerID)
+}
+
+func TestPeopleHandlerAcquirePeopleRuntimeConflict(t *testing.T) {
+	handler, runtimeService, _ := newPeopleHandlerWithRuntimeForTest(t)
+	_, err := runtimeService.Acquire(model.GlobalPeopleResourceKey, model.AnalysisOwnerTypeBackground, "local", "local background task")
+	require.NoError(t, err)
+
+	rec := performJSONRequest(t, http.MethodPost, "/api/v1/people/runtime/acquire", []byte(`{"worker_id":"worker-1"}`), nil, handler.AcquirePeopleRuntime)
+
+	require.Equal(t, http.StatusConflict, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	require.False(t, resp.Success)
+	status := decodeResponseData[model.AnalysisRuntimeStatusResponse](t, resp)
+	assert.Equal(t, model.AnalysisOwnerTypeBackground, status.OwnerType)
+	assert.Equal(t, "local", status.OwnerID)
+}
+
+func TestPeopleHandlerPeopleRuntimeHeartbeatRequiresOwner(t *testing.T) {
+	handler, runtimeService, _ := newPeopleHandlerWithRuntimeForTest(t)
+	_, err := runtimeService.Acquire(model.GlobalPeopleResourceKey, model.AnalysisOwnerTypePeopleWorker, "worker-1", "worker one")
+	require.NoError(t, err)
+
+	rec := performJSONRequest(t, http.MethodPost, "/api/v1/people/runtime/heartbeat", []byte(`{"worker_id":"worker-2"}`), nil, handler.HeartbeatPeopleRuntime)
+
+	require.Equal(t, http.StatusConflict, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	require.False(t, resp.Success)
+	status := decodeResponseData[model.AnalysisRuntimeStatusResponse](t, resp)
+	assert.Equal(t, "worker-1", status.OwnerID)
+}
+
+func TestPeopleHandlerPeopleRuntimeReleaseRequiresOwner(t *testing.T) {
+	handler, runtimeService, _ := newPeopleHandlerWithRuntimeForTest(t)
+	_, err := runtimeService.Acquire(model.GlobalPeopleResourceKey, model.AnalysisOwnerTypePeopleWorker, "worker-1", "worker one")
+	require.NoError(t, err)
+
+	rec := performJSONRequest(t, http.MethodPost, "/api/v1/people/runtime/release", []byte(`{"worker_id":"worker-2"}`), nil, handler.ReleasePeopleRuntime)
+
+	require.Equal(t, http.StatusConflict, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	require.False(t, resp.Success)
+
+	status, err := runtimeService.GetStatus(model.GlobalPeopleResourceKey)
+	require.NoError(t, err)
+	require.True(t, status.IsActive)
+	assert.Equal(t, "worker-1", status.OwnerID)
+}
+
+func TestPeopleHandlerGetWorkerTasksRequiresRuntimeLease(t *testing.T) {
+	handler, _, _ := newPeopleHandlerWithRuntimeForTest(t)
+
+	rec := performWorkerRequest(
+		t,
+		http.MethodGet,
+		"/api/v1/people/worker/tasks?limit=1",
+		nil,
+		nil,
+		map[string]string{"X-Worker-ID": "worker-1"},
+		1,
+		handler.GetWorkerTasks,
+	)
+
+	require.Equal(t, http.StatusConflict, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	require.False(t, resp.Success)
 }
