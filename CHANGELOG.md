@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.1] - 2026-04-13
+
+### Added
+- **Apple Silicon CoreML backend** — `ml-service` 新增 CoreML backend 支持，提升 Mac 本地人物识别运行体验
+- **低成本优雅重启治理** — 新增 `draining` 生命周期状态、`/api/v1/system/readiness` 就绪检查与更完整的后台停机编排
+
+### Changed
+- **人物聚类性能优化** — 降低 NAS 上人物聚类的 CPU 开销，补齐等价性/性能测试
+- **人脸缩略图批处理** — 单张照片内多个人脸复用一次源图解码，减少重复开销
+
+### Fixed
+- **people-worker 运行时租约** — 服务端真正接入共享 runtime lease，避免 worker 与本地人物后台并发抢占同一资源
+- **待聚类人脸 backlog 排空** — 无新 `people_jobs` 时后台仍会继续处理 `pending faces`
+- **派生照片字段覆写** — 修复人物流程误覆写照片派生字段的问题
+- **前端 router 构建警告** — 清理 `request.ts` 对 router 的动态导入，移除无效 mixed-import 警告
+
+### Docs
+- **计划文档状态整理** — `docs/plans` 与 `docs/INDEX.md` 新增统一状态标记，已完成/候选/审计项不再混淆
+
+---
+
 ## [1.5.0] - 2026-04-06
 
 ### Added
