@@ -1,5 +1,6 @@
 import axios, { AxiosError, type AxiosRequestConfig } from 'axios'
 import { ElMessage } from 'element-plus'
+import { navigateTo } from '@/router/bridge'
 import { useUserStore } from '@/stores/user'
 
 // 创建 axios 实例
@@ -45,10 +46,8 @@ http.interceptors.response.use(
         userStore.clearUserState()
         if (!isRedirectingToLogin) {
           isRedirectingToLogin = true
-          import('@/router').then(({ default: router }) => {
-            router.push('/login').finally(() => {
-              isRedirectingToLogin = false
-            })
+          navigateTo('/login').finally(() => {
+            isRedirectingToLogin = false
           })
         }
         // 返回一个永远 pending 的 Promise，阻止调用方的 catch 触发额外错误提示
@@ -57,7 +56,7 @@ http.interceptors.response.use(
 
       // 处理 403 首次登录需要修改密码
       if (status === 403 && data?.error?.code === 'FIRST_LOGIN_REQUIRED') {
-        import('@/router').then(({ default: router }) => router.push('/change-Password'))
+        navigateTo('/change-Password')
         return Promise.reject(error)
       }
 

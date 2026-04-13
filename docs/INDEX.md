@@ -79,6 +79,8 @@
 - `docs/plans/2026-04-13-graceful-restart-draining-design.md`
 - `docs/plans/2026-04-13-graceful-restart-draining.md`
 - `docs/plans/2026-04-13-people-worker-runtime-lease.md`
+- `docs/plans/2026-04-13-router-bridge-design.md`
+- `docs/plans/2026-04-13-router-bridge.md`
 
 ## 当前实现文档
 
