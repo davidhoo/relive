@@ -111,7 +111,12 @@ DEPLOY_IMAGE_SCRIPT="$(cat "$ROOT/deploy-image.sh")"
 assert_contains "$DEPLOY_IMAGE_SCRIPT" "docker compose -f docker-compose.prod.yml pull" "deploy-image.sh does not pull published images"
 assert_contains "$DEPLOY_IMAGE_SCRIPT" "docker compose -f docker-compose.prod.yml up -d" "deploy-image.sh does not start the published image stack"
 
-# 9) user-facing docs should match the approved Make interface
+# 9) Dockerfile should build package commands, not single Go files
+DOCKERFILE_TEXT="$(cat "$ROOT/Dockerfile")"
+assert_contains "$DOCKERFILE_TEXT" "./cmd/relive" "Dockerfile does not build the relive package"
+assert_not_contains "$DOCKERFILE_TEXT" "./cmd/relive/main.go" "Dockerfile still builds only cmd/relive/main.go"
+
+# 10) user-facing docs should match the approved Make interface
 README_TEXT="$(cat "$ROOT/README.md")"
 QUICKSTART_TEXT="$(cat "$ROOT/QUICKSTART.md")"
 QUICK_REFERENCE_TEXT="$(cat "$ROOT/docs/QUICK_REFERENCE.md")"
@@ -139,7 +144,7 @@ do
   assert_not_contains "$DOCS_TEXT" "$target" "Docs still advertise deprecated target: $target"
 done
 
-# 10) operational targets should work for image-only installs
+# 11) operational targets should work for image-only installs
 assert_contains "$IMAGE_ONLY_LOGS" "-f docker-compose.prod.yml logs -f" "make -n logs does not target docker-compose.prod.yml for image-only installs"
 assert_contains "$IMAGE_ONLY_STOP" "-f docker-compose.prod.yml down" "make -n stop does not target docker-compose.prod.yml for image-only installs"
 assert_contains "$IMAGE_ONLY_RESTART" "-f docker-compose.prod.yml restart" "make -n restart does not target docker-compose.prod.yml for image-only installs"

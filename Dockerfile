@@ -47,7 +47,7 @@ ARG BUILD_TIME
 RUN CGO_ENABLED=1 GOOS=linux go build \
     -ldflags "-X github.com/davidhoo/relive/pkg/version.BuildTime=${BUILD_TIME} -X github.com/davidhoo/relive/pkg/version.GitCommit=${VERSION}" \
     -o relive \
-    ./cmd/relive/main.go
+    ./cmd/relive
 
 # 构建 relive-analyzer
 WORKDIR /app/cmd/relive-analyzer

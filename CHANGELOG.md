@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.2] - 2026-04-14
+
+### Fixed
+- **Docker 镜像构建入口** — 后端镜像构建改为编译 `./cmd/relive` 包而不是单独编译 `main.go`，修复多架构镜像发布工作流失败
+- **发布构建回归保护** — 脚本一致性检查新增 Dockerfile 构建入口约束，避免后续再回到单文件编译
+
+---
+
 ## [1.5.1] - 2026-04-13
 
 ### Added

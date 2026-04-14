@@ -1,7 +1,7 @@
 # Relive 项目状态报告
 
 > 报告日期：2026-04-13
-> 当前版本：v1.5.1
+> 当前版本：v1.5.2
 > 状态：核心功能完备，包含人物系统、事件策展、照片旋转、Web / Backend / ml-service / Analyzer / People Worker / ESP32 固件
 
 ## 当前结论
