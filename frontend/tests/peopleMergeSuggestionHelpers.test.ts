@@ -25,6 +25,18 @@ test('sortMergeSuggestionCandidates 按相似度从高到低排序', () => {
 
 test('getMergeSuggestionTaskStatusMeta 映射 paused 与 running 状态', () => {
   assert.deepEqual(getMergeSuggestionTaskStatusMeta('running'), { label: '巡检中', type: 'warning' })
-  assert.deepEqual(getMergeSuggestionTaskStatusMeta('stopped'), { label: '已暂停', type: 'info' })
+  assert.deepEqual(getMergeSuggestionTaskStatusMeta('paused'), { label: '已暂停', type: 'info' })
   assert.deepEqual(getMergeSuggestionTaskStatusMeta('idle'), { label: '等待巡检', type: 'info' })
+})
+
+test('merge suggestion UI includes avatars and candidate stats bindings required by design', async () => {
+  const fs = await import('node:fs/promises')
+  const page = await fs.readFile(new URL('../src/views/People/index.vue', import.meta.url), 'utf8')
+  const dialog = await fs.readFile(new URL('../src/views/People/MergeSuggestionReviewDialog.vue', import.meta.url), 'utf8')
+
+  assert.match(page, /merge-suggestion-avatar/)
+  assert.match(page, /candidate-preview/)
+  assert.match(dialog, /candidate-avatar/)
+  assert.match(dialog, /photo_count/)
+  assert.match(dialog, /face_count/)
 })

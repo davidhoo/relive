@@ -50,7 +50,7 @@ dev:
 
 dev-backend: sync-version
 	test -f backend/config.dev.yaml || cp backend/config.dev.yaml.example backend/config.dev.yaml
-	cd backend && go run cmd/relive/main.go --config config.dev.yaml
+	cd backend && go run ./cmd/relive --config config.dev.yaml
 
 dev-frontend:
 	cd frontend && npm run dev

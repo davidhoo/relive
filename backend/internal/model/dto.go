@@ -337,6 +337,7 @@ type CountDerivedStatusByPathsResponse struct {
 const (
 	TaskStatusRunning  = "running"
 	TaskStatusIdle     = "idle"
+	TaskStatusPaused   = "paused"
 	TaskStatusStopping = "stopping"
 	TaskStatusStopped  = "stopped"
 )
