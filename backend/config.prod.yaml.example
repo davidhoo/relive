@@ -34,7 +34,7 @@ performance:
 people:
   ml_endpoint: "http://relive-ml:5050"
   timeout: 15
-  merge_suggestion_threshold: 0.60
+  merge_suggestion_threshold: 0.58
   merge_suggestion_max_pairs_per_run: 200
   merge_suggestion_batch_size: 100
   merge_suggestion_cooldown_seconds: 300
