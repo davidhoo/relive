@@ -182,6 +182,13 @@ func TestAutoMigrateAddsPersonMergeSuggestionConstraints(t *testing.T) {
 
 	if err := db.Exec(
 		"INSERT INTO person_merge_suggestion_items (suggestion_id, candidate_person_id, similarity_score, rank, status) VALUES (?, ?, ?, ?, ?)",
+		1, 3, 0.67, 2, "pending",
+	).Error; err == nil {
+		t.Fatal("expected duplicate (suggestion_id, candidate_person_id) insert to be rejected")
+	}
+
+	if err := db.Exec(
+		"INSERT INTO person_merge_suggestion_items (suggestion_id, candidate_person_id, similarity_score, rank, status) VALUES (?, ?, ?, ?, ?)",
 		1, 4, 0.65, 2, "bad_status",
 	).Error; err == nil {
 		t.Fatal("expected invalid person_merge_suggestion_items status to be rejected")

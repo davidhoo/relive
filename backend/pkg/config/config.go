@@ -85,6 +85,13 @@ type PeopleConfig struct {
 	MergeSuggestionCooldownSeconds int     `yaml:"merge_suggestion_cooldown_seconds"`
 }
 
+const (
+	defaultMergeSuggestionThreshold       = 0.62
+	defaultMergeSuggestionMaxPairsPerRun  = 200
+	defaultMergeSuggestionBatchSize       = 100
+	defaultMergeSuggestionCooldownSeconds = 300
+)
+
 // LegacyMLConfig 兼容旧版人物配置块
 type LegacyMLConfig struct {
 	ServiceURL string `yaml:"service_url"`
@@ -319,6 +326,18 @@ func Load(path string) (*Config, error) {
 	if cfg.People.Timeout == 0 && cfg.LegacyML.Timeout > 0 {
 		cfg.People.Timeout = cfg.LegacyML.Timeout
 	}
+	if cfg.People.MergeSuggestionThreshold == 0 {
+		cfg.People.MergeSuggestionThreshold = defaultMergeSuggestionThreshold
+	}
+	if cfg.People.MergeSuggestionMaxPairsPerRun == 0 {
+		cfg.People.MergeSuggestionMaxPairsPerRun = defaultMergeSuggestionMaxPairsPerRun
+	}
+	if cfg.People.MergeSuggestionBatchSize == 0 {
+		cfg.People.MergeSuggestionBatchSize = defaultMergeSuggestionBatchSize
+	}
+	if cfg.People.MergeSuggestionCooldownSeconds == 0 {
+		cfg.People.MergeSuggestionCooldownSeconds = defaultMergeSuggestionCooldownSeconds
+	}
 
 	// 从环境变量覆盖敏感配置
 	if secret := os.Getenv("JWT_SECRET"); secret != "" {
@@ -390,6 +409,22 @@ func (c *Config) Validate() error {
 	// 验证 JWT 密钥
 	if c.Security.JWTSecret == "" {
 		return fmt.Errorf("security.jwt_Secret is required")
+	}
+
+	if c.People.MergeSuggestionThreshold <= 0 || c.People.MergeSuggestionThreshold >= 1 {
+		return fmt.Errorf("people.merge_suggestion_threshold must be between 0 and 1")
+	}
+	if c.People.MergeSuggestionMaxPairsPerRun <= 0 {
+		return fmt.Errorf("people.merge_suggestion_max_pairs_per_run must be greater than 0")
+	}
+	if c.People.MergeSuggestionBatchSize <= 0 {
+		return fmt.Errorf("people.merge_suggestion_batch_size must be greater than 0")
+	}
+	if c.People.MergeSuggestionCooldownSeconds <= 0 {
+		return fmt.Errorf("people.merge_suggestion_cooldown_seconds must be greater than 0")
+	}
+	if c.People.AttachThreshold > 0 && c.People.MergeSuggestionThreshold >= c.People.AttachThreshold {
+		return fmt.Errorf("people.merge_suggestion_threshold must be less than people.attach_threshold")
 	}
 
 	return nil
