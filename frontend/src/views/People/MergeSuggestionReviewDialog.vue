@@ -188,13 +188,16 @@ watch(
 .candidate-card-body {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
 }
 
 .candidate-name {
   font-size: 15px;
   font-weight: 600;
   color: var(--color-text-primary);
+  line-height: 1.4;
 }
 
 .candidate-meta {
@@ -203,6 +206,7 @@ watch(
   font-size: 13px;
   color: var(--color-text-secondary);
   flex-wrap: wrap;
+  line-height: 1.4;
 }
 
 .review-footer {

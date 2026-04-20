@@ -570,7 +570,7 @@ const loadTaskData = async () => {
   }
 }
 
-const loadMergeSuggestionDetail = async (id: number) => {
+const loadMergeSuggestionDetail = async (id: number, silent = false) => {
   mergeSuggestionDetailLoading.value = true
   try {
     const res = await peopleApi.getMergeSuggestion(id)
@@ -579,7 +579,9 @@ const loadMergeSuggestionDetail = async (id: number) => {
   } catch (error: any) {
     currentMergeSuggestion.value = null
     currentMergeSuggestionId.value = null
-    ElMessage.error(error.response?.data?.error?.message || error.message || '加载建议详情失败')
+    if (!silent) {
+      ElMessage.error(error.response?.data?.error?.message || error.message || '加载建议详情失败')
+    }
   } finally {
     mergeSuggestionDetailLoading.value = false
   }
@@ -686,17 +688,19 @@ const openMergeSuggestionReview = async (id: number) => {
   await loadMergeSuggestionDetail(id)
 }
 
-const reloadMergeSuggestionReviewState = async () => {
+const reloadMergeSuggestionReviewState = async (shouldCloseOnComplete = false) => {
   await Promise.all([loadMergeSuggestions(), loadTaskData()])
   if (!currentMergeSuggestionId.value) {
     return
   }
-  try {
-    await loadMergeSuggestionDetail(currentMergeSuggestionId.value)
-    if (!currentMergeSuggestion.value || !currentMergeSuggestion.value.items?.length) {
-      mergeSuggestionDialogVisible.value = false
-    }
-  } catch {
+  // 操作完成后直接关闭对话框（避免已合并建议返回 404）
+  if (shouldCloseOnComplete) {
+    mergeSuggestionDialogVisible.value = false
+    return
+  }
+  // 静默加载详情，避免合并完成后 404 报错
+  await loadMergeSuggestionDetail(currentMergeSuggestionId.value, true)
+  if (!currentMergeSuggestion.value || !currentMergeSuggestion.value.items?.length) {
     mergeSuggestionDialogVisible.value = false
   }
 }
@@ -721,7 +725,7 @@ const handleApplyMergeSuggestion = async (candidateIds: number[]) => {
   try {
     await peopleApi.applyMergeSuggestion(currentMergeSuggestionId.value, candidateIds)
     ElMessage.success('已应用所选合并建议')
-    await reloadMergeSuggestionReviewState()
+    await reloadMergeSuggestionReviewState(true)
   } catch (error: any) {
     ElMessage.error(error.response?.data?.error?.message || error.message || '应用失败')
   } finally {
