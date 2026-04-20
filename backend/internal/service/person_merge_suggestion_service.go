@@ -470,6 +470,7 @@ func (s *personMergeSuggestionService) buildAssignments(targets []*model.Person)
 		facesByPerson[*face.PersonID] = append(facesByPerson[*face.PersonID], face)
 	}
 
+	// 预解码所有候选人物的原型嵌入（优化：只解码一次）
 	candidatePrototypes := make(map[uint][]faceWithEmbedding)
 	for _, person := range allPeople {
 		if person == nil {
@@ -482,8 +483,31 @@ func (s *personMergeSuggestionService) buildAssignments(targets []*model.Person)
 		candidatePrototypes[person.ID] = decodeFacesWithEmbeddings(selectDiversePrototypes(personFaces, peoplePrototypeCount))
 	}
 
+	// 预加载所有 cannot-link 约束（优化：避免逐对查询 DB）
+	cannotLinkCache := make(map[uint]map[uint]bool)
+	allCannotLinks, err := s.cannotLinkRepo.ListAll()
+	if err != nil {
+		return nil, err
+	}
+	for _, cl := range allCannotLinks {
+		if cannotLinkCache[cl.PersonIDA] == nil {
+			cannotLinkCache[cl.PersonIDA] = make(map[uint]bool)
+		}
+		cannotLinkCache[cl.PersonIDA][cl.PersonIDB] = true
+		if cannotLinkCache[cl.PersonIDB] == nil {
+			cannotLinkCache[cl.PersonIDB] = make(map[uint]bool)
+		}
+		cannotLinkCache[cl.PersonIDB][cl.PersonIDA] = true
+	}
+
 	bestByCandidate := make(map[uint]mergeSuggestionCandidate)
+	bestMutex := sync.Mutex{}
 	threshold := s.mergeSuggestionThreshold()
+
+	// 使用 worker pool 并行处理目标人物
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 4) // 限制并发数为 4
+
 	for _, target := range targets {
 		if target == nil {
 			continue
@@ -493,38 +517,52 @@ func (s *personMergeSuggestionService) buildAssignments(targets []*model.Person)
 			continue
 		}
 		targetEmbeddings := decodeFacesWithEmbeddings(selectDiversePrototypes(targetFaces, peoplePrototypeCount))
-		for _, person := range allPeople {
-			if person == nil || person.ID == target.ID {
-				continue
-			}
-			candidateEmbeddings := candidatePrototypes[person.ID]
-			if len(candidateEmbeddings) == 0 {
-				continue
-			}
-			blocked, err := s.cannotLinkRepo.ExistsBetween(target.ID, person.ID)
-			if err != nil {
-				return nil, err
-			}
-			if blocked {
-				continue
-			}
-
-			score := averageBestSuggestionSimilarity(targetEmbeddings, candidateEmbeddings)
-			if score < threshold || score >= s.attachThreshold() {
-				continue
-			}
-
-			current, exists := bestByCandidate[person.ID]
-			if !exists || score > current.score || (score == current.score && target.ID < current.targetID) {
-				bestByCandidate[person.ID] = mergeSuggestionCandidate{
-					targetID:     target.ID,
-					candidateID:  person.ID,
-					score:        score,
-					targetPerson: target,
-				}
-			}
+		if len(targetEmbeddings) == 0 {
+			continue
 		}
+
+		wg.Add(1)
+		go func(tgt *model.Person, tgtEmb []faceWithEmbedding) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			for _, person := range allPeople {
+				if person == nil || person.ID == tgt.ID {
+					continue
+				}
+				candidateEmbeddings := candidatePrototypes[person.ID]
+				if len(candidateEmbeddings) == 0 {
+					continue
+				}
+				// 使用缓存的 cannot-link 检查
+				if cannotLinkCache[tgt.ID] != nil && cannotLinkCache[tgt.ID][person.ID] {
+					continue
+				}
+				if cannotLinkCache[person.ID] != nil && cannotLinkCache[person.ID][tgt.ID] {
+					continue
+				}
+
+				score := averageBestSuggestionSimilarity(tgtEmb, candidateEmbeddings)
+				if score < threshold || score >= s.attachThreshold() {
+					continue
+				}
+
+				bestMutex.Lock()
+				current, exists := bestByCandidate[person.ID]
+				if !exists || score > current.score || (score == current.score && tgt.ID < current.targetID) {
+					bestByCandidate[person.ID] = mergeSuggestionCandidate{
+						targetID:     tgt.ID,
+						candidateID:  person.ID,
+						score:        score,
+						targetPerson: tgt,
+					}
+				}
+				bestMutex.Unlock()
+			}
+		}(target, targetEmbeddings)
 	}
+	wg.Wait()
 
 	assignments := make(map[uint][]model.PersonMergeSuggestionItem, len(targets))
 	for _, assignment := range bestByCandidate {

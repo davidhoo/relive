@@ -10,6 +10,7 @@ type CannotLinkRepository interface {
 	Create(personIDA, personIDB uint) error
 	ExistsBetween(personIDA, personIDB uint) (bool, error)
 	ListByPersonID(personID uint) ([]uint, error)
+	ListAll() ([]model.CannotLinkConstraint, error)
 	DeleteByPersonID(personID uint) error
 }
 
@@ -78,4 +79,10 @@ func (r *cannotLinkRepository) ListByPersonID(personID uint) ([]uint, error) {
 func (r *cannotLinkRepository) DeleteByPersonID(personID uint) error {
 	return r.db.Where("person_id_a = ? OR person_id_b = ?", personID, personID).
 		Delete(&model.CannotLinkConstraint{}).Error
+}
+
+func (r *cannotLinkRepository) ListAll() ([]model.CannotLinkConstraint, error) {
+	var constraints []model.CannotLinkConstraint
+	err := r.db.Find(&constraints).Error
+	return constraints, err
 }
