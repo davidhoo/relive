@@ -457,30 +457,28 @@ func (s *personMergeSuggestionService) buildAssignments(targets []*model.Person)
 	if err != nil {
 		return nil, err
 	}
-	faces, err := s.faceRepo.ListAssigned()
+
+	// 借鉴人脸聚类 runIncrementalClustering 的做法：
+	// 只加载每个人物的 Top-K 原型人脸，而非全部 assigned 人脸
+	// 262K 人脸 → ~21K × 10 = 210K，且 ListTopByPersonIDs 按质量排序取前 N
+	personIDs := make([]uint, 0, len(allPeople))
+	for _, person := range allPeople {
+		if person != nil && person.FaceCount > 0 {
+			personIDs = append(personIDs, person.ID)
+		}
+	}
+	protoFaces, err := s.faceRepo.ListTopByPersonIDs(personIDs, peoplePrototypeCandidates)
 	if err != nil {
 		return nil, err
 	}
 
-	facesByPerson := make(map[uint][]*model.Face)
-	for _, face := range faces {
-		if face == nil || face.PersonID == nil || *face.PersonID == 0 {
-			continue
-		}
-		facesByPerson[*face.PersonID] = append(facesByPerson[*face.PersonID], face)
-	}
+	// 复用 selectPersonPrototypes 按人物分组 + 多样性选择
+	protosByPerson := selectPersonPrototypesStatic(protoFaces, peoplePrototypeCount)
 
-	// 预解码所有候选人物的原型嵌入（优化：只解码一次）
-	candidatePrototypes := make(map[uint][]faceWithEmbedding)
-	for _, person := range allPeople {
-		if person == nil {
-			continue
-		}
-		personFaces := facesByPerson[person.ID]
-		if len(personFaces) == 0 {
-			continue
-		}
-		candidatePrototypes[person.ID] = decodeFacesWithEmbeddings(selectDiversePrototypes(personFaces, peoplePrototypeCount))
+	// 预解码原型嵌入
+	candidatePrototypes := make(map[uint][]faceWithEmbedding, len(protosByPerson))
+	for personID, protos := range protosByPerson {
+		candidatePrototypes[personID] = decodeFacesWithEmbeddings(protos)
 	}
 
 	// 预加载所有 cannot-link 约束（优化：避免逐对查询 DB）
@@ -512,11 +510,7 @@ func (s *personMergeSuggestionService) buildAssignments(targets []*model.Person)
 		if target == nil {
 			continue
 		}
-		targetFaces := facesByPerson[target.ID]
-		if len(targetFaces) == 0 {
-			continue
-		}
-		targetEmbeddings := decodeFacesWithEmbeddings(selectDiversePrototypes(targetFaces, peoplePrototypeCount))
+		targetEmbeddings := candidatePrototypes[target.ID]
 		if len(targetEmbeddings) == 0 {
 			continue
 		}

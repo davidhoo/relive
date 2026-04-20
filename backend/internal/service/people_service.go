@@ -1309,6 +1309,10 @@ func (s *peopleService) ensurePersonForDetectedFace(detected mlclient.DetectedFa
 }
 
 func (s *peopleService) selectPersonPrototypes(faces []*model.Face, k int) map[uint][]*model.Face {
+	return selectPersonPrototypesStatic(faces, k)
+}
+
+func selectPersonPrototypesStatic(faces []*model.Face, k int) map[uint][]*model.Face {
 	prototypes := make(map[uint][]*model.Face)
 	if k <= 0 {
 		return prototypes
