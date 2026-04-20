@@ -230,28 +230,27 @@ func (s *personMergeSuggestionService) MarkDirty(reason string) error {
 }
 
 func (s *personMergeSuggestionService) RunBackgroundSlice() error {
+	// 快速检查是否暂停（持锁）
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.state.Paused {
 		s.task.Status = model.TaskStatusPaused
 		s.task.CurrentMessage = "已暂停"
+		s.mu.Unlock()
 		return nil
 	}
+	// 读取状态后释放锁
+	cursor := s.state.CursorTargetID
+	s.mu.Unlock()
 
-	now := time.Now()
-	if s.task.StartedAt == nil {
-		s.task.StartedAt = &now
-	}
-	s.task.Status = model.TaskStatusRunning
-	s.task.CurrentMessage = "巡检人物合并建议"
-
+	// 耗时操作在锁外执行
 	targets, err := s.listSuggestionTargets()
 	if err != nil {
 		return err
 	}
 	if len(targets) == 0 {
-		s.finishSliceLocked(now, 0, "没有可巡检的人物目标")
+		s.mu.Lock()
+		s.finishSliceLocked(time.Now(), 0, "没有可巡检的人物目标")
+		s.mu.Unlock()
 		return nil
 	}
 
@@ -259,21 +258,37 @@ func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 	if err != nil {
 		return err
 	}
-	selected := selectNextSuggestionTargets(targets, s.state.CursorTargetID, batchSize)
+	selected := selectNextSuggestionTargets(targets, cursor, batchSize)
 	if len(selected) == 0 {
+		s.mu.Lock()
+		now := time.Now()
 		s.state.CursorTargetID = 0
 		s.state.Dirty = false
 		s.state.LastRunAt = now
 		s.task.Status = model.TaskStatusIdle
 		s.task.CurrentMessage = "本轮巡检完成"
 		s.task.StoppedAt = &now
-		return s.saveStateLocked()
+		err := s.saveStateLocked()
+		s.mu.Unlock()
+		return err
 	}
 
+	// 最耗时的操作：计算相似度
 	assignments, err := s.buildAssignments(selected)
 	if err != nil {
 		return err
 	}
+
+	// 写入数据库和更新状态（持锁）
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	if s.task.StartedAt == nil {
+		s.task.StartedAt = &now
+	}
+	s.task.Status = model.TaskStatusRunning
+	s.task.CurrentMessage = "保存合并建议"
 
 	processedPairs := 0
 	for _, target := range selected {
