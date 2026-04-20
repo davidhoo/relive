@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
+	"github.com/davidhoo/relive/pkg/config"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -139,5 +140,63 @@ func TestAutoMigrateAddsPeopleFeedbackIndexes(t *testing.T) {
 		if count != 1 {
 			t.Fatalf("expected index %s to exist after migration", indexName)
 		}
+	}
+}
+
+func TestAutoMigrateAddsPersonMergeSuggestionTables(t *testing.T) {
+	db := openMigratedTestDB(t)
+
+	for _, table := range []string{
+		"person_merge_suggestions",
+		"person_merge_suggestion_items",
+	} {
+		if !db.Migrator().HasTable(table) {
+			t.Fatalf("expected %s table to exist after migration", table)
+		}
+	}
+}
+
+func TestAutoMigrateAddsPersonMergeSuggestionConstraints(t *testing.T) {
+	db := openMigratedTestDB(t)
+
+	if err := db.Exec(
+		"INSERT INTO person_merge_suggestions (target_person_id, target_category_snapshot, status, candidate_count, top_similarity) VALUES (?, ?, ?, ?, ?)",
+		1, "family", "pending", 2, 0.62,
+	).Error; err != nil {
+		t.Fatalf("expected pending suggestion insert to succeed: %v", err)
+	}
+
+	if err := db.Exec(
+		"INSERT INTO person_merge_suggestions (target_person_id, target_category_snapshot, status, candidate_count, top_similarity) VALUES (?, ?, ?, ?, ?)",
+		2, "friend", "bad_status", 1, 0.72,
+	).Error; err == nil {
+		t.Fatal("expected invalid person_merge_suggestions status to be rejected")
+	}
+
+	if err := db.Exec(
+		"INSERT INTO person_merge_suggestion_items (suggestion_id, candidate_person_id, similarity_score, rank, status) VALUES (?, ?, ?, ?, ?)",
+		1, 3, 0.66, 1, "pending",
+	).Error; err != nil {
+		t.Fatalf("expected pending suggestion item insert to succeed: %v", err)
+	}
+
+	if err := db.Exec(
+		"INSERT INTO person_merge_suggestion_items (suggestion_id, candidate_person_id, similarity_score, rank, status) VALUES (?, ?, ?, ?, ?)",
+		1, 4, 0.65, 2, "bad_status",
+	).Error; err == nil {
+		t.Fatal("expected invalid person_merge_suggestion_items status to be rejected")
+	}
+}
+
+func TestPeopleConfigHasMergeSuggestionField(t *testing.T) {
+	cfg := config.PeopleConfig{
+		MergeSuggestionThreshold:       0.62,
+		MergeSuggestionMaxPairsPerRun:  200,
+		MergeSuggestionBatchSize:       100,
+		MergeSuggestionCooldownSeconds: 300,
+	}
+
+	if cfg.MergeSuggestionThreshold <= 0 {
+		t.Fatal("expected MergeSuggestionThreshold field to exist and hold value")
 	}
 }

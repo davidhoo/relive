@@ -73,12 +73,16 @@ type AIConfig struct {
 
 // PeopleConfig 人物系统配置
 type PeopleConfig struct {
-	MLEndpoint         string  `yaml:"ml_endpoint"`
-	Timeout            int     `yaml:"timeout"`
-	ReclusterThreshold float64 `yaml:"recluster_threshold"`
-	ReclusterMaxIter   int     `yaml:"recluster_max_iterations"`
-	LinkThreshold      float64 `yaml:"link_threshold"`
-	AttachThreshold    float64 `yaml:"attach_threshold"`
+	MLEndpoint                     string  `yaml:"ml_endpoint"`
+	Timeout                        int     `yaml:"timeout"`
+	ReclusterThreshold             float64 `yaml:"recluster_threshold"`
+	ReclusterMaxIter               int     `yaml:"recluster_max_iterations"`
+	LinkThreshold                  float64 `yaml:"link_threshold"`
+	AttachThreshold                float64 `yaml:"attach_threshold"`
+	MergeSuggestionThreshold       float64 `yaml:"merge_suggestion_threshold"`
+	MergeSuggestionMaxPairsPerRun  int     `yaml:"merge_suggestion_max_pairs_per_run"`
+	MergeSuggestionBatchSize       int     `yaml:"merge_suggestion_batch_size"`
+	MergeSuggestionCooldownSeconds int     `yaml:"merge_suggestion_cooldown_seconds"`
 }
 
 // LegacyMLConfig 兼容旧版人物配置块

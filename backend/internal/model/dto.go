@@ -461,6 +461,63 @@ type PeopleStatsResponse struct {
 	PendingFacesRetried        int64 `json:"pending_faces_retried"`
 }
 
+type PersonMergeSuggestionTask struct {
+	Status         string     `json:"status"`
+	CurrentMessage string     `json:"current_message,omitempty"`
+	ProcessedPairs int64      `json:"processed_pairs"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	StoppedAt      *time.Time `json:"stopped_at,omitempty"`
+}
+
+type PersonMergeSuggestionStatsResponse struct {
+	Total         int64 `json:"total"`
+	Pending       int64 `json:"pending"`
+	Applied       int64 `json:"applied"`
+	Dismissed     int64 `json:"dismissed"`
+	Obsolete      int64 `json:"obsolete"`
+	PendingItems  int64 `json:"pending_items"`
+	ExcludedItems int64 `json:"excluded_items"`
+	MergedItems   int64 `json:"merged_items"`
+}
+
+type ListPersonMergeSuggestionsRequest struct {
+	Page     int    `form:"page" binding:"omitempty,min=1"`
+	PageSize int    `form:"page_size" binding:"omitempty,min=1,max=100"`
+	Status   string `form:"status"`
+	TargetID uint   `form:"target_id"`
+	SortBy   string `form:"sort_by"`
+	SortDesc bool   `form:"sort_desc"`
+}
+
+type PersonMergeSuggestionItemResponse struct {
+	ID                uint            `json:"id"`
+	SuggestionID      uint            `json:"suggestion_id"`
+	CandidatePersonID uint            `json:"candidate_person_id"`
+	SimilarityScore   float64         `json:"similarity_score"`
+	Rank              int             `json:"rank"`
+	Status            string          `json:"status"`
+	CandidatePerson   *PersonResponse `json:"candidate_person,omitempty"`
+}
+
+type PersonMergeSuggestionResponse struct {
+	ID                     uint                                `json:"id"`
+	TargetPersonID         uint                                `json:"target_person_id"`
+	TargetCategorySnapshot string                              `json:"target_category_snapshot"`
+	Status                 string                              `json:"status"`
+	CandidateCount         int                                 `json:"candidate_count"`
+	TopSimilarity          float64                             `json:"top_similarity"`
+	ReviewedAt             *time.Time                          `json:"reviewed_at,omitempty"`
+	CreatedAt              time.Time                           `json:"created_at"`
+	UpdatedAt              time.Time                           `json:"updated_at"`
+	TargetPerson           *PersonResponse                     `json:"target_person,omitempty"`
+	Items                  []PersonMergeSuggestionItemResponse `json:"items,omitempty"`
+}
+
+type ReviewPersonMergeSuggestionRequest struct {
+	Action             string `json:"action" binding:"required,oneof=exclude apply dismiss"`
+	CandidatePersonIDs []uint `json:"candidate_person_ids,omitempty"`
+}
+
 type PeopleBatchEnqueueRequest struct {
 	Path string `json:"path" binding:"required"`
 }
