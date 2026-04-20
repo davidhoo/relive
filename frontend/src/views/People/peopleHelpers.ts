@@ -1,4 +1,4 @@
-import type { PeopleTask, Person, PersonCategory } from '../../types/people.js'
+import type { PeopleTask, Person, PersonCategory, PersonMergeSuggestionItem, PersonMergeSuggestionTask } from '../../types/people.js'
 
 export interface TaskStatusMeta {
   label: string
@@ -42,18 +42,21 @@ export function sortPeopleForDisplay<T extends Pick<Person, 'category' | 'photo_
   })
 }
 
-export function getPeopleTaskStatusMeta(task?: Pick<PeopleTask, 'status' | 'current_phase'> | null): TaskStatusMeta {
-  const status = task?.status
-  const phase = task?.current_phase
+export function getPeopleTaskStatusMeta(task?: Pick<PeopleTask, 'status' | 'current_phase'> | string | null): TaskStatusMeta {
+  const status = typeof task === 'string' ? task : task?.status
+  const phase = typeof task === 'string' ? undefined : task?.current_phase
 
   if (status === 'stopping') {
     return { label: '停止中', type: 'warning' }
+  }
+  if (status === 'failed') {
+    return { label: '失败', type: 'danger' }
   }
   if (status === 'running' && phase === 'clustering') {
     return { label: '聚类处理中', type: 'warning' }
   }
   if (status === 'running') {
-    return { label: '检测处理中', type: 'warning' }
+    return { label: phase ? '检测处理中' : '运行中', type: 'warning' }
   }
   if (status === 'idle') {
     return { label: '空闲等待', type: 'info' }
@@ -67,4 +70,32 @@ export function getPersonAvatarFallback(person: Pick<Person, 'name' | 'category'
     return normalizedName.charAt(0).toUpperCase()
   }
   return CATEGORY_FALLBACKS[person.category] || '人'
+}
+
+export function getMergeSuggestionVisibility(totalPending: number, loading = false): boolean {
+  if (loading) return true
+  return totalPending > 0
+}
+
+export function sortMergeSuggestionCandidates<T extends Pick<PersonMergeSuggestionItem, 'similarity_score' | 'candidate_person_id'>>(items: T[]): T[] {
+  return [...items].sort((left, right) => {
+    if (left.similarity_score !== right.similarity_score) {
+      return right.similarity_score - left.similarity_score
+    }
+    return left.candidate_person_id - right.candidate_person_id
+  })
+}
+
+export function getMergeSuggestionTaskStatusMeta(task?: Pick<PersonMergeSuggestionTask, 'status'> | string | null): TaskStatusMeta {
+  const status = typeof task === 'string' ? task : task?.status
+  if (status === 'running') {
+    return { label: '巡检中', type: 'warning' }
+  }
+  if (status === 'stopped') {
+    return { label: '已暂停', type: 'info' }
+  }
+  if (status === 'idle') {
+    return { label: '等待巡检', type: 'info' }
+  }
+  return { label: '未运行', type: 'info' }
 }

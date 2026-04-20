@@ -1,7 +1,18 @@
 import http from '@/utils/request'
 import type { ApiResponse, PagedResponse } from '@/types/api'
 import type { Photo } from '@/types/photo'
-import type { Face, PeopleBackgroundLogsResponse, PeopleListParams, PeopleStats, PeopleTask, Person, PhotoPeopleResponse } from '@/types/people'
+import type {
+  Face,
+  PeopleBackgroundLogsResponse,
+  PeopleListParams,
+  PeopleStats,
+  PeopleTask,
+  Person,
+  PersonMergeSuggestion,
+  PersonMergeSuggestionStats,
+  PersonMergeSuggestionTask,
+  PhotoPeopleResponse
+} from '@/types/people'
 
 export const peopleApi = {
   getList(params?: PeopleListParams) {
@@ -88,5 +99,49 @@ export const peopleApi = {
 
   getPhotoPeople(photoId: number) {
     return http.get<ApiResponse<PhotoPeopleResponse>>(`/photos/${photoId}/people`)
+  },
+
+  getMergeSuggestionTask() {
+    return http.get<ApiResponse<PersonMergeSuggestionTask | null>>('/people/merge-suggestions/task')
+  },
+
+  getMergeSuggestionStats() {
+    return http.get<ApiResponse<PersonMergeSuggestionStats>>('/people/merge-suggestions/stats')
+  },
+
+  getMergeSuggestionLogs() {
+    return http.get<ApiResponse<PeopleBackgroundLogsResponse>>('/people/merge-suggestions/background/logs')
+  },
+
+  pauseMergeSuggestionTask() {
+    return http.post<ApiResponse<void>>('/people/merge-suggestions/background/pause')
+  },
+
+  resumeMergeSuggestionTask() {
+    return http.post<ApiResponse<void>>('/people/merge-suggestions/background/resume')
+  },
+
+  rebuildMergeSuggestionTask() {
+    return http.post<ApiResponse<void>>('/people/merge-suggestions/background/rebuild')
+  },
+
+  listMergeSuggestions(params?: { page?: number; page_size?: number }) {
+    return http.get<ApiResponse<PagedResponse<PersonMergeSuggestion>>>('/people/merge-suggestions', { params })
+  },
+
+  getMergeSuggestion(id: number) {
+    return http.get<ApiResponse<PersonMergeSuggestion>>(`/people/merge-suggestions/${id}`)
+  },
+
+  excludeMergeSuggestionCandidates(id: number, candidatePersonIds: number[]) {
+    return http.post<ApiResponse<void>>(`/people/merge-suggestions/${id}/exclude`, {
+      candidate_person_ids: candidatePersonIds,
+    })
+  },
+
+  applyMergeSuggestion(id: number, candidatePersonIds: number[]) {
+    return http.post<ApiResponse<void>>(`/people/merge-suggestions/${id}/apply`, {
+      candidate_person_ids: candidatePersonIds,
+    })
   },
 }

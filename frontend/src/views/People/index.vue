@@ -1,6 +1,6 @@
 <template>
   <div class="people-page">
-    <PageHeader title="人物管理" subtitle="按人物维度浏览聚类结果，查看后台进度，并进入详情页做修正" :gradient="true">
+    <PageHeader title="人物管理" subtitle="按人物维度浏览聚类结果，查看后台进度，并集中审核系统给出的合并建议" :gradient="true">
       <template #actions>
         <el-button class="header-action-btn" @click="refreshCurrentTab">
           刷新当前标签
@@ -83,6 +83,46 @@
                 @current-change="handlePageChange"
                 @size-change="handlePageSizeChange"
               />
+            </div>
+          </el-card>
+
+          <el-card v-if="mergeSuggestionVisible" shadow="never" class="section-card animate-fade-in animate-delay-2">
+            <template #header>
+              <SectionHeader :icon="Connection" :title="`人物合并建议（${mergeSuggestionTotal}）`">
+                <template #actions>
+                  <el-button size="small" plain class="mini-action-btn" @click="loadMergeSuggestions">刷新</el-button>
+                </template>
+              </SectionHeader>
+            </template>
+
+            <div v-loading="mergeSuggestionLoading" class="merge-suggestion-list">
+              <div v-if="mergeSuggestions.length > 0" class="merge-suggestion-grid">
+                <div v-for="suggestion in mergeSuggestions" :key="suggestion.id" class="merge-suggestion-card">
+                  <div class="merge-suggestion-header">
+                    <div>
+                      <div class="merge-suggestion-title">
+                        {{ suggestion.target_person?.name?.trim() || `未命名人物 #${suggestion.target_person_id}` }}
+                      </div>
+                      <div class="merge-suggestion-subtitle">
+                        {{ getPersonCategoryLabel(suggestion.target_person?.category || suggestion.target_category_snapshot) }}
+                      </div>
+                    </div>
+                    <span class="merge-suggestion-score">{{ `${(suggestion.top_similarity * 100).toFixed(1)}%` }}</span>
+                  </div>
+
+                  <div class="merge-suggestion-meta">
+                    <span>{{ suggestion.candidate_count }} 个候选</span>
+                    <span>{{ `最高相似度 ${(suggestion.top_similarity * 100).toFixed(1)}%` }}</span>
+                  </div>
+
+                  <div class="merge-suggestion-actions">
+                    <el-button size="small" type="primary" @click="openMergeSuggestionReview(suggestion.id)">
+                      审核
+                    </el-button>
+                  </div>
+                </div>
+              </div>
+              <el-empty v-else description="当前没有待审核的人物合并建议" />
             </div>
           </el-card>
         </div>
@@ -179,7 +219,75 @@
 
           <el-card shadow="never" class="section-card animate-fade-in animate-delay-1">
             <template #header>
-              <SectionHeader :icon="Document" title="最近活动">
+              <SectionHeader :icon="Connection" title="合并建议 Worker">
+                <template #actions>
+                  <span class="status-pill" :class="mergeSuggestionTaskMeta.type">{{ mergeSuggestionTaskMeta.label }}</span>
+                  <el-button
+                    v-if="mergeSuggestionTask?.status === 'stopped'"
+                    size="small"
+                    type="primary"
+                    :loading="mergeSuggestionAction === 'resume'"
+                    @click="handleResumeMergeSuggestionTask"
+                  >
+                    恢复巡检
+                  </el-button>
+                  <el-button
+                    v-else
+                    size="small"
+                    type="warning"
+                    plain
+                    :loading="mergeSuggestionAction === 'pause'"
+                    @click="handlePauseMergeSuggestionTask"
+                  >
+                    暂停巡检
+                  </el-button>
+                  <el-button
+                    size="small"
+                    type="danger"
+                    plain
+                    :loading="mergeSuggestionAction === 'rebuild'"
+                    @click="handleRebuildMergeSuggestionTask"
+                  >
+                    立即重跑
+                  </el-button>
+                </template>
+              </SectionHeader>
+            </template>
+
+            <div class="task-body">
+              <div class="merge-task-stats">
+                <div class="merge-stat-card">
+                  <span class="merge-stat-label">待审核建议</span>
+                  <strong>{{ mergeSuggestionStats.pending }}</strong>
+                </div>
+                <div class="merge-stat-card">
+                  <span class="merge-stat-label">已应用</span>
+                  <strong>{{ mergeSuggestionStats.applied }}</strong>
+                </div>
+                <div class="merge-stat-card">
+                  <span class="merge-stat-label">已忽略</span>
+                  <strong>{{ mergeSuggestionStats.dismissed }}</strong>
+                </div>
+                <div class="merge-stat-card">
+                  <span class="merge-stat-label">待处理候选</span>
+                  <strong>{{ mergeSuggestionStats.pending_items }}</strong>
+                </div>
+              </div>
+
+              <div v-if="mergeSuggestionTask?.current_message" class="task-phase">
+                <span class="task-phase-label">当前状态</span>
+                <span class="task-phase-message">{{ mergeSuggestionTask.current_message }}</span>
+              </div>
+
+              <div class="task-summary">
+                <span>累计扫描候选对 <strong>{{ mergeSuggestionTask?.processed_pairs || 0 }}</strong></span>
+              </div>
+            </div>
+          </el-card>
+
+          <el-card shadow="never" class="section-card animate-fade-in animate-delay-1">
+            <template #header>
+              <SectionHeader :icon="Document" title="人物 Worker 最近活动">
                 <template #actions>
                   <el-button size="small" plain class="mini-action-btn" @click="loadTaskData">刷新</el-button>
                 </template>
@@ -191,23 +299,63 @@
               <div v-else class="background-log-empty">暂无最近活动记录</div>
             </div>
           </el-card>
+
+          <el-card shadow="never" class="section-card animate-fade-in animate-delay-2">
+            <template #header>
+              <SectionHeader :icon="Document" title="合并建议 Worker 最近活动">
+                <template #actions>
+                  <el-button size="small" plain class="mini-action-btn" @click="loadTaskData">刷新</el-button>
+                </template>
+              </SectionHeader>
+            </template>
+
+            <div ref="mergeLogContainerRef" class="background-log-body">
+              <pre v-if="mergeSuggestionLogs.length">{{ mergeSuggestionLogs.join('\n') }}</pre>
+              <div v-else class="background-log-empty">暂无最近活动记录</div>
+            </div>
+          </el-card>
         </div>
       </el-tab-pane>
     </el-tabs>
+
+    <MergeSuggestionReviewDialog
+      v-model="mergeSuggestionDialogVisible"
+      :suggestion="currentMergeSuggestion"
+      :loading="mergeSuggestionDetailLoading"
+      :submitting="mergeSuggestionSubmitting"
+      @exclude="handleExcludeMergeSuggestion"
+      @apply="handleApplyMergeSuggestion"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Clock, Document, Search, User } from '@element-plus/icons-vue'
+import { Clock, Connection, Document, Search, User } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 import { peopleApi } from '@/api/people'
-import type { PeopleStats, PeopleTask, Person, PersonCategory } from '@/types/people'
-import { getPeopleTaskStatusMeta, getPersonAvatarFallback, getPersonCategoryLabel, sortPeopleForDisplay } from './peopleHelpers'
+import type {
+  PeopleStats,
+  PeopleTask,
+  Person,
+  PersonCategory,
+  PersonMergeSuggestion,
+  PersonMergeSuggestionStats,
+  PersonMergeSuggestionTask,
+} from '@/types/people'
+import MergeSuggestionReviewDialog from './MergeSuggestionReviewDialog.vue'
+import {
+  getMergeSuggestionTaskStatusMeta,
+  getMergeSuggestionVisibility,
+  getPeopleTaskStatusMeta,
+  getPersonAvatarFallback,
+  getPersonCategoryLabel,
+  sortPeopleForDisplay,
+} from './peopleHelpers'
 
 const route = useRoute()
 const router = useRouter()
@@ -231,11 +379,35 @@ const stats = ref<PeopleStats>({
 const backgroundLogs = ref<string[]>([])
 const people = ref<Person[]>([])
 const total = ref(0)
+
+const mergeSuggestionTask = ref<PersonMergeSuggestionTask | null>(null)
+const mergeSuggestionStats = ref<PersonMergeSuggestionStats>({
+  total: 0,
+  pending: 0,
+  applied: 0,
+  dismissed: 0,
+  obsolete: 0,
+  pending_items: 0,
+  excluded_items: 0,
+  merged_items: 0,
+})
+const mergeSuggestionLogs = ref<string[]>([])
+const mergeSuggestions = ref<PersonMergeSuggestion[]>([])
+const mergeSuggestionTotal = ref(0)
+const mergeSuggestionLoading = ref(false)
+const mergeSuggestionDialogVisible = ref(false)
+const mergeSuggestionDetailLoading = ref(false)
+const mergeSuggestionSubmitting = ref(false)
+const currentMergeSuggestion = ref<PersonMergeSuggestion | null>(null)
+const currentMergeSuggestionId = ref<number | null>(null)
+const mergeSuggestionAction = ref<'pause' | 'resume' | 'rebuild' | ''>('')
+
 const starting = ref(false)
 const stopping = ref(false)
 const resetting = ref(false)
 const enqueueing = ref(false)
 const logContainerRef = ref<HTMLElement | null>(null)
+const mergeLogContainerRef = ref<HTMLElement | null>(null)
 let taskTimer: number | null = null
 
 const workerActive = computed(() => {
@@ -248,10 +420,13 @@ const queuePending = computed(() => stats.value.pending + stats.value.queued + s
 const clusteringPending = computed(() => stats.value.pending_faces_total)
 const queueProgressPercent = computed(() => {
   const done = stats.value.completed
-  const total = done + queuePending.value
-  if (total === 0) return 0
-  return Math.round((done / total) * 100)
+  const totalCount = done + queuePending.value
+  if (totalCount === 0) return 0
+  return Math.round((done / totalCount) * 100)
 })
+
+const mergeSuggestionVisible = computed(() => getMergeSuggestionVisibility(mergeSuggestionTotal.value, mergeSuggestionLoading.value))
+const mergeSuggestionTaskMeta = computed(() => getMergeSuggestionTaskStatusMeta(mergeSuggestionTask.value))
 
 const filters = reactive<{
   page: number
@@ -333,6 +508,31 @@ const loadPeople = async () => {
   }
 }
 
+const loadMergeSuggestions = async () => {
+  mergeSuggestionLoading.value = true
+  try {
+    const res = await peopleApi.listMergeSuggestions({ page: 1, page_size: 12 })
+    const payload = res.data?.data
+    mergeSuggestions.value = payload?.items || []
+    mergeSuggestionTotal.value = payload?.total || 0
+  } catch (error: any) {
+    ElMessage.error(error.message || '加载人物合并建议失败')
+  } finally {
+    mergeSuggestionLoading.value = false
+  }
+}
+
+const loadMergeSuggestionTaskData = async () => {
+  const [taskRes, statsRes, logsRes] = await Promise.all([
+    peopleApi.getMergeSuggestionTask(),
+    peopleApi.getMergeSuggestionStats(),
+    peopleApi.getMergeSuggestionLogs(),
+  ])
+  mergeSuggestionTask.value = taskRes.data?.data || null
+  mergeSuggestionStats.value = statsRes.data?.data || mergeSuggestionStats.value
+  mergeSuggestionLogs.value = logsRes.data?.data?.lines || []
+}
+
 const loadTaskData = async () => {
   try {
     const [taskRes, statsRes, logsRes] = await Promise.all([
@@ -343,8 +543,24 @@ const loadTaskData = async () => {
     task.value = taskRes.data?.data || null
     stats.value = statsRes.data?.data || stats.value
     backgroundLogs.value = logsRes.data?.data?.lines || []
+    await loadMergeSuggestionTaskData()
   } catch (error: any) {
     ElMessage.error(error.message || '加载人物任务状态失败')
+  }
+}
+
+const loadMergeSuggestionDetail = async (id: number) => {
+  mergeSuggestionDetailLoading.value = true
+  try {
+    const res = await peopleApi.getMergeSuggestion(id)
+    currentMergeSuggestion.value = res.data?.data || null
+    currentMergeSuggestionId.value = currentMergeSuggestion.value?.id || null
+  } catch (error: any) {
+    currentMergeSuggestion.value = null
+    currentMergeSuggestionId.value = null
+    ElMessage.error(error.response?.data?.error?.message || error.message || '加载建议详情失败')
+  } finally {
+    mergeSuggestionDetailLoading.value = false
   }
 }
 
@@ -376,7 +592,7 @@ const refreshCurrentTab = async () => {
     await loadTaskData()
     return
   }
-  await loadPeople()
+  await Promise.all([loadPeople(), loadMergeSuggestions()])
 }
 
 const handleStart = async () => {
@@ -442,6 +658,95 @@ const handleEnqueueUnprocessed = async () => {
   }
 }
 
+const openMergeSuggestionReview = async (id: number) => {
+  mergeSuggestionDialogVisible.value = true
+  currentMergeSuggestion.value = null
+  currentMergeSuggestionId.value = id
+  await loadMergeSuggestionDetail(id)
+}
+
+const reloadMergeSuggestionReviewState = async () => {
+  await Promise.all([loadMergeSuggestions(), loadTaskData()])
+  if (!currentMergeSuggestionId.value) {
+    return
+  }
+  try {
+    await loadMergeSuggestionDetail(currentMergeSuggestionId.value)
+    if (!currentMergeSuggestion.value || !currentMergeSuggestion.value.items?.length) {
+      mergeSuggestionDialogVisible.value = false
+    }
+  } catch {
+    mergeSuggestionDialogVisible.value = false
+  }
+}
+
+const handleExcludeMergeSuggestion = async (candidateIds: number[]) => {
+  if (!currentMergeSuggestionId.value || candidateIds.length === 0) return
+  mergeSuggestionSubmitting.value = true
+  try {
+    await peopleApi.excludeMergeSuggestionCandidates(currentMergeSuggestionId.value, candidateIds)
+    ElMessage.success('已剔除所选候选人物')
+    await reloadMergeSuggestionReviewState()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || error.message || '剔除失败')
+  } finally {
+    mergeSuggestionSubmitting.value = false
+  }
+}
+
+const handleApplyMergeSuggestion = async (candidateIds: number[]) => {
+  if (!currentMergeSuggestionId.value || candidateIds.length === 0) return
+  mergeSuggestionSubmitting.value = true
+  try {
+    await peopleApi.applyMergeSuggestion(currentMergeSuggestionId.value, candidateIds)
+    ElMessage.success('已应用所选合并建议')
+    await reloadMergeSuggestionReviewState()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || error.message || '应用失败')
+  } finally {
+    mergeSuggestionSubmitting.value = false
+  }
+}
+
+const handlePauseMergeSuggestionTask = async () => {
+  mergeSuggestionAction.value = 'pause'
+  try {
+    await peopleApi.pauseMergeSuggestionTask()
+    ElMessage.success('人物合并建议巡检已暂停')
+    await loadTaskData()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || error.message || '暂停失败')
+  } finally {
+    mergeSuggestionAction.value = ''
+  }
+}
+
+const handleResumeMergeSuggestionTask = async () => {
+  mergeSuggestionAction.value = 'resume'
+  try {
+    await peopleApi.resumeMergeSuggestionTask()
+    ElMessage.success('人物合并建议巡检已恢复')
+    await loadTaskData()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || error.message || '恢复失败')
+  } finally {
+    mergeSuggestionAction.value = ''
+  }
+}
+
+const handleRebuildMergeSuggestionTask = async () => {
+  mergeSuggestionAction.value = 'rebuild'
+  try {
+    await peopleApi.rebuildMergeSuggestionTask()
+    ElMessage.success('人物合并建议已标记重跑')
+    await Promise.all([loadTaskData(), loadMergeSuggestions()])
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || error.message || '重跑失败')
+  } finally {
+    mergeSuggestionAction.value = ''
+  }
+}
+
 watch(backgroundLogs, async () => {
   await nextTick()
   if (logContainerRef.value) {
@@ -449,15 +754,34 @@ watch(backgroundLogs, async () => {
   }
 })
 
-watch(activeTab, async (tab) => {
-  if (tab === 'task') {
-    await loadTaskData()
+watch(mergeSuggestionLogs, async () => {
+  await nextTick()
+  if (mergeLogContainerRef.value) {
+    mergeLogContainerRef.value.scrollTop = mergeLogContainerRef.value.scrollHeight
   }
 })
 
+watch(mergeSuggestionDialogVisible, (visible) => {
+  if (!visible) {
+    currentMergeSuggestion.value = null
+    currentMergeSuggestionId.value = null
+  }
+})
+
+watch(activeTab, async (tab) => {
+  if (tab === 'task') {
+    await loadTaskData()
+    return
+  }
+  await loadMergeSuggestions()
+})
+
 onMounted(async () => {
-  await Promise.all([loadPeople(), loadTaskData()])
-  taskTimer = window.setInterval(loadTaskData, 5000)
+  await Promise.all([loadPeople(), loadTaskData(), loadMergeSuggestions()])
+  taskTimer = window.setInterval(() => {
+    void loadTaskData()
+    void loadMergeSuggestions()
+  }, 5000)
 })
 
 onBeforeUnmount(() => {
@@ -511,30 +835,11 @@ onBeforeUnmount(() => {
   min-height: 240px;
 }
 
-.people-card-grid {
+.people-card-grid,
+.merge-suggestion-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 12px;
-}
-
-.detail-btn {
-  background-color: #fff7e6 !important;
-  border-color: #ffd591 !important;
-  color: #d46b08 !important;
-  border-radius: var(--radius-sm);
-  min-width: 78px;
-}
-
-.detail-btn:hover:not(:disabled) {
-  background-color: #ffe7ba !important;
-  border-color: #ffc53d !important;
-  color: #ad4e00 !important;
-}
-
-.detail-btn:disabled {
-  background-color: #f5f5f5 !important;
-  border-color: #d9d9d9 !important;
-  color: #999 !important;
 }
 
 .person-card {
@@ -569,14 +874,17 @@ onBeforeUnmount(() => {
   gap: 6px;
 }
 
-.person-card-title-row {
+.person-card-title-row,
+.merge-suggestion-header,
+.queue-progress-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.person-card-name {
+.person-card-name,
+.merge-suggestion-title {
   font-weight: 600;
   font-size: 14px;
   color: var(--color-text-primary);
@@ -597,13 +905,18 @@ onBeforeUnmount(() => {
   font-weight: 600;
 }
 
-.person-card-meta {
+.person-card-meta,
+.merge-suggestion-meta,
+.merge-suggestion-subtitle {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
-.person-card-counts {
+.person-card-counts,
+.merge-suggestion-meta,
+.merge-suggestion-subtitle {
   font-size: 12px;
   color: var(--color-text-secondary);
 }
@@ -612,6 +925,35 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: flex-end;
   margin-top: 20px;
+}
+
+.merge-suggestion-list {
+  min-height: 120px;
+}
+
+.merge-suggestion-card {
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  padding: 16px;
+  background: linear-gradient(135deg, #fffdf6 0%, #ffffff 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.merge-suggestion-score {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(230, 162, 60, 0.12);
+  color: #d46b08;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.merge-suggestion-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .task-body {
@@ -626,9 +968,12 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
-.queue-progress-header {
-  display: flex;
-  justify-content: space-between;
+.queue-progress-header,
+.queue-progress-detail,
+.queue-empty,
+.task-summary,
+.task-phase,
+.merge-stat-label {
   font-size: 13px;
   color: var(--color-text-secondary);
 }
@@ -638,15 +983,8 @@ onBeforeUnmount(() => {
   color: var(--color-text-primary);
 }
 
-.queue-progress-detail {
-  font-size: 13px;
-  color: var(--color-text-secondary);
-}
-
 .queue-empty {
   padding: 16px 0;
-  color: var(--color-text-secondary);
-  font-size: 13px;
 }
 
 .task-summary {
@@ -654,8 +992,6 @@ onBeforeUnmount(() => {
   border-radius: 12px;
   background: var(--color-bg-soft);
   border: 1px solid var(--color-border);
-  font-size: 13px;
-  color: var(--color-text-secondary);
 }
 
 .task-phase {
@@ -663,11 +999,6 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  font-size: 13px;
-}
-
-.task-phase-label {
-  color: var(--color-text-secondary);
 }
 
 .task-phase-message {
@@ -692,12 +1023,17 @@ onBeforeUnmount(() => {
   background: rgba(230, 162, 60, 0.12);
 }
 
+.status-pill.danger {
+  color: #f56c6c;
+  background: rgba(245, 108, 108, 0.12);
+}
+
 .danger {
   color: #f56c6c;
 }
 
 .background-log-body {
-  max-height: 360px;
+  max-height: 300px;
   overflow: auto;
   padding: 16px 18px;
   border-radius: 14px;
@@ -718,9 +1054,36 @@ onBeforeUnmount(() => {
   color: #9ca3af;
 }
 
+.merge-task-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.merge-stat-card {
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.merge-stat-card strong {
+  font-size: 22px;
+  line-height: 1;
+  color: var(--color-text-primary);
+}
+
 @media (max-width: 1200px) {
-  .people-card-grid {
+  .people-card-grid,
+  .merge-suggestion-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .merge-task-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -735,7 +1098,9 @@ onBeforeUnmount(() => {
     padding-right: 18px;
   }
 
-  .people-card-grid {
+  .people-card-grid,
+  .merge-suggestion-grid,
+  .merge-task-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -745,7 +1110,9 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 520px) {
-  .people-card-grid {
+  .people-card-grid,
+  .merge-suggestion-grid,
+  .merge-task-stats {
     grid-template-columns: 1fr;
   }
 }

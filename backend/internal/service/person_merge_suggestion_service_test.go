@@ -299,3 +299,58 @@ func TestPersonMergeSuggestionService_SlowsDownWhenPeopleBacklogIsHigh(t *testin
 	assert.Equal(t, []uint{candidateA.ID}, got[targetA.ID])
 	assert.Equal(t, []uint{candidateB.ID}, got[targetB.ID])
 }
+
+func TestPersonMergeSuggestionService_EndToEndReviewFlow(t *testing.T) {
+	svc, _, repos, _ := newPersonMergeSuggestionServiceForTest(t)
+
+	target := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0}, []float32{0.99, 0.01})
+	excludedCandidate := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{1, 0.015})
+	mergedCandidate := createSuggestionTestPerson(t, repos, model.PersonCategoryAcquaintance, []float32{1, 0.03})
+	otherTarget := createSuggestionTestPerson(t, repos, model.PersonCategoryFriend, []float32{0, 1}, []float32{0.01, 0.99})
+	_ = createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{0, 1.02})
+
+	require.NotZero(t, target.ID)
+	require.NotZero(t, excludedCandidate.ID)
+	require.NotZero(t, mergedCandidate.ID)
+	require.NotZero(t, otherTarget.ID)
+
+	require.NoError(t, svc.MarkDirty("end-to-end"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	suggestions, total, err := svc.ListPending(1, 10)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), total)
+
+	var targetSuggestion *model.PersonMergeSuggestionResponse
+	for i := range suggestions {
+		if suggestions[i].TargetPersonID == target.ID {
+			targetSuggestion = &suggestions[i]
+			break
+		}
+	}
+	require.NotNil(t, targetSuggestion)
+	require.Len(t, targetSuggestion.Items, 2)
+
+	require.NoError(t, svc.ExcludeCandidates(targetSuggestion.ID, []uint{excludedCandidate.ID}))
+	blocked, err := repos.CannotLink.ExistsBetween(target.ID, excludedCandidate.ID)
+	require.NoError(t, err)
+	assert.True(t, blocked)
+
+	afterExclude, err := svc.GetPendingByID(targetSuggestion.ID)
+	require.NoError(t, err)
+	require.NotNil(t, afterExclude)
+	require.Len(t, afterExclude.Items, 1)
+	assert.Equal(t, mergedCandidate.ID, afterExclude.Items[0].CandidatePersonID)
+
+	require.NoError(t, svc.ApplySuggestion(targetSuggestion.ID, []uint{mergedCandidate.ID}))
+
+	mergedPerson, err := repos.Person.GetByID(mergedCandidate.ID)
+	require.NoError(t, err)
+	assert.Nil(t, mergedPerson)
+
+	finalSuggestions, finalTotal, err := svc.ListPending(1, 10)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), finalTotal)
+	require.Len(t, finalSuggestions, 1)
+	assert.Equal(t, otherTarget.ID, finalSuggestions[0].TargetPersonID)
+}

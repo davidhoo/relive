@@ -32,7 +32,7 @@ func NewHandlers(db *gorm.DB, services *service.Services, repos *repository.Repo
 	handlers := &Handlers{
 		System:    NewSystemHandler(services.System, cfg, appState),
 		Photo:     NewPhotoHandler(services.Photo, services.Thumbnail, services.GeocodeTask, services.Config, cfg),
-		People:    NewPeopleHandler(services.People, repos.Person, repos.Face, repos.Photo, repos.PeopleJob, cfg),
+		People:    NewPeopleHandler(services.People, services.MergeSuggestion, repos.Person, repos.Face, repos.Photo, repos.PeopleJob, cfg),
 		Thumbnail: NewThumbnailHandler(services.Thumbnail),
 		Geocode:   NewGeocodeHandler(services.GeocodeTask),
 		Display:   NewDisplayHandler(services.Display, services.Device, cfg),

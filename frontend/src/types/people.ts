@@ -75,3 +75,46 @@ export interface PhotoPeopleResponse {
   top_person_category?: PersonCategory | ''
   people: Person[]
 }
+
+export interface PersonMergeSuggestionTask {
+  status?: string
+  current_message?: string
+  processed_pairs: number
+  started_at?: string
+  stopped_at?: string
+}
+
+export interface PersonMergeSuggestionStats {
+  total: number
+  pending: number
+  applied: number
+  dismissed: number
+  obsolete: number
+  pending_items: number
+  excluded_items: number
+  merged_items: number
+}
+
+export interface PersonMergeSuggestionItem {
+  id: number
+  suggestion_id: number
+  candidate_person_id: number
+  similarity_score: number
+  rank: number
+  status: string
+  candidate_person?: Person
+}
+
+export interface PersonMergeSuggestion {
+  id: number
+  target_person_id: number
+  target_category_snapshot: string
+  status: string
+  candidate_count: number
+  top_similarity: number
+  reviewed_at?: string
+  created_at: string
+  updated_at: string
+  target_person?: Person
+  items?: PersonMergeSuggestionItem[]
+}

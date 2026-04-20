@@ -6,7 +6,7 @@ import {
   getPersonAvatarFallback,
   getPersonCategoryLabel,
   sortPeopleForDisplay,
-} from '../src/views/People/peopleHelpers.js'
+} from '../src/views/People/peopleHelpers.ts'
 
 test('getPersonCategoryLabel 映射固定人物类别文案', () => {
   assert.equal(getPersonCategoryLabel('family'), '家人')
