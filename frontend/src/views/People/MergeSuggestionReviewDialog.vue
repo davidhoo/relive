@@ -10,8 +10,17 @@
       <template v-if="suggestion">
         <div class="review-target">
           <div class="review-target-label">目标人物</div>
-          <div class="review-target-name">
-            {{ suggestion.target_person?.name?.trim() || `未命名人物 #${suggestion.target_person?.id || suggestion.target_person_id}` }}
+          <div class="review-target-header">
+            <el-avatar
+              :size="48"
+              :src="getFaceThumbnail(suggestion.target_person?.representative_face_id)"
+              class="candidate-avatar"
+            >
+              {{ getPersonAvatarFallback(suggestion.target_person || { category: suggestion.target_category_snapshot as PersonCategory }) }}
+            </el-avatar>
+            <div class="review-target-name">
+              {{ suggestion.target_person?.name?.trim() || `未命名人物 #${suggestion.target_person?.id || suggestion.target_person_id}` }}
+            </div>
           </div>
           <div class="review-target-meta">
             <span>{{ getPersonCategoryLabel(suggestion.target_person?.category || suggestion.target_category_snapshot) }}</span>
@@ -27,12 +36,21 @@
             class="candidate-card"
           >
             <el-checkbox :value="item.candidate_person_id" />
+            <el-avatar
+              :size="40"
+              :src="getFaceThumbnail(item.candidate_person?.representative_face_id)"
+              class="candidate-avatar"
+            >
+              {{ getPersonAvatarFallback(item.candidate_person || { category: 'stranger' }) }}
+            </el-avatar>
             <div class="candidate-card-body">
               <div class="candidate-name">
                 {{ item.candidate_person?.name?.trim() || `候选人物 #${item.candidate_person_id}` }}
               </div>
               <div class="candidate-meta">
                 <span>{{ getPersonCategoryLabel(item.candidate_person?.category) }}</span>
+                <span>{{ item.candidate_person?.photo_count || 0 }} 照片</span>
+                <span>{{ item.candidate_person?.face_count || 0 }} 人脸</span>
                 <span>{{ `相似度 ${(item.similarity_score * 100).toFixed(1)}%` }}</span>
               </div>
             </div>
@@ -70,8 +88,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 
-import type { PersonMergeSuggestion } from '@/types/people'
-import { getPersonCategoryLabel, sortMergeSuggestionCandidates } from './peopleHelpers'
+import type { PersonCategory, PersonMergeSuggestion } from '@/types/people'
+import { getPersonAvatarFallback, getPersonCategoryLabel, sortMergeSuggestionCandidates } from './peopleHelpers'
 
 const props = defineProps<{
   modelValue: boolean
@@ -87,8 +105,14 @@ const emit = defineEmits<{
 }>()
 
 const selectedIds = ref<number[]>([])
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
 
 const sortedItems = computed(() => sortMergeSuggestionCandidates(props.suggestion?.items || []))
+
+const getFaceThumbnail = (faceId?: number) => {
+  if (!faceId) return ''
+  return `${apiBaseUrl}/faces/${faceId}/thumbnail?v=${faceId}`
+}
 
 watch(
   () => [props.modelValue, props.suggestion?.id],
@@ -126,6 +150,12 @@ watch(
   color: var(--color-text-primary);
 }
 
+.review-target-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .review-target-meta {
   display: flex;
   gap: 12px;
@@ -149,6 +179,10 @@ watch(
   border-radius: 14px;
   padding: 14px 16px;
   cursor: pointer;
+}
+
+.candidate-avatar {
+  flex-shrink: 0;
 }
 
 .candidate-card-body {

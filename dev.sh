@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 ML_PID=""
 BACKEND_PID=""
 FRONTEND_PID=""
+PYTHON_BIN=""
 
 stop_process() {
     local pid="$1"
@@ -56,7 +57,11 @@ if ! command -v npm >/dev/null 2>&1; then
     exit 1
 fi
 
-if ! command -v python3 >/dev/null 2>&1; then
+if command -v python3.13 >/dev/null 2>&1; then
+    PYTHON_BIN="python3.13"
+elif command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+else
     echo "Missing python3 runtime"
     exit 1
 fi
@@ -66,9 +71,18 @@ if [ ! -d "frontend/node_modules" ]; then
     (cd frontend && npm install)
 fi
 
+if [ -x "ml-service/.venv/bin/python" ]; then
+    VENV_PYTHON_VERSION="$(ml-service/.venv/bin/python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || true)"
+    SYSTEM_PYTHON_VERSION="$("${PYTHON_BIN}" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+    if [ "${VENV_PYTHON_VERSION}" != "${SYSTEM_PYTHON_VERSION}" ]; then
+        echo "Recreating ml-service virtual environment with ${PYTHON_BIN}..."
+        rm -rf ml-service/.venv
+    fi
+fi
+
 if [ ! -x "ml-service/.venv/bin/python" ]; then
     echo "Creating ml-service virtual environment..."
-    python3 -m venv ml-service/.venv
+    "${PYTHON_BIN}" -m venv ml-service/.venv
 fi
 
 if ! ml-service/.venv/bin/python -c "import fastapi, uvicorn, cv2" >/dev/null 2>&1; then
@@ -92,7 +106,7 @@ if ! kill -0 "${ML_PID}" 2>/dev/null; then
     exit 1
 fi
 
-(cd backend && go run cmd/relive/main.go --config config.dev.yaml) &
+(cd backend && go run ./cmd/relive --config config.dev.yaml) &
 BACKEND_PID=$!
 
 sleep 3

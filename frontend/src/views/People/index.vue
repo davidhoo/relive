@@ -99,12 +99,21 @@
               <div v-if="mergeSuggestions.length > 0" class="merge-suggestion-grid">
                 <div v-for="suggestion in mergeSuggestions" :key="suggestion.id" class="merge-suggestion-card">
                   <div class="merge-suggestion-header">
-                    <div>
+                    <div class="merge-suggestion-target">
+                      <el-avatar
+                        :size="40"
+                        :src="getFaceThumbnail(suggestion.target_person?.representative_face_id)"
+                        class="merge-suggestion-avatar"
+                      >
+                        {{ getPersonAvatarFallback(suggestion.target_person || { category: suggestion.target_category_snapshot as PersonCategory }) }}
+                      </el-avatar>
+                      <div>
                       <div class="merge-suggestion-title">
                         {{ suggestion.target_person?.name?.trim() || `未命名人物 #${suggestion.target_person_id}` }}
                       </div>
                       <div class="merge-suggestion-subtitle">
                         {{ getPersonCategoryLabel(suggestion.target_person?.category || suggestion.target_category_snapshot) }}
+                      </div>
                       </div>
                     </div>
                     <span class="merge-suggestion-score">{{ `${(suggestion.top_similarity * 100).toFixed(1)}%` }}</span>
@@ -113,6 +122,18 @@
                   <div class="merge-suggestion-meta">
                     <span>{{ suggestion.candidate_count }} 个候选</span>
                     <span>{{ `最高相似度 ${(suggestion.top_similarity * 100).toFixed(1)}%` }}</span>
+                  </div>
+
+                  <div class="candidate-preview-list">
+                    <el-avatar
+                      v-for="item in suggestion.items?.slice(0, 4) || []"
+                      :key="item.candidate_person_id"
+                      :size="28"
+                      :src="getFaceThumbnail(item.candidate_person?.representative_face_id)"
+                      class="candidate-preview"
+                    >
+                      {{ getPersonAvatarFallback(item.candidate_person || { category: 'stranger' }) }}
+                    </el-avatar>
                   </div>
 
                   <div class="merge-suggestion-actions">
@@ -223,7 +244,7 @@
                 <template #actions>
                   <span class="status-pill" :class="mergeSuggestionTaskMeta.type">{{ mergeSuggestionTaskMeta.label }}</span>
                   <el-button
-                    v-if="mergeSuggestionTask?.status === 'stopped'"
+                    v-if="mergeSuggestionTask?.status === 'paused'"
                     size="small"
                     type="primary"
                     :loading="mergeSuggestionAction === 'resume'"
@@ -941,6 +962,17 @@ onBeforeUnmount(() => {
   gap: 12px;
 }
 
+.merge-suggestion-target {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.merge-suggestion-avatar {
+  flex-shrink: 0;
+}
+
 .merge-suggestion-score {
   flex-shrink: 0;
   padding: 4px 8px;
@@ -949,6 +981,16 @@ onBeforeUnmount(() => {
   color: #d46b08;
   font-size: 12px;
   font-weight: 700;
+}
+
+.candidate-preview-list {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.candidate-preview {
+  flex-shrink: 0;
 }
 
 .merge-suggestion-actions {

@@ -91,7 +91,7 @@ export function getMergeSuggestionTaskStatusMeta(task?: Pick<PersonMergeSuggesti
   if (status === 'running') {
     return { label: '巡检中', type: 'warning' }
   }
-  if (status === 'stopped') {
+  if (status === 'paused') {
     return { label: '已暂停', type: 'info' }
   }
   if (status === 'idle') {

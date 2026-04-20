@@ -173,7 +173,7 @@ func (s *personMergeSuggestionService) Pause() error {
 
 	s.state.Paused = true
 	now := time.Now()
-	s.task.Status = model.TaskStatusStopped
+	s.task.Status = model.TaskStatusPaused
 	s.task.CurrentMessage = "已暂停"
 	s.task.StoppedAt = &now
 	s.appendBackgroundLogLocked("人物合并建议后台任务已暂停")
@@ -234,7 +234,7 @@ func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 	defer s.mu.Unlock()
 
 	if s.state.Paused {
-		s.task.Status = model.TaskStatusStopped
+		s.task.Status = model.TaskStatusPaused
 		s.task.CurrentMessage = "已暂停"
 		return nil
 	}
@@ -455,16 +455,9 @@ func (s *personMergeSuggestionService) buildAssignments(targets []*model.Person)
 		facesByPerson[*face.PersonID] = append(facesByPerson[*face.PersonID], face)
 	}
 
-	targetSet := make(map[uint]*model.Person, len(targets))
-	for _, target := range targets {
-		if target != nil {
-			targetSet[target.ID] = target
-		}
-	}
-
 	candidatePrototypes := make(map[uint][]faceWithEmbedding)
 	for _, person := range allPeople {
-		if person == nil || !isSuggestionCandidateCategory(person.Category) {
+		if person == nil {
 			continue
 		}
 		personFaces := facesByPerson[person.ID]
@@ -486,7 +479,7 @@ func (s *personMergeSuggestionService) buildAssignments(targets []*model.Person)
 		}
 		targetEmbeddings := decodeFacesWithEmbeddings(selectDiversePrototypes(targetFaces, peoplePrototypeCount))
 		for _, person := range allPeople {
-			if person == nil || person.ID == target.ID || !isSuggestionCandidateCategory(person.Category) {
+			if person == nil || person.ID == target.ID {
 				continue
 			}
 			candidateEmbeddings := candidatePrototypes[person.ID]
@@ -501,8 +494,8 @@ func (s *personMergeSuggestionService) buildAssignments(targets []*model.Person)
 				continue
 			}
 
-			score := bestSuggestionSimilarity(targetEmbeddings, candidateEmbeddings)
-			if score < threshold {
+			score := averageBestSuggestionSimilarity(targetEmbeddings, candidateEmbeddings)
+			if score < threshold || score >= s.attachThreshold() {
 				continue
 			}
 
@@ -635,7 +628,7 @@ func (s *personMergeSuggestionService) loadState() error {
 	defer s.mu.Unlock()
 	s.state = state
 	if state.Paused {
-		s.task.Status = model.TaskStatusStopped
+		s.task.Status = model.TaskStatusPaused
 		s.task.CurrentMessage = "已暂停"
 	} else {
 		s.task.Status = model.TaskStatusIdle
@@ -725,8 +718,40 @@ func bestSuggestionSimilarity(targetEmbeddings, candidateEmbeddings []faceWithEm
 	return best
 }
 
-func isSuggestionCandidateCategory(category string) bool {
-	return category == model.PersonCategoryStranger || category == model.PersonCategoryAcquaintance
+func averageBestSuggestionSimilarity(targetEmbeddings, candidateEmbeddings []faceWithEmbedding) float64 {
+	if len(targetEmbeddings) == 0 || len(candidateEmbeddings) == 0 {
+		return -1
+	}
+
+	var sum float64
+	count := 0
+	for _, candidate := range candidateEmbeddings {
+		best := -1.0
+		for _, target := range targetEmbeddings {
+			score := cosineSimilarityPrecomputed(
+				target.embedding, target.norm,
+				candidate.embedding, candidate.norm,
+			)
+			if score > best {
+				best = score
+			}
+		}
+		if best >= 0 {
+			sum += best
+			count++
+		}
+	}
+	if count == 0 {
+		return -1
+	}
+	return sum / float64(count)
+}
+
+func (s *personMergeSuggestionService) attachThreshold() float64 {
+	if s.config != nil && s.config.People.AttachThreshold > 0 {
+		return s.config.People.AttachThreshold
+	}
+	return defaultAttachThreshold
 }
 
 func toSuggestionPersonResponse(person *model.Person) *model.PersonResponse {

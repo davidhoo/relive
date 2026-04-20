@@ -52,7 +52,8 @@ func newPersonMergeSuggestionServiceForTest(t *testing.T) (PersonMergeSuggestion
 	configService := NewConfigService(repos.Config)
 	cfg := &config.Config{
 		People: config.PeopleConfig{
-			MergeSuggestionThreshold:       0.90,
+			MergeSuggestionThreshold:       0.62,
+			AttachThreshold:                1.10,
 			MergeSuggestionMaxPairsPerRun:  100,
 			MergeSuggestionBatchSize:       10,
 			MergeSuggestionCooldownSeconds: 1,
@@ -69,6 +70,27 @@ func newPersonMergeSuggestionServiceForTest(t *testing.T) (PersonMergeSuggestion
 		repos.MergeSuggestion,
 		configService,
 		cfg,
+	)
+	return svc, db, repos, configService
+}
+
+func newPersonMergeSuggestionServiceWithConfigForTest(t *testing.T, peopleCfg config.PeopleConfig) (PersonMergeSuggestionService, *gorm.DB, *repository.Repositories, ConfigService) {
+	t.Helper()
+
+	db := setupPersonMergeSuggestionServiceTestDB(t)
+	repos := repository.NewRepositories(db)
+	configService := NewConfigService(repos.Config)
+
+	svc := NewPersonMergeSuggestionService(
+		db,
+		repos.Photo,
+		repos.Face,
+		repos.Person,
+		repos.PeopleJob,
+		repos.CannotLink,
+		repos.MergeSuggestion,
+		configService,
+		&config.Config{People: peopleCfg},
 	)
 	return svc, db, repos, configService
 }
@@ -182,20 +204,85 @@ func TestPersonMergeSuggestionService_SkipsCannotLinkCandidates(t *testing.T) {
 }
 
 func TestPersonMergeSuggestionService_AssignsCandidateToBestTargetOnly(t *testing.T) {
-	svc, _, repos, _ := newPersonMergeSuggestionServiceForTest(t)
+	svc, _, repos, _ := newPersonMergeSuggestionServiceWithConfigForTest(t, config.PeopleConfig{
+		MergeSuggestionThreshold:       0.50,
+		AttachThreshold:                1.10,
+		MergeSuggestionMaxPairsPerRun:  100,
+		MergeSuggestionBatchSize:       10,
+		MergeSuggestionCooldownSeconds: 1,
+	})
 
-	bestTarget := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0}, []float32{0.99, 0.01})
-	otherTarget := createSuggestionTestPerson(t, repos, model.PersonCategoryFriend, []float32{0.8, 0.2}, []float32{0.78, 0.22})
-	candidate := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{1, 0.05})
+	bestTarget := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0}, []float32{0.98, 0.02})
+	otherTarget := createSuggestionTestPerson(t, repos, model.PersonCategoryFriend, []float32{0.60, 0.80}, []float32{0.58, 0.81})
+	candidate := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{0.90, 0.10})
 
 	require.NoError(t, svc.MarkDirty("best-target-only"))
 	require.NoError(t, svc.RunBackgroundSlice())
 
 	got := pendingSuggestionCandidatesByTarget(t, repos.MergeSuggestion)
-	require.Len(t, got, 1)
-	assert.Equal(t, []uint{candidate.ID}, got[bestTarget.ID])
-	_, existsOnOther := got[otherTarget.ID]
-	assert.False(t, existsOnOther)
+	assert.Contains(t, got[bestTarget.ID], candidate.ID)
+	assert.NotContains(t, got[otherTarget.ID], candidate.ID)
+}
+
+func TestPersonMergeSuggestionService_AllowsFamilyAndFriendCandidates(t *testing.T) {
+	svc, _, repos, _ := newPersonMergeSuggestionServiceForTest(t)
+
+	_ = createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0}, []float32{0.99, 0.01})
+	friendCandidate := createSuggestionTestPerson(t, repos, model.PersonCategoryFriend, []float32{1, 0.03})
+	familyCandidate := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0.04})
+
+	require.NoError(t, svc.MarkDirty("allow-family-friend-candidates"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	got := pendingSuggestionCandidatesByTarget(t, repos.MergeSuggestion)
+	allCandidateIDs := make([]uint, 0)
+	for _, ids := range got {
+		allCandidateIDs = append(allCandidateIDs, ids...)
+	}
+	assert.Contains(t, allCandidateIDs, friendCandidate.ID)
+	assert.Contains(t, allCandidateIDs, familyCandidate.ID)
+}
+
+func TestPersonMergeSuggestionService_DoesNotCreateSuggestionAtOrAboveAttachThreshold(t *testing.T) {
+	svc, _, repos, _ := newPersonMergeSuggestionServiceWithConfigForTest(t, config.PeopleConfig{
+		MergeSuggestionThreshold:       0.90,
+		AttachThreshold:                0.95,
+		MergeSuggestionMaxPairsPerRun:  100,
+		MergeSuggestionBatchSize:       10,
+		MergeSuggestionCooldownSeconds: 1,
+	})
+
+	target := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0}, []float32{0.99, 0.01})
+	tooCloseCandidate := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{1, 0})
+
+	require.NoError(t, svc.MarkDirty("attach-threshold-upper-bound"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	got := pendingSuggestionCandidatesByTarget(t, repos.MergeSuggestion)
+	assert.NotContains(t, got, target.ID)
+	assert.NotContains(t, got[target.ID], tooCloseCandidate.ID)
+}
+
+func TestPersonMergeSuggestionService_UsesAverageBestSimilarityInsteadOfSingleMaxPair(t *testing.T) {
+	svc, _, repos, _ := newPersonMergeSuggestionServiceWithConfigForTest(t, config.PeopleConfig{
+		MergeSuggestionThreshold:       0.80,
+		AttachThreshold:                0.95,
+		MergeSuggestionMaxPairsPerRun:  100,
+		MergeSuggestionBatchSize:       10,
+		MergeSuggestionCooldownSeconds: 1,
+	})
+
+	target := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0}, []float32{0, 1})
+	// One prototype matches perfectly, one is nearly orthogonal.
+	// Max-pair logic would suggest; average-best should stay below threshold.
+	candidate := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{1, 0}, []float32{0.2, 0.98})
+
+	require.NoError(t, svc.MarkDirty("average-best-similarity"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	got := pendingSuggestionCandidatesByTarget(t, repos.MergeSuggestion)
+	assert.NotContains(t, got, target.ID)
+	assert.NotContains(t, got[target.ID], candidate.ID)
 }
 
 func TestPersonMergeSuggestionService_PauseResumeAndRebuildPersistState(t *testing.T) {
@@ -209,6 +296,7 @@ func TestPersonMergeSuggestionService_PauseResumeAndRebuildPersistState(t *testi
 	require.NoError(t, svc.Pause())
 	state := readSuggestionStateConfig(t, db)
 	assert.Equal(t, true, state["paused"])
+	assert.Equal(t, "paused", svc.GetTask().Status)
 
 	reloaded := NewPersonMergeSuggestionService(
 		db,
@@ -221,7 +309,8 @@ func TestPersonMergeSuggestionService_PauseResumeAndRebuildPersistState(t *testi
 		configService,
 		&config.Config{
 			People: config.PeopleConfig{
-				MergeSuggestionThreshold:       0.90,
+				MergeSuggestionThreshold:       0.62,
+				AttachThreshold:                1.10,
 				MergeSuggestionMaxPairsPerRun:  100,
 				MergeSuggestionBatchSize:       10,
 				MergeSuggestionCooldownSeconds: 1,
@@ -230,6 +319,7 @@ func TestPersonMergeSuggestionService_PauseResumeAndRebuildPersistState(t *testi
 	)
 	state = readSuggestionStateConfig(t, db)
 	assert.Equal(t, true, state["paused"])
+	assert.Equal(t, "paused", reloaded.GetTask().Status)
 
 	require.NoError(t, reloaded.Resume())
 	state = readSuggestionStateConfig(t, db)
