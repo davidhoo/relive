@@ -94,6 +94,7 @@ type peopleService struct {
 	feedbackStopCh        chan struct{}
 	feedbackPollInterval  time.Duration
 	feedbackReclusterHook func() model.ReclusterResult
+	mergeSuggestionDirty  func(string) error
 
 	// Clustering rate limiting to prevent CPU overload
 	clusteringTaskCounter   int
@@ -393,6 +394,7 @@ func (s *peopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint)
 	if err := s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs); err != nil {
 		return nil, err
 	}
+	s.markMergeSuggestionsDirty("merge_people")
 	s.scheduleFeedbackRecluster()
 	return &model.ReclusterResult{}, nil
 }
@@ -455,6 +457,7 @@ func (s *peopleService) SplitPerson(faceIDs []uint) (*model.Person, *model.Reclu
 	if err != nil {
 		return nil, nil, err
 	}
+	s.markMergeSuggestionsDirty("split_person")
 	s.scheduleFeedbackRecluster()
 	return person, &model.ReclusterResult{}, nil
 }
@@ -491,6 +494,7 @@ func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) (*model.R
 	if err := s.photoRepo.RecomputeTopPersonCategory(facePhotoIDs(faces)); err != nil {
 		return nil, err
 	}
+	s.markMergeSuggestionsDirty("move_faces")
 	s.scheduleFeedbackRecluster()
 	return &model.ReclusterResult{}, nil
 }
@@ -503,7 +507,11 @@ func (s *peopleService) UpdatePersonCategory(personID uint, category string) err
 	if err != nil {
 		return err
 	}
-	return s.photoRepo.RecomputeTopPersonCategory(facePhotoIDs(faces))
+	if err := s.photoRepo.RecomputeTopPersonCategory(facePhotoIDs(faces)); err != nil {
+		return err
+	}
+	s.markMergeSuggestionsDirty("update_person_category")
+	return nil
 }
 
 func (s *peopleService) UpdatePersonName(personID uint, name string) error {
@@ -995,12 +1003,15 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 	}
 
 	s.appendBackgroundLog(fmt.Sprintf("照片 #%d 检测到 %d 张人脸", photo.ID, len(createdFaces)))
-
-	return s.jobRepo.UpdateFields(job.ID, map[string]interface{}{
+	if err := s.jobRepo.UpdateFields(job.ID, map[string]interface{}{
 		"status":       model.PeopleJobStatusCompleted,
 		"last_error":   "",
 		"completed_at": &now,
-	})
+	}); err != nil {
+		return err
+	}
+	s.markMergeSuggestionsDirty("apply_detection_result")
+	return nil
 }
 
 // convertMLResultToModel converts mlclient.DetectFacesResponse to model.PeopleDetectionResult
@@ -1190,10 +1201,34 @@ func (s *peopleService) setFeedbackReclusterPollIntervalForTest(interval time.Du
 	s.feedbackPollInterval = interval
 }
 
+func (s *peopleService) setMergeSuggestionDirtyHookForTest(hook func(string) error) {
+	s.taskMutex.Lock()
+	defer s.taskMutex.Unlock()
+	s.mergeSuggestionDirty = hook
+}
+
 func (s *peopleService) setBackgroundBusy(busy bool) {
 	s.backgroundBusyMu.Lock()
 	defer s.backgroundBusyMu.Unlock()
 	s.backgroundBusy = busy
+}
+
+func (s *peopleService) setMergeSuggestionDirtyHook(hook func(string) error) {
+	s.taskMutex.Lock()
+	defer s.taskMutex.Unlock()
+	s.mergeSuggestionDirty = hook
+}
+
+func (s *peopleService) markMergeSuggestionsDirty(reason string) {
+	s.taskMutex.RLock()
+	hook := s.mergeSuggestionDirty
+	s.taskMutex.RUnlock()
+	if hook == nil {
+		return
+	}
+	if err := hook(reason); err != nil {
+		logger.Warnf("failed to mark merge suggestions dirty: %v", err)
+	}
 }
 
 func (s *peopleService) setTaskStatus(status string) {
@@ -1954,6 +1989,10 @@ func (s *peopleService) triggerRecluster() model.ReclusterResult {
 		if len(affectedPhotoIDs) > 0 {
 			_ = s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs)
 		}
+	}
+
+	if result.Evaluated > 0 || result.Reassigned > 0 || len(affectedPersonIDs) > 0 || len(affectedPhotoIDs) > 0 {
+		s.markMergeSuggestionsDirty("trigger_recluster")
 	}
 
 	return result

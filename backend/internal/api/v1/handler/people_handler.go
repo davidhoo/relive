@@ -22,23 +22,25 @@ import (
 )
 
 type PeopleHandler struct {
-	service        service.PeopleService
-	personRepo     repository.PersonRepository
-	faceRepo       repository.FaceRepository
-	photoRepo      repository.PhotoRepository
-	jobRepo        repository.PeopleJobRepository
-	runtimeService service.AnalysisRuntimeService
-	cfg            *config.Config
+	service                service.PeopleService
+	mergeSuggestionService service.PersonMergeSuggestionService
+	personRepo             repository.PersonRepository
+	faceRepo               repository.FaceRepository
+	photoRepo              repository.PhotoRepository
+	jobRepo                repository.PeopleJobRepository
+	runtimeService         service.AnalysisRuntimeService
+	cfg                    *config.Config
 }
 
-func NewPeopleHandler(service service.PeopleService, personRepo repository.PersonRepository, faceRepo repository.FaceRepository, photoRepo repository.PhotoRepository, jobRepo repository.PeopleJobRepository, cfg *config.Config) *PeopleHandler {
+func NewPeopleHandler(service service.PeopleService, mergeSuggestionService service.PersonMergeSuggestionService, personRepo repository.PersonRepository, faceRepo repository.FaceRepository, photoRepo repository.PhotoRepository, jobRepo repository.PeopleJobRepository, cfg *config.Config) *PeopleHandler {
 	return &PeopleHandler{
-		service:    service,
-		personRepo: personRepo,
-		faceRepo:   faceRepo,
-		photoRepo:  photoRepo,
-		jobRepo:    jobRepo,
-		cfg:        cfg,
+		service:                service,
+		mergeSuggestionService: mergeSuggestionService,
+		personRepo:             personRepo,
+		faceRepo:               faceRepo,
+		photoRepo:              photoRepo,
+		jobRepo:                jobRepo,
+		cfg:                    cfg,
 	}
 }
 
@@ -388,6 +390,142 @@ func (h *PeopleHandler) GetBackgroundLogs(c *gin.Context) {
 		Message: "Success",
 		Data:    map[string]interface{}{"lines": h.service.GetBackgroundLogs()},
 	})
+}
+
+func (h *PeopleHandler) GetMergeSuggestionTask(c *gin.Context) {
+	c.JSON(http.StatusOK, model.Response{Success: true, Data: h.mergeSuggestionService.GetTask()})
+}
+
+func (h *PeopleHandler) GetMergeSuggestionStats(c *gin.Context) {
+	stats, err := h.mergeSuggestionService.GetStats()
+	if err != nil {
+		writePeopleError(c, http.StatusInternalServerError, "STATS_FAILED", err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Data: stats})
+}
+
+func (h *PeopleHandler) GetMergeSuggestionLogs(c *gin.Context) {
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Data:    map[string]interface{}{"lines": h.mergeSuggestionService.GetBackgroundLogs()},
+	})
+}
+
+func (h *PeopleHandler) PauseMergeSuggestionTask(c *gin.Context) {
+	if err := h.mergeSuggestionService.Pause(); err != nil {
+		writeServiceFailure(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "人物合并建议后台任务已暂停"})
+}
+
+func (h *PeopleHandler) ResumeMergeSuggestionTask(c *gin.Context) {
+	if err := h.mergeSuggestionService.Resume(); err != nil {
+		writeServiceFailure(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "人物合并建议后台任务已恢复"})
+}
+
+func (h *PeopleHandler) RebuildMergeSuggestionTask(c *gin.Context) {
+	if err := h.mergeSuggestionService.Rebuild(); err != nil {
+		writeServiceFailure(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "人物合并建议后台任务已重建"})
+}
+
+func (h *PeopleHandler) ListMergeSuggestions(c *gin.Context) {
+	page, pageSize, ok := parsePagination(c)
+	if !ok {
+		return
+	}
+
+	items, total, err := h.mergeSuggestionService.ListPending(page, pageSize)
+	if err != nil {
+		writePeopleError(c, http.StatusInternalServerError, "LIST_FAILED", err.Error())
+		return
+	}
+
+	totalPages := 0
+	if total > 0 {
+		totalPages = int((total + int64(pageSize) - 1) / int64(pageSize))
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Data: model.PagedResponse{
+			Items:      items,
+			Total:      total,
+			Page:       page,
+			PageSize:   pageSize,
+			TotalPages: totalPages,
+		},
+	})
+}
+
+func (h *PeopleHandler) GetMergeSuggestion(c *gin.Context) {
+	suggestionID, ok := parseUintParam(c, "id", "Invalid suggestion ID")
+	if !ok {
+		return
+	}
+
+	item, err := h.mergeSuggestionService.GetPendingByID(suggestionID)
+	if err != nil {
+		writeServiceFailure(c, err)
+		return
+	}
+	if item == nil {
+		writePeopleError(c, http.StatusNotFound, "NOT_FOUND", "Merge suggestion not found")
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{Success: true, Data: item})
+}
+
+func (h *PeopleHandler) ExcludeMergeSuggestionCandidates(c *gin.Context) {
+	suggestionID, ok := parseUintParam(c, "id", "Invalid suggestion ID")
+	if !ok {
+		return
+	}
+
+	var req struct {
+		CandidatePersonIDs []uint `json:"candidate_person_ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+
+	if err := h.mergeSuggestionService.ExcludeCandidates(suggestionID, req.CandidatePersonIDs); err != nil {
+		writeServiceFailure(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "候选人物已剔除"})
+}
+
+func (h *PeopleHandler) ApplyMergeSuggestion(c *gin.Context) {
+	suggestionID, ok := parseUintParam(c, "id", "Invalid suggestion ID")
+	if !ok {
+		return
+	}
+
+	var req struct {
+		CandidatePersonIDs []uint `json:"candidate_person_ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+
+	if err := h.mergeSuggestionService.ApplySuggestion(suggestionID, req.CandidatePersonIDs); err != nil {
+		writeServiceFailure(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "人物合并建议已应用"})
 }
 
 func (h *PeopleHandler) RescanByPath(c *gin.Context) {

@@ -487,7 +487,10 @@ func waitForTaskStatus(t *testing.T, service *photoService, statuses map[string]
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		task := service.GetScanTask()
-		if task != nil && statuses[task.Status] {
+		service.taskMutex.RLock()
+		activeJob := service.activeJob
+		service.taskMutex.RUnlock()
+		if task != nil && statuses[task.Status] && activeJob == nil {
 			return task
 		}
 		time.Sleep(20 * time.Millisecond)

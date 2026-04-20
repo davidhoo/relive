@@ -2363,6 +2363,146 @@ func TestPeopleServiceCategoryBackfillsPhotos(t *testing.T) {
 	assert.Equal(t, model.PersonCategoryFamily, updatedB.TopPersonCategory)
 }
 
+func TestPeopleService_MergePeopleMarksMergeSuggestionsDirty(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	type mergeSuggestionDirtyHookTestHooks interface {
+		setMergeSuggestionDirtyHookForTest(func(string) error)
+	}
+
+	hooks, ok := any(svc).(mergeSuggestionDirtyHookTestHooks)
+	require.True(t, ok)
+
+	var reasons []string
+	hooks.setMergeSuggestionDirtyHookForTest(func(reason string) error {
+		reasons = append(reasons, reason)
+		return nil
+	})
+	t.Cleanup(func() { hooks.setMergeSuggestionDirtyHookForTest(nil) })
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+
+	targetPhoto := &model.Photo{FilePath: "/photos/merge-target.jpg", FileName: "merge-target.jpg", FileSize: 1, FileHash: "merge-target", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	sourcePhoto := &model.Photo{FilePath: "/photos/merge-source.jpg", FileName: "merge-source.jpg", FileSize: 1, FileHash: "merge-source", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(targetPhoto))
+	require.NoError(t, photoRepo.Create(sourcePhoto))
+
+	target := &model.Person{Category: model.PersonCategoryFamily}
+	source := &model.Person{Category: model.PersonCategoryStranger}
+	require.NoError(t, personRepo.Create(target))
+	require.NoError(t, personRepo.Create(source))
+	require.NoError(t, faceRepo.Create(&model.Face{PhotoID: targetPhoto.ID, PersonID: &target.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.95, QualityScore: 0.8, Embedding: encodeEmbedding(t, []float32{1, 0})}))
+	require.NoError(t, faceRepo.Create(&model.Face{PhotoID: sourcePhoto.ID, PersonID: &source.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.95, QualityScore: 0.8, Embedding: encodeEmbedding(t, []float32{0, 1})}))
+	require.NoError(t, personRepo.RefreshStats(target.ID))
+	require.NoError(t, personRepo.RefreshStats(source.ID))
+
+	_, err := svc.MergePeople(target.ID, []uint{source.ID})
+	require.NoError(t, err)
+	require.Equal(t, []string{"merge_people"}, reasons)
+}
+
+func TestPeopleService_SplitPersonMarksMergeSuggestionsDirty(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	type mergeSuggestionDirtyHookTestHooks interface {
+		setMergeSuggestionDirtyHookForTest(func(string) error)
+	}
+
+	hooks, ok := any(svc).(mergeSuggestionDirtyHookTestHooks)
+	require.True(t, ok)
+
+	var reasons []string
+	hooks.setMergeSuggestionDirtyHookForTest(func(reason string) error {
+		reasons = append(reasons, reason)
+		return nil
+	})
+	t.Cleanup(func() { hooks.setMergeSuggestionDirtyHookForTest(nil) })
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+
+	photoA := &model.Photo{FilePath: "/photos/split-a.jpg", FileName: "split-a.jpg", FileSize: 1, FileHash: "split-a", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	photoB := &model.Photo{FilePath: "/photos/split-b.jpg", FileName: "split-b.jpg", FileSize: 1, FileHash: "split-b", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(photoA))
+	require.NoError(t, photoRepo.Create(photoB))
+
+	person := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(person))
+	faceA := &model.Face{PhotoID: photoA.ID, PersonID: &person.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.9, QualityScore: 0.7, Embedding: encodeEmbedding(t, []float32{1, 0})}
+	faceB := &model.Face{PhotoID: photoB.ID, PersonID: &person.ID, BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.92, QualityScore: 0.8, Embedding: encodeEmbedding(t, []float32{0, 1})}
+	require.NoError(t, faceRepo.Create(faceA))
+	require.NoError(t, faceRepo.Create(faceB))
+	require.NoError(t, personRepo.RefreshStats(person.ID))
+
+	_, _, err := svc.SplitPerson([]uint{faceB.ID})
+	require.NoError(t, err)
+	require.Equal(t, []string{"split_person"}, reasons)
+}
+
+func TestPeopleService_MoveFacesMarksMergeSuggestionsDirty(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	type mergeSuggestionDirtyHookTestHooks interface {
+		setMergeSuggestionDirtyHookForTest(func(string) error)
+	}
+
+	hooks, ok := any(svc).(mergeSuggestionDirtyHookTestHooks)
+	require.True(t, ok)
+
+	var reasons []string
+	hooks.setMergeSuggestionDirtyHookForTest(func(reason string) error {
+		reasons = append(reasons, reason)
+		return nil
+	})
+	t.Cleanup(func() { hooks.setMergeSuggestionDirtyHookForTest(nil) })
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+
+	photo := &model.Photo{FilePath: "/photos/move-dirty.jpg", FileName: "move-dirty.jpg", FileSize: 1, FileHash: "move-dirty", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(photo))
+	source := &model.Person{Category: model.PersonCategoryStranger}
+	target := &model.Person{Category: model.PersonCategoryFamily}
+	require.NoError(t, personRepo.Create(source))
+	require.NoError(t, personRepo.Create(target))
+	face := &model.Face{PhotoID: photo.ID, PersonID: &source.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.94, QualityScore: 0.8, Embedding: encodeEmbedding(t, []float32{0, 1})}
+	require.NoError(t, faceRepo.Create(face))
+	require.NoError(t, personRepo.RefreshStats(source.ID))
+
+	_, err := svc.MoveFaces([]uint{face.ID}, target.ID)
+	require.NoError(t, err)
+	require.Equal(t, []string{"move_faces"}, reasons)
+}
+
+func TestPeopleService_UpdatePersonCategoryMarksMergeSuggestionsDirty(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	type mergeSuggestionDirtyHookTestHooks interface {
+		setMergeSuggestionDirtyHookForTest(func(string) error)
+	}
+
+	hooks, ok := any(svc).(mergeSuggestionDirtyHookTestHooks)
+	require.True(t, ok)
+
+	var reasons []string
+	hooks.setMergeSuggestionDirtyHookForTest(func(reason string) error {
+		reasons = append(reasons, reason)
+		return nil
+	})
+	t.Cleanup(func() { hooks.setMergeSuggestionDirtyHookForTest(nil) })
+
+	personRepo := repository.NewPersonRepository(db)
+	person := &model.Person{Category: model.PersonCategoryStranger}
+	require.NoError(t, personRepo.Create(person))
+
+	require.NoError(t, svc.UpdatePersonCategory(person.ID, model.PersonCategoryFamily))
+	require.Equal(t, []string{"update_person_category"}, reasons)
+}
+
 func TestPeopleServiceManualAvatarWins(t *testing.T) {
 	rootDir := t.TempDir()
 	newPhotoPath := createTestImageFile(t, rootDir, "avatar-new.jpg")
@@ -2646,4 +2786,125 @@ func TestPeopleService_ApplyDetectionResult_CleansUpOldFaces(t *testing.T) {
 	updatedPerson, err := personRepo.GetByID(person.ID)
 	require.NoError(t, err)
 	assert.Nil(t, updatedPerson)
+}
+
+func TestPeopleService_ApplyDetectionResultMarksMergeSuggestionsDirty(t *testing.T) {
+	rootDir := t.TempDir()
+	photoPath := createTestImageFile(t, rootDir, "dirty-faces.jpg")
+
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	svc.config.Photos.ThumbnailPath = filepath.Join(rootDir, ".thumbnails")
+
+	type mergeSuggestionDirtyHookTestHooks interface {
+		setMergeSuggestionDirtyHookForTest(func(string) error)
+	}
+
+	hooks, ok := any(svc).(mergeSuggestionDirtyHookTestHooks)
+	require.True(t, ok)
+
+	var reasons []string
+	hooks.setMergeSuggestionDirtyHookForTest(func(reason string) error {
+		reasons = append(reasons, reason)
+		return nil
+	})
+	t.Cleanup(func() { hooks.setMergeSuggestionDirtyHookForTest(nil) })
+
+	photoRepo := repository.NewPhotoRepository(db)
+	jobRepo := repository.NewPeopleJobRepository(db)
+
+	photo := &model.Photo{
+		FilePath: photoPath,
+		FileName: "dirty-faces.jpg",
+		FileSize: 1,
+		FileHash: "hash-dirty-faces",
+		Width:    320,
+		Height:   320,
+		Status:   model.PhotoStatusActive,
+	}
+	require.NoError(t, photoRepo.Create(photo))
+
+	job := &model.PeopleJob{
+		PhotoID:  photo.ID,
+		FilePath: photo.FilePath,
+		Status:   model.PeopleJobStatusProcessing,
+		Source:   model.PeopleJobSourceManual,
+		WorkerID: "worker-1",
+		Priority: 10,
+		QueuedAt: time.Now(),
+	}
+	require.NoError(t, jobRepo.Create(job))
+
+	result := &model.PeopleDetectionResult{
+		Faces: []model.PeopleDetectionFace{
+			{
+				BBox:         model.BoundingBox{X: 0.1, Y: 0.1, Width: 0.2, Height: 0.2},
+				Confidence:   0.95,
+				QualityScore: 0.88,
+				Embedding:    []float32{1, 0, 0},
+			},
+		},
+	}
+
+	err := svc.ApplyDetectionResult(job, photo, result)
+	require.NoError(t, err)
+	require.Equal(t, []string{"apply_detection_result"}, reasons)
+}
+
+func TestPeopleService_TriggerReclusterMarksMergeSuggestionsDirty(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	type mergeSuggestionDirtyHookTestHooks interface {
+		setMergeSuggestionDirtyHookForTest(func(string) error)
+	}
+
+	hooks, ok := any(svc).(mergeSuggestionDirtyHookTestHooks)
+	require.True(t, ok)
+
+	var reasons []string
+	hooks.setMergeSuggestionDirtyHookForTest(func(reason string) error {
+		reasons = append(reasons, reason)
+		return nil
+	})
+	t.Cleanup(func() { hooks.setMergeSuggestionDirtyHookForTest(nil) })
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+
+	targetPhoto := &model.Photo{FilePath: "/photos/recluster-target.jpg", FileName: "recluster-target.jpg", FileSize: 1, FileHash: "recluster-target", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	pendingPhoto := &model.Photo{FilePath: "/photos/recluster-pending.jpg", FileName: "recluster-pending.jpg", FileSize: 1, FileHash: "recluster-pending", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(targetPhoto))
+	require.NoError(t, photoRepo.Create(pendingPhoto))
+
+	person := &model.Person{Category: model.PersonCategoryFamily}
+	require.NoError(t, personRepo.Create(person))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID:       targetPhoto.ID,
+		PersonID:      &person.ID,
+		BBoxX:         0.1,
+		BBoxY:         0.1,
+		BBoxWidth:     0.2,
+		BBoxHeight:    0.2,
+		Confidence:    0.95,
+		QualityScore:  0.9,
+		Embedding:     encodeEmbedding(t, []float32{1, 0}),
+		ClusterStatus: model.FaceClusterStatusAssigned,
+		ClusterScore:  0.98,
+	}))
+	require.NoError(t, personRepo.RefreshStats(person.ID))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID:       pendingPhoto.ID,
+		BBoxX:         0.2,
+		BBoxY:         0.2,
+		BBoxWidth:     0.2,
+		BBoxHeight:    0.2,
+		Confidence:    0.94,
+		QualityScore:  0.88,
+		Embedding:     encodeEmbedding(t, []float32{1, 0.02}),
+		ClusterStatus: model.FaceClusterStatusPending,
+	}))
+
+	result := svc.triggerRecluster()
+	assert.Zero(t, result.Evaluated)
+	require.Equal(t, []string{"trigger_recluster"}, reasons)
 }

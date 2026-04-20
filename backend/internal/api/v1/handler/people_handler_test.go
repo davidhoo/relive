@@ -148,6 +148,93 @@ func (s *stubPeopleService) ApplyDetectionResult(_ *model.PeopleJob, _ *model.Ph
 	return nil
 }
 
+type stubMergeSuggestionService struct {
+	task              *model.PersonMergeSuggestionTask
+	stats             *model.PersonMergeSuggestionStatsResponse
+	logs              []string
+	pending           []model.PersonMergeSuggestionResponse
+	pendingTotal      int64
+	detail            *model.PersonMergeSuggestionResponse
+	listPage          int
+	listPageSize      int
+	detailID          uint
+	excludeID         uint
+	excludeCandidates []uint
+	applyID           uint
+	applyCandidates   []uint
+	pauseCalled       int
+	resumeCalled      int
+	rebuildCalled     int
+	err               error
+}
+
+func (s *stubMergeSuggestionService) GetTask() *model.PersonMergeSuggestionTask {
+	return s.task
+}
+
+func (s *stubMergeSuggestionService) GetStats() (*model.PersonMergeSuggestionStatsResponse, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.stats, nil
+}
+
+func (s *stubMergeSuggestionService) GetBackgroundLogs() []string {
+	return s.logs
+}
+
+func (s *stubMergeSuggestionService) Pause() error {
+	s.pauseCalled++
+	return s.err
+}
+
+func (s *stubMergeSuggestionService) Resume() error {
+	s.resumeCalled++
+	return s.err
+}
+
+func (s *stubMergeSuggestionService) Rebuild() error {
+	s.rebuildCalled++
+	return s.err
+}
+
+func (s *stubMergeSuggestionService) MarkDirty(string) error {
+	return nil
+}
+
+func (s *stubMergeSuggestionService) RunBackgroundSlice() error {
+	return nil
+}
+
+func (s *stubMergeSuggestionService) ExcludeCandidates(suggestionID uint, candidateIDs []uint) error {
+	s.excludeID = suggestionID
+	s.excludeCandidates = append([]uint(nil), candidateIDs...)
+	return s.err
+}
+
+func (s *stubMergeSuggestionService) ApplySuggestion(suggestionID uint, candidateIDs []uint) error {
+	s.applyID = suggestionID
+	s.applyCandidates = append([]uint(nil), candidateIDs...)
+	return s.err
+}
+
+func (s *stubMergeSuggestionService) ListPending(page, pageSize int) ([]model.PersonMergeSuggestionResponse, int64, error) {
+	s.listPage = page
+	s.listPageSize = pageSize
+	if s.err != nil {
+		return nil, 0, s.err
+	}
+	return append([]model.PersonMergeSuggestionResponse(nil), s.pending...), s.pendingTotal, nil
+}
+
+func (s *stubMergeSuggestionService) GetPendingByID(id uint) (*model.PersonMergeSuggestionResponse, error) {
+	s.detailID = id
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.detail, nil
+}
+
 type peopleListPayload struct {
 	Items      []model.PersonResponse `json:"items"`
 	Total      int64                  `json:"total"`
@@ -176,7 +263,7 @@ type peopleHandlerFixture struct {
 	FaceFour     model.Face
 }
 
-func newPeopleHandlerForTest(t *testing.T) (*PeopleHandler, *stubPeopleService, *gorm.DB, *config.Config) {
+func newPeopleHandlerForTest(t *testing.T) (*PeopleHandler, *stubPeopleService, *stubMergeSuggestionService, *gorm.DB, *config.Config) {
 	t.Helper()
 
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -193,9 +280,15 @@ func newPeopleHandlerForTest(t *testing.T) (*PeopleHandler, *stubPeopleService, 
 		stats: &model.PeopleStatsResponse{Total: 10, Pending: 2, Completed: 8},
 		logs:  []string{"line1", "line2"},
 	}
+	mergeSuggestionStub := &stubMergeSuggestionService{
+		task:  &model.PersonMergeSuggestionTask{Status: model.TaskStatusIdle, ProcessedPairs: 7},
+		stats: &model.PersonMergeSuggestionStatsResponse{Total: 3, Pending: 1, Applied: 1, Dismissed: 1, PendingItems: 2},
+		logs:  []string{"merge-line-1", "merge-line-2"},
+	}
 
 	handler := NewPeopleHandler(
 		serviceStub,
+		mergeSuggestionStub,
 		repository.NewPersonRepository(db),
 		repository.NewFaceRepository(db),
 		repository.NewPhotoRepository(db),
@@ -203,13 +296,13 @@ func newPeopleHandlerForTest(t *testing.T) (*PeopleHandler, *stubPeopleService, 
 		cfg,
 	)
 
-	return handler, serviceStub, db, cfg
+	return handler, serviceStub, mergeSuggestionStub, db, cfg
 }
 
 func newPeopleHandlerWithRuntimeForTest(t *testing.T) (*PeopleHandler, service.AnalysisRuntimeService, *gorm.DB) {
 	t.Helper()
 
-	handler, _, db, _ := newPeopleHandlerForTest(t)
+	handler, _, _, db, _ := newPeopleHandlerForTest(t)
 	runtimeService := service.NewAnalysisRuntimeService(db)
 	handler.runtimeService = runtimeService
 	return handler, runtimeService, db
@@ -364,7 +457,7 @@ func ptrTime(t time.Time) *time.Time {
 }
 
 func TestPeopleHandlerListPeople(t *testing.T) {
-	handler, _, db, _ := newPeopleHandlerForTest(t)
+	handler, _, _, db, _ := newPeopleHandlerForTest(t)
 	fixture := seedPeopleHandlerFixture(t, db)
 
 	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people?search=Ali&category=family&page=1&page_size=10", nil, nil, handler.ListPeople)
@@ -379,7 +472,7 @@ func TestPeopleHandlerListPeople(t *testing.T) {
 }
 
 func TestPeopleHandler_GetPeopleIncludesHasAvatar(t *testing.T) {
-	handler, _, db, _ := newPeopleHandlerForTest(t)
+	handler, _, _, db, _ := newPeopleHandlerForTest(t)
 	fixture := seedPeopleHandlerFixture(t, db)
 
 	noAvatar := model.Person{
@@ -410,7 +503,7 @@ func TestPeopleHandler_GetPeopleIncludesHasAvatar(t *testing.T) {
 }
 
 func TestPeopleHandlerGetPerson(t *testing.T) {
-	handler, _, db, _ := newPeopleHandlerForTest(t)
+	handler, _, _, db, _ := newPeopleHandlerForTest(t)
 	fixture := seedPeopleHandlerFixture(t, db)
 
 	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/1", nil, gin.Params{{Key: "id", Value: "1"}}, handler.GetPerson)
@@ -426,7 +519,7 @@ func TestPeopleHandlerGetPerson(t *testing.T) {
 }
 
 func TestPeopleHandler_GetPersonIncludesHasAvatar(t *testing.T) {
-	handler, _, db, _ := newPeopleHandlerForTest(t)
+	handler, _, _, db, _ := newPeopleHandlerForTest(t)
 	fixture := seedPeopleHandlerFixture(t, db)
 
 	noAvatar := model.Person{
@@ -461,7 +554,7 @@ func TestPeopleHandler_GetPersonIncludesHasAvatar(t *testing.T) {
 }
 
 func TestPeopleHandlerGetPersonPhotos(t *testing.T) {
-	handler, _, db, _ := newPeopleHandlerForTest(t)
+	handler, _, _, db, _ := newPeopleHandlerForTest(t)
 	fixture := seedPeopleHandlerFixture(t, db)
 
 	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/1/photos", nil, gin.Params{{Key: "id", Value: "1"}}, handler.GetPersonPhotos)
@@ -475,7 +568,7 @@ func TestPeopleHandlerGetPersonPhotos(t *testing.T) {
 }
 
 func TestPeopleHandlerGetPersonFaces(t *testing.T) {
-	handler, _, db, _ := newPeopleHandlerForTest(t)
+	handler, _, _, db, _ := newPeopleHandlerForTest(t)
 	fixture := seedPeopleHandlerFixture(t, db)
 
 	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/1/faces", nil, gin.Params{{Key: "id", Value: "1"}}, handler.GetPersonFaces)
@@ -489,7 +582,7 @@ func TestPeopleHandlerGetPersonFaces(t *testing.T) {
 }
 
 func TestPeopleHandlerUpdateCategory(t *testing.T) {
-	handler, svc, _, _ := newPeopleHandlerForTest(t)
+	handler, svc, _, _, _ := newPeopleHandlerForTest(t)
 
 	rec := performJSONRequest(t, http.MethodPatch, "/api/v1/people/7/category", []byte(`{"category":"friend"}`), gin.Params{{Key: "id", Value: "7"}}, handler.UpdatePersonCategory)
 
@@ -499,7 +592,7 @@ func TestPeopleHandlerUpdateCategory(t *testing.T) {
 }
 
 func TestPeopleHandlerUpdateName(t *testing.T) {
-	handler, svc, _, _ := newPeopleHandlerForTest(t)
+	handler, svc, _, _, _ := newPeopleHandlerForTest(t)
 
 	rec := performJSONRequest(t, http.MethodPatch, "/api/v1/people/7/name", []byte(`{"name":"Alice Zhang"}`), gin.Params{{Key: "id", Value: "7"}}, handler.UpdatePersonName)
 
@@ -509,7 +602,7 @@ func TestPeopleHandlerUpdateName(t *testing.T) {
 }
 
 func TestPeopleHandlerUpdateAvatar(t *testing.T) {
-	handler, svc, _, _ := newPeopleHandlerForTest(t)
+	handler, svc, _, _, _ := newPeopleHandlerForTest(t)
 
 	rec := performJSONRequest(t, http.MethodPatch, "/api/v1/people/7/avatar", []byte(`{"face_id":12}`), gin.Params{{Key: "id", Value: "7"}}, handler.UpdatePersonAvatar)
 
@@ -519,7 +612,7 @@ func TestPeopleHandlerUpdateAvatar(t *testing.T) {
 }
 
 func TestPeopleHandlerMerge(t *testing.T) {
-	handler, svc, _, _ := newPeopleHandlerForTest(t)
+	handler, svc, _, _, _ := newPeopleHandlerForTest(t)
 
 	rec := performJSONRequest(t, http.MethodPost, "/api/v1/people/merge", []byte(`{"target_person_id":3,"source_person_ids":[4,5]}`), nil, handler.MergePeople)
 
@@ -529,7 +622,7 @@ func TestPeopleHandlerMerge(t *testing.T) {
 }
 
 func TestPeopleHandlerSplit(t *testing.T) {
-	handler, svc, _, _ := newPeopleHandlerForTest(t)
+	handler, svc, _, _, _ := newPeopleHandlerForTest(t)
 	svc.splitResult = &model.Person{ID: 55, Category: model.PersonCategoryAcquaintance}
 
 	rec := performJSONRequest(t, http.MethodPost, "/api/v1/people/split", []byte(`{"face_ids":[8,9]}`), nil, handler.SplitPerson)
@@ -547,7 +640,7 @@ func TestPeopleHandlerSplit(t *testing.T) {
 }
 
 func TestPeopleHandlerMoveFaces(t *testing.T) {
-	handler, svc, _, _ := newPeopleHandlerForTest(t)
+	handler, svc, _, _, _ := newPeopleHandlerForTest(t)
 
 	rec := performJSONRequest(t, http.MethodPost, "/api/v1/people/move-faces", []byte(`{"face_ids":[8,9],"target_person_id":6}`), nil, handler.MoveFaces)
 
@@ -557,7 +650,7 @@ func TestPeopleHandlerMoveFaces(t *testing.T) {
 }
 
 func TestPeopleHandlerTask(t *testing.T) {
-	handler, _, _, _ := newPeopleHandlerForTest(t)
+	handler, _, _, _, _ := newPeopleHandlerForTest(t)
 
 	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/task", nil, nil, handler.GetTask)
 
@@ -569,7 +662,7 @@ func TestPeopleHandlerTask(t *testing.T) {
 }
 
 func TestPeopleHandlerStats(t *testing.T) {
-	handler, _, _, _ := newPeopleHandlerForTest(t)
+	handler, _, _, _, _ := newPeopleHandlerForTest(t)
 
 	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/stats", nil, nil, handler.GetStats)
 
@@ -581,7 +674,7 @@ func TestPeopleHandlerStats(t *testing.T) {
 }
 
 func TestPeopleHandlerBackgroundLogs(t *testing.T) {
-	handler, _, _, _ := newPeopleHandlerForTest(t)
+	handler, _, _, _, _ := newPeopleHandlerForTest(t)
 
 	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/background/logs", nil, nil, handler.GetBackgroundLogs)
 
@@ -591,8 +684,82 @@ func TestPeopleHandlerBackgroundLogs(t *testing.T) {
 	assert.Equal(t, []string{"line1", "line2"}, payload.Lines)
 }
 
+func TestPeopleHandler_GetMergeSuggestionTask(t *testing.T) {
+	handler, _, mergeSvc, _, _ := newPeopleHandlerForTest(t)
+
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/merge-suggestions/task", nil, nil, handler.GetMergeSuggestionTask)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	task := decodeResponseData[model.PersonMergeSuggestionTask](t, resp)
+	assert.Equal(t, mergeSvc.task.Status, task.Status)
+	assert.Equal(t, mergeSvc.task.ProcessedPairs, task.ProcessedPairs)
+}
+
+func TestPeopleHandler_ListMergeSuggestions(t *testing.T) {
+	handler, _, mergeSvc, _, _ := newPeopleHandlerForTest(t)
+	mergeSvc.pending = []model.PersonMergeSuggestionResponse{
+		{ID: 11, Status: model.PersonMergeSuggestionStatusPending, CandidateCount: 2},
+	}
+	mergeSvc.pendingTotal = 1
+
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/merge-suggestions?page=2&page_size=5", nil, nil, handler.ListMergeSuggestions)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	payload := decodeResponseData[model.PagedResponse](t, resp)
+	itemsJSON, err := json.Marshal(payload.Items)
+	require.NoError(t, err)
+	var items []model.PersonMergeSuggestionResponse
+	require.NoError(t, json.Unmarshal(itemsJSON, &items))
+	require.Len(t, items, 1)
+	assert.Equal(t, uint(11), items[0].ID)
+	assert.Equal(t, 2, mergeSvc.listPage)
+	assert.Equal(t, 5, mergeSvc.listPageSize)
+}
+
+func TestPeopleHandler_GetMergeSuggestionDetail(t *testing.T) {
+	handler, _, mergeSvc, _, _ := newPeopleHandlerForTest(t)
+	mergeSvc.detail = &model.PersonMergeSuggestionResponse{
+		ID:             21,
+		Status:         model.PersonMergeSuggestionStatusPending,
+		CandidateCount: 1,
+		Items: []model.PersonMergeSuggestionItemResponse{
+			{CandidatePersonID: 31, Status: model.PersonMergeSuggestionItemStatusPending},
+		},
+	}
+
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/merge-suggestions/21", nil, gin.Params{{Key: "id", Value: "21"}}, handler.GetMergeSuggestion)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	item := decodeResponseData[model.PersonMergeSuggestionResponse](t, resp)
+	assert.Equal(t, uint(21), item.ID)
+	assert.Equal(t, uint(21), mergeSvc.detailID)
+}
+
+func TestPeopleHandler_ExcludeMergeSuggestionCandidates(t *testing.T) {
+	handler, _, mergeSvc, _, _ := newPeopleHandlerForTest(t)
+
+	rec := performJSONRequest(t, http.MethodPost, "/api/v1/people/merge-suggestions/33/exclude", []byte(`{"candidate_person_ids":[7,8]}`), gin.Params{{Key: "id", Value: "33"}}, handler.ExcludeMergeSuggestionCandidates)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, uint(33), mergeSvc.excludeID)
+	assert.Equal(t, []uint{7, 8}, mergeSvc.excludeCandidates)
+}
+
+func TestPeopleHandler_ApplyMergeSuggestion(t *testing.T) {
+	handler, _, mergeSvc, _, _ := newPeopleHandlerForTest(t)
+
+	rec := performJSONRequest(t, http.MethodPost, "/api/v1/people/merge-suggestions/44/apply", []byte(`{"candidate_person_ids":[9,10]}`), gin.Params{{Key: "id", Value: "44"}}, handler.ApplyMergeSuggestion)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, uint(44), mergeSvc.applyID)
+	assert.Equal(t, []uint{9, 10}, mergeSvc.applyCandidates)
+}
+
 func TestPeopleHandlerRescanByPath(t *testing.T) {
-	handler, svc, _, _ := newPeopleHandlerForTest(t)
+	handler, svc, _, _, _ := newPeopleHandlerForTest(t)
 	svc.task = nil
 	svc.enqueueByPathCount = 12
 
@@ -609,7 +776,7 @@ func TestPeopleHandlerRescanByPath(t *testing.T) {
 }
 
 func TestPeopleHandlerGetPhotoPeople(t *testing.T) {
-	handler, _, db, _ := newPeopleHandlerForTest(t)
+	handler, _, _, db, _ := newPeopleHandlerForTest(t)
 	fixture := seedPeopleHandlerFixture(t, db)
 
 	rec := performJSONRequest(t, http.MethodGet, "/api/v1/photos/1/people", nil, gin.Params{{Key: "id", Value: "1"}}, handler.GetPhotoPeople)
@@ -627,7 +794,7 @@ func TestPeopleHandlerGetPhotoPeople(t *testing.T) {
 }
 
 func TestPeopleHandlerGetFaceThumbnail(t *testing.T) {
-	handler, _, db, cfg := newPeopleHandlerForTest(t)
+	handler, _, _, db, cfg := newPeopleHandlerForTest(t)
 	fixture := seedPeopleHandlerFixture(t, db)
 	thumbnailPath := filepath.Join(cfg.Photos.ThumbnailPath, fixture.FaceOne.ThumbnailPath)
 	require.NoError(t, os.MkdirAll(filepath.Dir(thumbnailPath), 0o755))
@@ -640,7 +807,7 @@ func TestPeopleHandlerGetFaceThumbnail(t *testing.T) {
 }
 
 func TestPeopleHandlerGetFaceThumbnailGeneratesMissingCrop(t *testing.T) {
-	handler, _, db, cfg := newPeopleHandlerForTest(t)
+	handler, _, _, db, cfg := newPeopleHandlerForTest(t)
 	sourceDir := t.TempDir()
 	photoPath := filepath.Join(sourceDir, "photo.jpg")
 	require.NoError(t, imaging.Save(imaging.New(320, 320, color.NRGBA{R: 120, G: 80, B: 40, A: 255}), photoPath))
@@ -678,7 +845,7 @@ func TestPeopleHandlerGetFaceThumbnailGeneratesMissingCrop(t *testing.T) {
 }
 
 func TestPeopleHandlerStatsError(t *testing.T) {
-	handler, svc, _, _ := newPeopleHandlerForTest(t)
+	handler, svc, _, _, _ := newPeopleHandlerForTest(t)
 	svc.err = errors.New("stats failed")
 
 	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/stats", nil, nil, handler.GetStats)

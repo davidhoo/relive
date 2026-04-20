@@ -133,3 +133,68 @@ ml:
 		t.Fatalf("expected legacy ml.timeout to map to people.timeout, got %d", cfg.People.Timeout)
 	}
 }
+
+func TestLoadDefaultsPeopleMergeSuggestionConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+
+	writeTestFile(t, configPath, `server:
+  host: "0.0.0.0"
+  port: 8080
+  mode: "debug"
+database:
+  type: "sqlite"
+  path: "/tmp/relive.db"
+  auto_migrate: true
+photos:
+  root_path: "/tmp/photos"
+security:
+  jwt_Secret: "base-secret"
+people:
+  ml_endpoint: "http://localhost:5050"
+  timeout: 15
+`)
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.People.MergeSuggestionThreshold != 0.62 {
+		t.Fatalf("expected default merge_suggestion_threshold 0.62, got %v", cfg.People.MergeSuggestionThreshold)
+	}
+	if cfg.People.MergeSuggestionMaxPairsPerRun != 200 {
+		t.Fatalf("expected default merge_suggestion_max_pairs_per_run 200, got %d", cfg.People.MergeSuggestionMaxPairsPerRun)
+	}
+	if cfg.People.MergeSuggestionBatchSize != 100 {
+		t.Fatalf("expected default merge_suggestion_batch_size 100, got %d", cfg.People.MergeSuggestionBatchSize)
+	}
+	if cfg.People.MergeSuggestionCooldownSeconds != 300 {
+		t.Fatalf("expected default merge_suggestion_cooldown_seconds 300, got %d", cfg.People.MergeSuggestionCooldownSeconds)
+	}
+}
+
+func TestLoadRejectsInvalidPeopleMergeSuggestionConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+
+	writeTestFile(t, configPath, `server:
+  host: "0.0.0.0"
+  port: 8080
+  mode: "debug"
+database:
+  type: "sqlite"
+  path: "/tmp/relive.db"
+  auto_migrate: true
+photos:
+  root_path: "/tmp/photos"
+security:
+  jwt_Secret: "base-secret"
+people:
+  merge_suggestion_batch_size: -1
+`)
+
+	if _, err := Load(configPath); err == nil {
+		t.Fatal("expected Load to reject invalid people.merge_suggestion_batch_size")
+	}
+}
