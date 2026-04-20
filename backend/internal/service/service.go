@@ -14,6 +14,7 @@ import (
 type Services struct {
 	Photo           PhotoService
 	People          PeopleService
+	MergeSuggestion PersonMergeSuggestionService
 	Thumbnail       ThumbnailService
 	GeocodeTask     GeocodeTaskService
 	Display         DisplayService
@@ -68,8 +69,20 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	if cfg != nil && cfg.People.MLEndpoint != "" {
 		peopleClient = mlclient.New(cfg.People.MLEndpoint, time.Duration(cfg.People.Timeout)*time.Second)
 	}
-	peopleService := NewPeopleService(db, repos.Photo, repos.Face, repos.Person, repos.PeopleJob, repos.CannotLink, cfg, peopleClient, runtimeService)
-	photoService.SetPeopleService(peopleService)
+	peopleSvc := NewPeopleService(db, repos.Photo, repos.Face, repos.Person, repos.PeopleJob, repos.CannotLink, cfg, peopleClient, runtimeService)
+	mergeSuggestionService := NewPersonMergeSuggestionService(
+		db,
+		repos.Photo,
+		repos.Face,
+		repos.Person,
+		repos.PeopleJob,
+		repos.CannotLink,
+		repos.MergeSuggestion,
+		configService,
+		cfg,
+	)
+	peopleSvc.(*peopleService).setMergeSuggestionDirtyHook(mergeSuggestionService.MarkDirty)
+	photoService.SetPeopleService(peopleSvc)
 	displayService := NewDisplayService(db, repos.Photo, repos.DisplayRecord, repos.Device, repos.Event, configService, cfg)
 
 	// 创建事件聚类服务并注入到 photoService
@@ -77,7 +90,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	photoService.SetEventClusteringService(eventClusteringService)
 
 	// 创建定时任务调度器
-	scheduler := NewTaskScheduler(analysisService, displayService, photoService, repos.ThumbnailJob, repos.GeocodeJob)
+	scheduler := NewTaskScheduler(analysisService, displayService, photoService, mergeSuggestionService, repos.ThumbnailJob, repos.GeocodeJob)
 
 	// 创建提示词配置服务
 	promptService := NewPromptService(repos.Config)
@@ -103,7 +116,8 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 
 	return &Services{
 		Photo:           photoService,
-		People:          peopleService,
+		People:          peopleSvc,
+		MergeSuggestion: mergeSuggestionService,
 		Thumbnail:       thumbnailService,
 		GeocodeTask:     geocodeTaskService,
 		Display:         displayService,
