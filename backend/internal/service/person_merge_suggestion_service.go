@@ -224,7 +224,7 @@ func (s *personMergeSuggestionService) MarkDirty(reason string) error {
 	s.state.Dirty = true
 	s.state.CursorTargetID = 0
 	if reason != "" {
-		s.appendBackgroundLogLocked("人物合并建议已标记脏数据: " + reason)
+		s.appendBackgroundLogLocked("合并建议待更新: " + reason)
 	}
 	return s.saveStateLocked()
 }

@@ -1683,11 +1683,13 @@ func (s *peopleService) markComponentPending(component []*model.Face, score floa
 	}
 
 	now := time.Now()
+	// 增加重试次数（用于退避策略）
 	if err := s.db.Model(&model.Face{}).Where("id IN ?", ids).Updates(map[string]interface{}{
 		"person_id":      nil,
 		"cluster_status": model.FaceClusterStatusPending,
 		"cluster_score":  score,
 		"clustered_at":   &now,
+		"retry_count":    gorm.Expr("retry_count + 1"),
 	}).Error; err != nil {
 		return err
 	}
@@ -1700,6 +1702,7 @@ func (s *peopleService) markComponentPending(component []*model.Face, score floa
 		face.ClusterStatus = model.FaceClusterStatusPending
 		face.ClusterScore = score
 		face.ClusteredAt = &now
+		face.RetryCount++
 	}
 
 	return nil
@@ -1722,6 +1725,7 @@ func (s *peopleService) createPersonFromComponent(component []*model.Face, score
 			"cluster_status": model.FaceClusterStatusAssigned,
 			"cluster_score":  score,
 			"clustered_at":   &now,
+			"retry_count":    0, // 聚类成功，重置重试次数
 		}).Error
 	}); err != nil {
 		return nil, err
@@ -1736,6 +1740,7 @@ func (s *peopleService) createPersonFromComponent(component []*model.Face, score
 		face.ClusterStatus = model.FaceClusterStatusAssigned
 		face.ClusterScore = score
 		face.ClusteredAt = &now
+		face.RetryCount = 0
 	}
 
 	if err := s.syncPersonState(person.ID); err != nil {
@@ -1845,6 +1850,7 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 				"cluster_status": model.FaceClusterStatusAssigned,
 				"cluster_score":  componentScore,
 				"clustered_at":   &now,
+				"retry_count":    0, // 聚类成功，重置重试次数
 			}); err != nil {
 				return nil, nil, err
 			}
@@ -1856,6 +1862,7 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 				face.ClusterStatus = model.FaceClusterStatusAssigned
 				face.ClusterScore = componentScore
 				face.ClusteredAt = &now
+				face.RetryCount = 0
 			}
 			affectedPersonIDs[personID] = struct{}{}
 			// Also sync previous persons that lost faces

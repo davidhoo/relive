@@ -213,26 +213,9 @@
                 队列已清空，等待新任务入队
               </div>
 
-              <div v-if="clusteringPending > 0" class="queue-progress">
-                <div class="queue-progress-header">
-                  <span>聚类积压</span>
-                  <span class="queue-progress-numbers">{{ clusteringPending }}</span>
-                </div>
-                <div class="queue-progress-detail">
-                  未聚类 {{ stats.pending_faces_never_clustered }} · 已重试 {{ stats.pending_faces_retried }}
-                </div>
-              </div>
-              <div v-else class="queue-empty">
-                没有待聚类人脸积压
-              </div>
-
-              <div v-if="task?.current_message" class="task-phase">
-                <span class="task-phase-label">{{ taskPhaseLabel }}</span>
-                <span class="task-phase-message">{{ task.current_message }}</span>
-              </div>
-
               <div class="task-summary">
-                <span>累计完成 <strong>{{ stats.completed }}</strong></span>
+                <span>待聚类 {{ clusteringPending }}<template v-if="stats.pending_faces_backoff > 0"> · 休眠 {{ stats.pending_faces_backoff }}</template></span>
+                <span> · 累计完成 <strong>{{ stats.completed }}</strong></span>
                 <span v-if="stats.failed > 0"> · 失败 <strong class="danger">{{ stats.failed }}</strong></span>
               </div>
             </div>
@@ -396,6 +379,8 @@ const stats = ref<PeopleStats>({
   pending_faces_total: 0,
   pending_faces_never_clustered: 0,
   pending_faces_retried: 0,
+  pending_faces_active: 0,
+  pending_faces_backoff: 0,
 })
 const backgroundLogs = ref<string[]>([])
 const people = ref<Person[]>([])
@@ -1027,6 +1012,11 @@ onBeforeUnmount(() => {
 .queue-progress-numbers {
   font-weight: 600;
   color: var(--color-text-primary);
+}
+
+.backoff-hint {
+  color: var(--color-text-placeholder);
+  font-size: 12px;
 }
 
 .queue-empty {

@@ -36,6 +36,7 @@ type Face struct {
 	ManualLockedAt   *time.Time `json:"manual_locked_at,omitempty"`
 
 	ReclusterGeneration int `gorm:"not null;default:0" json:"recluster_generation"`
+	RetryCount          int `gorm:"not null;default:0" json:"retry_count"` // 聚类失败重试次数，用于退避策略
 }
 
 func (Face) TableName() string {

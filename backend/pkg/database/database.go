@@ -177,6 +177,10 @@ func AutoMigrate(db *gorm.DB) error {
 		log.Printf("[database] warning: people feedback index migration failed: %v", err)
 	}
 
+	if err := migrateFaceRetryCount(db); err != nil {
+		log.Printf("[database] warning: face retry_count migration failed: %v", err)
+	}
+
 	return nil
 }
 
@@ -481,6 +485,29 @@ func migrateEnumValidation(db *gorm.DB) error {
 	}
 
 	log.Printf("[database] enum validation migration completed")
+	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
+	return nil
+}
+
+// migrateFaceRetryCount 添加 faces.retry_count 字段用于聚类退避策略
+func migrateFaceRetryCount(db *gorm.DB) error {
+	const migrationKey = "migration.face_retry_count_v1"
+
+	var cfg model.AppConfig
+	if err := db.Where("key = ?", migrationKey).First(&cfg).Error; err == nil {
+		return nil
+	}
+
+	log.Printf("[database] adding retry_count column to faces table...")
+
+	// 检查列是否已存在
+	if !db.Migrator().HasColumn(&model.Face{}, "retry_count") {
+		if err := db.Exec("ALTER TABLE faces ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0").Error; err != nil {
+			return fmt.Errorf("add retry_count column: %w", err)
+		}
+	}
+
+	log.Printf("[database] retry_count column added")
 	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
 	return nil
 }
