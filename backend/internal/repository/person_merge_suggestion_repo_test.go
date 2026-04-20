@@ -134,6 +134,15 @@ func TestPersonMergeSuggestionRepository_MarkItemsMerged(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, mergedItems, 1)
 	assert.Equal(t, uint(501), mergedItems[0].CandidatePersonID)
+
+	obsoleteItems, err := repo.GetItems(suggestionID, model.PersonMergeSuggestionItemStatusObsolete)
+	require.NoError(t, err)
+	require.Len(t, obsoleteItems, 1)
+	assert.Equal(t, uint(502), obsoleteItems[0].CandidatePersonID)
+
+	pendingItems, err := repo.GetItems(suggestionID, model.PersonMergeSuggestionItemStatusPending)
+	require.NoError(t, err)
+	assert.Empty(t, pendingItems)
 }
 
 func TestPersonMergeSuggestionRepository_CandidateCanOnlyBelongToOnePendingSuggestion(t *testing.T) {
