@@ -145,6 +145,16 @@ func (r *personMergeSuggestionRepository) MarkItemsStatus(suggestionID uint, can
 	}
 
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		var pendingSuggestionCount int64
+		if err := tx.Model(&model.PersonMergeSuggestion{}).
+			Where("id = ? AND status = ?", suggestionID, model.PersonMergeSuggestionStatusPending).
+			Count(&pendingSuggestionCount).Error; err != nil {
+			return err
+		}
+		if pendingSuggestionCount == 0 {
+			return nil
+		}
+
 		updateResult := tx.Model(&model.PersonMergeSuggestionItem{}).
 			Where("suggestion_id = ? AND candidate_person_id IN ? AND status = ?", suggestionID, candidateIDs, model.PersonMergeSuggestionItemStatusPending).
 			Update("status", status)
@@ -162,12 +172,16 @@ func (r *personMergeSuggestionRepository) MarkItemsStatus(suggestionID uint, can
 				Update("status", model.PersonMergeSuggestionItemStatusObsolete).Error; err != nil {
 				return err
 			}
-			return tx.Model(&model.PersonMergeSuggestion{}).
-				Where("id = ?", suggestionID).
+			updateSuggestionResult := tx.Model(&model.PersonMergeSuggestion{}).
+				Where("id = ? AND status = ?", suggestionID, model.PersonMergeSuggestionStatusPending).
 				Updates(map[string]interface{}{
 					"status":      model.PersonMergeSuggestionStatusApplied,
 					"reviewed_at": &now,
-				}).Error
+				})
+			if updateSuggestionResult.Error != nil {
+				return updateSuggestionResult.Error
+			}
+			return nil
 		}
 
 		var pendingCount int64
@@ -188,21 +202,29 @@ func (r *personMergeSuggestionRepository) MarkItemsStatus(suggestionID uint, can
 		}
 		if mergedCount > 0 {
 			now := time.Now()
-			return tx.Model(&model.PersonMergeSuggestion{}).
-				Where("id = ?", suggestionID).
+			updateSuggestionResult := tx.Model(&model.PersonMergeSuggestion{}).
+				Where("id = ? AND status = ?", suggestionID, model.PersonMergeSuggestionStatusPending).
 				Updates(map[string]interface{}{
 					"status":      model.PersonMergeSuggestionStatusApplied,
 					"reviewed_at": &now,
-				}).Error
+				})
+			if updateSuggestionResult.Error != nil {
+				return updateSuggestionResult.Error
+			}
+			return nil
 		}
 
 		now := time.Now()
-		return tx.Model(&model.PersonMergeSuggestion{}).
-			Where("id = ?", suggestionID).
+		updateSuggestionResult := tx.Model(&model.PersonMergeSuggestion{}).
+			Where("id = ? AND status = ?", suggestionID, model.PersonMergeSuggestionStatusPending).
 			Updates(map[string]interface{}{
 				"status":      model.PersonMergeSuggestionStatusDismissed,
 				"reviewed_at": &now,
-			}).Error
+			})
+		if updateSuggestionResult.Error != nil {
+			return updateSuggestionResult.Error
+		}
+		return nil
 	})
 }
 
@@ -234,27 +256,15 @@ func (r *personMergeSuggestionRepository) FindPendingSuggestionByCandidate(candi
 }
 
 func (r *personMergeSuggestionRepository) markEmptyPendingSuggestionsObsolete(tx *gorm.DB) error {
-	var pendingSuggestions []model.PersonMergeSuggestion
-	if err := tx.Where("status = ?", model.PersonMergeSuggestionStatusPending).Find(&pendingSuggestions).Error; err != nil {
-		return err
-	}
+	pendingItemsSubquery := tx.Model(&model.PersonMergeSuggestionItem{}).
+		Select("1").
+		Where("person_merge_suggestion_items.suggestion_id = person_merge_suggestions.id").
+		Where("person_merge_suggestion_items.status = ?", model.PersonMergeSuggestionItemStatusPending)
 
-	for _, suggestion := range pendingSuggestions {
-		var pendingCount int64
-		if err := tx.Model(&model.PersonMergeSuggestionItem{}).
-			Where("suggestion_id = ? AND status = ?", suggestion.ID, model.PersonMergeSuggestionItemStatusPending).
-			Count(&pendingCount).Error; err != nil {
-			return err
-		}
-		if pendingCount == 0 {
-			if err := tx.Model(&model.PersonMergeSuggestion{}).
-				Where("id = ?", suggestion.ID).
-				Update("status", model.PersonMergeSuggestionStatusObsolete).Error; err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return tx.Model(&model.PersonMergeSuggestion{}).
+		Where("status = ?", model.PersonMergeSuggestionStatusPending).
+		Where("NOT EXISTS (?)", pendingItemsSubquery).
+		Update("status", model.PersonMergeSuggestionStatusObsolete).Error
 }
 
 func uniqueCandidateIDs(items []model.PersonMergeSuggestionItem) []uint {

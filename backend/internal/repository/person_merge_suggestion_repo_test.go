@@ -277,3 +277,36 @@ func TestPersonMergeSuggestionRepository_ReplacePendingForTargetWithEmptyItems(t
 	require.NotNil(t, oldSuggestion)
 	assert.Equal(t, model.PersonMergeSuggestionStatusObsolete, oldSuggestion.Status)
 }
+
+func TestPersonMergeSuggestionRepository_MarkItemsStatusOnTerminalSuggestionNoOp(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	repo := NewPersonMergeSuggestionRepository(db)
+
+	require.NoError(t, repo.ReplacePendingForTarget(1000, model.PersonCategoryFamily, []model.PersonMergeSuggestionItem{
+		{CandidatePersonID: 1001, SimilarityScore: 0.95, Rank: 1},
+		{CandidatePersonID: 1002, SimilarityScore: 0.89, Rank: 2},
+	}))
+
+	suggestions, _, err := repo.ListPending(1, 10)
+	require.NoError(t, err)
+	require.Len(t, suggestions, 1)
+	suggestionID := suggestions[0].ID
+
+	require.NoError(t, repo.UpdateSuggestionStatus(suggestionID, model.PersonMergeSuggestionStatusDismissed, nil))
+	require.NoError(t, repo.MarkItemsStatus(suggestionID, []uint{1001}, model.PersonMergeSuggestionItemStatusMerged))
+
+	current, err := repo.GetByID(suggestionID)
+	require.NoError(t, err)
+	require.NotNil(t, current)
+	assert.Equal(t, model.PersonMergeSuggestionStatusDismissed, current.Status)
+
+	pendingItems, err := repo.GetItems(suggestionID, model.PersonMergeSuggestionItemStatusPending)
+	require.NoError(t, err)
+	require.Len(t, pendingItems, 2)
+
+	mergedItems, err := repo.GetItems(suggestionID, model.PersonMergeSuggestionItemStatusMerged)
+	require.NoError(t, err)
+	assert.Empty(t, mergedItems)
+}
