@@ -4,6 +4,10 @@ FROM node:20-alpine AS frontend-builder
 
 WORKDIR /frontend
 
+# 配置 npm 国内镜像
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+RUN npm config set registry ${NPM_REGISTRY}
+
 # 复制前端依赖文件
 COPY frontend/package*.json ./
 RUN npm ci
@@ -21,6 +25,10 @@ RUN npm run build
 FROM golang:1.26-alpine AS backend-builder
 
 WORKDIR /app
+
+# 配置 Alpine 国内镜像
+ARG ALPINE_MIRROR=https://mirrors.aliyun.com/alpine
+RUN sed -i "s#https://dl-cdn.alpinelinux.org/alpine#${ALPINE_MIRROR}#g" /etc/apk/repositories
 
 # 安装依赖（包括 g++ 用于编译 goheif/libde265）
 RUN apk add --no-cache gcc g++ musl-dev sqlite-dev
@@ -61,6 +69,10 @@ WORKDIR /app
 FROM alpine:3.21
 
 WORKDIR /app
+
+# 配置 Alpine 国内镜像
+ARG ALPINE_MIRROR=https://mirrors.aliyun.com/alpine
+RUN sed -i "s#https://dl-cdn.alpinelinux.org/alpine#${ALPINE_MIRROR}#g" /etc/apk/repositories
 
 # 安装运行时依赖
 RUN apk add --no-cache \
