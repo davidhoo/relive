@@ -173,3 +173,107 @@ func TestPersonMergeSuggestionRepository_CandidateCanOnlyBelongToOnePendingSugge
 	require.NoError(t, err)
 	assert.Empty(t, itemsForOld)
 }
+
+func TestPersonMergeSuggestionRepository_MarkItemsMergedWithStaleCandidateNoOp(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	repo := NewPersonMergeSuggestionRepository(db)
+
+	require.NoError(t, repo.ReplacePendingForTarget(700, model.PersonCategoryFamily, []model.PersonMergeSuggestionItem{
+		{CandidatePersonID: 701, SimilarityScore: 0.95, Rank: 1},
+		{CandidatePersonID: 702, SimilarityScore: 0.89, Rank: 2},
+	}))
+
+	suggestions, _, err := repo.ListPending(1, 10)
+	require.NoError(t, err)
+	require.Len(t, suggestions, 1)
+	suggestionID := suggestions[0].ID
+
+	require.NoError(t, repo.MarkItemsStatus(suggestionID, []uint{799}, model.PersonMergeSuggestionItemStatusMerged))
+
+	current, err := repo.GetByID(suggestionID)
+	require.NoError(t, err)
+	require.NotNil(t, current)
+	assert.Equal(t, model.PersonMergeSuggestionStatusPending, current.Status)
+	assert.Nil(t, current.ReviewedAt)
+
+	pendingItems, err := repo.GetItems(suggestionID, model.PersonMergeSuggestionItemStatusPending)
+	require.NoError(t, err)
+	require.Len(t, pendingItems, 2)
+	mergedItems, err := repo.GetItems(suggestionID, model.PersonMergeSuggestionItemStatusMerged)
+	require.NoError(t, err)
+	assert.Empty(t, mergedItems)
+	obsoleteItems, err := repo.GetItems(suggestionID, model.PersonMergeSuggestionItemStatusObsolete)
+	require.NoError(t, err)
+	assert.Empty(t, obsoleteItems)
+}
+
+func TestPersonMergeSuggestionRepository_MarkItemsMergedOnTerminalItemNoOp(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	repo := NewPersonMergeSuggestionRepository(db)
+
+	require.NoError(t, repo.ReplacePendingForTarget(800, model.PersonCategoryFamily, []model.PersonMergeSuggestionItem{
+		{CandidatePersonID: 801, SimilarityScore: 0.95, Rank: 1},
+		{CandidatePersonID: 802, SimilarityScore: 0.89, Rank: 2},
+	}))
+
+	suggestions, _, err := repo.ListPending(1, 10)
+	require.NoError(t, err)
+	require.Len(t, suggestions, 1)
+	suggestionID := suggestions[0].ID
+
+	require.NoError(t, repo.MarkItemsStatus(suggestionID, []uint{801}, model.PersonMergeSuggestionItemStatusExcluded))
+	require.NoError(t, repo.MarkItemsStatus(suggestionID, []uint{801}, model.PersonMergeSuggestionItemStatusMerged))
+
+	current, err := repo.GetByID(suggestionID)
+	require.NoError(t, err)
+	require.NotNil(t, current)
+	assert.Equal(t, model.PersonMergeSuggestionStatusPending, current.Status)
+
+	excludedItems, err := repo.GetItems(suggestionID, model.PersonMergeSuggestionItemStatusExcluded)
+	require.NoError(t, err)
+	require.Len(t, excludedItems, 1)
+	assert.Equal(t, uint(801), excludedItems[0].CandidatePersonID)
+
+	pendingItems, err := repo.GetItems(suggestionID, model.PersonMergeSuggestionItemStatusPending)
+	require.NoError(t, err)
+	require.Len(t, pendingItems, 1)
+	assert.Equal(t, uint(802), pendingItems[0].CandidatePersonID)
+
+	mergedItems, err := repo.GetItems(suggestionID, model.PersonMergeSuggestionItemStatusMerged)
+	require.NoError(t, err)
+	assert.Empty(t, mergedItems)
+}
+
+func TestPersonMergeSuggestionRepository_ReplacePendingForTargetWithEmptyItems(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	repo := NewPersonMergeSuggestionRepository(db)
+
+	require.NoError(t, repo.ReplacePendingForTarget(900, model.PersonCategoryFamily, []model.PersonMergeSuggestionItem{
+		{CandidatePersonID: 901, SimilarityScore: 0.95, Rank: 1},
+		{CandidatePersonID: 902, SimilarityScore: 0.89, Rank: 2},
+	}))
+
+	before, total, err := repo.ListPending(1, 10)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), total)
+	require.Len(t, before, 1)
+	oldID := before[0].ID
+
+	require.NoError(t, repo.ReplacePendingForTarget(900, model.PersonCategoryFamily, nil))
+
+	after, total, err := repo.ListPending(1, 10)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), total)
+	assert.Empty(t, after)
+
+	oldSuggestion, err := repo.GetByID(oldID)
+	require.NoError(t, err)
+	require.NotNil(t, oldSuggestion)
+	assert.Equal(t, model.PersonMergeSuggestionStatusObsolete, oldSuggestion.Status)
+}

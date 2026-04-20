@@ -59,6 +59,10 @@ func (r *personMergeSuggestionRepository) ReplacePendingForTarget(targetPersonID
 			}
 		}
 
+		if len(items) == 0 {
+			return nil
+		}
+
 		suggestion := &model.PersonMergeSuggestion{
 			TargetPersonID:         targetPersonID,
 			TargetCategorySnapshot: targetCategory,
@@ -68,10 +72,6 @@ func (r *personMergeSuggestionRepository) ReplacePendingForTarget(targetPersonID
 		}
 		if err := tx.Create(suggestion).Error; err != nil {
 			return err
-		}
-
-		if len(items) == 0 {
-			return nil
 		}
 
 		records := make([]model.PersonMergeSuggestionItem, 0, len(items))
@@ -145,10 +145,14 @@ func (r *personMergeSuggestionRepository) MarkItemsStatus(suggestionID uint, can
 	}
 
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&model.PersonMergeSuggestionItem{}).
-			Where("suggestion_id = ? AND candidate_person_id IN ?", suggestionID, candidateIDs).
-			Update("status", status).Error; err != nil {
-			return err
+		updateResult := tx.Model(&model.PersonMergeSuggestionItem{}).
+			Where("suggestion_id = ? AND candidate_person_id IN ? AND status = ?", suggestionID, candidateIDs, model.PersonMergeSuggestionItemStatusPending).
+			Update("status", status)
+		if updateResult.Error != nil {
+			return updateResult.Error
+		}
+		if updateResult.RowsAffected == 0 {
+			return nil
 		}
 
 		if status == model.PersonMergeSuggestionItemStatusMerged {
