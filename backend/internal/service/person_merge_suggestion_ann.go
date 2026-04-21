@@ -8,10 +8,10 @@ import (
 )
 
 const (
-	annSearchK           = 50            // neighbors per prototype query
-	annHNSWM             = 16            // max neighbors per node (standard for 512-dim embeddings)
-	annHNSWEfSearch      = 100           // search beam width; high value ensures recall near threshold boundary
-	annRebuildCooldown   = 10 * time.Minute // min interval between ANN rebuilds triggered by MarkDirty
+	annSearchK         = 50             // neighbors per prototype query
+	annHNSWM           = 8              // max neighbors per node; 8 halves build time vs 16 with negligible recall loss at this scale
+	annHNSWEfSearch    = 100            // search beam width; high value ensures recall near threshold boundary
+	annRebuildCooldown = 30 * time.Minute // min interval between ANN rebuilds triggered by MarkDirty
 )
 
 // annIndex is a cached HNSW nearest-neighbor index over all person prototype embeddings.
