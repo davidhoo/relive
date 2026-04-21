@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.3] - 2026-04-21
+
+### Performance
+- **ANN 预过滤应用于人脸聚类（~100x 加速）** — `attachComponentToExistingPersonWithEmbeddings` 的 O(22K) 全量人物扫描是 NAS 持续 CPU 100% 的根本原因（86K 待处理面部 × 22K 人物 × 5 原型 = 每批约 550 万次余弦计算）。现在直接复用合并建议服务中已构建的 HNSW 索引，将每次 attach 的候选集从 22K 压缩到约 50 个，CPU 预计从 ~100% 降至 ~5%。
+- **原型数据 TTL 缓存** — 人脸聚类不再在每批 50 张面部时重新加载全部 22K 人物原型（约 220K 数据库行 + 79K JSON 解码），改为 5 分钟 TTL 缓存。
+- **修复聚类空转循环** — `GetPendingStats().Total == 0` 改为 `.Active == 0`，避免 86K 面部全部进入退避期时出现紧循环。
+
+### Changed
+- `personMergeSuggestionService` 新增 `annMu sync.Mutex`，`FindCandidates` 方法支持并发调用（人脸聚类与合并建议后台任务可安全并行查询 HNSW 图）。
+
+---
+
 ## [1.6.2] - 2026-04-21
 
 ### Changed
