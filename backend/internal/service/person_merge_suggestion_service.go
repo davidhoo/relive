@@ -54,6 +54,7 @@ type personMergeSuggestionService struct {
 	task           *model.PersonMergeSuggestionTask
 	state          personMergeSuggestionState
 	backgroundLogs []string
+	annIdx         *annIndex
 }
 
 type mergeSuggestionCandidate struct {
@@ -211,6 +212,7 @@ func (s *personMergeSuggestionService) Rebuild() error {
 
 	s.state.Dirty = true
 	s.state.CursorTargetID = 0
+	s.annIdx = nil
 	s.task.Status = model.TaskStatusIdle
 	s.task.CurrentMessage = "等待重建巡检"
 	s.appendBackgroundLogLocked("人物合并建议已标记重建")
@@ -223,6 +225,7 @@ func (s *personMergeSuggestionService) MarkDirty(reason string) error {
 
 	s.state.Dirty = true
 	s.state.CursorTargetID = 0
+	s.annIdx = nil
 	if reason != "" {
 		s.appendBackgroundLogLocked("合并建议待更新: " + reason)
 	}
@@ -238,6 +241,18 @@ func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 		s.mu.Unlock()
 		return nil
 	}
+
+	// 冷却时间检查：避免频繁执行繁重的相似度计算
+	// 注意：如果有脏数据（Dirty=true），则跳过冷却检查，立即处理
+	cooldown := 300 // 默认 5 分钟
+	if s.config != nil && s.config.People.MergeSuggestionCooldownSeconds > 0 {
+		cooldown = s.config.People.MergeSuggestionCooldownSeconds
+	}
+	if !s.state.Dirty && !s.state.LastRunAt.IsZero() && time.Since(s.state.LastRunAt) < time.Duration(cooldown)*time.Second {
+		s.mu.Unlock()
+		return nil // 还在冷却期内且无脏数据，跳过
+	}
+
 	// 读取状态后释放锁
 	cursor := s.state.CursorTargetID
 	s.mu.Unlock()
@@ -453,35 +468,13 @@ func (s *personMergeSuggestionService) mergeSuggestionThreshold() float64 {
 }
 
 func (s *personMergeSuggestionService) buildAssignments(targets []*model.Person) (map[uint][]model.PersonMergeSuggestionItem, error) {
-	allPeople, err := s.personRepo.ListAll()
+	// Phase 1: ensure ANN index is ready (lazy build, cached across slices).
+	idx, err := s.ensureANNIndex()
 	if err != nil {
 		return nil, err
 	}
 
-	// 借鉴人脸聚类 runIncrementalClustering 的做法：
-	// 只加载每个人物的 Top-K 原型人脸，而非全部 assigned 人脸
-	// 262K 人脸 → ~21K × 10 = 210K，且 ListTopByPersonIDs 按质量排序取前 N
-	personIDs := make([]uint, 0, len(allPeople))
-	for _, person := range allPeople {
-		if person != nil && person.FaceCount > 0 {
-			personIDs = append(personIDs, person.ID)
-		}
-	}
-	protoFaces, err := s.faceRepo.ListTopByPersonIDs(personIDs, peoplePrototypeCandidates)
-	if err != nil {
-		return nil, err
-	}
-
-	// 复用 selectPersonPrototypes 按人物分组 + 多样性选择
-	protosByPerson := selectPersonPrototypesStatic(protoFaces, peoplePrototypeCount)
-
-	// 预解码原型嵌入
-	candidatePrototypes := make(map[uint][]faceWithEmbedding, len(protosByPerson))
-	for personID, protos := range protosByPerson {
-		candidatePrototypes[personID] = decodeFacesWithEmbeddings(protos)
-	}
-
-	// 预加载所有 cannot-link 约束（优化：避免逐对查询 DB）
+	// Phase 2: load cannot-link constraints.
 	cannotLinkCache := make(map[uint]map[uint]bool)
 	allCannotLinks, err := s.cannotLinkRepo.ListAll()
 	if err != nil {
@@ -498,42 +491,52 @@ func (s *personMergeSuggestionService) buildAssignments(targets []*model.Person)
 		cannotLinkCache[cl.PersonIDB][cl.PersonIDA] = true
 	}
 
+	// Phase 3: ANN candidate generation — serialized because hnsw.Graph is not thread-safe.
+	candidatesByTarget := make(map[uint]map[uint]struct{}, len(targets))
+	for _, target := range targets {
+		if target == nil {
+			continue
+		}
+		targetProtos := idx.personProtos[target.ID]
+		if len(targetProtos) == 0 {
+			continue
+		}
+		candidatesByTarget[target.ID] = idx.annCandidates(target.ID, targetProtos, annSearchK)
+	}
+
+	// Phase 4: exact re-scoring on shortlisted candidates — parallelized with 4 workers.
 	bestByCandidate := make(map[uint]mergeSuggestionCandidate)
 	bestMutex := sync.Mutex{}
 	threshold := s.mergeSuggestionThreshold()
 
-	// 使用 worker pool 并行处理目标人物
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 4) // 限制并发数为 4
+	sem := make(chan struct{}, 4)
 
 	for _, target := range targets {
 		if target == nil {
 			continue
 		}
-		targetEmbeddings := candidatePrototypes[target.ID]
-		if len(targetEmbeddings) == 0 {
+		candidates := candidatesByTarget[target.ID]
+		if len(candidates) == 0 {
 			continue
 		}
+		targetProtos := idx.personProtos[target.ID]
 
 		wg.Add(1)
-		go func(tgt *model.Person, tgtEmb []faceWithEmbedding) {
+		go func(tgt *model.Person, tgtEmb []faceWithEmbedding, candIDs map[uint]struct{}) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			for _, person := range allPeople {
-				if person == nil || person.ID == tgt.ID {
-					continue
-				}
-				candidateEmbeddings := candidatePrototypes[person.ID]
+			for candidateID := range candIDs {
+				candidateEmbeddings := idx.personProtos[candidateID]
 				if len(candidateEmbeddings) == 0 {
 					continue
 				}
-				// 使用缓存的 cannot-link 检查
-				if cannotLinkCache[tgt.ID] != nil && cannotLinkCache[tgt.ID][person.ID] {
+				if cannotLinkCache[tgt.ID] != nil && cannotLinkCache[tgt.ID][candidateID] {
 					continue
 				}
-				if cannotLinkCache[person.ID] != nil && cannotLinkCache[person.ID][tgt.ID] {
+				if cannotLinkCache[candidateID] != nil && cannotLinkCache[candidateID][tgt.ID] {
 					continue
 				}
 
@@ -543,18 +546,18 @@ func (s *personMergeSuggestionService) buildAssignments(targets []*model.Person)
 				}
 
 				bestMutex.Lock()
-				current, exists := bestByCandidate[person.ID]
+				current, exists := bestByCandidate[candidateID]
 				if !exists || score > current.score || (score == current.score && tgt.ID < current.targetID) {
-					bestByCandidate[person.ID] = mergeSuggestionCandidate{
+					bestByCandidate[candidateID] = mergeSuggestionCandidate{
 						targetID:     tgt.ID,
-						candidateID:  person.ID,
+						candidateID:  candidateID,
 						score:        score,
 						targetPerson: tgt,
 					}
 				}
 				bestMutex.Unlock()
 			}
-		}(target, targetEmbeddings)
+		}(target, targetProtos, candidates)
 	}
 	wg.Wait()
 
