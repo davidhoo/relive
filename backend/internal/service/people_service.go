@@ -41,6 +41,7 @@ const (
 	peopleClusteringBatchSize    = 50  // Max pending faces to cluster at once
 	peopleClusteringInterval     = 100 // Milliseconds to sleep after clustering
 	peopleClusteringTaskInterval = 5   // Cluster every N tasks (0 = always)
+	clustProtoCacheTTL           = 5 * time.Minute // Prototype cache TTL; avoids reloading 220K rows per 50-face batch
 )
 
 type PeopleMLClient interface {
@@ -99,6 +100,16 @@ type peopleService struct {
 	// Clustering rate limiting to prevent CPU overload
 	clusteringTaskCounter   int
 	clusteringTaskCounterMu sync.Mutex
+
+	// Prototype cache: avoids reloading all 22K person prototypes on every 50-face clustering batch.
+	// Only accessed from the single background clustering goroutine; no locking required.
+	protoCache *clustProtoCache
+}
+
+type clustProtoCache struct {
+	prototypesWithEmb map[uint][]faceWithEmbedding
+	prototypesOrig    map[uint][]*model.Face
+	builtAt           time.Time
 }
 
 type activePeopleTask struct {
@@ -707,7 +718,7 @@ func (s *peopleService) runBackground(active *activePeopleTask) {
 				time.Sleep(300 * time.Millisecond)
 				continue
 			}
-			if pendingFaceStats.Total == 0 {
+			if pendingFaceStats.Active == 0 {
 				s.setTaskState(model.TaskStatusIdle, "idle", "队列已清空，等待新任务入队", nil)
 				time.Sleep(300 * time.Millisecond)
 				continue
@@ -1766,24 +1777,31 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 	// This allows API requests to be processed between clustering batches
 	defer time.Sleep(peopleClusteringInterval * time.Millisecond)
 
-	assignedPersonIDs, err := s.faceRepo.ListAssignedPersonIDs()
-	if err != nil {
-		return nil, nil, err
-	}
-	var protoFaces []*model.Face
-	if len(assignedPersonIDs) > 0 {
-		protoFaces, err = s.faceRepo.ListTopByPersonIDs(assignedPersonIDs, peoplePrototypeCandidates)
+	if s.protoCache == nil || time.Since(s.protoCache.builtAt) > clustProtoCacheTTL {
+		assignedPersonIDs, err := s.faceRepo.ListAssignedPersonIDs()
 		if err != nil {
 			return nil, nil, err
 		}
+		var protoFaces []*model.Face
+		if len(assignedPersonIDs) > 0 {
+			protoFaces, err = s.faceRepo.ListTopByPersonIDs(assignedPersonIDs, peoplePrototypeCandidates)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		orig := s.selectPersonPrototypes(protoFaces, peoplePrototypeCount)
+		withEmb := make(map[uint][]faceWithEmbedding, len(orig))
+		for personID, protoList := range orig {
+			withEmb[personID] = decodeFacesWithEmbeddings(protoList)
+		}
+		s.protoCache = &clustProtoCache{
+			prototypesWithEmb: withEmb,
+			prototypesOrig:    orig,
+			builtAt:           time.Now(),
+		}
 	}
-	prototypes := s.selectPersonPrototypes(protoFaces, peoplePrototypeCount)
-
-	// Pre-decode all prototype embeddings once (optimization: avoid repeated json.Unmarshal)
-	prototypesWithEmb := make(map[uint][]faceWithEmbedding, len(prototypes))
-	for personID, protoList := range prototypes {
-		prototypesWithEmb[personID] = decodeFacesWithEmbeddings(protoList)
-	}
+	prototypesWithEmb := s.protoCache.prototypesWithEmb
+	prototypes := s.protoCache.prototypesOrig
 
 	graph := s.buildFaceGraph(pendingFaces, s.linkThreshold())
 	components := s.findConnectedComponents(graph)
