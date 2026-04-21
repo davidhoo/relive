@@ -55,6 +55,8 @@ type personMergeSuggestionService struct {
 	state          personMergeSuggestionState
 	backgroundLogs []string
 	annIdx         *annIndex
+	annDirty       bool      // index is stale; rebuild when cooldown passes
+	annBuiltAt     time.Time // when index was last successfully built
 }
 
 type mergeSuggestionCandidate struct {
@@ -213,6 +215,7 @@ func (s *personMergeSuggestionService) Rebuild() error {
 	s.state.Dirty = true
 	s.state.CursorTargetID = 0
 	s.annIdx = nil
+	s.annDirty = false
 	s.task.Status = model.TaskStatusIdle
 	s.task.CurrentMessage = "等待重建巡检"
 	s.appendBackgroundLogLocked("人物合并建议已标记重建")
@@ -225,7 +228,7 @@ func (s *personMergeSuggestionService) MarkDirty(reason string) error {
 
 	s.state.Dirty = true
 	s.state.CursorTargetID = 0
-	s.annIdx = nil
+	s.annDirty = true
 	if reason != "" {
 		s.appendBackgroundLogLocked("合并建议待更新: " + reason)
 	}

@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -17,6 +16,7 @@ import (
 	"github.com/davidhoo/relive/internal/util"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/logger"
+	"github.com/viterin/vek/vek32"
 	"gorm.io/gorm"
 )
 
@@ -2164,21 +2164,12 @@ func cosineSimilarity(a, b []float32) float64 {
 	if len(a) == 0 || len(a) != len(b) {
 		return -1
 	}
-
-	var dot float64
-	var normA float64
-	var normB float64
-	for i := range a {
-		af := float64(a[i])
-		bf := float64(b[i])
-		dot += af * bf
-		normA += af * af
-		normB += bf * bf
-	}
+	normA := float64(vek32.Norm(a))
+	normB := float64(vek32.Norm(b))
 	if normA == 0 || normB == 0 {
 		return -1
 	}
-	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
+	return float64(vek32.Dot(a, b)) / (normA * normB)
 }
 
 // faceWithEmbedding holds a face with its pre-decoded embedding and precomputed norm.
@@ -2211,26 +2202,17 @@ func decodeFacesWithEmbeddings(faces []*model.Face) []faceWithEmbedding {
 	return result
 }
 
-// calculateNorm computes the L2 norm of a vector.
+// calculateNorm computes the L2 norm of a float32 vector using SIMD acceleration.
 func calculateNorm(v []float32) float64 {
-	var sum float64
-	for _, x := range v {
-		f := float64(x)
-		sum += f * f
-	}
-	return math.Sqrt(sum)
+	return float64(vek32.Norm(v))
 }
 
 // cosineSimilarityPrecomputed computes cosine similarity using precomputed norms.
-// This avoids recalculating norms in tight loops.
+// Uses SIMD-accelerated dot product; ArcFace embeddings are unit vectors so
+// normA * normB ≈ 1.0 and the result is effectively just the dot product.
 func cosineSimilarityPrecomputed(a []float32, normA float64, b []float32, normB float64) float64 {
 	if len(a) == 0 || len(a) != len(b) || normA == 0 || normB == 0 {
 		return -1
 	}
-
-	var dot float64
-	for i := range a {
-		dot += float64(a[i]) * float64(b[i])
-	}
-	return dot / (normA * normB)
+	return float64(vek32.Dot(a, b)) / (normA * normB)
 }

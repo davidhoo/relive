@@ -8,9 +8,10 @@ import (
 )
 
 const (
-	annSearchK      = 50  // neighbors per prototype query
-	annHNSWM        = 16  // max neighbors per node (standard for 512-dim embeddings)
-	annHNSWEfSearch = 100 // search beam width; high value ensures recall near threshold boundary
+	annSearchK           = 50            // neighbors per prototype query
+	annHNSWM             = 16            // max neighbors per node (standard for 512-dim embeddings)
+	annHNSWEfSearch      = 100           // search beam width; high value ensures recall near threshold boundary
+	annRebuildCooldown   = 10 * time.Minute // min interval between ANN rebuilds triggered by MarkDirty
 )
 
 // annIndex is a cached HNSW nearest-neighbor index over all person prototype embeddings.
@@ -105,16 +106,25 @@ func (s *personMergeSuggestionService) buildANNIndex() (*annIndex, error) {
 }
 
 // ensureANNIndex returns the cached index, building it if necessary.
+// If the index is dirty but was built recently (within annRebuildCooldown),
+// the slightly stale index is returned to avoid thrashing during active detection.
 // Must be called with s.mu NOT held (it calls buildANNIndex which does DB I/O).
 func (s *personMergeSuggestionService) ensureANNIndex() (*annIndex, error) {
 	if s.annIdx != nil {
-		return s.annIdx, nil
+		if !s.annDirty {
+			return s.annIdx, nil
+		}
+		if time.Since(s.annBuiltAt) < annRebuildCooldown {
+			return s.annIdx, nil // dirty but within cooldown; use stale index
+		}
 	}
 	idx, err := s.buildANNIndex()
 	if err != nil {
 		return nil, err
 	}
 	s.annIdx = idx
+	s.annDirty = false
+	s.annBuiltAt = time.Now()
 	return idx, nil
 }
 

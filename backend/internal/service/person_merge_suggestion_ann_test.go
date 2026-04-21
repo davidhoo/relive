@@ -2,6 +2,7 @@ package service
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -119,7 +120,7 @@ func TestEnsureANNIndex_RebuildAfterInvalidation(t *testing.T) {
 	assert.NotSame(t, first, second)
 }
 
-func TestMarkDirty_InvalidatesANNIndex(t *testing.T) {
+func TestMarkDirty_MarksANNDirtyWithoutDestroyingIndex(t *testing.T) {
 	svc, _, repos, _ := newPersonMergeSuggestionServiceForTest(t)
 	inner := svc.(*personMergeSuggestionService)
 
@@ -131,7 +132,48 @@ func TestMarkDirty_InvalidatesANNIndex(t *testing.T) {
 
 	require.NoError(t, svc.MarkDirty("test-invalidation"))
 
-	assert.Nil(t, inner.annIdx)
+	// index is preserved (used during cooldown), only dirty flag is set
+	assert.NotNil(t, inner.annIdx)
+	assert.True(t, inner.annDirty)
+}
+
+func TestANNIndex_UsesStaleDuringCooldown(t *testing.T) {
+	svc, _, repos, _ := newPersonMergeSuggestionServiceForTest(t)
+	inner := svc.(*personMergeSuggestionService)
+
+	createSuggestionTestPerson(t, repos, "family", ann512(0, 1.0))
+
+	first, err := inner.ensureANNIndex()
+	require.NoError(t, err)
+
+	require.NoError(t, svc.MarkDirty("test"))
+
+	// annBuiltAt is recent → cooldown not passed → stale index returned
+	second, err := inner.ensureANNIndex()
+	require.NoError(t, err)
+
+	assert.Same(t, first, second)
+}
+
+func TestANNIndex_RebuildsAfterCooldown(t *testing.T) {
+	svc, _, repos, _ := newPersonMergeSuggestionServiceForTest(t)
+	inner := svc.(*personMergeSuggestionService)
+
+	createSuggestionTestPerson(t, repos, "family", ann512(0, 1.0))
+
+	first, err := inner.ensureANNIndex()
+	require.NoError(t, err)
+
+	require.NoError(t, svc.MarkDirty("test"))
+
+	// simulate cooldown having passed
+	inner.annBuiltAt = time.Time{}
+
+	second, err := inner.ensureANNIndex()
+	require.NoError(t, err)
+
+	assert.NotSame(t, first, second)
+	assert.False(t, inner.annDirty)
 }
 
 func TestRebuild_InvalidatesANNIndex(t *testing.T) {
