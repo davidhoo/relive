@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.1] - 2026-04-21
+
+### Changed
+- **合并建议 ANN 加速** — 使用 HNSW 近似最近邻索引替代暴力全量扫描，20K+ 人物规模预计加速 100x+
+  - 索引在首次 slice 时懒加载，后续 slice 直接复用（无重建开销）
+  - ANN 候选查询串行执行（hnsw.Graph 非线程安全），精确评分并行执行
+  - MarkDirty / Rebuild 时自动失效索引，保证数据一致性
+
+### Fixed
+- **开发模式缩略图 401** — 配置 Vite proxy 将 `/api/*` 代理到后端，`VITE_API_BASE_URL` 改为相对路径，确保 `<img>` 标签请求与前端同源，cookie 正常携带
+
+---
+
 ## [1.6.0] - 2026-04-21
 
 ### Added
