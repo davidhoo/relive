@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.2] - 2026-04-21
+
+### Changed
+- **ANN 索引构建进一步提速** — HNSW `M` 从 16 降至 8，实测 80K 面部向量构建时间从 4m23s 降至约 2min，召回率无损（Phase 4 精确评分兜底）
+- **ANN 重建冷却期延长至 30 分钟** — 从 10 分钟延长，重建 CPU 占用从 ~44% 降至约 7%（单核均值）；合并建议系统为异步人工审核，30 分钟索引滞后无业务影响
+
+---
+
 ## [1.6.1] - 2026-04-21
 
 ### Changed
