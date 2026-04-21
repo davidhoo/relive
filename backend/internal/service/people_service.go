@@ -104,6 +104,10 @@ type peopleService struct {
 	// Prototype cache: avoids reloading all 22K person prototypes on every 50-face clustering batch.
 	// Only accessed from the single background clustering goroutine; no locking required.
 	protoCache *clustProtoCache
+
+	// annCandidateFn, when set, pre-filters the O(N) attach scan to ~O(50) ANN candidates.
+	// Injected from personMergeSuggestionService which already maintains the HNSW index.
+	annCandidateFn func(probes []faceWithEmbedding, k int) map[uint]struct{}
 }
 
 type clustProtoCache struct {
@@ -1230,6 +1234,10 @@ func (s *peopleService) setMergeSuggestionDirtyHook(hook func(string) error) {
 	s.mergeSuggestionDirty = hook
 }
 
+func (s *peopleService) setANNCandidateFn(fn func(probes []faceWithEmbedding, k int) map[uint]struct{}) {
+	s.annCandidateFn = fn
+}
+
 func (s *peopleService) markMergeSuggestionsDirty(reason string) {
 	s.taskMutex.RLock()
 	hook := s.mergeSuggestionDirty
@@ -1656,8 +1664,20 @@ func (s *peopleService) attachComponentToExistingPersonWithEmbeddings(
 		return 0, -1, false
 	}
 
+	// ANN pre-filter: call candidate fn to reduce O(22K) full scan to O(~50).
+	// nil result means index not ready; fall back to full scan.
+	var candidateFilter map[uint]struct{}
+	if s.annCandidateFn != nil {
+		candidateFilter = s.annCandidateFn(component, annSearchK)
+	}
+
 	personIDs := make([]uint, 0, len(prototypesWithEmb))
 	for personID := range prototypesWithEmb {
+		if candidateFilter != nil {
+			if _, ok := candidateFilter[personID]; !ok {
+				continue
+			}
+		}
 		personIDs = append(personIDs, personID)
 	}
 	sort.Slice(personIDs, func(i, j int) bool { return personIDs[i] < personIDs[j] })

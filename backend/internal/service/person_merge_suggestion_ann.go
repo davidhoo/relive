@@ -108,24 +108,48 @@ func (s *personMergeSuggestionService) buildANNIndex() (*annIndex, error) {
 // ensureANNIndex returns the cached index, building it if necessary.
 // If the index is dirty but was built recently (within annRebuildCooldown),
 // the slightly stale index is returned to avoid thrashing during active detection.
-// Must be called with s.mu NOT held (it calls buildANNIndex which does DB I/O).
+// Thread-safe: may be called concurrently with FindCandidates and MarkDirty.
 func (s *personMergeSuggestionService) ensureANNIndex() (*annIndex, error) {
+	s.annMu.Lock()
 	if s.annIdx != nil {
 		if !s.annDirty {
-			return s.annIdx, nil
+			idx := s.annIdx
+			s.annMu.Unlock()
+			return idx, nil
 		}
 		if time.Since(s.annBuiltAt) < annRebuildCooldown {
-			return s.annIdx, nil // dirty but within cooldown; use stale index
+			idx := s.annIdx
+			s.annMu.Unlock()
+			return idx, nil // dirty but within cooldown; use stale index
 		}
 	}
+	s.annMu.Unlock()
+
+	// Build outside the lock — this is a long DB + CPU operation.
+	// Two concurrent callers may both build; the second write is benign.
 	idx, err := s.buildANNIndex()
 	if err != nil {
 		return nil, err
 	}
+
+	s.annMu.Lock()
 	s.annIdx = idx
 	s.annDirty = false
 	s.annBuiltAt = time.Now()
+	s.annMu.Unlock()
 	return idx, nil
+}
+
+// FindCandidates queries the cached ANN index for persons whose prototype embeddings
+// are nearest to probes. Returns nil if the index has not been built yet
+// (caller should fall back to a full scan). Thread-safe.
+func (s *personMergeSuggestionService) FindCandidates(probes []faceWithEmbedding, k int) map[uint]struct{} {
+	s.annMu.Lock()
+	defer s.annMu.Unlock()
+	if s.annIdx == nil {
+		return nil
+	}
+	return s.annIdx.annCandidates(0, probes, k)
 }
 
 func newHNSWGraph() *hnsw.Graph[uint] {

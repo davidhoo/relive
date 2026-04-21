@@ -54,6 +54,7 @@ type personMergeSuggestionService struct {
 	task           *model.PersonMergeSuggestionTask
 	state          personMergeSuggestionState
 	backgroundLogs []string
+	annMu          sync.Mutex // guards annIdx, annDirty, annBuiltAt for concurrent access
 	annIdx         *annIndex
 	annDirty       bool      // index is stale; rebuild when cooldown passes
 	annBuiltAt     time.Time // when index was last successfully built
@@ -214,8 +215,10 @@ func (s *personMergeSuggestionService) Rebuild() error {
 
 	s.state.Dirty = true
 	s.state.CursorTargetID = 0
+	s.annMu.Lock()
 	s.annIdx = nil
 	s.annDirty = false
+	s.annMu.Unlock()
 	s.task.Status = model.TaskStatusIdle
 	s.task.CurrentMessage = "等待重建巡检"
 	s.appendBackgroundLogLocked("人物合并建议已标记重建")
@@ -228,7 +231,9 @@ func (s *personMergeSuggestionService) MarkDirty(reason string) error {
 
 	s.state.Dirty = true
 	s.state.CursorTargetID = 0
+	s.annMu.Lock()
 	s.annDirty = true
+	s.annMu.Unlock()
 	if reason != "" {
 		s.appendBackgroundLogLocked("合并建议待更新: " + reason)
 	}

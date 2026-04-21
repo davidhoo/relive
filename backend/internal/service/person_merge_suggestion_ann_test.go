@@ -190,3 +190,64 @@ func TestRebuild_InvalidatesANNIndex(t *testing.T) {
 
 	assert.Nil(t, inner.annIdx)
 }
+
+func TestFindCandidates_ReturnsNilWhenIndexNotBuilt(t *testing.T) {
+	svc, _, _, _ := newPersonMergeSuggestionServiceForTest(t)
+	inner := svc.(*personMergeSuggestionService)
+
+	// No persons created, index never built
+	require.Nil(t, inner.annIdx, "precondition: index not built")
+
+	result := inner.FindCandidates([]faceWithEmbedding{}, annSearchK)
+	assert.Nil(t, result, "should return nil when index is not built (caller falls back to full scan)")
+}
+
+func TestFindCandidates_ReturnsCandidatesFromBuiltIndex(t *testing.T) {
+	svc, _, repos, _ := newPersonMergeSuggestionServiceForTest(t)
+	inner := svc.(*personMergeSuggestionService)
+
+	similar := createSuggestionTestPerson(t, repos, "family", ann512(0, 1.0))
+	// orthogonal — should not appear as candidate
+	_ = createSuggestionTestPerson(t, repos, "stranger", ann512(100, 1.0))
+
+	idx, err := inner.buildANNIndex()
+	require.NoError(t, err)
+	inner.annMu.Lock()
+	inner.annIdx = idx
+	inner.annMu.Unlock()
+
+	// Query with a probe embedding very close to the "similar" person
+	probes := []faceWithEmbedding{{embedding: ann512(0, 1.0)}}
+	result := inner.FindCandidates(probes, annSearchK)
+
+	require.NotNil(t, result)
+	assert.Contains(t, result, similar.ID)
+}
+
+func TestFindCandidates_IsSafeToCallConcurrently(t *testing.T) {
+	svc, _, repos, _ := newPersonMergeSuggestionServiceForTest(t)
+	inner := svc.(*personMergeSuggestionService)
+
+	createSuggestionTestPerson(t, repos, "family", ann512(0, 1.0))
+
+	idx, err := inner.buildANNIndex()
+	require.NoError(t, err)
+	inner.annMu.Lock()
+	inner.annIdx = idx
+	inner.annMu.Unlock()
+
+	probes := []faceWithEmbedding{{embedding: ann512(0, 1.0)}}
+
+	// Fire N concurrent FindCandidates calls — should not panic or race
+	const goroutines = 4
+	done := make(chan struct{}, goroutines)
+	for range goroutines {
+		go func() {
+			inner.FindCandidates(probes, annSearchK)
+			done <- struct{}{}
+		}()
+	}
+	for range goroutines {
+		<-done
+	}
+}

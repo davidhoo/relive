@@ -2908,3 +2908,86 @@ func TestPeopleService_TriggerReclusterMarksMergeSuggestionsDirty(t *testing.T) 
 	assert.Zero(t, result.Evaluated)
 	require.Equal(t, []string{"trigger_recluster"}, reasons)
 }
+
+func TestAttachComponentWithANNCandidateFn_OnlyScoresCandidates(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	// person 1: embedding close to target
+	// person 2: embedding orthogonal — far from target
+	emb1 := []float32{1, 0, 0}
+	emb2 := []float32{0, 1, 0}
+	prototypesWithEmb := map[uint][]faceWithEmbedding{
+		1: {{embedding: emb1, norm: 1.0}},
+		2: {{embedding: emb2, norm: 1.0}},
+	}
+	prototypesOrig := map[uint][]*model.Face{
+		1: {{ID: 1}},
+		2: {{ID: 2}},
+	}
+	// component is close to person 1
+	component := []faceWithEmbedding{{embedding: []float32{0.98, 0.2, 0}, norm: 1.0}}
+
+	// ANN returns only person 2 — so only person 2 should be scored
+	called := 0
+	svc.setANNCandidateFn(func(probes []faceWithEmbedding, k int) map[uint]struct{} {
+		called++
+		return map[uint]struct{}{2: {}}
+	})
+
+	// threshold low enough that person 2 (score ≈ 0.2) won't attach
+	_, _, attached := svc.attachComponentToExistingPersonWithEmbeddings(
+		component, prototypesWithEmb, map[uint]bool{}, prototypesOrig, 0.5,
+	)
+
+	assert.Equal(t, 1, called, "ANN candidate fn must be called")
+	assert.False(t, attached, "person 1 should not be scored (not in ANN candidates); person 2 is below threshold")
+}
+
+func TestAttachComponentWithANNCandidateFn_FallsBackToFullScanWhenNil(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	emb1 := []float32{1, 0, 0}
+	emb2 := []float32{0, 1, 0}
+	prototypesWithEmb := map[uint][]faceWithEmbedding{
+		1: {{embedding: emb1, norm: 1.0}},
+		2: {{embedding: emb2, norm: 1.0}},
+	}
+	prototypesOrig := map[uint][]*model.Face{
+		1: {{ID: 1}},
+		2: {{ID: 2}},
+	}
+	component := []faceWithEmbedding{{embedding: []float32{0.98, 0.2, 0}, norm: 1.0}}
+
+	// ANN fn returns nil → full scan → person 1 wins
+	svc.setANNCandidateFn(func(probes []faceWithEmbedding, k int) map[uint]struct{} {
+		return nil
+	})
+
+	personID, _, attached := svc.attachComponentToExistingPersonWithEmbeddings(
+		component, prototypesWithEmb, map[uint]bool{}, prototypesOrig, 0.5,
+	)
+
+	assert.True(t, attached)
+	assert.Equal(t, uint(1), personID)
+}
+
+func TestAttachComponentWithANNCandidateFn_NilFnMeansFullScan(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	// No ANN fn set (nil)
+	emb1 := []float32{1, 0, 0}
+	prototypesWithEmb := map[uint][]faceWithEmbedding{
+		1: {{embedding: emb1, norm: 1.0}},
+	}
+	prototypesOrig := map[uint][]*model.Face{
+		1: {{ID: 1}},
+	}
+	component := []faceWithEmbedding{{embedding: []float32{0.98, 0.2, 0}, norm: 1.0}}
+
+	personID, _, attached := svc.attachComponentToExistingPersonWithEmbeddings(
+		component, prototypesWithEmb, map[uint]bool{}, prototypesOrig, 0.5,
+	)
+
+	assert.True(t, attached)
+	assert.Equal(t, uint(1), personID)
+}
