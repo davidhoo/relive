@@ -44,13 +44,15 @@ func Init(cfg config.DatabaseConfig) (*gorm.DB, error) {
 	switch cfg.Type {
 	case "sqlite":
 		// SQLite 连接参数优化
-		// _journal_mode=WAL: 启用 WAL 模式提升并发性能
+		// _journal_mode=WAL: 启用 WAL 模式提升并发性能（读写互不阻塞）
 		// _busy_timeout=60000: 60秒 busy timeout，NAS 慢速 I/O 需要更长等待
 		// _synchronous=NORMAL: 在 WAL 模式下提供性能和持久性的平衡
 		// _cache_size=-64000: 64MB 缓存（负值表示以 KB 为单位）
 		// _temp_store=memory: 临时表存储在内存中
-		// _txlock=immediate: 写事务立即获取写锁，避免 deferred→write 升级死锁
-		sqlitePath := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=60000&_synchronous=NORMAL&_cache_size=-64000&_temp_store=memory&_txlock=immediate",
+		// 注意：不设置 _txlock=immediate，使用 SQLite 默认的 deferred 模式。
+		// WAL 模式下 immediate 会让所有事务（包括只读查询）竞争写锁，
+		// 导致后台长任务持锁期间 4 个连接全部阻塞、连接池耗尽、API 无响应。
+		sqlitePath := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=60000&_synchronous=NORMAL&_cache_size=-64000&_temp_store=memory",
 			cfg.Path)
 		db, err = gorm.Open(sqlite.Open(sqlitePath), gormConfig)
 		if err != nil {
