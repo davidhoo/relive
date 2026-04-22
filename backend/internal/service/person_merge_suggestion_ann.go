@@ -92,7 +92,13 @@ func (s *personMergeSuggestionService) buildANNIndex() (*annIndex, error) {
 		}
 	}
 	if len(nodes) > 0 {
+		// Use a lower efSearch during construction to reduce CPU cost.
+		// EfSearch controls beam width for both build and query; the library default
+		// is 20. We only need high recall at query time, so we build with 20 and
+		// restore annHNSWEfSearch (100) afterward.
+		g.EfSearch = 20
 		g.Add(nodes...)
+		g.EfSearch = annHNSWEfSearch
 	}
 
 	idx := &annIndex{
