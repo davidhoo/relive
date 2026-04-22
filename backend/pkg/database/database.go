@@ -553,21 +553,30 @@ func migrateFaceEmbeddingBinary(db *gorm.DB) error {
 		if len(rows) == 0 {
 			break
 		}
-		for _, row := range rows {
-			lastID = row.ID
-			if len(row.Embedding) == 0 || row.Embedding[0] != '[' {
-				continue
+		// Wrap the batch in a single transaction: one fsync per 200 rows instead
+		// of one per row, which makes a large difference on NAS-backed SQLite.
+		var batchConverted int64
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			for _, row := range rows {
+				lastID = row.ID
+				if len(row.Embedding) == 0 || row.Embedding[0] != '[' {
+					continue
+				}
+				emb := model.DecodeEmbedding(row.Embedding)
+				if emb == nil {
+					continue
+				}
+				bin := model.EncodeEmbedding(emb)
+				if err := tx.Exec("UPDATE faces SET embedding = ? WHERE id = ?", bin, row.ID).Error; err != nil {
+					return err
+				}
+				batchConverted++
 			}
-			emb := model.DecodeEmbedding(row.Embedding)
-			if emb == nil {
-				continue
-			}
-			binary := model.EncodeEmbedding(emb)
-			if err := db.Exec("UPDATE faces SET embedding = ? WHERE id = ?", binary, row.ID).Error; err != nil {
-				return err
-			}
-			total++
+			return nil
+		}); err != nil {
+			return err
 		}
+		total += batchConverted
 		time.Sleep(10 * time.Millisecond)
 	}
 
