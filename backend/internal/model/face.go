@@ -1,6 +1,44 @@
 package model
 
-import "time"
+import (
+	"encoding/binary"
+	"encoding/json"
+	"math"
+	"time"
+)
+
+// EncodeEmbedding serializes a float32 slice as raw little-endian bytes.
+// This is ~10x faster to decode than JSON and uses half the storage.
+func EncodeEmbedding(emb []float32) []byte {
+	b := make([]byte, len(emb)*4)
+	for i, f := range emb {
+		binary.LittleEndian.PutUint32(b[i*4:], math.Float32bits(f))
+	}
+	return b
+}
+
+// DecodeEmbedding parses a face embedding from either the legacy JSON format
+// (starts with '[') or the current raw little-endian float32 binary format.
+func DecodeEmbedding(payload []byte) []float32 {
+	if len(payload) == 0 {
+		return nil
+	}
+	if payload[0] == '[' {
+		var emb []float32
+		if err := json.Unmarshal(payload, &emb); err != nil {
+			return nil
+		}
+		return emb
+	}
+	if len(payload)%4 != 0 {
+		return nil
+	}
+	emb := make([]float32, len(payload)/4)
+	for i := range emb {
+		emb[i] = math.Float32frombits(binary.LittleEndian.Uint32(payload[i*4:]))
+	}
+	return emb
+}
 
 const (
 	FaceClusterStatusPending  = "pending"

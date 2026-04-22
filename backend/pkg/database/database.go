@@ -183,6 +183,10 @@ func AutoMigrate(db *gorm.DB) error {
 		log.Printf("[database] warning: face retry_count migration failed: %v", err)
 	}
 
+	if err := migrateFaceEmbeddingBinary(db); err != nil {
+		log.Printf("[database] warning: face embedding binary migration failed: %v", err)
+	}
+
 	return nil
 }
 
@@ -510,6 +514,64 @@ func migrateFaceRetryCount(db *gorm.DB) error {
 	}
 
 	log.Printf("[database] retry_count column added")
+	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
+	return nil
+}
+
+// migrateFaceEmbeddingBinary converts stored face embeddings from JSON text to raw
+// little-endian float32 binary. Binary decoding is ~10x faster and uses ~50% less
+// storage, which meaningfully reduces CPU and NAS I/O during ANN index rebuilds.
+func migrateFaceEmbeddingBinary(db *gorm.DB) error {
+	const migrationKey = "migration.face_embedding_binary_v1"
+
+	var cfg model.AppConfig
+	if err := db.Where("key = ?", migrationKey).First(&cfg).Error; err == nil {
+		return nil
+	}
+
+	log.Printf("[database] converting face embeddings from JSON to binary...")
+
+	type faceRow struct {
+		ID        uint
+		Embedding []byte
+	}
+
+	const batchSize = 200
+	var total int64
+	var lastID uint
+
+	for {
+		var rows []faceRow
+		if err := db.Table("faces").
+			Select("id, embedding").
+			Where("id > ? AND embedding IS NOT NULL AND length(embedding) > 0", lastID).
+			Order("id ASC").
+			Limit(batchSize).
+			Scan(&rows).Error; err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			break
+		}
+		for _, row := range rows {
+			lastID = row.ID
+			if len(row.Embedding) == 0 || row.Embedding[0] != '[' {
+				continue
+			}
+			emb := model.DecodeEmbedding(row.Embedding)
+			if emb == nil {
+				continue
+			}
+			binary := model.EncodeEmbedding(emb)
+			if err := db.Exec("UPDATE faces SET embedding = ? WHERE id = ?", binary, row.ID).Error; err != nil {
+				return err
+			}
+			total++
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	log.Printf("[database] converted %d face embeddings to binary", total)
 	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
 	return nil
 }

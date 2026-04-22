@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -931,10 +930,7 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 	}
 
 	for i, detected := range result.Faces {
-		embeddingPayload, err := json.Marshal(detected.Embedding)
-		if err != nil {
-			return err
-		}
+		embeddingPayload := model.EncodeEmbedding(detected.Embedding)
 		face := &model.Face{
 			PhotoID:       photo.ID,
 			BBoxX:         detected.BBox.X,
@@ -2188,14 +2184,7 @@ func personIDsFromFaces(faces []*model.Face) []uint {
 }
 
 func decodeEmbedding(payload []byte) []float32 {
-	if len(payload) == 0 {
-		return nil
-	}
-	var embedding []float32
-	if err := json.Unmarshal(payload, &embedding); err != nil {
-		return nil
-	}
-	return embedding
+	return model.DecodeEmbedding(payload)
 }
 
 func cosineSimilarity(a, b []float32) float64 {
