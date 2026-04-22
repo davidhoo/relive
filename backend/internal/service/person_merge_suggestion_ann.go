@@ -91,14 +91,17 @@ func (s *personMergeSuggestionService) buildANNIndex() (*annIndex, error) {
 			faceOwner[fw.face.ID] = personID
 		}
 	}
-	if len(nodes) > 0 {
-		// Use a lower efSearch during construction to reduce CPU cost.
-		// EfSearch controls beam width for both build and query; the library default
-		// is 20. We only need high recall at query time, so we build with 20 and
-		// restore annHNSWEfSearch (100) afterward.
-		g.EfSearch = 20
-		g.Add(nodes...)
-		g.EfSearch = annHNSWEfSearch
+	// Add nodes in chunks with brief sleeps to avoid pegging CPU on NAS.
+	// HNSW accepts incremental additions so chunked Add is equivalent to one call.
+	const annBuildChunkSize = 500
+	const annBuildChunkSleep = 10 * time.Millisecond
+	for i := 0; i < len(nodes); i += annBuildChunkSize {
+		end := i + annBuildChunkSize
+		if end > len(nodes) {
+			end = len(nodes)
+		}
+		g.Add(nodes[i:end]...)
+		time.Sleep(annBuildChunkSleep)
 	}
 
 	idx := &annIndex{
