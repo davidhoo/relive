@@ -73,8 +73,7 @@ export function getPersonAvatarFallback(person: Pick<Person, 'name' | 'category'
 }
 
 export function getMergeSuggestionVisibility(totalPending: number, loading = false): boolean {
-  if (loading) return true
-  return totalPending > 0
+  return !loading && totalPending > 0
 }
 
 export function sortMergeSuggestionCandidates<T extends Pick<PersonMergeSuggestionItem, 'similarity_score' | 'candidate_person_id'>>(items: T[]): T[] {
