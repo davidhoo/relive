@@ -79,6 +79,10 @@ func (s *personMergeSuggestionService) buildANNIndex() (*annIndex, error) {
 	}
 
 	g := newHNSWGraph()
+	// Use lower efSearch during construction for speed; the graph quality is
+	// primarily determined by M=8. Restore to annHNSWEfSearch before returning
+	// so search queries use full beam width.
+	g.EfSearch = 20
 	faceOwner := make(map[uint]uint, len(personProtos)*peoplePrototypeCount)
 
 	nodes := make([]hnsw.Node[uint], 0, len(personProtos)*peoplePrototypeCount)
@@ -91,18 +95,8 @@ func (s *personMergeSuggestionService) buildANNIndex() (*annIndex, error) {
 			faceOwner[fw.face.ID] = personID
 		}
 	}
-	// Add nodes in chunks with brief sleeps to avoid pegging CPU on NAS.
-	// HNSW accepts incremental additions so chunked Add is equivalent to one call.
-	const annBuildChunkSize = 500
-	const annBuildChunkSleep = 10 * time.Millisecond
-	for i := 0; i < len(nodes); i += annBuildChunkSize {
-		end := i + annBuildChunkSize
-		if end > len(nodes) {
-			end = len(nodes)
-		}
-		g.Add(nodes[i:end]...)
-		time.Sleep(annBuildChunkSleep)
-	}
+	g.Add(nodes...)
+	g.EfSearch = annHNSWEfSearch
 
 	idx := &annIndex{
 		graph:        g,

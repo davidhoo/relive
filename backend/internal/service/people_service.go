@@ -1294,35 +1294,6 @@ func clonePeopleTask(task *model.PeopleTask) *model.PeopleTask {
 	return &clone
 }
 
-func (s *peopleService) ensurePersonForDetectedFace(detected mlclient.DetectedFace, candidates []*model.Face, people map[uint]*model.Person) (uint, error) {
-	bestPersonID := uint(0)
-	bestScore := -1.0
-
-	for _, face := range candidates {
-		if face.PersonID == nil || *face.PersonID == 0 {
-			continue
-		}
-		score := cosineSimilarity(detected.Embedding, decodeEmbedding(face.Embedding))
-		if score > bestScore {
-			bestScore = score
-			bestPersonID = *face.PersonID
-		}
-	}
-
-	if bestPersonID != 0 && bestScore >= peopleClusterThreshold {
-		if _, ok := people[bestPersonID]; ok {
-			return bestPersonID, nil
-		}
-	}
-
-	person := &model.Person{Category: model.PersonCategoryStranger}
-	if err := s.personRepo.Create(person); err != nil {
-		return 0, err
-	}
-	people[person.ID] = person
-	return person.ID, nil
-}
-
 func (s *peopleService) selectPersonPrototypes(faces []*model.Face, k int) map[uint][]*model.Face {
 	return selectPersonPrototypesStatic(faces, k)
 }
