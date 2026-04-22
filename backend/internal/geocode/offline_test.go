@@ -56,3 +56,24 @@ func TestGetProvinceName_China(t *testing.T) {
 func TestGetProvinceName_NonChina(t *testing.T) {
 	assert.Equal(t, "California", getProvinceName("US", "California"))
 }
+
+func TestGetProvinceName_NonChinaNumericReturnsEmpty(t *testing.T) {
+	assert.Equal(t, "", getProvinceName("US", "12"))
+}
+
+// --- isNumericCode ---
+
+func TestIsNumericCode_Empty(t *testing.T) {
+	assert.False(t, isNumericCode(""))
+}
+
+func TestIsNumericCode_AllDigits(t *testing.T) {
+	assert.True(t, isNumericCode("01"))
+	assert.True(t, isNumericCode("123"))
+}
+
+func TestIsNumericCode_HasLetters(t *testing.T) {
+	assert.False(t, isNumericCode("CA"))
+	assert.False(t, isNumericCode("12A"))
+	assert.False(t, isNumericCode("California"))
+}
