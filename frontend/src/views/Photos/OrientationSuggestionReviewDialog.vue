@@ -1,17 +1,13 @@
 <template>
   <el-dialog
     :model-value="modelValue"
-    :title="`审核旋转建议 - ${rotationLabel}`"
+    :title="dialogTitle"
     width="800px"
     destroy-on-close
     @close="emit('update:modelValue', false)"
   >
     <div v-loading="loading" class="review-dialog">
       <template v-if="detail">
-        <div class="review-info">
-          <span>共 {{ detail.total }} 张照片需要{{ rotationLabel }}</span>
-        </div>
-
         <el-checkbox-group v-model="selectedIds" class="photo-list">
           <label
             v-for="photo in detail.photos"
@@ -95,6 +91,11 @@ const rotationLabels: Record<number, string> = {
 
 const rotationLabel = computed(() => rotationLabels[props.rotation] || `${props.rotation}°`)
 
+const dialogTitle = computed(() => {
+  const count = props.detail?.total ?? 0
+  return `审核旋转建议 - ${rotationLabel.value}（${count}）`
+})
+
 const getThumbnailUrl = (photoId: number, version?: string) => {
   let url = `${apiBaseUrl}/photos/${photoId}/thumbnail`
   if (version) {
@@ -123,12 +124,6 @@ const handleDismiss = () => {
 <style scoped>
 .review-dialog {
   min-height: 200px;
-}
-
-.review-info {
-  margin-bottom: 16px;
-  font-size: 14px;
-  color: var(--color-text-secondary);
 }
 
 .photo-list {
