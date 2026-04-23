@@ -31,6 +31,7 @@ const (
 	defaultAttachThreshold     = 0.65
 	peopleMinClusterFaces      = 2
 	peopleFeedbackPollInterval = 250 * time.Millisecond
+	peopleStatsCacheTTL        = 30 * time.Second
 
 	// confirmedPersonDiscount lowers the attach threshold for persons with manual-locked faces,
 	// making it easier for new faces to join user-confirmed identities (e.g., family members).
@@ -111,6 +112,11 @@ type peopleService struct {
 	// annCandidateFn, when set, pre-filters the O(N) attach scan to ~O(50) ANN candidates.
 	// Injected from personMergeSuggestionService which already maintains the HNSW index.
 	annCandidateFn func(probes []faceWithEmbedding, k int) map[uint]struct{}
+
+	// In-memory cache for GetStats() to avoid scanning 78K+ faces rows on every poll.
+	statsCache    *model.PeopleStatsResponse
+	statsCacheAt  time.Time
+	statsCacheMu  sync.RWMutex
 }
 
 type clustProtoCache struct {
@@ -212,6 +218,7 @@ func (s *peopleService) StartBackground() (*model.PeopleTask, error) {
 	s.active = active
 	s.resetBackgroundLogs()
 	s.appendBackgroundLog("人物后台任务已启动")
+	s.invalidateStatsCache()
 	go s.runBackground(active)
 	return clonePeopleTask(task), nil
 }
@@ -242,6 +249,14 @@ func (s *peopleService) GetTaskStatus() *model.PeopleTask {
 }
 
 func (s *peopleService) GetStats() (*model.PeopleStatsResponse, error) {
+	s.statsCacheMu.RLock()
+	if s.statsCache != nil && time.Since(s.statsCacheAt) < peopleStatsCacheTTL {
+		cached := *s.statsCache
+		s.statsCacheMu.RUnlock()
+		return &cached, nil
+	}
+	s.statsCacheMu.RUnlock()
+
 	stats, err := s.jobRepo.GetStats()
 	if err != nil {
 		return nil, err
@@ -250,7 +265,7 @@ func (s *peopleService) GetStats() (*model.PeopleStatsResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &model.PeopleStatsResponse{
+	result := &model.PeopleStatsResponse{
 		Total:                      stats.Total,
 		Pending:                    stats.Pending,
 		Queued:                     stats.Queued,
@@ -261,7 +276,20 @@ func (s *peopleService) GetStats() (*model.PeopleStatsResponse, error) {
 		PendingFacesTotal:          pendingFaceStats.Total,
 		PendingFacesNeverClustered: pendingFaceStats.NeverClustered,
 		PendingFacesRetried:        pendingFaceStats.Retried,
-	}, nil
+	}
+
+	s.statsCacheMu.Lock()
+	s.statsCache = result
+	s.statsCacheAt = time.Now()
+	s.statsCacheMu.Unlock()
+
+	return &(*result), nil
+}
+
+func (s *peopleService) invalidateStatsCache() {
+	s.statsCacheMu.Lock()
+	s.statsCache = nil
+	s.statsCacheMu.Unlock()
 }
 
 func (s *peopleService) GetBackgroundLogs() []string {
@@ -1136,6 +1164,7 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 		return err
 	}
 	s.markMergeSuggestionsDirty("apply_detection_result")
+	s.invalidateStatsCache()
 	return nil
 }
 

@@ -34,6 +34,8 @@ type PhotoRepository interface {
 	ListAll() ([]*model.Photo, error)
 	ListByIDs(ids []uint) ([]*model.Photo, error)
 	ListPhotosByPersonID(personID uint) ([]*model.Photo, error) // 通过 JOIN 直接获取人物关联照片
+	ListPhotoSummariesByPersonID(personID uint) ([]*model.Photo, error) // 精简列 + SQL 排序
+	ListPhotoSummariesByPersonIDPaginated(personID uint, page, pageSize int) ([]*model.Photo, int64, error)
 
 	// AI 分析相关
 	GetUnanalyzed(limit int) ([]*model.Photo, error)
@@ -409,6 +411,42 @@ func (r *photoRepository) ListPhotosByPersonID(personID uint) ([]*model.Photo, e
 		Where("faces.person_id = ?", personID).
 		Find(&photos).Error
 	return photos, err
+}
+
+// ListPhotoSummariesByPersonID 精简列查询 + SQL 排序，用于人物详情页
+func (r *photoRepository) ListPhotoSummariesByPersonID(personID uint) ([]*model.Photo, error) {
+	var photos []*model.Photo
+	err := r.db.Distinct().
+		Select("photos.id, photos.file_name, photos.caption, photos.taken_at, photos.created_at").
+		Joins("INNER JOIN faces ON faces.photo_id = photos.id").
+		Where("faces.person_id = ?", personID).
+		Order("photos.taken_at DESC, photos.id DESC").
+		Find(&photos).Error
+	return photos, err
+}
+
+// ListPhotoSummariesByPersonIDPaginated 精简列 + 分页查询，用于人物详情页
+func (r *photoRepository) ListPhotoSummariesByPersonIDPaginated(personID uint, page, pageSize int) ([]*model.Photo, int64, error) {
+	var total int64
+	if err := r.db.Model(&model.Photo{}).
+		Joins("INNER JOIN faces ON faces.photo_id = photos.id").
+		Where("faces.person_id = ?", personID).
+		Distinct("photos.id").
+		Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var photos []*model.Photo
+	offset := (page - 1) * pageSize
+	err := r.db.Distinct().
+		Select("photos.id, photos.file_name, photos.caption, photos.taken_at, photos.created_at").
+		Joins("INNER JOIN faces ON faces.photo_id = photos.id").
+		Where("faces.person_id = ?", personID).
+		Order("photos.taken_at DESC, photos.id DESC").
+		Offset(offset).
+		Limit(pageSize).
+		Find(&photos).Error
+	return photos, total, err
 }
 
 // GetUnanalyzed 获取未分析的照片

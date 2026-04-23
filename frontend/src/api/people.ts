@@ -24,12 +24,12 @@ export const peopleApi = {
     return http.get<ApiResponse<Person>>(`/people/${id}`)
   },
 
-  getPhotos(id: number) {
-    return http.get<ApiResponse<Photo[]>>(`/people/${id}/photos`)
+  getPhotos(id: number, params?: { page?: number; page_size?: number }) {
+    return http.get<ApiResponse<Photo[] | PagedResponse<Photo>>>(`/people/${id}/photos`, { params })
   },
 
-  getFaces(id: number) {
-    return http.get<ApiResponse<Face[]>>(`/people/${id}/faces`)
+  getFaces(id: number, params?: { page?: number; page_size?: number }) {
+    return http.get<ApiResponse<Face[] | PagedResponse<Face>>>(`/people/${id}/faces`, { params })
   },
 
   updateCategory(id: number, category: Person['category']) {

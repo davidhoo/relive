@@ -358,7 +358,6 @@ import {
   getPeopleTaskStatusMeta,
   getPersonAvatarFallback,
   getPersonCategoryLabel,
-  sortPeopleForDisplay,
 } from './peopleHelpers'
 
 const route = useRoute()
@@ -505,7 +504,7 @@ const loadPeople = async () => {
       category: filters.category,
     })
     const payload = res.data?.data
-    people.value = sortPeopleForDisplay(payload?.items || [])
+    people.value = payload?.items || []
     total.value = payload?.total || 0
   } catch (error: any) {
     ElMessage.error(error.message || '加载人物列表失败')
@@ -807,9 +806,11 @@ watch(activeTab, async (tab) => {
 onMounted(async () => {
   await Promise.all([loadPeople(), loadTaskData(), loadMergeSuggestions()])
   taskTimer = window.setInterval(() => {
-    void loadTaskData()
+    if (activeTab.value === 'task') {
+      void loadTaskData()
+    }
     void loadMergeSuggestions(true) // silent: true 避免轮询时 loading 闪烁
-  }, 5000)
+  }, 30000)
 })
 
 onBeforeUnmount(() => {

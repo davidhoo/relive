@@ -16,6 +16,8 @@ type FaceRepository interface {
 	DeleteByPhotoID(photoID uint) error
 	ListByPhotoID(photoID uint) ([]*model.Face, error)
 	ListByPersonID(personID uint) ([]*model.Face, error)
+	ListByPersonIDSummary(personID uint) ([]*model.Face, error)       // 排除 embedding，按 quality_score 排序
+	ListByPersonIDPaginated(personID uint, page, pageSize int) ([]*model.Face, int64, error)
 	ListByIDs(ids []uint) ([]*model.Face, error)
 	ListAssigned() ([]*model.Face, error)
 	ListAssignedPersonIDs() ([]uint, error)
@@ -87,6 +89,32 @@ func (r *faceRepository) ListByPersonID(personID uint) ([]*model.Face, error) {
 	var faces []*model.Face
 	err := r.db.Where("person_id = ?", personID).Order("id ASC").Find(&faces).Error
 	return faces, err
+}
+
+func (r *faceRepository) ListByPersonIDSummary(personID uint) ([]*model.Face, error) {
+	var faces []*model.Face
+	err := r.db.Select("id, created_at, updated_at, photo_id, person_id, b_box_x, b_box_y, b_box_width, b_box_height, confidence, quality_score, thumbnail_path, cluster_status, cluster_score, clustered_at, manual_locked, manual_lock_reason, manual_locked_at, recluster_generation, retry_count").
+		Where("person_id = ?", personID).
+		Order("quality_score DESC, id ASC").
+		Find(&faces).Error
+	return faces, err
+}
+
+func (r *faceRepository) ListByPersonIDPaginated(personID uint, page, pageSize int) ([]*model.Face, int64, error) {
+	var total int64
+	if err := r.db.Model(&model.Face{}).Where("person_id = ?", personID).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var faces []*model.Face
+	offset := (page - 1) * pageSize
+	err := r.db.Select("id, created_at, updated_at, photo_id, person_id, b_box_x, b_box_y, b_box_width, b_box_height, confidence, quality_score, thumbnail_path, cluster_status, cluster_score, clustered_at, manual_locked, manual_lock_reason, manual_locked_at, recluster_generation, retry_count").
+		Where("person_id = ?", personID).
+		Order("quality_score DESC, id ASC").
+		Offset(offset).
+		Limit(pageSize).
+		Find(&faces).Error
+	return faces, total, err
 }
 
 func (r *faceRepository) ListByIDs(ids []uint) ([]*model.Face, error) {

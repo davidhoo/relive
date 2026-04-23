@@ -16,8 +16,17 @@ type PersonRepository interface {
 	ListAll() ([]*model.Person, error)
 	ListByIDs(ids []uint) ([]*model.Person, error)
 	ListWithAvatar() ([]*model.Person, error) // 只返回有头像的人物（用于合并/移动候选列表）
+	ListPeople(opts ListPeopleOptions) ([]*model.Person, int64, error) // 数据库层分页查询
 	RefreshStats(personID uint) error
 	MergeInto(targetPersonID uint, sourcePersonIDs []uint) ([]uint, error)
+}
+
+type ListPeopleOptions struct {
+	Page      int
+	PageSize  int
+	Category  string
+	Search    string
+	HasAvatar bool
 }
 
 type personRepository struct {
@@ -76,6 +85,33 @@ func (r *personRepository) ListWithAvatar() ([]*model.Person, error) {
 		Order("id ASC").
 		Find(&people).Error
 	return people, err
+}
+
+func (r *personRepository) ListPeople(opts ListPeopleOptions) ([]*model.Person, int64, error) {
+	q := r.db.Model(&model.Person{})
+
+	if opts.HasAvatar {
+		q = q.Where("representative_face_id IS NOT NULL")
+	}
+	if opts.Category != "" {
+		q = q.Where("category = ?", opts.Category)
+	}
+	if opts.Search != "" {
+		like := "%" + opts.Search + "%"
+		q = q.Where("LOWER(name) LIKE ? OR LOWER(category) LIKE ? OR CAST(id AS TEXT) LIKE ?", like, like, like)
+	}
+
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	orderBy := "CASE category WHEN 'family' THEN 0 WHEN 'friend' THEN 1 WHEN 'acquaintance' THEN 2 WHEN 'stranger' THEN 3 ELSE 4 END, photo_count DESC, face_count DESC, id ASC"
+
+	var people []*model.Person
+	offset := (opts.Page - 1) * opts.PageSize
+	err := q.Order(orderBy).Offset(offset).Limit(opts.PageSize).Find(&people).Error
+	return people, total, err
 }
 
 func (r *personRepository) RefreshStats(personID uint) error {

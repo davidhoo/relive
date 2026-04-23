@@ -54,88 +54,19 @@ func (h *PeopleHandler) ListPeople(c *gin.Context) {
 		return
 	}
 
-	// 支持 has_avatar 过滤参数（用于合并/移动候选列表）
 	hasAvatar := strings.TrimSpace(c.Query("has_avatar"))
-	if hasAvatar == "true" {
-		people, err := h.personRepo.ListWithAvatar()
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, model.Response{
-				Success: false,
-				Error: &model.ErrorInfo{
-					Code:    "LIST_FAILED",
-					Message: err.Error(),
-				},
-			})
-			return
-		}
+	category := strings.TrimSpace(c.Query("category"))
+	search := strings.ToLower(strings.TrimSpace(c.Query("search")))
 
-		// 过滤和排序
-		category := strings.TrimSpace(c.Query("category"))
-		search := strings.ToLower(strings.TrimSpace(c.Query("search")))
-
-		filtered := make([]*model.Person, 0, len(people))
-		for _, person := range people {
-			if category != "" && person.Category != category {
-				continue
-			}
-			if search != "" {
-				searchText := strings.ToLower(person.Name + " " + person.Category + " " + strconv.FormatUint(uint64(person.ID), 10))
-				if !strings.Contains(searchText, search) {
-					continue
-				}
-			}
-			filtered = append(filtered, person)
-		}
-
-		sort.Slice(filtered, func(i, j int) bool {
-			left := filtered[i]
-			right := filtered[j]
-			if personCategoryOrder(left.Category) != personCategoryOrder(right.Category) {
-				return personCategoryOrder(left.Category) < personCategoryOrder(right.Category)
-			}
-			if left.PhotoCount != right.PhotoCount {
-				return left.PhotoCount > right.PhotoCount
-			}
-			if left.FaceCount != right.FaceCount {
-				return left.FaceCount > right.FaceCount
-			}
-			return left.ID < right.ID
-		})
-
-		total := len(filtered)
-		start := (page - 1) * pageSize
-		if start > total {
-			start = total
-		}
-		end := start + pageSize
-		if end > total {
-			end = total
-		}
-
-		items := make([]model.PersonResponse, 0, end-start)
-		for _, person := range filtered[start:end] {
-			items = append(items, personToResponse(person, nil))
-		}
-
-		totalPages := 0
-		if total > 0 {
-			totalPages = (total + pageSize - 1) / pageSize
-		}
-
-		c.JSON(http.StatusOK, model.Response{
-			Success: true,
-			Data: model.PagedResponse{
-				Items:      items,
-				Total:      int64(total),
-				Page:       page,
-				PageSize:   pageSize,
-				TotalPages: totalPages,
-			},
-		})
-		return
+	opts := repository.ListPeopleOptions{
+		Page:      page,
+		PageSize:  pageSize,
+		Category:  category,
+		Search:    search,
+		HasAvatar: hasAvatar == "true",
 	}
 
-	people, err := h.personRepo.ListAll()
+	people, total, err := h.personRepo.ListPeople(opts)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, model.Response{
 			Success: false,
@@ -147,63 +78,21 @@ func (h *PeopleHandler) ListPeople(c *gin.Context) {
 		return
 	}
 
-	category := strings.TrimSpace(c.Query("category"))
-	search := strings.ToLower(strings.TrimSpace(c.Query("search")))
-
-	filtered := make([]*model.Person, 0, len(people))
+	items := make([]model.PersonResponse, 0, len(people))
 	for _, person := range people {
-		if category != "" && person.Category != category {
-			continue
-		}
-		if search != "" {
-			searchText := strings.ToLower(person.Name + " " + person.Category + " " + strconv.FormatUint(uint64(person.ID), 10))
-			if !strings.Contains(searchText, search) {
-				continue
-			}
-		}
-		filtered = append(filtered, person)
-	}
-
-	sort.Slice(filtered, func(i, j int) bool {
-		left := filtered[i]
-		right := filtered[j]
-		if personCategoryOrder(left.Category) != personCategoryOrder(right.Category) {
-			return personCategoryOrder(left.Category) < personCategoryOrder(right.Category)
-		}
-		if left.PhotoCount != right.PhotoCount {
-			return left.PhotoCount > right.PhotoCount
-		}
-		if left.FaceCount != right.FaceCount {
-			return left.FaceCount > right.FaceCount
-		}
-		return left.ID < right.ID
-	})
-
-	total := len(filtered)
-	start := (page - 1) * pageSize
-	if start > total {
-		start = total
-	}
-	end := start + pageSize
-	if end > total {
-		end = total
-	}
-
-	items := make([]model.PersonResponse, 0, end-start)
-	for _, person := range filtered[start:end] {
 		items = append(items, personToResponse(person, nil))
 	}
 
 	totalPages := 0
 	if total > 0 {
-		totalPages = (total + pageSize - 1) / pageSize
+		totalPages = (int(total) + pageSize - 1) / pageSize
 	}
 
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
 		Data: model.PagedResponse{
 			Items:      items,
-			Total:      int64(total),
+			Total:      total,
 			Page:       page,
 			PageSize:   pageSize,
 			TotalPages: totalPages,
@@ -239,21 +128,43 @@ func (h *PeopleHandler) GetPersonPhotos(c *gin.Context) {
 		return
 	}
 
-	// 优化：直接通过 JOIN 查询获取照片，避免先查 faces 再查 photos
-	photos, err := h.photoRepo.ListPhotosByPersonID(personID)
+	// 支持分页（向后兼容：无参数返回全量）
+	if c.Query("page") != "" || c.Query("page_size") != "" {
+		page, pageSize, ok := parsePagination(c)
+		if !ok {
+			return
+		}
+
+		photos, total, err := h.photoRepo.ListPhotoSummariesByPersonIDPaginated(personID, page, pageSize)
+		if err != nil {
+			writePeopleError(c, http.StatusInternalServerError, "LIST_FAILED", err.Error())
+			return
+		}
+
+		totalPages := 0
+		if total > 0 {
+			totalPages = (int(total) + pageSize - 1) / pageSize
+		}
+
+		c.JSON(http.StatusOK, model.Response{
+			Success: true,
+			Data: model.PagedResponse{
+				Items:      photos,
+				Total:      total,
+				Page:       page,
+				PageSize:   pageSize,
+				TotalPages: totalPages,
+			},
+		})
+		return
+	}
+
+	// 无分页参数：返回全量（精简列 + SQL 排序）
+	photos, err := h.photoRepo.ListPhotoSummariesByPersonID(personID)
 	if err != nil {
 		writePeopleError(c, http.StatusInternalServerError, "LIST_FAILED", err.Error())
 		return
 	}
-
-	sort.Slice(photos, func(i, j int) bool {
-		leftTime := photoSortUnix(photos[i])
-		rightTime := photoSortUnix(photos[j])
-		if leftTime != rightTime {
-			return leftTime > rightTime
-		}
-		return photos[i].ID > photos[j].ID
-	})
 
 	c.JSON(http.StatusOK, model.Response{Success: true, Data: photos})
 }
@@ -264,18 +175,48 @@ func (h *PeopleHandler) GetPersonFaces(c *gin.Context) {
 		return
 	}
 
-	faces, err := h.faceRepo.ListByPersonID(personID)
+	// 支持分页（向后兼容：无参数返回全量）
+	if c.Query("page") != "" || c.Query("page_size") != "" {
+		page, pageSize, ok := parsePagination(c)
+		if !ok {
+			return
+		}
+
+		faces, total, err := h.faceRepo.ListByPersonIDPaginated(personID, page, pageSize)
+		if err != nil {
+			writePeopleError(c, http.StatusInternalServerError, "LIST_FAILED", err.Error())
+			return
+		}
+
+		resp := make([]model.FaceResponse, 0, len(faces))
+		for _, face := range faces {
+			resp = append(resp, faceToResponse(face))
+		}
+
+		totalPages := 0
+		if total > 0 {
+			totalPages = (int(total) + pageSize - 1) / pageSize
+		}
+
+		c.JSON(http.StatusOK, model.Response{
+			Success: true,
+			Data: model.PagedResponse{
+				Items:      resp,
+				Total:      total,
+				Page:       page,
+				PageSize:   pageSize,
+				TotalPages: totalPages,
+			},
+		})
+		return
+	}
+
+	// 无分页参数：返回全量（排除 embedding，SQL 排序）
+	faces, err := h.faceRepo.ListByPersonIDSummary(personID)
 	if err != nil {
 		writePeopleError(c, http.StatusInternalServerError, "LIST_FAILED", err.Error())
 		return
 	}
-
-	sort.Slice(faces, func(i, j int) bool {
-		if faces[i].QualityScore != faces[j].QualityScore {
-			return faces[i].QualityScore > faces[j].QualityScore
-		}
-		return faces[i].ID < faces[j].ID
-	})
 
 	resp := make([]model.FaceResponse, 0, len(faces))
 	for _, face := range faces {
@@ -959,21 +900,6 @@ func faceToResponse(face *model.Face) model.FaceResponse {
 	}
 }
 
-func personCategoryOrder(category string) int {
-	switch category {
-	case model.PersonCategoryFamily:
-		return 0
-	case model.PersonCategoryFriend:
-		return 1
-	case model.PersonCategoryAcquaintance:
-		return 2
-	case model.PersonCategoryStranger:
-		return 3
-	default:
-		return 4
-	}
-}
-
 func uniquePhotoIDs(faces []*model.Face) []uint {
 	seen := make(map[uint]struct{}, len(faces))
 	ids := make([]uint, 0, len(faces))
@@ -1001,13 +927,6 @@ func uniquePersonIDs(faces []*model.Face) []uint {
 		ids = append(ids, *face.PersonID)
 	}
 	return ids
-}
-
-func photoSortUnix(photo *model.Photo) int64 {
-	if photo == nil || photo.TakenAt == nil {
-		return 0
-	}
-	return photo.TakenAt.Unix()
 }
 
 func resolveThumbnailPath(cfg *config.Config, thumbnailPath string) (string, error) {

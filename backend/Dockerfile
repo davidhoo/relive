@@ -21,7 +21,7 @@ COPY . .
 RUN CGO_ENABLED=1 GOOS=linux go build \
     -ldflags "-X main.Version=${VERSION:-dev} -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     -o relive \
-    ./cmd/relive/main.go
+    ./cmd/relive
 
 # 构建 relive-analyzer
 WORKDIR /app/cmd/relive-analyzer

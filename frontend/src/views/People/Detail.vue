@@ -78,7 +78,7 @@
                     <div class="operation-title">移动到其他人物</div>
                     <div class="operation-desc">把当前选中的人脸移动到已有人物，适合做误归属修正。</div>
                   </div>
-                  <el-button plain :disabled="selectedFaceIds.length === 0 || candidatePeople.length === 0" @click="showMoveDialog = true">
+                  <el-button plain :disabled="selectedFaceIds.length === 0" @click="ensureCandidatePeople(); showMoveDialog = true">
                     选择目标
                   </el-button>
                 </div>
@@ -88,7 +88,7 @@
                     <div class="operation-title">合并其他人物到当前人物</div>
                     <div class="operation-desc">从其他人物中选择若干个，并把它们全部并入当前人物。</div>
                   </div>
-                  <el-button plain :disabled="candidatePeople.length === 0" @click="showMergeDialog = true">
+                  <el-button plain @click="ensureCandidatePeople(); showMergeDialog = true">
                     发起合并
                   </el-button>
                 </div>
@@ -98,7 +98,7 @@
                     <div class="operation-title">合并当前人物到其他人物</div>
                     <div class="operation-desc">将当前人物并入选定的目标人物，当前人物将被删除。</div>
                   </div>
-                  <el-button plain :disabled="candidatePeople.length === 0" @click="showMergeIntoDialog = true">
+                  <el-button plain @click="ensureCandidatePeople(); showMergeIntoDialog = true">
                     选择目标
                   </el-button>
                 </div>
@@ -108,7 +108,7 @@
                     <div class="operation-title">计算相似度</div>
                     <div class="operation-desc">计算当前人物与目标人物的相似度，用于人工评判阈值调整。</div>
                   </div>
-                  <el-button plain :disabled="candidatePeople.length === 0" @click="showSimilarityDialog = true">
+                  <el-button plain @click="ensureCandidatePeople(); showSimilarityDialog = true">
                     选择目标
                   </el-button>
                 </div>
@@ -131,7 +131,7 @@
           <div class="section-stack">
             <el-card shadow="never" class="section-card">
               <template #header>
-                <SectionHeader :icon="Crop" :title="`人脸样本（${faces.length}）`">
+                <SectionHeader :icon="Crop" :title="`人脸样本（${person?.face_count ?? 0}）`">
                   <template #actions>
                     <el-tag size="small" effect="plain">
                       已选择 {{ selectedFaceIds.length }} 张
@@ -177,11 +177,21 @@
                   </div>
                 </div>
               </div>
+
+              <el-pagination
+                v-if="facesTotal > facesPageSize"
+                layout="prev, pager, next"
+                :total="facesTotal"
+                :page-size="facesPageSize"
+                v-model:current-page="facesPage"
+                @current-change="onFacesPageChange"
+                class="section-pagination"
+              />
             </el-card>
 
             <el-card shadow="never" class="section-card animate-delay-1">
               <template #header>
-                <SectionHeader :icon="Picture" :title="`关联照片（${photos.length}）`" />
+                <SectionHeader :icon="Picture" :title="`关联照片（${person?.photo_count ?? 0}）`" />
               </template>
 
               <el-empty v-if="photos.length === 0" description="暂无关联照片" />
@@ -195,6 +205,16 @@
                   </div>
                 </button>
               </div>
+
+              <el-pagination
+                v-if="photosTotal > photosPageSize"
+                layout="prev, pager, next"
+                :total="photosTotal"
+                :page-size="photosPageSize"
+                v-model:current-page="photosPage"
+                @current-change="onPhotosPageChange"
+                class="section-pagination"
+              />
             </el-card>
           </div>
         </el-col>
@@ -366,6 +386,17 @@ const categoryOptions = [
   { label: '路人', value: 'stranger' },
 ] satisfies Array<{ label: string; value: PersonCategory }>
 
+// 分页状态
+const facesPage = ref(1)
+const facesPageSize = ref(50)
+const facesTotal = ref(0)
+const photosPage = ref(1)
+const photosPageSize = ref(30)
+const photosTotal = ref(0)
+
+// 候选人物懒加载
+const candidatePeopleLoaded = ref(false)
+
 const personTitle = computed(() => {
   if (!person.value) return '人物详情'
   return person.value.name?.trim() || `未命名人物 #${person.value.id}`
@@ -407,13 +438,50 @@ const resetSelections = () => {
   showSimilarityDialog.value = false
 }
 
-const loadCandidatePeople = async () => {
+const ensureCandidatePeople = async () => {
+  if (candidatePeopleLoaded.value) return
   try {
-    // 优化：只加载有头像的人物作为合并/移动候选（减少数据传输）
     const res = await peopleApi.getList({ page: 1, page_size: 200, has_avatar: 'true' })
     allPeople.value = res.data?.data?.items || []
+    candidatePeopleLoaded.value = true
   } catch (error) {
     console.error('Failed to load candidate people:', error)
+  }
+}
+
+const loadFaces = async () => {
+  const personId = Number(route.params.id)
+  if (!personId) return
+  try {
+    const res = await peopleApi.getFaces(personId, { page: facesPage.value, page_size: facesPageSize.value })
+    const data = res.data?.data as any
+    if (data && 'items' in data) {
+      faces.value = data.items as Face[]
+      facesTotal.value = data.total as number
+    } else {
+      faces.value = (data as Face[]) || []
+      facesTotal.value = faces.value.length
+    }
+  } catch (error: any) {
+    ElMessage.error(error.message || '加载人脸失败')
+  }
+}
+
+const loadPhotos = async () => {
+  const personId = Number(route.params.id)
+  if (!personId) return
+  try {
+    const res = await peopleApi.getPhotos(personId, { page: photosPage.value, page_size: photosPageSize.value })
+    const data = res.data?.data as any
+    if (data && 'items' in data) {
+      photos.value = data.items as Photo[]
+      photosTotal.value = data.total as number
+    } else {
+      photos.value = (data as Photo[]) || []
+      photosTotal.value = photos.value.length
+    }
+  } catch (error: any) {
+    ElMessage.error(error.message || '加载照片失败')
   }
 }
 
@@ -423,24 +491,63 @@ const loadData = async () => {
 
   loading.value = true
   try {
-    const [personRes, facesRes, photosRes] = await Promise.all([
+    const [personRes] = await Promise.all([
       peopleApi.getById(personId),
-      peopleApi.getFaces(personId),
-      peopleApi.getPhotos(personId),
+      loadFaces(),
+      loadPhotos(),
     ])
 
     person.value = personRes.data?.data || null
-    faces.value = facesRes.data?.data || []
-    photos.value = photosRes.data?.data || []
     editableName.value = person.value?.name || ''
     editableCategory.value = person.value?.category || 'stranger'
     resetSelections()
-    await loadCandidatePeople()
+    candidatePeopleLoaded.value = false
   } catch (error: any) {
     ElMessage.error(error.message || '加载人物详情失败')
   } finally {
     loading.value = false
   }
+}
+
+// 精准刷新：只刷新人物信息
+const refreshPerson = async () => {
+  const personId = Number(route.params.id)
+  if (!personId) return
+  try {
+    const res = await peopleApi.getById(personId)
+    person.value = res.data?.data || null
+    editableName.value = person.value?.name || ''
+    editableCategory.value = person.value?.category || 'stranger'
+  } catch (error: any) {
+    ElMessage.error(error.message || '刷新人物信息失败')
+  }
+}
+
+// 精准刷新：刷新人物信息 + 人脸
+const refreshPersonAndFaces = async () => {
+  const personId = Number(route.params.id)
+  if (!personId) return
+  try {
+    const [personRes] = await Promise.all([
+      peopleApi.getById(personId),
+      loadFaces(),
+    ])
+    person.value = personRes.data?.data || null
+    editableName.value = person.value?.name || ''
+    editableCategory.value = person.value?.category || 'stranger'
+  } catch (error: any) {
+    ElMessage.error(error.message || '刷新数据失败')
+  }
+}
+
+const onFacesPageChange = async (page: number) => {
+  facesPage.value = page
+  await loadFaces()
+}
+
+const onPhotosPageChange = async (page: number) => {
+  photosPage.value = page
+  await loadPhotos()
 }
 
 const saveName = async () => {
@@ -449,7 +556,7 @@ const saveName = async () => {
     nameSaving.value = true
     await peopleApi.updateName(person.value.id, editableName.value.trim())
     ElMessage.success('人物姓名已更新')
-    await loadData()
+    await refreshPerson()
   } catch (error: any) {
     ElMessage.error(error.message || '更新人物姓名失败')
   } finally {
@@ -463,7 +570,7 @@ const saveCategory = async (category: PersonCategory) => {
     categorySaving.value = true
     await peopleApi.updateCategory(person.value.id, category)
     ElMessage.success('人物类别已更新')
-    await loadData()
+    await refreshPerson()
   } catch (error: any) {
     ElMessage.error(error.message || '更新人物类别失败')
   } finally {
@@ -477,7 +584,7 @@ const setAvatar = async (faceId: number) => {
     avatarSavingFaceId.value = faceId
     await peopleApi.updateAvatar(person.value.id, faceId)
     ElMessage.success('代表头像已更新')
-    await loadData()
+    await refreshPersonAndFaces()
   } catch (error: any) {
     ElMessage.error(error.message || '更新人物头像失败')
   } finally {
@@ -547,7 +654,7 @@ const confirmMoveFaces = async () => {
 }
 
 const pollMergeJob = async (jobId: number, targetPersonId: number, isMergeInto: boolean) => {
-  const maxPolls = 60 // 最多轮询 60 次（约 2 分钟）
+  const maxPolls = 60
   for (let i = 0; i < maxPolls; i++) {
     await new Promise(resolve => setTimeout(resolve, 2000))
     try {
@@ -570,7 +677,6 @@ const pollMergeJob = async (jobId: number, targetPersonId: number, isMergeInto: 
         ElMessage.error(job.error_message || '合并任务失败')
         return
       }
-      // pending / processing 继续轮询
     } catch {
       // 轮询出错继续重试
     }
@@ -665,7 +771,6 @@ const goToPhoto = (photoId: number) => {
 
 const goBack = () => {
   const query = route.query
-  // 如果有分页或筛选参数，返回到对应状态的列表页
   if (query.page || query.page_size || query.search || query.category) {
     router.push({
       path: '/people',
@@ -673,7 +778,7 @@ const goBack = () => {
         ...(query.page && { page: query.page }),
         ...(query.page_size && { page_size: query.page_size }),
         ...(query.search && { search: query.search }),
-        ...(query.category && { category: query.category }),
+        ...(query.category && { query: query.category }),
       }
     })
   } else {
@@ -682,6 +787,8 @@ const goBack = () => {
 }
 
 watch(() => route.params.id, async () => {
+  facesPage.value = 1
+  photosPage.value = 1
   await loadData()
 })
 
@@ -916,6 +1023,11 @@ onMounted(async () => {
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
+}
+
+.section-pagination {
+  margin-top: 16px;
+  justify-content: center;
 }
 
 .photo-grid {

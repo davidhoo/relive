@@ -107,6 +107,12 @@ func (r *stubPhotoRepo) ListByFaceStatus(status string) ([]*model.Photo, error) 
 func (r *stubPhotoRepo) ListPhotosByPersonID(personID uint) ([]*model.Photo, error) {
 	return nil, nil
 }
+func (r *stubPhotoRepo) ListPhotoSummariesByPersonID(personID uint) ([]*model.Photo, error) {
+	return nil, nil
+}
+func (r *stubPhotoRepo) ListPhotoSummariesByPersonIDPaginated(personID uint, page, pageSize int) ([]*model.Photo, int64, error) {
+	return nil, 0, nil
+}
 
 func TestNormalizeDisplayStrategyConfig_MergesSmartIntoOnThisDay(t *testing.T) {
 	cfg := &model.DisplayStrategyConfig{Algorithm: "smart"}
