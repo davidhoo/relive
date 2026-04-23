@@ -68,16 +68,6 @@ func Init(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		// 启用外键约束（其他参数已在连接字符串中设置）
 		db.Exec("PRAGMA foreign_keys=ON")
 
-		// 显式设置 busy_timeout，确保连接池中每个连接都生效
-		// 连接字符串中的 _busy_timeout 可能不被所有连接继承
-		db.Exec("PRAGMA busy_timeout = 60000")
-
-		// 诊断：验证关键 PRAGMA 设置
-		var bt, jm string
-		db.Raw("PRAGMA busy_timeout").Scan(&bt)
-		db.Raw("PRAGMA journal_mode").Scan(&jm)
-		log.Printf("[database] SQLite config: journal_mode=%s, busy_timeout=%s", jm, bt)
-
 		// 设置连接池（WAL 模式下支持并发读，写仍是串行的）
 		// MaxOpenConns > 1 让读请求不被写事务阻塞
 		sqlDB.SetMaxOpenConns(4)
