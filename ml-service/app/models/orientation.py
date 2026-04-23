@@ -1,10 +1,18 @@
-"""Orientation detection model for photos."""
+"""Orientation detection model for photos.
+
+Automatically selects the best available backend:
+- ONNX Runtime (lighter, recommended for NAS)
+- PyTorch CGD model (fallback, requires more memory)
+"""
 
 import base64
+import math
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import Image
 
 from app.config import get_settings
 from app.schemas import DetectOrientationResponse
@@ -13,11 +21,75 @@ from app.schemas import DetectOrientationResponse
 class OrientationDetector:
     """Detects the correct orientation of photos.
 
-    Returns the suggested rotation angle (0, 90, 180, 270) to make the photo upright.
+    Uses ONNX Runtime by default (lighter weight).
+    Falls back to PyTorch CGD model if ONNX model not available.
     """
 
     def __init__(self) -> None:
         self.settings = get_settings()
+        self._backend = None  # 'onnx' or 'pytorch'
+        self._model = None
+        self._session = None
+
+    def _init_backend(self):
+        """Initialize the appropriate backend."""
+        if self._backend is not None:
+            return
+
+        # Try ONNX first (lighter weight)
+        onnx_path = self._get_onnx_model_path()
+        if onnx_path.exists():
+            self._backend = 'onnx'
+            self._init_onnx(onnx_path)
+            return
+
+        # Fall back to PyTorch
+        try:
+            from app.models.orientation_cgd import CGDAngleEstimation
+            self._backend = 'pytorch'
+            self._model = CGDAngleEstimation.from_pretrained(
+                "maxwoe/image-rotation-angle-estimation"
+            )
+            self._model.eval()
+        except ImportError:
+            raise RuntimeError(
+                "Neither ONNX model nor PyTorch available. "
+                "Please either: "
+                "1. Run 'python export_to_onnx.py' to create ONNX model, or "
+                "2. Install PyTorch with 'pip install torch torchvision timm pytorch-lightning'"
+            )
+
+    def _get_onnx_model_path(self) -> Path:
+        """Get the path to the ONNX model file."""
+        # Check multiple locations
+        possible_paths = [
+            Path("/app/onnx_models/orientation_model.onnx"),  # Docker build location
+            Path("/app/models/orientation_model.onnx"),       # Volume mount location
+            Path(__file__).parent.parent.parent / "models" / "orientation_model.onnx",  # Local dev
+        ]
+        for p in possible_paths:
+            if p.exists():
+                return p
+
+        # Default to volume mount path (will trigger download/error if not exists)
+        return Path("/app/models/orientation_model.onnx")
+
+    def _init_onnx(self, model_path: Path):
+        """Initialize ONNX Runtime session."""
+        import onnxruntime as ort
+
+        sess_options = ort.SessionOptions()
+        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+
+        providers = ['CPUExecutionProvider']
+        if 'CoreMLExecutionProvider' in ort.get_available_providers():
+            providers.insert(0, 'CoreMLExecutionProvider')
+
+        self._session = ort.InferenceSession(
+            str(model_path),
+            sess_options,
+            providers=providers
+        )
 
     def detect(
         self,
@@ -36,11 +108,37 @@ class OrientationDetector:
         """
         started_at = time.perf_counter()
 
-        frame = self._load_image(image_path=image_path, image_base64=image_base64)
-        if frame is None:
+        try:
+            self._init_backend()
+
+            if self._backend == 'onnx':
+                return self._detect_onnx(image_path, image_base64, started_at)
+            else:
+                return self._detect_pytorch(image_path, image_base64, started_at)
+
+        except Exception as e:
+            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+            return DetectOrientationResponse(
+                rotation=0,
+                confidence=0.3,
+                processing_time_ms=max(elapsed_ms, 0),
+            )
+
+    def _detect_onnx(self, image_path, image_base64, started_at) -> DetectOrientationResponse:
+        """Detect using ONNX Runtime."""
+        # Load and preprocess
+        image_tensor = self._load_and_preprocess(image_path, image_base64)
+        if image_tensor is None:
             return DetectOrientationResponse(rotation=0, confidence=0.0, processing_time_ms=0)
 
-        rotation, confidence = self._detect_orientation(frame)
+        # Run inference
+        input_name = self._session.get_inputs()[0].name
+        output_name = self._session.get_outputs()[0].name
+        distribution = self._session.run([output_name], {input_name: image_tensor})[0]
+
+        # Convert to angle and rotation
+        angle = self._distribution_to_angle(distribution[0])
+        rotation, confidence = self._angle_to_rotation(angle)
 
         elapsed_ms = int((time.perf_counter() - started_at) * 1000)
         return DetectOrientationResponse(
@@ -49,8 +147,69 @@ class OrientationDetector:
             processing_time_ms=max(elapsed_ms, 0),
         )
 
-    def _load_image(self, *, image_path: str | None, image_base64: str | None) -> np.ndarray | None:
-        """Load image from path or base64 data."""
+    def _detect_pytorch(self, image_path, image_base64, started_at) -> DetectOrientationResponse:
+        """Detect using PyTorch CGD model."""
+        # Load image as PIL Image
+        pil_image = self._load_image_pil(image_path, image_base64)
+        if pil_image is None:
+            return DetectOrientationResponse(rotation=0, confidence=0.0, processing_time_ms=0)
+
+        # Predict angle
+        import torch
+        with torch.no_grad():
+            predicted_angle = self._model.predict_angle(pil_image)
+
+        rotation, confidence = self._angle_to_rotation(predicted_angle)
+
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        return DetectOrientationResponse(
+            rotation=rotation,
+            confidence=confidence,
+            processing_time_ms=max(elapsed_ms, 0),
+        )
+
+    def _load_and_preprocess(self, image_path, image_base64) -> np.ndarray | None:
+        """Load and preprocess image for ONNX model."""
+        image = None
+
+        if image_base64:
+            try:
+                payload = image_base64.split(",", 1)[-1]
+                raw = base64.b64decode(payload)
+                buffer = np.frombuffer(raw, dtype=np.uint8)
+                image = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+                if image is not None:
+                    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            except Exception:
+                return None
+        elif image_path:
+            try:
+                image = cv2.imread(image_path)
+                if image is None:
+                    raise FileNotFoundError(f"image not found: {image_path}")
+                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            except Exception:
+                raise FileNotFoundError(f"image not found or unreadable: {image_path}")
+        else:
+            return None
+
+        # Resize to 224x224
+        image = cv2.resize(image, (224, 224))
+
+        # Normalize (ImageNet mean/std)
+        image = image.astype(np.float32) / 255.0
+        mean = np.array([0.485, 0.456, 0.406])
+        std = np.array([0.229, 0.224, 0.225])
+        image = (image - mean) / std
+
+        # HWC -> CHW -> NCHW
+        image = np.transpose(image, (2, 0, 1))
+        image = np.expand_dims(image, 0)
+
+        return image.astype(np.float32)
+
+    def _load_image_pil(self, image_path, image_base64) -> Image.Image | None:
+        """Load image as PIL Image."""
         if image_base64:
             try:
                 payload = image_base64.split(",", 1)[-1]
@@ -58,120 +217,59 @@ class OrientationDetector:
                 buffer = np.frombuffer(raw, dtype=np.uint8)
                 frame = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
                 if frame is not None:
-                    return frame
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    return Image.fromarray(frame_rgb)
             except Exception:
                 pass
 
         if image_path:
-            frame = cv2.imread(image_path)
-            if frame is None:
+            try:
+                return Image.open(image_path).convert("RGB")
+            except Exception:
                 raise FileNotFoundError(f"image not found or unreadable: {image_path}")
-            return frame
 
         return None
 
-    def _detect_orientation(self, frame: np.ndarray) -> tuple[int, float]:
-        """Detect the correct orientation of the image.
+    def _distribution_to_angle(self, distribution: np.ndarray) -> float:
+        """Convert 360-bin probability distribution to angle."""
+        peak_idx = np.argmax(distribution)
+        bin_size = 360.0 / len(distribution)
+        angle = peak_idx * bin_size
 
-        Uses a heuristic approach based on face detection:
-        1. Try detecting faces in all 4 orientations
-        2. The orientation with the best face detection results is likely correct
+        # Parabolic interpolation for sub-bin accuracy
+        if 0 < peak_idx < len(distribution) - 1:
+            y1 = distribution[peak_idx - 1]
+            y2 = distribution[peak_idx]
+            y3 = distribution[peak_idx + 1]
 
-        Returns:
-            Tuple of (rotation_angle, confidence)
-            rotation_angle: 0, 90, 180, or 270 (clockwise rotation needed)
+            a = 0.5 * (y1 - 2 * y2 + y3)
+            b = 0.5 * (y3 - y1)
+
+            if abs(a) > 1e-8:
+                offset = -b / (2 * a)
+                offset = np.clip(offset, -0.5, 0.5)
+                angle += offset * bin_size
+
+        return angle % 360.0
+
+    def _angle_to_rotation(self, angle: float) -> tuple[int, float]:
+        """Convert continuous angle to discrete rotation and confidence.
+
+        The CGD model predicts how much the image has been rotated (clockwise).
+        To correct the image, we need to rotate in the opposite direction.
+        Our API returns the clockwise rotation needed to correct.
         """
-        # Import here to avoid circular dependency and allow lazy loading
-        from insightface.app import FaceAnalysis
+        angle = angle % 360.0
+        nearest_90 = round(angle / 90.0) * 90
 
-        # Initialize face detector (reuse if possible)
-        providers = self._get_providers()
-        root = self.settings.model_cache_dir
+        # Calculate confidence
+        distance = abs(angle - nearest_90)
+        if distance > 45:
+            distance = 90 - distance
+        confidence = 1.0 - (distance / 90.0)
+        confidence = max(0.5, min(1.0, confidence))
 
-        try:
-            app = FaceAnalysis(
-                name=self.settings.model_pack,
-                root=root,
-                providers=providers,
-            )
-            app.prepare(ctx_id=0, det_size=(640, 640))
-        except Exception:
-            # If face detection fails, return 0 rotation with low confidence
-            return (0, 0.5)
+        # If image was rotated X°, we need (360-X)° to correct
+        rotation_needed = (360 - int(nearest_90 % 360)) % 360
 
-        # Test all 4 orientations
-        orientations = [
-            (0, frame),  # Original
-            (90, self._rotate_90_clockwise(frame)),  # Rotate 90 CW
-            (180, self._rotate_180(frame)),  # Rotate 180
-            (270, self._rotate_270_clockwise(frame)),  # Rotate 270 CW
-        ]
-
-        best_rotation = 0
-        best_score = 0.0
-        best_count = 0
-
-        for rotation, rotated_frame in orientations:
-            try:
-                faces = app.get(rotated_frame)
-                if not faces:
-                    continue
-
-                # Calculate score based on number of faces and their confidence
-                count = len(faces)
-                avg_confidence = sum(float(f.det_score) for f in faces) / count if count > 0 else 0
-
-                # Score = count * avg_confidence, with bonus for more faces
-                score = count * avg_confidence * (1 + 0.1 * (count - 1))
-
-                if score > best_score:
-                    best_score = score
-                    best_rotation = rotation
-                    best_count = count
-
-            except Exception:
-                continue
-
-        # Calculate confidence based on detection quality
-        if best_count == 0:
-            # No faces detected in any orientation
-            confidence = 0.5
-        else:
-            # Higher confidence if more faces detected with higher scores
-            confidence = min(best_score / 2.0, 1.0)
-
-        return (best_rotation, round(confidence, 4))
-
-    def _rotate_90_clockwise(self, frame: np.ndarray) -> np.ndarray:
-        """Rotate image 90 degrees clockwise."""
-        return cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-
-    def _rotate_180(self, frame: np.ndarray) -> np.ndarray:
-        """Rotate image 180 degrees."""
-        return cv2.rotate(frame, cv2.ROTATE_180)
-
-    def _rotate_270_clockwise(self, frame: np.ndarray) -> np.ndarray:
-        """Rotate image 270 degrees clockwise (90 counter-clockwise)."""
-        return cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
-
-    def _get_providers(self) -> list[str]:
-        """Get ONNX providers based on platform and settings."""
-        import platform
-
-        device = self.settings.onnx_device.lower()
-
-        # macOS Apple Silicon - prefer CoreML
-        if platform.system() == "Darwin" and platform.machine() == "arm64":
-            try:
-                import onnxruntime as ort
-
-                available_providers = ort.get_available_providers()
-                if "CoreMLExecutionProvider" in available_providers:
-                    return ["CoreMLExecutionProvider", "CPUExecutionProvider"]
-            except Exception:
-                pass
-            return ["CPUExecutionProvider"]
-
-        if device == "cuda":
-            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        return ["CPUExecutionProvider"]
+        return (rotation_needed, round(confidence, 4))

@@ -47,7 +47,7 @@ jobs:
         id: buildtime
         run: echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
 
-      - name: Build and push image
+      - name: Build and push main image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -62,47 +62,62 @@ jobs:
             VERSION=${{ steps.version.outputs.version }}
             BUILD_TIME=${{ steps.buildtime.outputs.build_time }}
 
-      - name: Verify image
-        run: |
-          echo "Verifying image..."
-          docker buildx imagetools inspect davidhu/relive:${{ steps.version.outputs.version }}
+      - name: Build and push ML image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./ml-service
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            davidhu/relive-ml:${{ steps.version.outputs.version }}
+            davidhu/relive-ml:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Test image
+      - name: Verify images
         run: |
-          echo "Testing amd64..."
+          echo "Verifying main image..."
+          docker buildx imagetools inspect davidhu/relive:${{ steps.version.outputs.version }}
+          echo "Verifying ML image..."
+          docker buildx imagetools inspect davidhu/relive-ml:${{ steps.version.outputs.version }}
+
+      - name: Test images
+        run: |
+          echo "Testing main image amd64..."
           docker run --rm --platform linux/amd64 davidhu/relive:${{ steps.version.outputs.version }} /app/relive --version || echo "Test skipped"
 
-          echo "Testing arm64..."
+          echo "Testing main image arm64..."
           docker run --rm --platform linux/arm64 davidhu/relive:${{ steps.version.outputs.version }} /app/relive --version || echo "Test skipped"
 
       - name: Create release notes
         run: |
           cat > release-notes.md << EOF
-          ## Docker Image
+          ## Docker Images
 
-          Single image with embedded frontend, multi-architecture support:
-          - ✅ linux/amd64 (Intel/AMD x86_64)
-          - ✅ linux/arm64 (Apple Silicon, ARM NAS, Raspberry Pi)
+          Multi-architecture support (linux/amd64, linux/arm64):
 
-          ### Pull Image
+          ### Main Service
           \`\`\`bash
           docker pull davidhu/relive:${{ steps.version.outputs.version }}
           \`\`\`
 
-          ### Deploy
+          ### ML Service (Face Detection)
           \`\`\`bash
-          docker run -d \
-            -p 8080:8080 \
-            -v ./data:/app/data \
-            -v /path/to/photos:/app/photos:ro \
-            -e JWT_SECRET=your-secret-key \
-            davidhu/relive:${{ steps.version.outputs.version }}
+          docker pull davidhu/relive-ml:${{ steps.version.outputs.version }}
+          \`\`\`
+
+          ### Deploy with Docker Compose
+          \`\`\`bash
+          # Copy example files
+          cp docker-compose.prod.yml.example docker-compose.prod.yml
+          cp .env.example .env
+          cp backend/config.prod.yaml.example backend/config.prod.yaml
+
+          # Edit .env and config.prod.yaml, then:
+          docker compose -f docker-compose.prod.yml up -d
           \`\`\`
 
           Access: http://localhost:8080
-
-          ### Image Size
-          ~75MB (per architecture, includes frontend)
 
           See [Deployment Guide](https://github.com/davidhoo/relive/blob/main/docs/DEPLOY_FROM_DOCKERHUB.md) for details.
           EOF

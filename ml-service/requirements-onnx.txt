@@ -1,3 +1,6 @@
+# Minimal requirements for ONNX-based ML service
+# Much lighter than PyTorch version - suitable for NAS devices
+
 fastapi==0.135.3
 uvicorn==0.42.0
 pydantic==2.12.5
@@ -5,15 +8,8 @@ pydantic-settings==2.13.1
 httpx==0.28.1
 pytest==9.0.2
 opencv-python-headless==4.13.0.92
-onnxruntime>=1.20,<2; python_version < "3.14"
+onnxruntime>=1.16
 insightface>=0.7.3,<1.0
 numpy>=1.26
-
-# Orientation detection (CGD model)
-torch>=2.0
-torchvision>=0.15
-timm>=1.0
-pytorch-lightning>=2.0
-huggingface_hub>=0.20
-loguru>=0.7
 Pillow>=10.0
+loguru>=0.7
