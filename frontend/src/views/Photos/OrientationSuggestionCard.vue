@@ -8,7 +8,7 @@
       <img
         v-for="photo in previewPhotos"
         :key="photo.id"
-        :src="getThumbnailUrl(photo.thumbnail_path)"
+        :src="getThumbnailUrl(photo.id, photo.updated_at)"
         class="preview-thumb"
         :style="{ transform: `rotate(${photo.suggested_rotation}deg)` }"
       />
@@ -46,9 +46,12 @@ const rotationLabels: Record<number, string> = {
 
 const rotationLabel = rotationLabels[props.group.suggested_rotation] || `${props.group.suggested_rotation}°`
 
-const getThumbnailUrl = (thumbnailPath: string) => {
-  if (!thumbnailPath) return ''
-  return `${apiBaseUrl}/photos/thumbnail/${thumbnailPath.split('/').pop()}`
+const getThumbnailUrl = (photoId: number, version?: string) => {
+  let url = `${apiBaseUrl}/photos/${photoId}/thumbnail`
+  if (version) {
+    url += `?v=${encodeURIComponent(version)}`
+  }
+  return url
 }
 </script>
 

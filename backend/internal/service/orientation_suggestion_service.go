@@ -316,6 +316,7 @@ func (s *orientationSuggestionService) GetDetail(rotation int, page, pageSize in
 			SuggestedRotation: sug.SuggestedRotation,
 			Confidence:        sug.Confidence,
 			LowConfidence:     sug.LowConfidence,
+			UpdatedAt:         photo.UpdatedAt.Format("2006-01-02T15:04:05.999Z"),
 		})
 	}
 

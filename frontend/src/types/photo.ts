@@ -165,6 +165,7 @@ export interface OrientationSuggestionPhoto {
   suggested_rotation: number
   confidence: number
   low_confidence: boolean
+  updated_at: string
 }
 
 // 方向建议详情

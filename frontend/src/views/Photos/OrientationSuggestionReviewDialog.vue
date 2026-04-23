@@ -21,7 +21,7 @@
             <el-checkbox :value="photo.id" />
             <div class="photo-preview">
               <img
-                :src="getThumbnailUrl(photo.thumbnail_path)"
+                :src="getThumbnailUrl(photo.id, photo.updated_at)"
                 :style="{ transform: `rotate(${photo.suggested_rotation}deg)` }"
               />
             </div>
@@ -98,9 +98,12 @@ const rotationLabels: Record<number, string> = {
 
 const rotationLabel = computed(() => rotationLabels[props.rotation] || `${props.rotation}°`)
 
-const getThumbnailUrl = (thumbnailPath: string) => {
-  if (!thumbnailPath) return ''
-  return `${apiBaseUrl}/photos/thumbnail/${thumbnailPath.split('/').pop()}`
+const getThumbnailUrl = (photoId: number, version?: string) => {
+  let url = `${apiBaseUrl}/photos/${photoId}/thumbnail`
+  if (version) {
+    url += `?v=${encodeURIComponent(version)}`
+  }
+  return url
 }
 
 watch(

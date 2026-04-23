@@ -61,6 +61,7 @@ type OrientationSuggestionPhoto struct {
 	SuggestedRotation int     `json:"suggested_rotation"`
 	Confidence        float64 `json:"confidence"`
 	LowConfidence     bool    `json:"low_confidence"`
+	UpdatedAt         string  `json:"updated_at"`
 }
 
 // OrientationSuggestionDetail represents detailed suggestions for a specific rotation.
