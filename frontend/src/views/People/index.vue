@@ -519,8 +519,11 @@ const loadMergeSuggestions = async () => {
   try {
     const res = await peopleApi.listMergeSuggestions({ page: 1, page_size: 12 })
     const payload = res.data?.data
-    mergeSuggestions.value = payload?.items || []
-    mergeSuggestionTotal.value = payload?.total || 0
+    // 防御性更新：仅在响应有效时更新状态，避免异常响应导致数据被重置
+    if (payload) {
+      mergeSuggestions.value = payload.items || []
+      mergeSuggestionTotal.value = payload.total || 0
+    }
   } catch (error: any) {
     ElMessage.error(error.message || '加载人物合并建议失败')
   } finally {
