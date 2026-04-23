@@ -5,6 +5,7 @@ import type {
   Face,
   PeopleBackgroundLogsResponse,
   PeopleListParams,
+  PeopleMergeJob,
   PeopleStats,
   PeopleTask,
   Person,
@@ -44,10 +45,14 @@ export const peopleApi = {
   },
 
   merge(targetPersonId: number, sourcePersonIds: number[]) {
-    return http.post<ApiResponse<void>>('/people/merge', {
+    return http.post<ApiResponse<{ job_id: number; status: string }>>('/people/merge', {
       target_person_id: targetPersonId,
       source_person_ids: sourcePersonIds,
     })
+  },
+
+  getMergeJob(jobId: number) {
+    return http.get<ApiResponse<PeopleMergeJob>>(`/people/merge-jobs/${jobId}`)
   },
 
   split(faceIds: number[]) {

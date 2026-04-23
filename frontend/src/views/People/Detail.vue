@@ -546,13 +546,50 @@ const confirmMoveFaces = async () => {
   }
 }
 
+const pollMergeJob = async (jobId: number, targetPersonId: number, isMergeInto: boolean) => {
+  const maxPolls = 60 // 最多轮询 60 次（约 2 分钟）
+  for (let i = 0; i < maxPolls; i++) {
+    await new Promise(resolve => setTimeout(resolve, 2000))
+    try {
+      const res = await peopleApi.getMergeJob(jobId)
+      const job = res.data?.data
+      if (!job) break
+
+      if (job.status === 'completed') {
+        if (isMergeInto) {
+          ElMessage.success('当前人物已合并到目标人物')
+          router.push(`/people/${targetPersonId}`)
+        } else {
+          ElMessage.success('人物已合并')
+          await loadData()
+        }
+        return
+      }
+
+      if (job.status === 'failed') {
+        ElMessage.error(job.error_message || '合并任务失败')
+        return
+      }
+      // pending / processing 继续轮询
+    } catch {
+      // 轮询出错继续重试
+    }
+  }
+  ElMessage.warning('合并任务超时，请稍后刷新页面查看结果')
+}
+
 const confirmMerge = async () => {
   if (!person.value || mergeSourceIds.value.length === 0) return
   try {
     merging.value = true
     const res = await peopleApi.merge(person.value.id, mergeSourceIds.value)
-    showReclusterResult(res.data?.data, '人物已合并', true)
-    await loadData()
+    const jobId = res.data?.data?.job_id
+    showMergeDialog.value = false
+    mergeSourceIds.value = []
+    if (jobId) {
+      ElMessage.info('合并任务已提交，正在后台处理...')
+      await pollMergeJob(jobId, person.value.id, false)
+    }
   } catch (error: any) {
     ElMessage.error(error.message || '合并人物失败')
   } finally {
@@ -562,11 +599,17 @@ const confirmMerge = async () => {
 
 const confirmMergeInto = async () => {
   if (!person.value || !mergeIntoTargetId.value) return
+  const targetId = mergeIntoTargetId.value
   try {
     mergingInto.value = true
-    await peopleApi.merge(mergeIntoTargetId.value, [person.value.id])
-    ElMessage.success('当前人物已合并到目标人物')
-    router.push(`/people/${mergeIntoTargetId.value}`)
+    const res = await peopleApi.merge(targetId, [person.value.id])
+    const jobId = res.data?.data?.job_id
+    showMergeIntoDialog.value = false
+    mergeIntoTargetId.value = undefined
+    if (jobId) {
+      ElMessage.info('合并任务已提交，正在后台处理...')
+      await pollMergeJob(jobId, targetId, true)
+    }
   } catch (error: any) {
     ElMessage.error(error.message || '合并人物失败')
   } finally {

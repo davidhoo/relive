@@ -86,6 +86,7 @@ func newPeopleServiceForTest(t *testing.T, client PeopleMLClient) (*peopleServic
 		repository.NewFaceRepository(db),
 		repository.NewPersonRepository(db),
 		repository.NewPeopleJobRepository(db),
+		repository.NewPeopleMergeJobRepository(db),
 		repository.NewCannotLinkRepository(db),
 		cfg,
 		client,
@@ -1330,6 +1331,7 @@ func TestPhotoScanStartsPeopleBackground(t *testing.T) {
 		repository.NewFaceRepository(db),
 		repository.NewPersonRepository(db),
 		peopleJobRepo,
+		repository.NewPeopleMergeJobRepository(db),
 		repository.NewCannotLinkRepository(db),
 		cfg,
 		&fakePeopleMLClient{
@@ -1566,6 +1568,7 @@ func TestPeopleServiceGeneratesFaceThumbnail(t *testing.T) {
 		repository.NewFaceRepository(db),
 		repository.NewPersonRepository(db),
 		repository.NewPeopleJobRepository(db),
+		repository.NewPeopleMergeJobRepository(db),
 		repository.NewCannotLinkRepository(db),
 		cfg,
 		&fakePeopleMLClient{

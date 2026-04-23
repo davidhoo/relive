@@ -9,9 +9,9 @@ type Repositories struct {
 	Face                 FaceRepository
 	Person               PersonRepository
 	PeopleJob            PeopleJobRepository
+	PeopleMergeJob       PeopleMergeJobRepository
 	CannotLink           CannotLinkRepository
 	MergeSuggestion      PersonMergeSuggestionRepository
-	OrientationSuggestion PhotoOrientationSuggestionRepository
 	ScanJob              ScanJobRepository
 	ThumbnailJob         ThumbnailJobRepository
 	GeocodeJob           GeocodeJobRepository
@@ -31,9 +31,9 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		Face:                 NewFaceRepository(db),
 		Person:               NewPersonRepository(db),
 		PeopleJob:            NewPeopleJobRepository(db),
+		PeopleMergeJob:       NewPeopleMergeJobRepository(db),
 		CannotLink:           NewCannotLinkRepository(db),
 		MergeSuggestion:      NewPersonMergeSuggestionRepository(db),
-		OrientationSuggestion: NewPhotoOrientationSuggestionRepository(db),
 		ScanJob:              NewScanJobRepository(db),
 		ThumbnailJob:         NewThumbnailJobRepository(db),
 		GeocodeJob:           NewGeocodeJobRepository(db),

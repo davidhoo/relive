@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -58,6 +59,8 @@ type PeopleService interface {
 	EnqueueUnprocessed() (int, error)
 	ResetAllPeople() (int, error)
 	MergePeople(targetPersonID uint, sourcePersonIDs []uint) (*model.ReclusterResult, error)
+	MergePeopleAsync(targetPersonID uint, sourcePersonIDs []uint, jobType string) (uint, error)
+	GetMergeJobStatus(jobID uint) (*model.PeopleMergeJob, error)
 	SplitPerson(faceIDs []uint) (*model.Person, *model.ReclusterResult, error)
 	MoveFaces(faceIDs []uint, targetPersonID uint) (*model.ReclusterResult, error)
 	UpdatePersonCategory(personID uint, category string) error
@@ -69,15 +72,16 @@ type PeopleService interface {
 }
 
 type peopleService struct {
-	db             *gorm.DB
-	photoRepo      repository.PhotoRepository
-	faceRepo       repository.FaceRepository
-	personRepo     repository.PersonRepository
-	jobRepo        repository.PeopleJobRepository
-	cannotLinkRepo repository.CannotLinkRepository
-	config         *config.Config
-	client         PeopleMLClient
-	runtimeService AnalysisRuntimeService
+	db               *gorm.DB
+	photoRepo        repository.PhotoRepository
+	faceRepo         repository.FaceRepository
+	personRepo       repository.PersonRepository
+	jobRepo          repository.PeopleJobRepository
+	mergeJobRepo     repository.PeopleMergeJobRepository
+	cannotLinkRepo   repository.CannotLinkRepository
+	config           *config.Config
+	client           PeopleMLClient
+	runtimeService   AnalysisRuntimeService
 
 	taskMutex        sync.RWMutex
 	task             *model.PeopleTask
@@ -122,7 +126,7 @@ type activePeopleTask struct {
 	stop   bool
 }
 
-func NewPeopleService(db *gorm.DB, photoRepo repository.PhotoRepository, faceRepo repository.FaceRepository, personRepo repository.PersonRepository, jobRepo repository.PeopleJobRepository, cannotLinkRepo repository.CannotLinkRepository, cfg *config.Config, client PeopleMLClient, runtimeService AnalysisRuntimeService) PeopleService {
+func NewPeopleService(db *gorm.DB, photoRepo repository.PhotoRepository, faceRepo repository.FaceRepository, personRepo repository.PersonRepository, jobRepo repository.PeopleJobRepository, mergeJobRepo repository.PeopleMergeJobRepository, cannotLinkRepo repository.CannotLinkRepository, cfg *config.Config, client PeopleMLClient, runtimeService AnalysisRuntimeService) PeopleService {
 	// 清理上次异常退出遗留的非终态任务
 	if err := jobRepo.InterruptNonTerminal("task interrupted because service restarted"); err != nil {
 		logger.Errorf("Failed to interrupt non-terminal people jobs: %v", err)
@@ -141,6 +145,7 @@ func NewPeopleService(db *gorm.DB, photoRepo repository.PhotoRepository, faceRep
 		faceRepo:             faceRepo,
 		personRepo:           personRepo,
 		jobRepo:              jobRepo,
+		mergeJobRepo:         mergeJobRepo,
 		cannotLinkRepo:       cannotLinkRepo,
 		config:               cfg,
 		client:               client,
@@ -411,6 +416,115 @@ func (s *peopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint)
 	s.markMergeSuggestionsDirty("merge_people")
 	s.scheduleFeedbackRecluster()
 	return &model.ReclusterResult{}, nil
+}
+
+// MergePeopleAsync 异步创建人物合并任务，避免同步执行超时
+func (s *peopleService) MergePeopleAsync(targetPersonID uint, sourcePersonIDs []uint, jobType string) (uint, error) {
+	if len(sourcePersonIDs) == 0 {
+		return 0, fmt.Errorf("no source persons to merge")
+	}
+
+	// 验证目标人物存在
+	targetPerson, err := s.personRepo.GetByID(targetPersonID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get target person: %w", err)
+	}
+	if targetPerson == nil {
+		return 0, fmt.Errorf("target person not found")
+	}
+
+	// 验证源人物存在
+	for _, sourceID := range sourcePersonIDs {
+		if sourceID == targetPersonID {
+			return 0, fmt.Errorf("cannot merge person into itself")
+		}
+		sourcePerson, err := s.personRepo.GetByID(sourceID)
+		if err != nil {
+			return 0, fmt.Errorf("failed to get source person %d: %w", sourceID, err)
+		}
+		if sourcePerson == nil {
+			return 0, fmt.Errorf("source person %d not found", sourceID)
+		}
+	}
+
+	// 序列化源人物 ID 列表
+	sourceIDsJSON, err := json.Marshal(sourcePersonIDs)
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal source IDs: %w", err)
+	}
+
+	job := &model.PeopleMergeJob{
+		Type:      jobType,
+		Status:    model.PeopleMergeJobStatusPending,
+		TargetID:  targetPersonID,
+		SourceIDs: string(sourceIDsJSON),
+	}
+
+	if err := s.mergeJobRepo.Create(job); err != nil {
+		return 0, fmt.Errorf("failed to create merge job: %w", err)
+	}
+
+	logger.Infof("Created people merge job %d: type=%s, target=%d, sources=%v", job.ID, jobType, targetPersonID, sourcePersonIDs)
+
+	// 立即启动后台执行（也可以让调度器轮询执行）
+	go s.executeMergeJob(job.ID)
+
+	return job.ID, nil
+}
+
+// executeMergeJob 执行合并任务
+func (s *peopleService) executeMergeJob(jobID uint) {
+	job, err := s.mergeJobRepo.GetByID(jobID)
+	if err != nil {
+		logger.Errorf("Failed to get merge job %d: %v", jobID, err)
+		return
+	}
+
+	// 更新状态为处理中
+	now := time.Now()
+	job.StartedAt = &now
+	job.Status = model.PeopleMergeJobStatusProcessing
+	if err := s.db.Model(job).Updates(map[string]interface{}{
+		"status":      job.Status,
+		"started_at":  job.StartedAt,
+	}).Error; err != nil {
+		logger.Errorf("Failed to update merge job %d status: %v", jobID, err)
+		return
+	}
+
+	// 解析源人物 ID 列表
+	var sourcePersonIDs []uint
+	if err := json.Unmarshal([]byte(job.SourceIDs), &sourcePersonIDs); err != nil {
+		logger.Errorf("Failed to unmarshal source IDs for job %d: %v", jobID, err)
+		s.mergeJobRepo.Fail(jobID, fmt.Sprintf("invalid source IDs: %v", err))
+		return
+	}
+
+	// 执行同步合并
+	result, err := s.MergePeople(job.TargetID, sourcePersonIDs)
+	if err != nil {
+		logger.Errorf("Merge job %d failed: %v", jobID, err)
+		s.mergeJobRepo.Fail(jobID, err.Error())
+		return
+	}
+
+	// 序列化结果
+	resultJSON, _ := json.Marshal(&model.PeopleMergeJobResult{
+		AffectedPhotoCount: len(sourcePersonIDs), // 简化计数
+		ReclusterResult:    result,
+	})
+
+	if err := s.mergeJobRepo.Complete(jobID, string(resultJSON)); err != nil {
+		logger.Errorf("Failed to complete merge job %d: %v", jobID, err)
+		return
+	}
+
+	logger.Infof("Merge job %d completed successfully", jobID)
+}
+
+// GetMergeJobStatus 获取合并任务状态
+func (s *peopleService) GetMergeJobStatus(jobID uint) (*model.PeopleMergeJob, error) {
+	return s.mergeJobRepo.GetByID(jobID)
 }
 
 func (s *peopleService) SplitPerson(faceIDs []uint) (*model.Person, *model.ReclusterResult, error) {

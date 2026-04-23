@@ -35,7 +35,7 @@ func TestClusteringEquivalence(t *testing.T) {
 	}
 
 	repos := repository.NewRepositories(db)
-	svc := NewPeopleService(db, repos.Photo, repos.Face, repos.Person, repos.PeopleJob, repos.CannotLink, cfg, nil, nil).(*peopleService)
+	svc := NewPeopleService(db, repos.Photo, repos.Face, repos.Person, repos.PeopleJob, repos.PeopleMergeJob, repos.CannotLink, cfg, nil, nil).(*peopleService)
 
 	// 获取测试数据
 	pendingFaces, err := repos.Face.ListPending(peopleClusteringBatchSize)

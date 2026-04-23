@@ -121,3 +121,17 @@ export interface PersonMergeSuggestion {
   target_person?: Person
   items?: PersonMergeSuggestionItem[]
 }
+
+export interface PeopleMergeJob {
+  id: number
+  type: 'merge_into' | 'merge_to'
+  status: 'pending' | 'processing' | 'completed' | 'failed'
+  target_id: number
+  source_ids: string
+  result?: string
+  error_message?: string
+  started_at?: string
+  completed_at?: string
+  created_at: string
+  updated_at: string
+}

@@ -147,6 +147,17 @@ func (s *stubPeopleService) DissolvePerson(_ uint) (int, error) {
 func (s *stubPeopleService) ApplyDetectionResult(_ *model.PeopleJob, _ *model.Photo, _ *model.PeopleDetectionResult) error {
 	return nil
 }
+func (s *stubPeopleService) MergePeopleAsync(targetPersonID uint, sourcePersonIDs []uint, jobType string) (uint, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
+	s.mergeTargetPerson = targetPersonID
+	s.mergeSourcePeople = append([]uint(nil), sourcePersonIDs...)
+	return 1, nil
+}
+func (s *stubPeopleService) GetMergeJobStatus(jobID uint) (*model.PeopleMergeJob, error) {
+	return &model.PeopleMergeJob{ID: jobID, Status: model.PeopleMergeJobStatusCompleted}, nil
+}
 
 type stubMergeSuggestionService struct {
 	task              *model.PersonMergeSuggestionTask

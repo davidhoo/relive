@@ -411,13 +411,45 @@ func (h *PeopleHandler) MergePeople(c *gin.Context) {
 		return
 	}
 
-	rc, err := h.service.MergePeople(req.TargetPersonID, req.SourcePersonIDs)
+	// 创建异步合并任务
+	jobID, err := h.service.MergePeopleAsync(req.TargetPersonID, req.SourcePersonIDs, model.PeopleMergeJobTypeMergeInto)
 	if err != nil {
 		writeServiceFailure(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, model.Response{Success: true, Message: "人物已合并", Data: rc})
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "合并任务已创建",
+		Data: gin.H{
+			"job_id": jobID,
+			"status": "pending",
+		},
+	})
+}
+
+// GetMergeJob 获取合并任务状态
+func (h *PeopleHandler) GetMergeJob(c *gin.Context) {
+	jobID, err := strconv.ParseUint(c.Param("job_id"), 10, 32)
+	if err != nil {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_JOB_ID", "Invalid job ID")
+		return
+	}
+
+	job, err := h.service.GetMergeJobStatus(uint(jobID))
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			writePeopleError(c, http.StatusNotFound, "NOT_FOUND", "Job not found")
+			return
+		}
+		writeServiceFailure(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Data:    job,
+	})
 }
 
 func (h *PeopleHandler) SplitPerson(c *gin.Context) {

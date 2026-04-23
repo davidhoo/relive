@@ -254,6 +254,7 @@ func Setup(db *gorm.DB, cfg *config.Config, appState *lifecycle.State) (*gin.Eng
 				people.POST("/merge-suggestions/:id/exclude", handlers.People.ExcludeMergeSuggestionCandidates)
 				people.POST("/merge-suggestions/:id/apply", handlers.People.ApplyMergeSuggestion)
 				people.POST("/merge", handlers.People.MergePeople)
+				people.GET("/merge-jobs/:job_id", handlers.People.GetMergeJob)
 				people.POST("/split", handlers.People.SplitPerson)
 				people.POST("/move-faces", handlers.People.MoveFaces)
 				people.GET("", handlers.People.ListPeople)
@@ -267,20 +268,6 @@ func Setup(db *gorm.DB, cfg *config.Config, appState *lifecycle.State) (*gin.Eng
 				people.POST("/:id/dissolve", handlers.People.DissolvePerson)
 			}
 
-			// 照片方向建议
-			orientation := authorized.Group("/orientation-suggestions")
-			{
-				orientation.GET("/groups", handlers.Orientation.GetGroups)
-				orientation.GET("/detail", handlers.Orientation.GetDetail)
-				orientation.POST("/apply", handlers.Orientation.Apply)
-				orientation.POST("/dismiss", handlers.Orientation.Dismiss)
-				orientation.GET("/task", handlers.Orientation.GetTask)
-				orientation.GET("/stats", handlers.Orientation.GetStats)
-				orientation.GET("/logs", handlers.Orientation.GetLogs)
-				orientation.POST("/pause", handlers.Orientation.Pause)
-				orientation.POST("/resume", handlers.Orientation.Resume)
-				orientation.POST("/rebuild", handlers.Orientation.Rebuild)
-			}
 
 			thumbnails := authorized.Group("/thumbnails")
 			{
