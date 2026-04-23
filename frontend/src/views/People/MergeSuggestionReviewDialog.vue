@@ -14,7 +14,8 @@
             <el-avatar
               :size="48"
               :src="getFaceThumbnail(suggestion.target_person?.representative_face_id)"
-              class="candidate-avatar"
+              class="candidate-avatar clickable"
+              @click="goToPersonDetail(suggestion.target_person_id)"
             >
               {{ getPersonAvatarFallback(suggestion.target_person || { category: suggestion.target_category_snapshot as PersonCategory }) }}
             </el-avatar>
@@ -39,7 +40,8 @@
             <el-avatar
               :size="40"
               :src="getFaceThumbnail(item.candidate_person?.representative_face_id)"
-              class="candidate-avatar"
+              class="candidate-avatar clickable"
+              @click.stop="goToPersonDetail(item.candidate_person_id)"
             >
               {{ getPersonAvatarFallback(item.candidate_person || { category: 'stranger' }) }}
             </el-avatar>
@@ -63,7 +65,14 @@
 
     <template #footer>
       <div class="review-footer">
-        <el-button @click="emit('update:modelValue', false)">关闭</el-button>
+        <div class="review-footer-left">
+          <el-button :disabled="sortedItems.length === 0" @click="selectAll">
+            {{ isAllSelected ? '取消全选' : '全选' }}
+          </el-button>
+          <el-button :disabled="sortedItems.length === 0" @click="invertSelection">反选</el-button>
+        </div>
+        <div class="review-footer-right">
+          <el-button @click="emit('update:modelValue', false)">关闭</el-button>
         <el-button
           type="warning"
           :disabled="selectedIds.length === 0 || submitting"
@@ -79,7 +88,8 @@
           @click="emit('apply', [...selectedIds])"
         >
           确认合并所选
-        </el-button>
+          </el-button>
+        </div>
       </div>
     </template>
   </el-dialog>
@@ -87,9 +97,12 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 
 import type { PersonCategory, PersonMergeSuggestion } from '@/types/people'
 import { getPersonAvatarFallback, getPersonCategoryLabel, sortMergeSuggestionCandidates } from './peopleHelpers'
+
+const router = useRouter()
 
 const props = defineProps<{
   modelValue: boolean
@@ -108,6 +121,27 @@ const selectedIds = ref<number[]>([])
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
 
 const sortedItems = computed(() => sortMergeSuggestionCandidates(props.suggestion?.items || []))
+
+const allCandidateIds = computed(() => sortedItems.value.map(i => i.candidate_person_id))
+
+const isAllSelected = computed(() => allCandidateIds.value.length > 0 && selectedIds.value.length === allCandidateIds.value.length)
+
+function selectAll() {
+  if (isAllSelected.value) {
+    selectedIds.value = []
+  } else {
+    selectedIds.value = [...allCandidateIds.value]
+  }
+}
+
+function invertSelection() {
+  const selected = new Set(selectedIds.value)
+  selectedIds.value = allCandidateIds.value.filter(id => !selected.has(id))
+}
+
+function goToPersonDetail(personId: number) {
+  router.push({ name: 'PeopleDetail', params: { id: personId } })
+}
 
 const getFaceThumbnail = (faceId?: number) => {
   if (!faceId) return ''
@@ -211,7 +245,27 @@ watch(
 
 .review-footer {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
   gap: 10px;
+}
+
+.review-footer-left {
+  display: flex;
+  gap: 10px;
+}
+
+.review-footer-right {
+  display: flex;
+  gap: 10px;
+}
+
+.candidate-avatar.clickable {
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+
+.candidate-avatar.clickable:hover {
+  transform: scale(1.1);
 }
 </style>
