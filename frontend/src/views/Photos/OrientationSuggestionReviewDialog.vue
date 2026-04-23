@@ -165,10 +165,15 @@ const handleDismiss = () => {
 .photo-info {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   margin-top: 8px;
   font-size: 12px;
   color: var(--color-text-secondary);
+  line-height: 1.4;
+}
+
+.photo-info span {
+  display: block;
 }
 
 .low-confidence {
