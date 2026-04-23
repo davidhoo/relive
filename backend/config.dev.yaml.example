@@ -32,7 +32,7 @@ logging:
   console: true
 
 security:
-  jwt_secret: "dev-secret-change-in-production"
+  jwt_Secret: "dev-secret-change-in-production"
   api_key_prefix: "sk-relive-"
 
 performance:
