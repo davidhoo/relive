@@ -3,19 +3,20 @@
 
 services:
   relive-ml:
-    build:
-      context: ./ml-service
-      dockerfile: Dockerfile
-    image: relive-ml:local
+    image: davidhu/relive-ml:latest
     container_name: relive-ml
     restart: unless-stopped
+    cpu_shares: 512
     environment:
-      - RELIVE_ML_ONNX_DEVICE=cpu
-      - RELIVE_ML_MODEL_PACK=buffalo_sc
+      - TZ=Asia/Shanghai
+      - RELIVE_ML_MODEL_PACK=${ML_MODEL_PACK:-buffalo_sc}
+      - RELIVE_ML_ONNX_DEVICE=${ML_ONNX_DEVICE:-cpu}
     volumes:
-      # - ./data/photos:/photos:ro
+      # 照片目录挂载（与 relive 服务保持一致）
+      - /volume1/homes/david/Photos/:/app/photos/:rw
+      - /volume1/archive/:/app/photos/archive/:ro
       # InsightFace 模型缓存持久化
-      - ./data/ml-models:/app/models
+      - relive-ml-models:/app/models
     networks:
       - relive-network
     healthcheck:
@@ -24,6 +25,11 @@ services:
       timeout: 3s
       retries: 3
       start_period: 120s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   relive:
     image: davidhu/relive:latest
@@ -44,24 +50,9 @@ services:
       - ./backend/config.prod.yaml:/app/config.yaml:ro
       # 数据目录（数据库、日志）
       - ./data/backend:/app/data
-      # =============================================================================
-      # 离线逆地理编码数据（可选）
-      # =============================================================================
-      # 下载 cities500.zip 并解压到 ./data/backend/ 目录
-      # 容器启动时会自动检测并导入
-      # =============================================================================
       # 照片目录挂载
-      # =============================================================================
-      # 使用方法：
-      # 1. 修改下方的宿主机路径（冒号左边）为你实际的照片目录
-      # 2. 容器内路径（冒号右边）保持 /app/photos 不变
-      # 3. 在 Web 界面中添加扫描路径时使用容器内路径：/app/photos
-      #
-      # 示例：
-      # - /Users/yourname/Pictures:/app/photos:ro
-      # - /volume1/photos:/app/photos:ro
-      # =============================================================================
-      # - ./data/photos:/app/photos:ro
+      - /volume1/homes/david/Photos/:/app/photos/:rw
+      - /volume1/archive/:/app/photos/archive/:ro
     environment:
       - TZ=Asia/Shanghai
       - JWT_SECRET=${JWT_SECRET}
@@ -95,3 +86,6 @@ services:
 networks:
   relive-network:
     driver: bridge
+
+volumes:
+  relive-ml-models:

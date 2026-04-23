@@ -514,20 +514,35 @@ const loadPeople = async () => {
   }
 }
 
-const loadMergeSuggestions = async () => {
-  mergeSuggestionLoading.value = true
+const loadMergeSuggestions = async (silent = false) => {
+  if (!silent) {
+    mergeSuggestionLoading.value = true
+  }
   try {
     const res = await peopleApi.listMergeSuggestions({ page: 1, page_size: 12 })
     const payload = res.data?.data
-    // 防御性更新：仅在响应有效时更新状态，避免异常响应导致数据被重置
     if (payload) {
-      mergeSuggestions.value = payload.items || []
-      mergeSuggestionTotal.value = payload.total || 0
+      const newTotal = payload.total || 0
+      const newItems = payload.items || []
+      // silent 模式下检测变化，无变化则跳过更新
+      if (silent) {
+        const newIds = newItems.map((item: PersonMergeSuggestion) => item.id).join(',')
+        const oldIds = mergeSuggestions.value.map(item => item.id).join(',')
+        if (newTotal === mergeSuggestionTotal.value && newIds === oldIds) {
+          return
+        }
+      }
+      mergeSuggestions.value = newItems
+      mergeSuggestionTotal.value = newTotal
     }
   } catch (error: any) {
-    ElMessage.error(error.message || '加载人物合并建议失败')
+    if (!silent) {
+      ElMessage.error(error.message || '加载人物合并建议失败')
+    }
   } finally {
-    mergeSuggestionLoading.value = false
+    if (!silent) {
+      mergeSuggestionLoading.value = false
+    }
   }
 }
 
@@ -793,7 +808,7 @@ onMounted(async () => {
   await Promise.all([loadPeople(), loadTaskData(), loadMergeSuggestions()])
   taskTimer = window.setInterval(() => {
     void loadTaskData()
-    void loadMergeSuggestions()
+    void loadMergeSuggestions(true) // silent: true 避免轮询时 loading 闪烁
   }, 5000)
 })
 
