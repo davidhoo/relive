@@ -26,8 +26,8 @@ const (
 	peopleClusterThreshold     = 0.45
 	peoplePrototypeCount       = 5
 	peoplePrototypeCandidates  = 10
-	defaultLinkThreshold       = 0.65
-	defaultAttachThreshold     = 0.70
+	defaultLinkThreshold       = 0.62
+	defaultAttachThreshold     = 0.65
 	peopleMinClusterFaces      = 2
 	peopleFeedbackPollInterval = 250 * time.Millisecond
 
@@ -921,7 +921,7 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 			BBoxHeight: detected.BBox.Height,
 		})
 	}
-	thumbnailPaths, err := util.GenerateFaceThumbnails(photo.FilePath, s.faceThumbnailRoot(), thumbnailSpecs)
+	thumbnailPaths, err := util.GenerateFaceThumbnails(photo.FilePath, s.faceThumbnailRoot(), thumbnailSpecs, photo.ManualRotation)
 	if err != nil {
 		return err
 	}
@@ -1276,7 +1276,7 @@ func (s *peopleService) generateFaceThumbnail(photo *model.Photo, bbox model.Bou
 	if photo == nil {
 		return "", fmt.Errorf("photo is nil")
 	}
-	return util.GenerateFaceThumbnail(photo.FilePath, s.faceThumbnailRoot(), bbox.X, bbox.Y, bbox.Width, bbox.Height)
+	return util.GenerateFaceThumbnail(photo.FilePath, s.faceThumbnailRoot(), bbox.X, bbox.Y, bbox.Width, bbox.Height, photo.ManualRotation)
 }
 
 func (s *peopleService) faceThumbnailRoot() string {

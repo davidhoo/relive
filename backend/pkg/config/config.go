@@ -20,7 +20,8 @@ type Config struct {
 	People      PeopleConfig      `yaml:"people"`
 	LegacyML    LegacyMLConfig    `yaml:"ml"`
 	Display     DisplayConfig     `yaml:"display"`
-	Geocode     GeocodeConfig     `yaml:"geocode"` // 新增：地理编码配置
+	Geocode     GeocodeConfig     `yaml:"geocode"`     // 地理编码配置
+	Orientation OrientationConfig `yaml:"orientation"` // 方向检测配置
 	Logging     LoggingConfig     `yaml:"logging"`
 	Security    SecurityConfig    `yaml:"security"`
 }
@@ -85,11 +86,26 @@ type PeopleConfig struct {
 	MergeSuggestionCooldownSeconds int     `yaml:"merge_suggestion_cooldown_seconds"`
 }
 
+// OrientationConfig 方向检测配置
+type OrientationConfig struct {
+	Enabled            bool    `yaml:"enabled"`              // 是否启用方向检测
+	ConfidenceThreshold float64 `yaml:"confidence_threshold"` // 置信度阈值
+	CooldownSeconds    int     `yaml:"cooldown_seconds"`     // 冷却时间（秒）
+	BatchSize          int     `yaml:"batch_size"`           // 每批处理数量
+}
+
 const (
-	defaultMergeSuggestionThreshold       = 0.62
+	defaultMergeSuggestionThreshold       = 0.56
 	defaultMergeSuggestionMaxPairsPerRun  = 200
 	defaultMergeSuggestionBatchSize       = 100
 	defaultMergeSuggestionCooldownSeconds = 300
+)
+
+const (
+	defaultOrientationEnabled             = true
+	defaultOrientationConfidenceThreshold = 0.85
+	defaultOrientationCooldownSeconds     = 300
+	defaultOrientationBatchSize           = 50
 )
 
 // LegacyMLConfig 兼容旧版人物配置块
@@ -337,6 +353,17 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.People.MergeSuggestionCooldownSeconds == 0 {
 		cfg.People.MergeSuggestionCooldownSeconds = defaultMergeSuggestionCooldownSeconds
+	}
+
+	// Orientation 默认值
+	if cfg.Orientation.ConfidenceThreshold == 0 {
+		cfg.Orientation.ConfidenceThreshold = defaultOrientationConfidenceThreshold
+	}
+	if cfg.Orientation.CooldownSeconds == 0 {
+		cfg.Orientation.CooldownSeconds = defaultOrientationCooldownSeconds
+	}
+	if cfg.Orientation.BatchSize == 0 {
+		cfg.Orientation.BatchSize = defaultOrientationBatchSize
 	}
 
 	// 从环境变量覆盖敏感配置

@@ -160,8 +160,8 @@ people:
 		t.Fatalf("Load returned error: %v", err)
 	}
 
-	if cfg.People.MergeSuggestionThreshold != 0.62 {
-		t.Fatalf("expected default merge_suggestion_threshold 0.62, got %v", cfg.People.MergeSuggestionThreshold)
+	if cfg.People.MergeSuggestionThreshold != 0.56 {
+		t.Fatalf("expected default merge_suggestion_threshold 0.56, got %v", cfg.People.MergeSuggestionThreshold)
 	}
 	if cfg.People.MergeSuggestionMaxPairsPerRun != 200 {
 		t.Fatalf("expected default merge_suggestion_max_pairs_per_run 200, got %d", cfg.People.MergeSuggestionMaxPairsPerRun)
