@@ -63,8 +63,6 @@ export interface PeopleStats {
   pending_faces_total: number
   pending_faces_never_clustered: number
   pending_faces_retried: number
-  pending_faces_active: number    // 当前可重试的人脸
-  pending_faces_backoff: number   // 处于退避等待期的人脸
 }
 
 export interface PeopleBackgroundLogsResponse {

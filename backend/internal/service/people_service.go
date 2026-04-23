@@ -863,7 +863,7 @@ func (s *peopleService) runBackground(active *activePeopleTask) {
 				time.Sleep(300 * time.Millisecond)
 				continue
 			}
-			if pendingFaceStats.Active == 0 {
+			if pendingFaceStats.Total == 0 {
 				s.setTaskState(model.TaskStatusIdle, "idle", "队列已清空，等待新任务入队", nil)
 				time.Sleep(300 * time.Millisecond)
 				continue

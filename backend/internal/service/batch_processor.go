@@ -51,12 +51,30 @@ func (p *BatchProcessor) Run(stopCh <-chan struct{}, wg *sync.WaitGroup) {
 	ticker := time.NewTicker(p.flushInterval)
 	defer ticker.Stop()
 
+	// 空转退避：连续空轮次越多，间隔越长
+	idleTicks := 0
+	maxIdleInterval := 30 * time.Second
+
 	logger.Info("Batch processor started")
 
 	for {
 		select {
 		case <-ticker.C:
-			p.flush(false)
+			hasWork := p.flush(false)
+			if hasWork {
+				idleTicks = 0
+				ticker.Reset(p.flushInterval)
+			} else {
+				idleTicks++
+				if idleTicks >= 3 {
+					// 退避：3 次空转后拉长间隔，上限 30s
+					backoff := p.flushInterval * time.Duration(idleTicks-1)
+					if backoff > maxIdleInterval {
+						backoff = maxIdleInterval
+					}
+					ticker.Reset(backoff)
+				}
+			}
 
 		case <-stopCh:
 			// 停止前刷新所有数据
@@ -67,18 +85,15 @@ func (p *BatchProcessor) Run(stopCh <-chan struct{}, wg *sync.WaitGroup) {
 	}
 }
 
-// flush 批量写入数据库
-func (p *BatchProcessor) flush(isFinal bool) {
-	logger.Infof("Batch processor flush started (isFinal=%v)", isFinal)
-
+// flush 批量写入数据库，返回是否有实际数据处理
+func (p *BatchProcessor) flush(isFinal bool) bool {
 	// 1. 从队列取数据
 	items := p.queue.takeFromQueue(p.batchSize, 500*time.Millisecond)
-	logger.Infof("Took %d items from queue", len(items))
 
 	// 2. 加入重试队列中的项
 	p.retryMu.Lock()
-	if len(p.retryQueue) > 0 {
-		logger.Infof("Adding %d retry items", len(p.retryQueue))
+	retryCount := len(p.retryQueue)
+	if retryCount > 0 {
 		items = append(items, p.retryQueue...)
 		p.retryQueue = p.retryQueue[:0]
 	}
@@ -90,19 +105,18 @@ func (p *BatchProcessor) flush(isFinal bool) {
 
 	// 如果没有数据在缓冲区，直接返回
 	if len(p.buffer) == 0 {
-		logger.Debug("No items in buffer, returning")
 		p.mu.Unlock()
-		return
+		return false
 	}
 
-	logger.Infof("Processing %d items (%d new from queue, %d in buffer)",
-		len(p.buffer), len(items), len(p.buffer)-len(items))
+	logger.Infof("Batch processor flush: %d new items, %d in buffer, isFinal=%v",
+		len(items), len(p.buffer), isFinal)
 
 	// 如果缓冲区还不够大且不是最终刷新，等待更多数据
 	// 但如果是定时刷新（从队列取不到新数据）且缓冲区有数据，则强制刷新
 	if len(p.buffer) < p.batchSize && !isFinal && len(items) > 0 {
 		p.mu.Unlock()
-		return
+		return true
 	}
 
 	// 取出缓冲区所有数据
@@ -125,6 +139,8 @@ func (p *BatchProcessor) flush(isFinal bool) {
 		logger.Infof("Batch write success: %d results", len(uniqueItems))
 		p.queue.onProcessed(len(uniqueItems), true)
 	}
+
+	return true
 }
 
 // deduplicate 去重（同一照片保留最新，并检查最近处理过的）

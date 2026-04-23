@@ -34,8 +34,6 @@ type PendingFaceStats struct {
 	Total          int64 `json:"total"`
 	NeverClustered int64 `json:"never_clustered"`
 	Retried        int64 `json:"retried"`
-	Active         int64 `json:"active"`   // 当前可重试的人脸
-	Backoff        int64 `json:"backoff"`  // 处于退避等待期的人脸
 }
 
 type faceRepository struct {
@@ -175,34 +173,11 @@ func (r *faceRepository) ListPending(limit int) ([]*model.Face, error) {
 
 func (r *faceRepository) GetPendingStats() (*PendingFaceStats, error) {
 	stats := &PendingFaceStats{}
-	// 计算活跃人脸：满足重试条件的人脸
-	// 退避策略与 ListPending 一致
-	// 使用 julianday 计算时间差（单位：天），转换为分钟后与阈值比较
 	err := r.db.Model(&model.Face{}).
 		Select(`
 			COUNT(*) AS total,
 			SUM(CASE WHEN clustered_at IS NULL THEN 1 ELSE 0 END) AS never_clustered,
-			SUM(CASE WHEN clustered_at IS NOT NULL THEN 1 ELSE 0 END) AS retried,
-			SUM(CASE WHEN clustered_at IS NULL OR
-				(julianday('now') - julianday(clustered_at)) * 24 * 60 >=
-				CASE retry_count
-				WHEN 0 THEN 0
-				WHEN 1 THEN 0
-				WHEN 2 THEN 1
-				WHEN 3 THEN 5
-				WHEN 4 THEN 15
-				ELSE 60 END
-			THEN 1 ELSE 0 END) AS active,
-			SUM(CASE WHEN clustered_at IS NOT NULL AND
-				(julianday('now') - julianday(clustered_at)) * 24 * 60 <
-				CASE retry_count
-				WHEN 0 THEN 0
-				WHEN 1 THEN 0
-				WHEN 2 THEN 1
-				WHEN 3 THEN 5
-				WHEN 4 THEN 15
-				ELSE 60 END
-			THEN 1 ELSE 0 END) AS backoff
+			SUM(CASE WHEN clustered_at IS NOT NULL THEN 1 ELSE 0 END) AS retried
 		`).
 		Where("cluster_status = ?", model.FaceClusterStatusPending).
 		Scan(stats).Error

@@ -214,7 +214,7 @@
               </div>
 
               <div class="task-summary">
-                <span>待聚类 {{ clusteringPending }}<template v-if="stats.pending_faces_backoff > 0"> · 休眠 {{ stats.pending_faces_backoff }}</template></span>
+                <span>待聚类 {{ clusteringPending }}</span>
                 <span> · 累计完成 <strong>{{ stats.completed }}</strong></span>
                 <span v-if="stats.failed > 0"> · 失败 <strong class="danger">{{ stats.failed }}</strong></span>
               </div>
@@ -378,8 +378,6 @@ const stats = ref<PeopleStats>({
   pending_faces_total: 0,
   pending_faces_never_clustered: 0,
   pending_faces_retried: 0,
-  pending_faces_active: 0,
-  pending_faces_backoff: 0,
 })
 const backgroundLogs = ref<string[]>([])
 const people = ref<Person[]>([])
@@ -1033,10 +1031,6 @@ onBeforeUnmount(() => {
   color: var(--color-text-primary);
 }
 
-.backoff-hint {
-  color: var(--color-text-placeholder);
-  font-size: 12px;
-}
 
 .queue-empty {
   padding: 16px 0;

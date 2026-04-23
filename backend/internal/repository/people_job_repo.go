@@ -163,12 +163,11 @@ func (r *peopleJobRepository) InterruptNonTerminal(message string) error {
 
 func (r *peopleJobRepository) GetStats() (*PeopleJobStats, error) {
 	stats := &PeopleJobStats{}
-	if err := r.db.Model(&model.PeopleJob{}).Count(&stats.Total).Error; err != nil {
-		return nil, fmt.Errorf("count people jobs: %w", err)
-	}
 
+	// 查询非终态（pending/queued/processing/failed），行数极少
 	rows, err := r.db.Model(&model.PeopleJob{}).
 		Select("status, COUNT(*) as count").
+		Where("status NOT IN ?", []string{model.PeopleJobStatusCompleted, model.PeopleJobStatusCancelled}).
 		Group("status").Rows()
 	if err != nil {
 		return nil, err
@@ -188,15 +187,20 @@ func (r *peopleJobRepository) GetStats() (*PeopleJobStats, error) {
 			stats.Queued = count
 		case model.PeopleJobStatusProcessing:
 			stats.Processing = count
-		case model.PeopleJobStatusCompleted:
-			stats.Completed = count
 		case model.PeopleJobStatusFailed:
 			stats.Failed = count
-		case model.PeopleJobStatusCancelled:
-			stats.Cancelled = count
 		}
 	}
 
+	// 终态计数：利用 idx_people_job_status 索引直接定位，不扫描全表
+	if err := r.db.Model(&model.PeopleJob{}).Where("status = ?", model.PeopleJobStatusCompleted).Count(&stats.Completed).Error; err != nil {
+		return nil, fmt.Errorf("count completed: %w", err)
+	}
+	if err := r.db.Model(&model.PeopleJob{}).Where("status = ?", model.PeopleJobStatusCancelled).Count(&stats.Cancelled).Error; err != nil {
+		return nil, fmt.Errorf("count cancelled: %w", err)
+	}
+
+	stats.Total = stats.Pending + stats.Queued + stats.Processing + stats.Completed + stats.Failed + stats.Cancelled
 	return stats, nil
 }
 
