@@ -35,3 +35,27 @@ class DetectFacesResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+
+
+# Orientation detection schemas
+
+
+class DetectOrientationRequest(BaseModel):
+    """Request for detecting photo orientation."""
+
+    image_path: str | None = None
+    image_base64: str | None = None
+
+    @model_validator(mode="after")
+    def validate_source(self) -> "DetectOrientationRequest":
+        if not self.image_path and not self.image_base64:
+            raise ValueError("image_path or image_base64 is required")
+        return self
+
+
+class DetectOrientationResponse(BaseModel):
+    """Response for orientation detection."""
+
+    rotation: int = Field(ge=0, description="Suggested clockwise rotation in degrees (0, 90, 180, or 270)")
+    confidence: float = Field(ge=0, le=1, description="Confidence score for the prediction")
+    processing_time_ms: int = Field(ge=0, description="Processing time in milliseconds")

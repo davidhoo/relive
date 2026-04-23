@@ -785,7 +785,7 @@ func (h *PeopleHandler) GetFaceThumbnail(c *gin.Context) {
 			writePeopleError(c, http.StatusInternalServerError, "GET_FAILED", photoErr.Error())
 			return
 		}
-		thumbnailPath, genErr := util.GenerateFaceThumbnail(photo.FilePath, thumbnailRoot(h.cfg), face.BBoxX, face.BBoxY, face.BBoxWidth, face.BBoxHeight)
+		thumbnailPath, genErr := util.GenerateFaceThumbnail(photo.FilePath, thumbnailRoot(h.cfg), face.BBoxX, face.BBoxY, face.BBoxWidth, face.BBoxHeight, photo.ManualRotation)
 		if genErr != nil {
 			writePeopleError(c, http.StatusInternalServerError, "GENERATE_FAILED", genErr.Error())
 			return

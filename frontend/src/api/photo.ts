@@ -1,5 +1,5 @@
 import http from '@/utils/request'
-import type { Photo, PhotoListParams, PhotoStats, ScanPhotosRequest, RebuildPhotosRequest, CleanupPhotosResponse, CountPhotosByPathsRequest, CountPhotosByPathsResponse, CountDerivedStatusByPathsRequest, CountDerivedStatusByPathsResponse, PhotoCountsResponse, TagsResponse, AdjacentPhotosResponse } from '@/types/photo'
+import type { Photo, PhotoListParams, PhotoStats, ScanPhotosRequest, RebuildPhotosRequest, CleanupPhotosResponse, CountPhotosByPathsRequest, CountPhotosByPathsResponse, CountDerivedStatusByPathsRequest, CountDerivedStatusByPathsResponse, PhotoCountsResponse, TagsResponse, AdjacentPhotosResponse, OrientationSuggestionGroup, OrientationSuggestionDetail, OrientationSuggestionStats, OrientationSuggestionTask } from '@/types/photo'
 import type { ApiResponse, PagedResponse } from '@/types/api'
 
 export const photoApi = {
@@ -96,5 +96,59 @@ export const photoApi = {
   // 手动设置照片位置
   setLocation(id: number, data: { latitude: number; longitude: number }) {
     return http.patch<ApiResponse<{ location: string }>>(`/photos/${id}/location`, data)
+  },
+
+  // ========== 方向建议 API ==========
+
+  // 获取方向建议分组
+  getOrientationGroups() {
+    return http.get<ApiResponse<{ groups: OrientationSuggestionGroup[] }>>('/orientation-suggestions/groups')
+  },
+
+  // 获取指定旋转角度的方向建议详情
+  getOrientationDetail(rotation: number, page?: number, pageSize?: number) {
+    return http.get<ApiResponse<OrientationSuggestionDetail>>('/orientation-suggestions/detail', {
+      params: { rotation, page, page_size: pageSize }
+    })
+  },
+
+  // 应用方向建议
+  applyOrientationSuggestions(photoIds: number[]) {
+    return http.post<ApiResponse<{ applied: number }>>('/orientation-suggestions/apply', { photo_ids: photoIds })
+  },
+
+  // 忽略方向建议
+  dismissOrientationSuggestions(photoIds: number[]) {
+    return http.post<ApiResponse<void>>('/orientation-suggestions/dismiss', { photo_ids: photoIds })
+  },
+
+  // 获取方向建议任务状态
+  getOrientationTask() {
+    return http.get<ApiResponse<OrientationSuggestionTask>>('/orientation-suggestions/task')
+  },
+
+  // 获取方向建议统计
+  getOrientationStats() {
+    return http.get<ApiResponse<OrientationSuggestionStats>>('/orientation-suggestions/stats')
+  },
+
+  // 获取方向建议后台日志
+  getOrientationLogs() {
+    return http.get<ApiResponse<{ lines: string[] }>>('/orientation-suggestions/logs')
+  },
+
+  // 暂停方向建议后台任务
+  pauseOrientationTask() {
+    return http.post<ApiResponse<void>>('/orientation-suggestions/pause')
+  },
+
+  // 恢复方向建议后台任务
+  resumeOrientationTask() {
+    return http.post<ApiResponse<void>>('/orientation-suggestions/resume')
+  },
+
+  // 重建方向建议
+  rebuildOrientationSuggestions() {
+    return http.post<ApiResponse<void>>('/orientation-suggestions/rebuild')
   },
 }

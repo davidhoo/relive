@@ -7,10 +7,11 @@ import {
   sortMergeSuggestionCandidates,
 } from '../src/views/People/peopleHelpers.ts'
 
-test('getMergeSuggestionVisibility 在没有待审核建议时隐藏区块', () => {
+test('getMergeSuggestionVisibility 只根据待审核数量决定显示，不受加载状态影响', () => {
   assert.equal(getMergeSuggestionVisibility(0, false), false)
-  assert.equal(getMergeSuggestionVisibility(0, true), true)
+  assert.equal(getMergeSuggestionVisibility(0, true), false)
   assert.equal(getMergeSuggestionVisibility(2, false), true)
+  assert.equal(getMergeSuggestionVisibility(2, true), true)
 })
 
 test('sortMergeSuggestionCandidates 按相似度从高到低排序', () => {

@@ -11,16 +11,17 @@ import (
 
 // TaskScheduler 定时任务调度器
 type TaskScheduler struct {
-	analysisService       AnalysisService
-	displayService        DisplayService
-	photoService          PhotoService
-	mergeSuggestionService PersonMergeSuggestionService
-	thumbnailJobRepo      repository.ThumbnailJobRepository
-	geocodeJobRepo        repository.GeocodeJobRepository
-	stopCh                chan struct{}
-	wg                    sync.WaitGroup
-	running               bool
-	mu                    sync.Mutex
+	analysisService         AnalysisService
+	displayService          DisplayService
+	photoService            PhotoService
+	mergeSuggestionService  PersonMergeSuggestionService
+	orientationSuggestionService OrientationSuggestionService
+	thumbnailJobRepo        repository.ThumbnailJobRepository
+	geocodeJobRepo          repository.GeocodeJobRepository
+	stopCh                  chan struct{}
+	wg                      sync.WaitGroup
+	running                 bool
+	mu                      sync.Mutex
 }
 
 // NewTaskScheduler 创建定时任务调度器
@@ -29,17 +30,19 @@ func NewTaskScheduler(
 	displayService DisplayService,
 	photoService PhotoService,
 	mergeSuggestionService PersonMergeSuggestionService,
+	orientationSuggestionService OrientationSuggestionService,
 	thumbnailJobRepo repository.ThumbnailJobRepository,
 	geocodeJobRepo repository.GeocodeJobRepository,
 ) *TaskScheduler {
 	return &TaskScheduler{
-		analysisService:       analysisService,
-		displayService:        displayService,
-		photoService:          photoService,
-		mergeSuggestionService: mergeSuggestionService,
-		thumbnailJobRepo:      thumbnailJobRepo,
-		geocodeJobRepo:        geocodeJobRepo,
-		stopCh:                make(chan struct{}),
+		analysisService:         analysisService,
+		displayService:          displayService,
+		photoService:            photoService,
+		mergeSuggestionService:  mergeSuggestionService,
+		orientationSuggestionService: orientationSuggestionService,
+		thumbnailJobRepo:        thumbnailJobRepo,
+		geocodeJobRepo:          geocodeJobRepo,
+		stopCh:                  make(chan struct{}),
 	}
 }
 
@@ -71,6 +74,10 @@ func (s *TaskScheduler) Start() {
 	// 启动人物合并建议切片任务
 	s.wg.Add(1)
 	go s.mergeSuggestionSliceTask(1 * time.Minute)
+
+	// 启动方向建议切片任务
+	s.wg.Add(1)
+	go s.orientationSuggestionSliceTask(1 * time.Minute)
 
 	// 启动已完成任务清理（每6小时执行一次，清理7天前的终态记录）
 	s.wg.Add(1)
@@ -140,6 +147,7 @@ func (s *TaskScheduler) RunOnce() {
 	s.ensureTodayDailyBatch()
 	s.runAutoScanCheck()
 	s.runMergeSuggestionSlice()
+	s.runOrientationSuggestionSlice()
 	s.cleanTerminalJobs()
 }
 
@@ -269,6 +277,37 @@ func (s *TaskScheduler) runMergeSuggestionSlice() {
 	}
 	if err := s.mergeSuggestionService.RunBackgroundSlice(); err != nil {
 		logger.Warnf("Failed to run merge suggestion slice: %v", err)
+	}
+}
+
+func (s *TaskScheduler) orientationSuggestionSliceTask(interval time.Duration) {
+	defer s.wg.Done()
+
+	if interval <= 0 {
+		interval = time.Minute
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	s.runOrientationSuggestionSlice()
+
+	for {
+		select {
+		case <-ticker.C:
+			s.runOrientationSuggestionSlice()
+		case <-s.stopCh:
+			return
+		}
+	}
+}
+
+func (s *TaskScheduler) runOrientationSuggestionSlice() {
+	if s.orientationSuggestionService == nil {
+		return
+	}
+	if err := s.orientationSuggestionService.RunBackgroundSlice(); err != nil {
+		logger.Warnf("Failed to run orientation suggestion slice: %v", err)
 	}
 }
 

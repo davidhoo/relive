@@ -41,7 +41,7 @@ func TestGenerateFaceThumbnailsOpensImageOnce(t *testing.T) {
 	paths, err := GenerateFaceThumbnails(sourcePath, outputRoot, []FaceThumbnailSpec{
 		{BBoxX: 0.10, BBoxY: 0.10, BBoxWidth: 0.20, BBoxHeight: 0.20},
 		{BBoxX: 0.55, BBoxY: 0.15, BBoxWidth: 0.18, BBoxHeight: 0.18},
-	})
+	}, 0)
 	if err != nil {
 		t.Fatalf("generate face thumbnails: %v", err)
 	}

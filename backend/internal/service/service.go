@@ -12,24 +12,25 @@ import (
 
 // Services 所有服务的集合
 type Services struct {
-	Photo           PhotoService
-	People          PeopleService
-	MergeSuggestion PersonMergeSuggestionService
-	Thumbnail       ThumbnailService
-	GeocodeTask     GeocodeTaskService
-	Display         DisplayService
-	Device          DeviceService
-	AI              AIService
-	AnalysisRuntime AnalysisRuntimeService
-	Config          ConfigService
-	Prompt          PromptService
-	Geocode         GeocodeService
-	Auth            AuthService
-	Analysis        AnalysisService
-	System          SystemService
-	EventClustering EventClusteringService
-	Scheduler       *TaskScheduler
-	ResultQueue     *ResultQueue // 结果队列服务
+	Photo                PhotoService
+	People               PeopleService
+	MergeSuggestion      PersonMergeSuggestionService
+	Thumbnail            ThumbnailService
+	GeocodeTask          GeocodeTaskService
+	Display              DisplayService
+	Device               DeviceService
+	AI                   AIService
+	AnalysisRuntime      AnalysisRuntimeService
+	Config               ConfigService
+	Prompt               PromptService
+	Geocode              GeocodeService
+	Auth                 AuthService
+	Analysis             AnalysisService
+	System               SystemService
+	EventClustering      EventClusteringService
+	OrientationSuggestion OrientationSuggestionService
+	Scheduler            *TaskScheduler
+	ResultQueue          *ResultQueue // 结果队列服务
 }
 
 // NewServices 创建所有服务
@@ -90,8 +91,18 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	eventClusteringService := NewEventClusteringService(db, repos.Photo, repos.Event, repos.PhotoTag)
 	photoService.SetEventClusteringService(eventClusteringService)
 
+	// 创建方向建议服务
+	orientationSuggestionService := NewOrientationSuggestionService(
+		db,
+		repos.Photo,
+		repos.Face,
+		repos.OrientationSuggestion,
+		configService,
+		cfg,
+	)
+
 	// 创建定时任务调度器
-	scheduler := NewTaskScheduler(analysisService, displayService, photoService, mergeSuggestionService, repos.ThumbnailJob, repos.GeocodeJob)
+	scheduler := NewTaskScheduler(analysisService, displayService, photoService, mergeSuggestionService, orientationSuggestionService, repos.ThumbnailJob, repos.GeocodeJob)
 
 	// 创建提示词配置服务
 	promptService := NewPromptService(repos.Config)
@@ -116,23 +127,24 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	analysisService.SetResultQueue(resultQueue)
 
 	return &Services{
-		Photo:           photoService,
-		People:          peopleSvc,
-		MergeSuggestion: mergeSuggestionService,
-		Thumbnail:       thumbnailService,
-		GeocodeTask:     geocodeTaskService,
-		Display:         displayService,
-		Device:          deviceService,
-		AI:              aiService,
-		AnalysisRuntime: runtimeService,
-		Config:          configService,
-		Prompt:          promptService,
-		Geocode:         geocodeService,
-		Auth:            authService,
-		Analysis:        analysisService,
-		System:          NewSystemService(db),
-		EventClustering: eventClusteringService,
-		Scheduler:       scheduler,
-		ResultQueue:     resultQueue,
+		Photo:                photoService,
+		People:               peopleSvc,
+		MergeSuggestion:      mergeSuggestionService,
+		Thumbnail:            thumbnailService,
+		GeocodeTask:          geocodeTaskService,
+		Display:              displayService,
+		Device:               deviceService,
+		AI:                   aiService,
+		AnalysisRuntime:      runtimeService,
+		Config:               configService,
+		Prompt:               promptService,
+		Geocode:              geocodeService,
+		Auth:                 authService,
+		Analysis:             analysisService,
+		System:               NewSystemService(db),
+		EventClustering:      eventClusteringService,
+		OrientationSuggestion: orientationSuggestionService,
+		Scheduler:            scheduler,
+		ResultQueue:          resultQueue,
 	}
 }

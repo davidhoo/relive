@@ -19,7 +19,9 @@ type FaceThumbnailSpec struct {
 	BBoxHeight float64
 }
 
-func GenerateFaceThumbnail(filePath string, outputRoot string, bboxX, bboxY, bboxWidth, bboxHeight float64) (string, error) {
+// GenerateFaceThumbnail generates a face thumbnail with rotation support.
+// manualRotation is the clockwise rotation to apply (0, 90, 180, or 270 degrees).
+func GenerateFaceThumbnail(filePath string, outputRoot string, bboxX, bboxY, bboxWidth, bboxHeight float64, manualRotation int) (string, error) {
 	paths, err := GenerateFaceThumbnails(filePath, outputRoot, []FaceThumbnailSpec{
 		{
 			BBoxX:      bboxX,
@@ -27,7 +29,7 @@ func GenerateFaceThumbnail(filePath string, outputRoot string, bboxX, bboxY, bbo
 			BBoxWidth:  bboxWidth,
 			BBoxHeight: bboxHeight,
 		},
-	})
+	}, manualRotation)
 	if err != nil {
 		return "", err
 	}
@@ -37,7 +39,9 @@ func GenerateFaceThumbnail(filePath string, outputRoot string, bboxX, bboxY, bbo
 	return paths[0], nil
 }
 
-func GenerateFaceThumbnails(filePath string, outputRoot string, specs []FaceThumbnailSpec) ([]string, error) {
+// GenerateFaceThumbnails generates multiple face thumbnails with rotation support.
+// manualRotation is the clockwise rotation to apply (0, 90, 180, or 270 degrees).
+func GenerateFaceThumbnails(filePath string, outputRoot string, specs []FaceThumbnailSpec, manualRotation int) ([]string, error) {
 	if len(specs) == 0 {
 		return nil, nil
 	}
@@ -46,6 +50,10 @@ func GenerateFaceThumbnails(filePath string, outputRoot string, specs []FaceThum
 	if err != nil {
 		return nil, fmt.Errorf("open image for face thumbnail: %w", err)
 	}
+
+	// Apply manual rotation before generating thumbnails
+	img = ApplyManualRotation(img, manualRotation)
+
 	return generateFaceThumbnailsFromImage(img, filePath, outputRoot, specs)
 }
 

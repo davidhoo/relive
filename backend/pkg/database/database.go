@@ -111,6 +111,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.PeopleJob{},
 		&model.PersonMergeSuggestion{},
 		&model.PersonMergeSuggestionItem{},
+		&model.PhotoOrientationSuggestion{},
 		&model.ScanJob{},
 		&model.ThumbnailJob{},
 		&model.GeocodeJob{},

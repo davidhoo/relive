@@ -72,8 +72,9 @@ export function getPersonAvatarFallback(person: Pick<Person, 'name' | 'category'
   return CATEGORY_FALLBACKS[person.category] || '人'
 }
 
-export function getMergeSuggestionVisibility(totalPending: number, loading = false): boolean {
-  return !loading && totalPending > 0
+export function getMergeSuggestionVisibility(totalPending: number, _loading = false): boolean {
+  // 只根据是否有待审核建议决定显示，加载状态不影响（避免刷新时闪烁）
+  return totalPending > 0
 }
 
 export function sortMergeSuggestionCandidates<T extends Pick<PersonMergeSuggestionItem, 'similarity_score' | 'candidate_person_id'>>(items: T[]): T[] {
