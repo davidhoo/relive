@@ -285,6 +285,46 @@ func (h *PeopleHandler) GetPersonFaces(c *gin.Context) {
 	c.JSON(http.StatusOK, model.Response{Success: true, Data: resp})
 }
 
+func (h *PeopleHandler) CalculateSimilarity(c *gin.Context) {
+	personID1, ok := parseUintParam(c, "id", "Invalid person ID")
+	if !ok {
+		return
+	}
+
+	var req struct {
+		TargetPersonID uint `json:"target_person_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+	if req.TargetPersonID == 0 {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", "target_person_id is required")
+		return
+	}
+	if req.TargetPersonID == personID1 {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", "cannot compare with self")
+		return
+	}
+
+	score, err := h.mergeSuggestionService.CalculateSimilarity(personID1, req.TargetPersonID)
+	if err != nil {
+		writeServiceFailure(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Data: gin.H{
+			"person_id_1":       personID1,
+			"person_id_2":       req.TargetPersonID,
+			"similarity_score":  score,
+			"merge_threshold":   h.mergeSuggestionService.MergeSuggestionThreshold(),
+			"attach_threshold":  h.mergeSuggestionService.AttachThreshold(),
+		},
+	})
+}
+
 func (h *PeopleHandler) UpdatePersonCategory(c *gin.Context) {
 	personID, ok := parseUintParam(c, "id", "Invalid person ID")
 	if !ok {

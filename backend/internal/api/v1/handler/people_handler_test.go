@@ -235,6 +235,18 @@ func (s *stubMergeSuggestionService) GetPendingByID(id uint) (*model.PersonMerge
 	return s.detail, nil
 }
 
+func (s *stubMergeSuggestionService) CalculateSimilarity(personID1, personID2 uint) (float64, error) {
+	return 0.75, s.err
+}
+
+func (s *stubMergeSuggestionService) MergeSuggestionThreshold() float64 {
+	return 0.62
+}
+
+func (s *stubMergeSuggestionService) AttachThreshold() float64 {
+	return 0.70
+}
+
 type peopleListPayload struct {
 	Items      []model.PersonResponse `json:"items"`
 	Total      int64                  `json:"total"`

@@ -30,6 +30,9 @@ type PersonMergeSuggestionService interface {
 	ApplySuggestion(suggestionID uint, candidateIDs []uint) error
 	ListPending(page, pageSize int) ([]model.PersonMergeSuggestionResponse, int64, error)
 	GetPendingByID(id uint) (*model.PersonMergeSuggestionResponse, error)
+	CalculateSimilarity(personID1, personID2 uint) (float64, error) // 计算两个人物间的相似度
+	MergeSuggestionThreshold() float64                             // 获取合并建议阈值
+	AttachThreshold() float64                                      // 获取附加阈值
 }
 
 type personMergeSuggestionState struct {
@@ -475,6 +478,16 @@ func (s *personMergeSuggestionService) mergeSuggestionThreshold() float64 {
 	return 0.62
 }
 
+// MergeSuggestionThreshold 返回合并建议阈值（公开方法）
+func (s *personMergeSuggestionService) MergeSuggestionThreshold() float64 {
+	return s.mergeSuggestionThreshold()
+}
+
+// AttachThreshold 返回附加阈值（公开方法）
+func (s *personMergeSuggestionService) AttachThreshold() float64 {
+	return s.attachThreshold()
+}
+
 func (s *personMergeSuggestionService) buildAssignments(targets []*model.Person) (map[uint][]model.PersonMergeSuggestionItem, error) {
 	// Phase 1: ensure ANN index is ready (lazy build, cached across slices).
 	idx, err := s.ensureANNIndex()
@@ -863,4 +876,35 @@ func upsertMergeSuggestionState(db *gorm.DB, value string) error {
 		Key:   personMergeSuggestionStateKey,
 		Value: value,
 	}).Error
+}
+
+// CalculateSimilarity 计算两个人物间的相似度（使用与合并建议相同的方法）
+func (s *personMergeSuggestionService) CalculateSimilarity(personID1, personID2 uint) (float64, error) {
+	// 获取两个人的原型人脸
+	person1Faces, err := s.faceRepo.ListTopByPersonIDs([]uint{personID1}, peoplePrototypeCandidates)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get faces for person %d: %w", personID1, err)
+	}
+	person2Faces, err := s.faceRepo.ListTopByPersonIDs([]uint{personID2}, peoplePrototypeCandidates)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get faces for person %d: %w", personID2, err)
+	}
+
+	// 选择原型人脸
+	protos1 := selectPersonPrototypesStatic(person1Faces, peoplePrototypeCount)
+	protos2 := selectPersonPrototypesStatic(person2Faces, peoplePrototypeCount)
+
+	// 解码嵌入向量
+	emb1 := decodeFacesWithEmbeddings(protos1[personID1])
+	emb2 := decodeFacesWithEmbeddings(protos2[personID2])
+
+	if len(emb1) == 0 || len(emb2) == 0 {
+		return -1, nil // 没有有效嵌入
+	}
+
+	// 计算双向相似度并取平均
+	score1 := averageBestSuggestionSimilarity(emb1, emb2)
+	score2 := averageBestSuggestionSimilarity(emb2, emb1)
+
+	return (score1 + score2) / 2, nil
 }

@@ -144,4 +144,16 @@ export const peopleApi = {
       candidate_person_ids: candidatePersonIds,
     })
   },
+
+  calculateSimilarity(personId: number, targetPersonId: number) {
+    return http.post<ApiResponse<{
+      person_id_1: number
+      person_id_2: number
+      similarity_score: number
+      merge_threshold: number
+      attach_threshold: number
+    }>>(`/people/${personId}/similarity`, {
+      target_person_id: targetPersonId,
+    })
+  },
 }

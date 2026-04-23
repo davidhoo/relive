@@ -103,6 +103,16 @@
                   </el-button>
                 </div>
 
+                <div class="operation-item">
+                  <div>
+                    <div class="operation-title">计算相似度</div>
+                    <div class="operation-desc">计算当前人物与目标人物的相似度，用于人工评判阈值调整。</div>
+                  </div>
+                  <el-button plain :disabled="candidatePeople.length === 0" @click="showSimilarityDialog = true">
+                    选择目标
+                  </el-button>
+                </div>
+
                 <div class="operation-item operation-item-danger">
                   <div>
                     <div class="operation-title">解散此人物</div>
@@ -250,6 +260,53 @@
         <el-button type="primary" :disabled="!mergeIntoTargetId" :loading="mergingInto" @click="confirmMergeInto">确认合并</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="showSimilarityDialog" title="计算人物相似度" width="560px">
+      <el-select v-model="similarityTargetId" filterable class="dialog-select" placeholder="选择目标人物进行相似度计算">
+        <el-option v-for="candidate in candidatePeople" :key="candidate.id" :label="candidateLabel(candidate)" :value="candidate.id">
+          <div class="candidate-option">
+            <el-avatar :size="34" :src="candidateAvatarUrl(candidate)">
+              {{ getPersonAvatarFallback(candidate) }}
+            </el-avatar>
+            <div class="candidate-option-body">
+              <div class="candidate-option-title">{{ candidate.name?.trim() || `未命名人物 #${candidate.id}` }}</div>
+              <div class="candidate-option-subtitle">{{ getPersonCategoryLabel(candidate.category) }}</div>
+            </div>
+          </div>
+        </el-option>
+      </el-select>
+
+      <div v-if="similarityResult !== null" class="similarity-result">
+        <el-divider />
+        <div class="similarity-score">
+          <span class="similarity-label">相似度得分：</span>
+          <span class="similarity-value" :class="getSimilarityClass(similarityResult.similarity_score)">
+            {{ (similarityResult.similarity_score * 100).toFixed(1) }}%
+          </span>
+        </div>
+        <div class="similarity-thresholds">
+          <div class="threshold-item">
+            <span class="threshold-label">合并建议阈值：</span>
+            <span class="threshold-value">{{ (similarityResult.merge_threshold * 100).toFixed(0) }}%</span>
+            <el-tag v-if="similarityResult.similarity_score >= similarityResult.merge_threshold" type="success" size="small">已达阈值</el-tag>
+            <el-tag v-else type="info" size="small">未达阈值</el-tag>
+          </div>
+          <div class="threshold-item">
+            <span class="threshold-label">附加阈值：</span>
+            <span class="threshold-value">{{ (similarityResult.attach_threshold * 100).toFixed(0) }}%</span>
+            <el-tag v-if="similarityResult.similarity_score >= similarityResult.attach_threshold" type="warning" size="small">会自动附加</el-tag>
+            <el-tag v-else type="info" size="small">不会自动附加</el-tag>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="showSimilarityDialog = false">关闭</el-button>
+        <el-button type="primary" :disabled="!similarityTargetId" :loading="calculatingSimilarity" @click="calculateSimilarity">
+          计算相似度
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -289,9 +346,19 @@ const dissolving = ref(false)
 const showMoveDialog = ref(false)
 const showMergeDialog = ref(false)
 const showMergeIntoDialog = ref(false)
+const showSimilarityDialog = ref(false)
 const moveTargetPersonId = ref<number>()
 const mergeSourceIds = ref<number[]>([])
 const mergeIntoTargetId = ref<number>()
+const similarityTargetId = ref<number>()
+const calculatingSimilarity = ref(false)
+const similarityResult = ref<{
+  person_id_1: number
+  person_id_2: number
+  similarity_score: number
+  merge_threshold: number
+  attach_threshold: number
+} | null>(null)
 const categoryOptions = [
   { label: '家人', value: 'family' },
   { label: '亲友', value: 'friend' },
@@ -332,9 +399,12 @@ const resetSelections = () => {
   moveTargetPersonId.value = undefined
   mergeSourceIds.value = []
   mergeIntoTargetId.value = undefined
+  similarityTargetId.value = undefined
+  similarityResult.value = null
   showMoveDialog.value = false
   showMergeDialog.value = false
   showMergeIntoDialog.value = false
+  showSimilarityDialog.value = false
 }
 
 const loadCandidatePeople = async () => {
@@ -502,6 +572,25 @@ const confirmMergeInto = async () => {
   } finally {
     mergingInto.value = false
   }
+}
+
+const calculateSimilarity = async () => {
+  if (!person.value || !similarityTargetId.value) return
+  try {
+    calculatingSimilarity.value = true
+    const res = await peopleApi.calculateSimilarity(person.value.id, similarityTargetId.value)
+    similarityResult.value = res.data?.data || null
+  } catch (error: any) {
+    ElMessage.error(error.message || '计算相似度失败')
+  } finally {
+    calculatingSimilarity.value = false
+  }
+}
+
+const getSimilarityClass = (score: number) => {
+  if (score >= 0.7) return 'similarity-high'
+  if (score >= 0.5) return 'similarity-medium'
+  return 'similarity-low'
 }
 
 const handleDissolve = async () => {
@@ -829,6 +918,61 @@ onMounted(async () => {
   margin-top: 4px;
   color: var(--color-text-secondary);
   font-size: 12px;
+}
+
+.similarity-result {
+  margin-top: 12px;
+}
+
+.similarity-score {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.similarity-label {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+}
+
+.similarity-value {
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.similarity-high {
+  color: #67c23a;
+}
+
+.similarity-medium {
+  color: #e6a23c;
+}
+
+.similarity-low {
+  color: #f56c6c;
+}
+
+.similarity-thresholds {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.threshold-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.threshold-label {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.threshold-value {
+  font-weight: 600;
+  color: var(--color-text-primary);
 }
 
 @media (max-width: 1200px) {
