@@ -39,6 +39,7 @@ export interface PeopleListParams {
   page_size?: number
   category?: PersonCategory
   search?: string
+  has_avatar?: string // 'true' 只返回有头像的人物
 }
 
 export interface PeopleTask {

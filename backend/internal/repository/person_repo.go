@@ -15,6 +15,7 @@ type PersonRepository interface {
 	Delete(id uint) error
 	ListAll() ([]*model.Person, error)
 	ListByIDs(ids []uint) ([]*model.Person, error)
+	ListWithAvatar() ([]*model.Person, error) // 只返回有头像的人物（用于合并/移动候选列表）
 	RefreshStats(personID uint) error
 	MergeInto(targetPersonID uint, sourcePersonIDs []uint) ([]uint, error)
 }
@@ -66,6 +67,14 @@ func (r *personRepository) ListByIDs(ids []uint) ([]*model.Person, error) {
 		return people, nil
 	}
 	err := r.db.Where("id IN ?", ids).Order("id ASC").Find(&people).Error
+	return people, err
+}
+
+func (r *personRepository) ListWithAvatar() ([]*model.Person, error) {
+	var people []*model.Person
+	err := r.db.Where("representative_face_id IS NOT NULL").
+		Order("id ASC").
+		Find(&people).Error
 	return people, err
 }
 

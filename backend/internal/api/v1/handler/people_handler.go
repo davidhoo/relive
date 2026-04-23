@@ -54,6 +54,87 @@ func (h *PeopleHandler) ListPeople(c *gin.Context) {
 		return
 	}
 
+	// 支持 has_avatar 过滤参数（用于合并/移动候选列表）
+	hasAvatar := strings.TrimSpace(c.Query("has_avatar"))
+	if hasAvatar == "true" {
+		people, err := h.personRepo.ListWithAvatar()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, model.Response{
+				Success: false,
+				Error: &model.ErrorInfo{
+					Code:    "LIST_FAILED",
+					Message: err.Error(),
+				},
+			})
+			return
+		}
+
+		// 过滤和排序
+		category := strings.TrimSpace(c.Query("category"))
+		search := strings.ToLower(strings.TrimSpace(c.Query("search")))
+
+		filtered := make([]*model.Person, 0, len(people))
+		for _, person := range people {
+			if category != "" && person.Category != category {
+				continue
+			}
+			if search != "" {
+				searchText := strings.ToLower(person.Name + " " + person.Category + " " + strconv.FormatUint(uint64(person.ID), 10))
+				if !strings.Contains(searchText, search) {
+					continue
+				}
+			}
+			filtered = append(filtered, person)
+		}
+
+		sort.Slice(filtered, func(i, j int) bool {
+			left := filtered[i]
+			right := filtered[j]
+			if personCategoryOrder(left.Category) != personCategoryOrder(right.Category) {
+				return personCategoryOrder(left.Category) < personCategoryOrder(right.Category)
+			}
+			if left.PhotoCount != right.PhotoCount {
+				return left.PhotoCount > right.PhotoCount
+			}
+			if left.FaceCount != right.FaceCount {
+				return left.FaceCount > right.FaceCount
+			}
+			return left.ID < right.ID
+		})
+
+		total := len(filtered)
+		start := (page - 1) * pageSize
+		if start > total {
+			start = total
+		}
+		end := start + pageSize
+		if end > total {
+			end = total
+		}
+
+		items := make([]model.PersonResponse, 0, end-start)
+		for _, person := range filtered[start:end] {
+			items = append(items, personToResponse(person, nil))
+		}
+
+		totalPages := 0
+		if total > 0 {
+			totalPages = (total + pageSize - 1) / pageSize
+		}
+
+		c.JSON(http.StatusOK, model.Response{
+			Success: true,
+			Data: model.PagedResponse{
+				Items:      items,
+				Total:      int64(total),
+				Page:       page,
+				PageSize:   pageSize,
+				TotalPages: totalPages,
+			},
+		})
+		return
+	}
+
 	people, err := h.personRepo.ListAll()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, model.Response{
@@ -158,18 +239,8 @@ func (h *PeopleHandler) GetPersonPhotos(c *gin.Context) {
 		return
 	}
 
-	if !h.ensurePersonExists(c, personID) {
-		return
-	}
-
-	faces, err := h.faceRepo.ListByPersonID(personID)
-	if err != nil {
-		writePeopleError(c, http.StatusInternalServerError, "LIST_FAILED", err.Error())
-		return
-	}
-
-	photoIDs := uniquePhotoIDs(faces)
-	photos, err := h.photoRepo.ListByIDs(photoIDs)
+	// 优化：直接通过 JOIN 查询获取照片，避免先查 faces 再查 photos
+	photos, err := h.photoRepo.ListPhotosByPersonID(personID)
 	if err != nil {
 		writePeopleError(c, http.StatusInternalServerError, "LIST_FAILED", err.Error())
 		return
@@ -190,10 +261,6 @@ func (h *PeopleHandler) GetPersonPhotos(c *gin.Context) {
 func (h *PeopleHandler) GetPersonFaces(c *gin.Context) {
 	personID, ok := parseUintParam(c, "id", "Invalid person ID")
 	if !ok {
-		return
-	}
-
-	if !h.ensurePersonExists(c, personID) {
 		return
 	}
 

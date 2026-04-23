@@ -33,6 +33,7 @@ type PhotoRepository interface {
 	List(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string) ([]*model.Photo, int64, error)
 	ListAll() ([]*model.Photo, error)
 	ListByIDs(ids []uint) ([]*model.Photo, error)
+	ListPhotosByPersonID(personID uint) ([]*model.Photo, error) // 通过 JOIN 直接获取人物关联照片
 
 	// AI 分析相关
 	GetUnanalyzed(limit int) ([]*model.Photo, error)
@@ -396,6 +397,17 @@ func (r *photoRepository) ListAll() ([]*model.Photo, error) {
 func (r *photoRepository) ListByIDs(ids []uint) ([]*model.Photo, error) {
 	var photos []*model.Photo
 	err := r.db.Where("id IN ?", ids).Find(&photos).Error
+	return photos, err
+}
+
+// ListPhotosByPersonID 通过 JOIN 查询获取人物关联的所有照片（优化：避免先查 faces 再查 photos）
+func (r *photoRepository) ListPhotosByPersonID(personID uint) ([]*model.Photo, error) {
+	var photos []*model.Photo
+	err := r.db.Distinct().
+		Select("photos.*").
+		Joins("INNER JOIN faces ON faces.photo_id = photos.id").
+		Where("faces.person_id = ?", personID).
+		Find(&photos).Error
 	return photos, err
 }
 

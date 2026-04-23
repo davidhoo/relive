@@ -339,7 +339,8 @@ const resetSelections = () => {
 
 const loadCandidatePeople = async () => {
   try {
-    const res = await peopleApi.getList({ page: 1, page_size: 200 })
+    // 优化：只加载有头像的人物作为合并/移动候选（减少数据传输）
+    const res = await peopleApi.getList({ page: 1, page_size: 200, has_avatar: 'true' })
     allPeople.value = res.data?.data?.items || []
   } catch (error) {
     console.error('Failed to load candidate people:', error)
