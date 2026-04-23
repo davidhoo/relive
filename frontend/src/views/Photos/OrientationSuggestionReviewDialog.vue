@@ -18,19 +18,16 @@
             :key="photo.id"
             class="photo-card"
           >
-            <el-checkbox :value="photo.id" />
             <div class="photo-preview">
+              <el-checkbox :value="photo.id" class="photo-checkbox" />
               <img
                 :src="getThumbnailUrl(photo.id, photo.updated_at)"
                 :style="{ transform: `rotate(${photo.suggested_rotation}deg)` }"
               />
             </div>
             <div class="photo-info">
-              <div class="photo-name">{{ photo.file_name }}</div>
-              <div class="photo-meta">
-                <span>置信度 {{ (photo.confidence * 100).toFixed(0) }}%</span>
-                <span v-if="photo.low_confidence" class="low-confidence">低置信度</span>
-              </div>
+              <span>置信度 {{ (photo.confidence * 100).toFixed(0) }}%</span>
+              <span v-if="photo.low_confidence" class="low-confidence">低置信度</span>
             </div>
           </label>
         </el-checkbox-group>
@@ -136,57 +133,42 @@ const handleDismiss = () => {
 
 .photo-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 16px;
 }
 
 .photo-card {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  padding: 12px;
+  flex-direction: column;
   cursor: pointer;
-  transition: border-color 0.2s;
-}
-
-.photo-card:hover {
-  border-color: rgba(64, 158, 255, 0.4);
 }
 
 .photo-preview {
+  position: relative;
   flex-shrink: 0;
 }
 
 .photo-preview img {
-  width: 80px;
-  height: 80px;
+  width: 100%;
+  aspect-ratio: 1;
   object-fit: cover;
   border-radius: 8px;
 }
 
+.photo-checkbox {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1;
+}
+
 .photo-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.photo-name {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--color-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.photo-meta {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--color-text-secondary);
   display: flex;
   flex-direction: column;
   gap: 2px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
 }
 
 .low-confidence {
