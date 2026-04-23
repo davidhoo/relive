@@ -24,6 +24,7 @@ type FaceRepository interface {
 	ListPending(limit int) ([]*model.Face, error)
 	GetPendingStats() (*PendingFaceStats, error)
 	ListTopByPersonIDs(personIDs []uint, perPerson int) ([]*model.Face, error)
+	ListPrototypeEmbeddings(personIDs []uint, perPerson int) ([]*model.Face, error)
 	ReassignFaces(faceIDs []uint, personID uint, reason string) error
 	ListLowConfidence(threshold float64, maxGeneration int) ([]*model.Face, error)
 	ResetForRecluster(ids []uint) error
@@ -247,6 +248,32 @@ func (r *faceRepository) ListTopByPersonIDs(personIDs []uint, perPerson int) ([]
 		counts[personID]++
 	}
 	return topFaces, nil
+}
+
+// ListPrototypeEmbeddings loads only id, person_id, and embedding for the top perPerson faces
+// per person, using a window function to avoid fetching all faces and truncating in Go.
+func (r *faceRepository) ListPrototypeEmbeddings(personIDs []uint, perPerson int) ([]*model.Face, error) {
+	if len(personIDs) == 0 {
+		return nil, nil
+	}
+	if perPerson <= 0 {
+		perPerson = 1
+	}
+
+	var faces []*model.Face
+	err := r.db.Raw(`
+		SELECT id, person_id, embedding FROM (
+			SELECT id, person_id, embedding,
+				ROW_NUMBER() OVER (
+					PARTITION BY person_id
+					ORDER BY manual_locked DESC, quality_score DESC, confidence DESC, id ASC
+				) AS rn
+			FROM faces
+			WHERE person_id IN ?
+		) sub
+		WHERE rn <= ?
+	`, personIDs, perPerson).Scan(&faces).Error
+	return faces, err
 }
 
 func (r *faceRepository) ReassignFaces(faceIDs []uint, personID uint, reason string) error {

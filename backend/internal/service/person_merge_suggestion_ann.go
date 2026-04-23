@@ -12,6 +12,8 @@ const (
 	annHNSWM           = 8              // max neighbors per node; 8 halves build time vs 16 with negligible recall loss at this scale
 	annHNSWEfSearch    = 100            // search beam width; high value ensures recall near threshold boundary
 	annRebuildCooldown = 30 * time.Minute // min interval between ANN rebuilds triggered by MarkDirty
+	annBuildBatchSize  = 500            // nodes per HNSW insert batch
+	annBuildBatchSleep = 5 * time.Millisecond // pause between batches to yield CPU
 )
 
 // annIndex is a cached HNSW nearest-neighbor index over all person prototype embeddings.
@@ -66,16 +68,32 @@ func (s *personMergeSuggestionService) buildANNIndex() (*annIndex, error) {
 		}, nil
 	}
 
-	protoFaces, err := s.faceRepo.ListTopByPersonIDs(personIDs, peoplePrototypeCandidates)
+	// Load only id, person_id, embedding for top-N prototypes per person.
+	// Uses ROW_NUMBER window function to avoid fetching all faces from DB.
+	protoFaces, err := s.faceRepo.ListPrototypeEmbeddings(personIDs, peoplePrototypeCount)
 	if err != nil {
 		return nil, fmt.Errorf("buildANNIndex: list prototype faces: %w", err)
 	}
 
-	protosByPerson := selectPersonPrototypesStatic(protoFaces, peoplePrototypeCount)
-
-	personProtos := make(map[uint][]faceWithEmbedding, len(protosByPerson))
-	for personID, faces := range protosByPerson {
-		personProtos[personID] = decodeFacesWithEmbeddings(faces)
+	personProtos := make(map[uint][]faceWithEmbedding, len(personIDs))
+	for _, f := range protoFaces {
+		if f == nil || f.PersonID == nil {
+			continue
+		}
+		emb := decodeEmbedding(f.Embedding)
+		personProtos[*f.PersonID] = append(personProtos[*f.PersonID], faceWithEmbedding{
+			face:      f,
+			embedding: emb,
+		})
+	}
+	// Pre-compute norms
+	for pid, protos := range personProtos {
+		for i := range protos {
+			if protos[i].embedding != nil {
+				protos[i].norm = calculateNorm(protos[i].embedding)
+			}
+		}
+		personProtos[pid] = protos
 	}
 
 	g := newHNSWGraph()
@@ -95,7 +113,19 @@ func (s *personMergeSuggestionService) buildANNIndex() (*annIndex, error) {
 			faceOwner[fw.face.ID] = personID
 		}
 	}
-	g.Add(nodes...)
+
+	// Insert in batches with brief pauses to avoid pinning CPU on NAS devices.
+	// This adds ~5-10% overhead to build time but keeps the system responsive.
+	for i := 0; i < len(nodes); i += annBuildBatchSize {
+		end := i + annBuildBatchSize
+		if end > len(nodes) {
+			end = len(nodes)
+		}
+		g.Add(nodes[i:end]...)
+		if end < len(nodes) {
+			time.Sleep(annBuildBatchSleep)
+		}
+	}
 	g.EfSearch = annHNSWEfSearch
 
 	idx := &annIndex{
