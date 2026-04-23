@@ -197,7 +197,7 @@ func TestAutoMigrateAddsPersonMergeSuggestionConstraints(t *testing.T) {
 
 func TestPeopleConfigHasMergeSuggestionField(t *testing.T) {
 	cfg := config.PeopleConfig{
-		MergeSuggestionThreshold:       0.56,
+		MergeSuggestionThreshold:       0.55,
 		MergeSuggestionMaxPairsPerRun:  200,
 		MergeSuggestionBatchSize:       100,
 		MergeSuggestionCooldownSeconds: 300,

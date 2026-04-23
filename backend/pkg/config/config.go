@@ -95,7 +95,7 @@ type OrientationConfig struct {
 }
 
 const (
-	defaultMergeSuggestionThreshold       = 0.56
+	defaultMergeSuggestionThreshold       = 0.55
 	defaultMergeSuggestionMaxPairsPerRun  = 200
 	defaultMergeSuggestionBatchSize       = 100
 	defaultMergeSuggestionCooldownSeconds = 300

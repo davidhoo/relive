@@ -75,7 +75,7 @@ people:
   timeout: 30
   link_threshold: 0.62          # 人脸建边阈值，越高越严格
   attach_threshold: 0.65        # 人物挂靠阈值，越高越不容易把新脸归入已有人物
-  merge_suggestion_threshold: 0.56  # 合并建议相似度阈值
+  merge_suggestion_threshold: 0.55  # 合并建议相似度阈值
   merge_suggestion_max_pairs_per_run: 200
   merge_suggestion_batch_size: 100
   merge_suggestion_cooldown_seconds: 300
