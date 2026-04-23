@@ -185,7 +185,8 @@ const handleDismiss = () => {
   font-size: 12px;
   color: var(--color-text-secondary);
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .low-confidence {
