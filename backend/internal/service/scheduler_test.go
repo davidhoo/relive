@@ -60,6 +60,18 @@ func (s *mergeSuggestionServiceStub) GetPendingByID(id uint) (*model.PersonMerge
 	return nil, nil
 }
 
+func (s *mergeSuggestionServiceStub) AttachThreshold() float64 {
+	return 0.65
+}
+
+func (s *mergeSuggestionServiceStub) CalculateSimilarity(personID1, personID2 uint) (float64, error) {
+	return 0, nil
+}
+
+func (s *mergeSuggestionServiceStub) MergeSuggestionThreshold() float64 {
+	return 0.55
+}
+
 func TestTaskSchedulerRunMergeSuggestionSlice(t *testing.T) {
 	stub := &mergeSuggestionServiceStub{}
 	scheduler := &TaskScheduler{

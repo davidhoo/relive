@@ -104,6 +104,9 @@ func (r *stubPhotoRepo) GetScatteredHighQuality(minBeauty int, excludeIDs []uint
 	return nil, nil
 }
 func (r *stubPhotoRepo) ListByFaceStatus(status string) ([]*model.Photo, error) { return nil, nil }
+func (r *stubPhotoRepo) ListPhotosByPersonID(personID uint) ([]*model.Photo, error) {
+	return nil, nil
+}
 
 func TestNormalizeDisplayStrategyConfig_MergesSmartIntoOnThisDay(t *testing.T) {
 	cfg := &model.DisplayStrategyConfig{Algorithm: "smart"}
