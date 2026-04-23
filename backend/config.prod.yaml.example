@@ -1,4 +1,5 @@
-# 生产环境覆盖配置
+# 生产环境覆盖配置示例
+# 复制为 backend/config.prod.yaml 使用。
 # 角色：覆盖 backend/config.base.yaml 中与生产部署相关的环境差异。
 # 说明：AI / geocode / display / scan paths 等业务配置在运行时应以数据库为准。
 
@@ -14,12 +15,97 @@ database:
 photos:
   root_path: "/app/photos"
   thumbnail_path: "/app/data/thumbnails"
+  exclude_dirs:
+    - ".sync"
+    - "@eaDir"
+    - "#recycle"
+    - ".DS_Store"
+    - "Thumbs.db"
+    - ".Trashes"
+  supported_formats:
+    - ".jpg"
+    - ".jpeg"
+    - ".png"
+    - ".heic"
+    - ".HEIC"
+    - ".JPG"
+    - ".JPEG"
+    - ".PNG"
 
+# AI 配置（启动默认值，运行时通过管理后台配置后以数据库为准）
+ai:
+  provider: ""
+  timeout: 120
+  temperature: 0.7
+
+  ollama:
+    endpoint: "http://host.docker.internal:11434"
+    model: "llava:13b"
+    temperature: 0.7
+    timeout: 120
+
+  qwen:
+    api_key: ""
+    endpoint: "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+    model: "qwen-vl-max"
+    temperature: 0.7
+    timeout: 60
+
+  openai:
+    api_key: ""
+    endpoint: "https://api.openai.com/v1/chat/completions"
+    model: "gpt-4-vision-preview"
+    temperature: 0.7
+    max_tokens: 1000
+    timeout: 60
+
+  vllm:
+    endpoint: "http://host.docker.internal:8000"
+    model: "llava-v1.6-vicuna-13b"
+    temperature: 0.7
+    max_tokens: 800
+    timeout: 120
+
+  hybrid:
+    primary: "ollama"
+    fallback: "qwen"
+
+# 人物服务配置（人脸检测）
+people:
+  ml_endpoint: "http://relive-ml:5050"
+  timeout: 30
+  link_threshold: 0.62          # 人脸建边阈值，越高越严格
+  attach_threshold: 0.65        # 人物挂靠阈值，越高越不容易把新脸归入已有人物
+  merge_suggestion_threshold: 0.56  # 合并建议相似度阈值
+  merge_suggestion_max_pairs_per_run: 200
+  merge_suggestion_batch_size: 100
+  merge_suggestion_cooldown_seconds: 300
+
+# 地理编码配置（启动默认值，运行时通过管理后台配置后以数据库为准）
+geocode:
+  provider: "offline"
+  fallback: "nominatim"
+  cache_enabled: true
+  cache_ttl: 86400
+  offline_max_distance: 100
+  nominatim_endpoint: "https://nominatim.openstreetmap.org/reverse"
+
+# 展示策略（启动默认值，运行时通过管理后台配置后以数据库为准）
+display:
+  algorithm: "on_this_day"
+  fallback_days: [3, 7, 30, 365]
+  avoid_repeat_days: 7
+
+# 日志配置
 logging:
   level: "info"
   file: "/app/data/logs/relive.log"
+  max_size: 100
+  max_backups: 10
+  max_age: 30
   console: true
 
+# 安全配置
 security:
   jwt_Secret: "${JWT_SECRET:-relive-production-secret-change-me}"
   api_key_prefix: "sk-relive-"
@@ -30,13 +116,3 @@ performance:
   max_thumbnail_workers: 1
   max_geocode_workers: 1
   cache_size: 1000
-
-people:
-  ml_endpoint: "http://relive-ml:5050"
-  timeout: 15
-  link_threshold: 0.62          # 人脸建边阈值，越高越严格
-  attach_threshold: 0.65        # 人物挂靠阈值，越高越不容易把新脸归入已有人物
-  merge_suggestion_threshold: 0.56  # 合并建议相似度阈值
-  merge_suggestion_max_pairs_per_run: 200
-  merge_suggestion_batch_size: 100
-  merge_suggestion_cooldown_seconds: 300
