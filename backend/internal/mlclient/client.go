@@ -41,17 +41,6 @@ type DetectFacesResponse struct {
 	ProcessingTimeMS int            `json:"processing_time_ms"`
 }
 
-type DetectOrientationRequest struct {
-	ImagePath   string `json:"image_path,omitempty"`
-	ImageBase64 string `json:"image_base64,omitempty"`
-}
-
-type DetectOrientationResponse struct {
-	Rotation         int     `json:"rotation"`           // Suggested clockwise rotation (0, 90, 180, or 270)
-	Confidence       float64 `json:"confidence"`         // Confidence score (0-1)
-	ProcessingTimeMS int     `json:"processing_time_ms"` // Processing time in milliseconds
-}
-
 func New(baseURL string, timeout time.Duration) *Client {
 	if timeout <= 0 {
 		timeout = 15 * time.Second
@@ -89,36 +78,6 @@ func (c *Client) DetectFaces(ctx context.Context, request DetectFacesRequest) (*
 	var result DetectFacesResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode detect faces response: %w", err)
-	}
-
-	return &result, nil
-}
-
-func (c *Client) DetectOrientation(ctx context.Context, request DetectOrientationRequest) (*DetectOrientationResponse, error) {
-	payload, err := json.Marshal(request)
-	if err != nil {
-		return nil, fmt.Errorf("marshal detect orientation request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/v1/detect-orientation", bytes.NewReader(payload))
-	if err != nil {
-		return nil, fmt.Errorf("build detect orientation request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("call detect orientation: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("detect orientation returned status %d", resp.StatusCode)
-	}
-
-	var result DetectOrientationResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode detect orientation response: %w", err)
 	}
 
 	return &result, nil

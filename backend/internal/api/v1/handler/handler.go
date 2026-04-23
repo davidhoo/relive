@@ -22,7 +22,6 @@ type Handlers struct {
 	Auth        *AuthHandler
 	Analyzer    *AnalyzerHandler
 	Event       *EventHandler
-	Orientation *OrientationSuggestionHandler
 }
 
 // NewHandlers 创建所有处理器
@@ -42,7 +41,6 @@ func NewHandlers(db *gorm.DB, services *service.Services, repos *repository.Repo
 		Auth:        NewAuthHandler(services.Auth),
 		Analyzer:    NewAnalyzerHandler(services.Photo, services.Analysis, services.AnalysisRuntime),
 		Event:       NewEventHandler(services.EventClustering, repos.Event, db),
-		Orientation: NewOrientationSuggestionHandler(services.OrientationSuggestion),
 	}
 
 	// AI Handler - 即使 AI 服务未配置也创建，以便配置变更后动态更新

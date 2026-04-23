@@ -18,12 +18,3 @@ onnxruntime>=1.20,<2; platform_system == "Darwin" and platform_machine == "x86_6
 
 insightface>=0.7.3,<1.0
 numpy>=1.26
-
-# Orientation detection (CGD model)
-torch>=2.0
-torchvision>=0.15
-timm>=1.0
-pytorch-lightning>=2.0
-huggingface_hub>=0.20
-loguru>=0.7
-Pillow>=10.0

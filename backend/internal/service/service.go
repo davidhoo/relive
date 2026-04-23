@@ -28,7 +28,6 @@ type Services struct {
 	Analysis             AnalysisService
 	System               SystemService
 	EventClustering      EventClusteringService
-	OrientationSuggestion OrientationSuggestionService
 	Scheduler            *TaskScheduler
 	ResultQueue          *ResultQueue // 结果队列服务
 }
@@ -70,7 +69,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	if cfg != nil && cfg.People.MLEndpoint != "" {
 		peopleClient = mlclient.New(cfg.People.MLEndpoint, time.Duration(cfg.People.Timeout)*time.Second)
 	}
-	peopleSvc := NewPeopleService(db, repos.Photo, repos.Face, repos.Person, repos.PeopleJob, repos.CannotLink, cfg, peopleClient, runtimeService)
+	peopleSvc := NewPeopleService(db, repos.Photo, repos.Face, repos.Person, repos.PeopleJob, repos.PeopleMergeJob, repos.CannotLink, cfg, peopleClient, runtimeService)
 	mergeSuggestionService := NewPersonMergeSuggestionService(
 		db,
 		repos.Photo,
@@ -91,18 +90,8 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	eventClusteringService := NewEventClusteringService(db, repos.Photo, repos.Event, repos.PhotoTag)
 	photoService.SetEventClusteringService(eventClusteringService)
 
-	// 创建方向建议服务
-	orientationSuggestionService := NewOrientationSuggestionService(
-		db,
-		repos.Photo,
-		repos.Face,
-		repos.OrientationSuggestion,
-		configService,
-		cfg,
-	)
-
 	// 创建定时任务调度器
-	scheduler := NewTaskScheduler(analysisService, displayService, photoService, mergeSuggestionService, orientationSuggestionService, repos.ThumbnailJob, repos.GeocodeJob)
+	scheduler := NewTaskScheduler(analysisService, displayService, photoService, mergeSuggestionService, repos.ThumbnailJob, repos.GeocodeJob)
 
 	// 创建提示词配置服务
 	promptService := NewPromptService(repos.Config)
@@ -143,7 +132,6 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		Analysis:             analysisService,
 		System:               NewSystemService(db),
 		EventClustering:      eventClusteringService,
-		OrientationSuggestion: orientationSuggestionService,
 		Scheduler:            scheduler,
 		ResultQueue:          resultQueue,
 	}

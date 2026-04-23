@@ -617,38 +617,6 @@
       v-model:visible="showBatchLocationPicker"
       @confirm="handleBatchLocationConfirm"
     />
-
-    <!-- 方向建议区域 -->
-    <el-card v-if="orientationGroups.length > 0" shadow="never" class="section-card orientation-section">
-      <template #header>
-        <SectionHeader :icon="RefreshRight" :title="`照片旋转建议（${orientationStats?.pending || 0}）`">
-          <template #actions>
-            <el-button size="small" plain @click="loadOrientationData">刷新</el-button>
-          </template>
-        </SectionHeader>
-      </template>
-
-      <div v-loading="orientationLoading" class="orientation-grid">
-        <OrientationSuggestionCard
-          v-for="group in orientationGroups"
-          :key="group.suggested_rotation"
-          :group="group"
-          :preview-photos="orientationPreviews[group.suggested_rotation] || []"
-          @review="openOrientationReview(group.suggested_rotation)"
-        />
-      </div>
-    </el-card>
-
-    <!-- 方向建议审核弹窗 -->
-    <OrientationSuggestionReviewDialog
-      v-model="orientationDialogVisible"
-      :rotation="currentOrientationRotation"
-      :detail="currentOrientationDetail"
-      :loading="orientationDetailLoading"
-      :submitting="orientationSubmitting"
-      @apply="handleApplyOrientation"
-      @dismiss="handleDismissOrientation"
-    />
   </div>
 </template>
 
@@ -661,12 +629,10 @@ import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 import PathBrowser from '@/components/PathBrowser.vue'
 import LocationPicker from '@/components/LocationPicker.vue'
-import OrientationSuggestionCard from './OrientationSuggestionCard.vue'
-import OrientationSuggestionReviewDialog from './OrientationSuggestionReviewDialog.vue'
 import { photoApi } from '@/api/photo'
 import { peopleApi } from '@/api/people'
 import { configApi, type ScanPathConfig, type AutoScanConfig } from '@/api/config'
-import type { Photo, TagInfo, OrientationSuggestionGroup, OrientationSuggestionDetail, OrientationSuggestionStats } from '@/types/photo'
+import type { Photo, TagInfo } from '@/types/photo'
 import { v4 as uuidv4 } from 'uuid'
 
 const router = useRouter()
@@ -703,17 +669,6 @@ const excludingPhotos = ref(false)
 const batchRotating = ref(false)
 const showBatchLocationPicker = ref(false)
 const batchLocationLoading = ref(false)
-
-// 方向建议相关状态
-const orientationGroups = ref<OrientationSuggestionGroup[]>([])
-const orientationStats = ref<OrientationSuggestionStats | null>(null)
-const orientationPreviews = ref<Record<number, any[]>>({})
-const orientationLoading = ref(false)
-const orientationDialogVisible = ref(false)
-const currentOrientationRotation = ref(0)
-const currentOrientationDetail = ref<OrientationSuggestionDetail | null>(null)
-const orientationDetailLoading = ref(false)
-const orientationSubmitting = ref(false)
 
 const toggleSelectPhoto = (id: number, event?: MouseEvent) => {
   const currentIndex = photos.value.findIndex(p => p.id === id)
@@ -841,84 +796,6 @@ const handleBatchLocationConfirm = async (coords: { latitude: number; longitude:
   selectedPhotos.value = new Set()
   loadPhotos()
   loadPathDerivedStatus()
-}
-
-// ========== 方向建议相关方法 ==========
-
-const loadOrientationData = async () => {
-  orientationLoading.value = true
-  try {
-    const [groupsRes, statsRes] = await Promise.all([
-      photoApi.getOrientationGroups(),
-      photoApi.getOrientationStats()
-    ])
-    orientationGroups.value = groupsRes.data?.data?.groups || []
-    orientationStats.value = statsRes.data?.data || null
-
-    // 加载每个分组的预览照片
-    const previews: Record<number, any[]> = {}
-    for (const group of orientationGroups.value) {
-      try {
-        const detailRes = await photoApi.getOrientationDetail(group.suggested_rotation, 1, 4)
-        previews[group.suggested_rotation] = detailRes.data?.data?.photos || []
-      } catch {
-        previews[group.suggested_rotation] = []
-      }
-    }
-    orientationPreviews.value = previews
-  } catch (error: any) {
-    console.error('Failed to load orientation data:', error)
-  } finally {
-    orientationLoading.value = false
-  }
-}
-
-const openOrientationReview = async (rotation: number) => {
-  currentOrientationRotation.value = rotation
-  orientationDialogVisible.value = true
-  orientationDetailLoading.value = true
-  currentOrientationDetail.value = null
-
-  try {
-    const res = await photoApi.getOrientationDetail(rotation, 1, 100)
-    currentOrientationDetail.value = res.data?.data || null
-  } catch (error: any) {
-    ElMessage.error(error.message || '加载方向建议详情失败')
-  } finally {
-    orientationDetailLoading.value = false
-  }
-}
-
-const handleApplyOrientation = async (photoIds: number[]) => {
-  orientationSubmitting.value = true
-  try {
-    const res = await photoApi.applyOrientationSuggestions(photoIds)
-    ElMessage.success(`已旋转 ${res.data?.data?.applied || 0} 张照片`)
-    orientationDialogVisible.value = false
-    // 刷新方向建议数据
-    await loadOrientationData()
-    // 刷新照片列表
-    loadPhotos()
-  } catch (error: any) {
-    ElMessage.error(error.message || '应用方向建议失败')
-  } finally {
-    orientationSubmitting.value = false
-  }
-}
-
-const handleDismissOrientation = async (photoIds: number[]) => {
-  orientationSubmitting.value = true
-  try {
-    await photoApi.dismissOrientationSuggestions(photoIds)
-    ElMessage.success('已忽略所选方向建议')
-    orientationDialogVisible.value = false
-    // 刷新方向建议数据
-    await loadOrientationData()
-  } catch (error: any) {
-    ElMessage.error(error.message || '忽略方向建议失败')
-  } finally {
-    orientationSubmitting.value = false
-  }
 }
 
 const excludedCount = ref(0)
@@ -1827,9 +1704,6 @@ onMounted(() => {
 
   // 加载分类和标签
   loadCategoriesAndTags()
-
-  // 加载方向建议数据
-  loadOrientationData()
 
   // 检查是否有正在进行的扫描任务
   checkOngoingScanTask()
@@ -2931,21 +2805,6 @@ defineExpose({
 .float-toolbar-leave-to {
   opacity: 0;
   transform: translateY(16px);
-}
-
-/* ============ 方向建议区域 ============ */
-.orientation-section {
-  margin-top: var(--spacing-xl);
-}
-
-.orientation-section :deep(.el-card__body) {
-  padding: var(--spacing-lg);
-}
-
-.orientation-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: var(--spacing-lg);
 }
 
 </style>
