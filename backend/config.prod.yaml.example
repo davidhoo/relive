@@ -1,5 +1,4 @@
-# 生产环境覆盖配置示例
-# 复制为 backend/config.prod.yaml 使用。
+# 生产环境覆盖配置
 # 角色：覆盖 backend/config.base.yaml 中与生产部署相关的环境差异。
 # 说明：AI / geocode / display / scan paths 等业务配置在运行时应以数据库为准。
 
