@@ -37,6 +37,18 @@ const (
 	// making it easier for new faces to join user-confirmed identities (e.g., family members).
 	confirmedPersonDiscount = 0.05
 
+	// Adaptive threshold decay for long-pending faces
+	// retry_count 0-1: full threshold (no discount)
+	// retry_count 2-4: linear decay to floor
+	// retry_count 5+: floor threshold
+	thresholdDecayStart    = 2  // retry_count at which decay begins
+	thresholdDecayEnd      = 5  // retry_count at which floor is reached
+	attachThresholdFloor   = 0.5
+	linkThresholdFloor     = 0.5
+
+	// Fallback: after this many retries, allow single-face person creation
+	singleFaceFallbackRetries = 10
+
 	// Clustering optimization constants to prevent CPU overload on NAS
 	// See: https://github.com/davidhoo/relive/issues/XXX
 	peopleClusteringBatchSize    = 50  // Max pending faces to cluster at once
@@ -169,12 +181,40 @@ func (s *peopleService) linkThreshold() float64 {
 	return defaultLinkThreshold
 }
 
-// attachThreshold returns the configured person attach threshold, defaulting to 0.70.
+// attachThreshold returns the configured person attach threshold, defaulting to 0.65.
 func (s *peopleService) attachThreshold() float64 {
 	if s.config != nil && s.config.People.AttachThreshold > 0 {
 		return s.config.People.AttachThreshold
 	}
 	return defaultAttachThreshold
+}
+
+// effectiveAttachThreshold decays the attach threshold based on max retry_count in a component.
+// retry 0-1: full threshold, retry 2-4: linear decay, retry 5+: floor 0.5
+func (s *peopleService) effectiveAttachThreshold(maxRetryCount int) float64 {
+	base := s.attachThreshold()
+	if maxRetryCount < thresholdDecayStart {
+		return base
+	}
+	if maxRetryCount >= thresholdDecayEnd {
+		return attachThresholdFloor
+	}
+	fraction := float64(maxRetryCount-thresholdDecayStart+1) / float64(thresholdDecayEnd-thresholdDecayStart+1)
+	return base - (base-attachThresholdFloor)*fraction
+}
+
+// effectiveLinkThreshold decays the link threshold based on retry_count.
+// retry 0-1: full threshold, retry 2-4: linear decay, retry 5+: floor 0.5
+func (s *peopleService) effectiveLinkThreshold(retryCount int) float64 {
+	base := s.linkThreshold()
+	if retryCount < thresholdDecayStart {
+		return base
+	}
+	if retryCount >= thresholdDecayEnd {
+		return linkThresholdFloor
+	}
+	fraction := float64(retryCount-thresholdDecayStart+1) / float64(thresholdDecayEnd-thresholdDecayStart+1)
+	return base - (base-linkThresholdFloor)*fraction
 }
 
 func (s *peopleService) StartBackground() (*model.PeopleTask, error) {
@@ -1587,27 +1627,37 @@ func selectDiversePrototypes(faces []*model.Face, k int) []*model.Face {
 	return selected
 }
 
-func (s *peopleService) buildFaceGraph(faces []*model.Face, linkThreshold float64) map[uint][]uint {
+func (s *peopleService) buildFaceGraph(faces []*model.Face) map[uint][]uint {
 	graph := make(map[uint][]uint, len(faces))
-	// First pass: initialize graph for all valid faces (preserve current semantics)
+	// Build per-face effective link thresholds based on retry_count
+	retryCounts := make(map[uint]int, len(faces))
+	thresholds := make(map[uint]float64, len(faces))
 	for _, face := range faces {
 		if face == nil || face.ID == 0 {
 			continue
 		}
 		graph[face.ID] = []uint{}
+		rc := face.RetryCount
+		retryCounts[face.ID] = rc
+		thresholds[face.ID] = s.effectiveLinkThreshold(rc)
 	}
 
 	// Pre-decode embeddings for all faces with valid embeddings
 	faceEmbeddings := decodeFacesWithEmbeddings(faces)
 
-	// Second pass: build edges using pre-decoded embeddings
+	// Second pass: build edges using per-face effective thresholds
+	// Edge exists if similarity >= min(threshold[A], threshold[B])
 	for i := 0; i < len(faceEmbeddings); i++ {
 		for j := i + 1; j < len(faceEmbeddings); j++ {
 			score := cosineSimilarityPrecomputed(
 				faceEmbeddings[i].embedding, faceEmbeddings[i].norm,
 				faceEmbeddings[j].embedding, faceEmbeddings[j].norm,
 			)
-			if score < linkThreshold {
+			edgeThreshold := thresholds[faceEmbeddings[i].face.ID]
+			if t := thresholds[faceEmbeddings[j].face.ID]; t < edgeThreshold {
+				edgeThreshold = t
+			}
+			if score < edgeThreshold {
 				continue
 			}
 
@@ -1933,7 +1983,7 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 	prototypesWithEmb := s.protoCache.prototypesWithEmb
 	prototypes := s.protoCache.prototypesOrig
 
-	graph := s.buildFaceGraph(pendingFaces, s.linkThreshold())
+	graph := s.buildFaceGraph(pendingFaces)
 	components := s.findConnectedComponents(graph)
 	pendingByID := make(map[uint]*model.Face, len(pendingFaces))
 	for _, face := range pendingFaces {
@@ -1983,8 +2033,16 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 			}
 		}
 
+		// Compute max retry_count in component for adaptive thresholds
+		maxRetry := 0
+		for _, face := range component {
+			if face != nil && face.RetryCount > maxRetry {
+				maxRetry = face.RetryCount
+			}
+		}
+
 		personID, score, attached := s.attachComponentToExistingPersonWithEmbeddings(
-			componentWithEmb, prototypesWithEmb, blockedPersons, prototypes, s.attachThreshold(),
+			componentWithEmb, prototypesWithEmb, blockedPersons, prototypes, s.effectiveAttachThreshold(maxRetry),
 		)
 		componentScore := nonNegativeScore(score)
 
@@ -2028,6 +2086,21 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 		}
 
 		if len(component) >= peopleMinClusterFaces && componentPhotoCount(component) >= 2 {
+			person, err := s.createPersonFromComponent(component, componentScore)
+			if err != nil {
+				return nil, nil, err
+			}
+			if person != nil && person.ID != 0 {
+				affectedPersonIDs[person.ID] = struct{}{}
+			}
+			for _, photoID := range facePhotoIDs(component) {
+				affectedPhotoIDs[photoID] = struct{}{}
+			}
+			continue
+		}
+
+		// Fallback: single-face person creation for long-pending faces
+		if maxRetry >= singleFaceFallbackRetries {
 			person, err := s.createPersonFromComponent(component, componentScore)
 			if err != nil {
 				return nil, nil, err

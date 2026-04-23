@@ -65,9 +65,9 @@ func TestClusteringEquivalence(t *testing.T) {
 
 	// 测试 buildFaceGraph 等价性
 	t.Run("buildFaceGraph", func(t *testing.T) {
-		graph1 := svc.buildFaceGraph(pendingFaces, svc.linkThreshold())
+		graph1 := svc.buildFaceGraph(pendingFaces)
 		// 运行两次，结果应该相同
-		graph2 := svc.buildFaceGraph(pendingFaces, svc.linkThreshold())
+		graph2 := svc.buildFaceGraph(pendingFaces)
 
 		if !graphsEqual(graph1, graph2) {
 			t.Errorf("buildFaceGraph results differ between runs")
@@ -88,7 +88,7 @@ func TestClusteringEquivalence(t *testing.T) {
 
 	// 测试 scoreComponentAgainstPerson 等价性
 	t.Run("scoreComponentAgainstPerson", func(t *testing.T) {
-		graph := svc.buildFaceGraph(pendingFaces, svc.linkThreshold())
+		graph := svc.buildFaceGraph(pendingFaces)
 		components := svc.findConnectedComponents(graph)
 
 		for _, componentIDs := range components {
@@ -136,7 +136,7 @@ type clusteringResult struct {
 }
 
 func runClusteringPipeline(svc *peopleService, pendingFaces []*model.Face, prototypes map[uint][]*model.Face) clusteringResult {
-	graph := svc.buildFaceGraph(pendingFaces, svc.linkThreshold())
+	graph := svc.buildFaceGraph(pendingFaces)
 	components := svc.findConnectedComponents(graph)
 
 	result := clusteringResult{

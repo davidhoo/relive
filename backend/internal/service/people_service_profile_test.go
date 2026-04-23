@@ -63,7 +63,7 @@ func BenchmarkPeopleClustering(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		// 模拟完整的聚类流程（使用优化后的预解码路径）
-		graph := svc.buildFaceGraph(pendingFaces, svc.linkThreshold())
+		graph := svc.buildFaceGraph(pendingFaces)
 		components := svc.findConnectedComponents(graph)
 
 		// 预解码所有 prototype embeddings 一次（生产优化）
@@ -171,7 +171,7 @@ func TestPeopleClusteringProfile(t *testing.T) {
 	start := time.Now()
 	iterations := 100
 	for i := 0; i < iterations; i++ {
-		graph := svc.buildFaceGraph(pendingFaces, svc.linkThreshold())
+		graph := svc.buildFaceGraph(pendingFaces)
 		components := svc.findConnectedComponents(graph)
 
 		// 预解码所有 prototype embeddings 一次（生产优化）

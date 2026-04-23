@@ -264,7 +264,7 @@ func TestPeopleService_BuildFaceGraph(t *testing.T) {
 	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
 
 	type graphBuilder interface {
-		buildFaceGraph(faces []*model.Face, linkThreshold float64) map[uint][]uint
+		buildFaceGraph(faces []*model.Face) map[uint][]uint
 	}
 
 	builder, ok := any(svc).(graphBuilder)
@@ -280,7 +280,7 @@ func TestPeopleService_BuildFaceGraph(t *testing.T) {
 		{ID: 5, Embedding: encodeEmbedding(t, []float32{0, 0, 1})},     // orthogonal to both groups
 	}
 
-	graph := builder.buildFaceGraph(faces, 0.65) // defaultLinkThreshold
+	graph := builder.buildFaceGraph(faces)
 	require.Len(t, graph, 5)
 	assert.Equal(t, []uint{2}, graph[1])
 	assert.Equal(t, []uint{1}, graph[2])
@@ -293,7 +293,7 @@ func TestPeopleService_FindFaceComponents(t *testing.T) {
 	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
 
 	type graphExplorer interface {
-		buildFaceGraph(faces []*model.Face, linkThreshold float64) map[uint][]uint
+		buildFaceGraph(faces []*model.Face) map[uint][]uint
 		findConnectedComponents(graph map[uint][]uint) [][]uint
 	}
 
@@ -308,7 +308,7 @@ func TestPeopleService_FindFaceComponents(t *testing.T) {
 		{ID: 5, Embedding: encodeEmbedding(t, []float32{0, 0, 1})},
 	}
 
-	graph := explorer.buildFaceGraph(faces, 0.65) // defaultLinkThreshold
+	graph := explorer.buildFaceGraph(faces)
 	components := explorer.findConnectedComponents(graph)
 
 	assert.Equal(t, []string{"1,2", "3,4", "5"}, normalizeFaceComponents(components))
