@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.4] - 2026-04-24
+
+### Performance
+- **聚类 CPU 优化** — 聚类间隔可配置化（默认 300ms，NAS 建议 500-1000ms），CPU 利用率从 ~70% 降至 ~15%
+- **聚类循环重构** — 有 pending faces 时进入内层循环直接聚类，跳过冗余的 ClaimNextJob/GetPendingStats 查询
+- **空闲轮询退避** — 无任务时空闲间隔从固定 300ms 改为指数退避（300ms→3s），DB 查询从 3.3 次/秒降至 0.33 次/秒
+- **原型缓存 SQL 优化** — `ListTopByPersonIDs`（全量加载 faces 表再 Go 截取）替换为 `ListPrototypeEmbeddings`（SQL 窗口函数直接取 top-N），减少原型重建时 50-70% I/O
+- **避免无用 embedding 加载** — `syncPersonState`、`UpdatePersonCategory`、`DissolvePerson` 改用 `ListByPersonIDSummary`，不再加载 2KB/张的 embedding blob
+- **Face embedding 二进制存储** — 从 JSON 迁移为 little-endian float32 二进制格式，存储减少 ~60%，解码提速
+- **ANN 索引构建优化** — 建图时 efSearch=20、500 节点/批插入 + 5ms 间隔、30 分钟最小重建间隔，降低 NAS CPU 峰值
+
+### Added
+- **自适应阈值衰减** — 长时间 pending 的 face 逐步降低 attach/link 阈值（0.65→0.50），减少无法聚类的"僵尸"人脸
+- **单人脸回退** — retry_count≥10 时允许为单张人脸创建 person，避免永远卡在 pending 状态
+- **异步人物合并** — 大数据集合并改为异步任务，避免 HTTP 超时
+- **人物相似度计算接口** — 支持手动评估合并阈值
+- **合并建议审核增强** — 全选/反选按钮、头像点击导航
+- **CGD 照片方向检测** — 替代原 face-based 方向检测模型
+
+### Fixed
+- **SQLite "database is locked"** — 新增 write gate（RWMutex），前台合并/拆分/移动操作独占写权限，后台聚类 worker 自动让步
+- **IN 子句 SQLite 变量限制** — 批量分片查询，避免 999 变量上限
+- **合并建议区域闪烁** — 修复无效 API 响应和未加载时显示问题
+- **Embedding 迁移事务保护** — 每批更新包裹在事务中
+
+### Changed
+- 合并建议阈值从 0.56 降至 0.55
+- 移除照片方向建议功能
+- 移除 `_txlock=immediate`，恢复 WAL 并发读
+
+---
+
 ## [1.6.3] - 2026-04-21
 
 ### Performance

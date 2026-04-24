@@ -6,7 +6,7 @@
 [![Vue](https://img.shields.io/badge/Vue-3.5+-4FC08D?logo=vue.js)]()
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)]()
 [![InsightFace](https://img.shields.io/badge/InsightFace-Face_AI-FF6F61)]()
-[![Version](https://img.shields.io/badge/Version-1.6.2-blue)]()
+[![Version](https://img.shields.io/badge/Version-1.6.4-blue)]()
 [![OSHW](https://img.shields.io/badge/OSHW-oshwhub-blue?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6bTAgMThjLTQuNDEgMC04LTMuNTktOC04czMuNTktOCA4LTggOCAzLjU5IDggOC0zLjU5IDgtOCA4eiIgZmlsbD0id2hpdGUiLz48L3N2Zz4=)](https://oshwhub.com/davidhoo/relive)
 
 > 你的 NAS 里存了多少照片？它们上一次被翻看是什么时候？
