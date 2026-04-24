@@ -106,6 +106,12 @@ export const peopleApi = {
     return http.get<ApiResponse<PhotoPeopleResponse>>(`/photos/${photoId}/people`)
   },
 
+  enqueueFaceDetection(photoId: number, force = false) {
+    return http.post<ApiResponse<{ photo_id: number; force: boolean }>>(`/photos/${photoId}/face-detection`, null, {
+      params: force ? { force: 'true' } : undefined,
+    })
+  },
+
   getMergeSuggestionTask() {
     return http.get<ApiResponse<PersonMergeSuggestionTask | null>>('/people/merge-suggestions/task')
   },

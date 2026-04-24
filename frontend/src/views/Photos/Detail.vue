@@ -66,6 +66,10 @@
                 {{ analyzing ? '分析中...' : (photo?.ai_analyzed ? '重新分析' : '分析') }}
               </el-button>
             </el-tooltip>
+            <el-button @click="handleFaceDetection" :loading="faceDetecting">
+              <el-icon><View /></el-icon>
+              {{ faceDetecting ? '识别中...' : (photoPeopleStatus === 'ready' || photoPeopleStatus === 'no_face' ? '重新识别人脸' : '识别人脸') }}
+            </el-button>
           </div>
         </div>
       </template>
@@ -346,7 +350,7 @@
 <script setup lang="ts">
 import { computed, ref, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight, InfoFilled, Delete, RefreshRight, RefreshLeft, Edit } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowRight, InfoFilled, Delete, RefreshRight, RefreshLeft, Edit, View } from '@element-plus/icons-vue'
 import { photoApi } from '@/api/photo'
 import { aiApi } from '@/api/ai'
 import { geocodeApi } from '@/api/geocode'
@@ -374,6 +378,7 @@ const imageVersion = ref(Date.now())
 const showLocationPicker = ref(false)
 const photoPeople = ref<PhotoPeopleResponse | null>(null)
 const photoPeopleLoading = ref(false)
+const faceDetecting = ref(false)
 
 // 上一张/下一张导航
 const prevId = ref<number | null>(null)
@@ -589,6 +594,56 @@ const handleGeocode = async () => {
     ElMessage.error(error.response?.data?.error?.message || error.message || 'GPS 解析失败')
   } finally {
     geocoding.value = false
+  }
+}
+
+// 人脸识别
+const handleFaceDetection = async () => {
+  if (!photo.value) return
+
+  const status = photoPeopleStatus.value
+  const force = status === 'ready' || status === 'no_face'
+  const label = force ? '重新识别将覆盖现有人脸数据，确定？' : '确定要对该照片进行人脸识别？'
+  try {
+    await ElMessageBox.confirm(label, force ? '重新识别人脸' : '人脸识别', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: force ? 'warning' : 'info',
+    })
+  } catch {
+    return
+  }
+
+  try {
+    faceDetecting.value = true
+    await peopleApi.enqueueFaceDetection(photo.value.id, force)
+    ElMessage.success('人脸识别任务已入队')
+
+    const lastStatus = status
+    const timer = addTimer(setInterval(async () => {
+      await loadPhotoPeople(photo.value?.id)
+      const current = photoPeopleStatus.value
+      if (current !== lastStatus && (current === 'ready' || current === 'no_face' || current === 'failed')) {
+        clearInterval(timer)
+        faceDetecting.value = false
+        if (current === 'ready') {
+          ElMessage.success('人脸识别完成')
+        } else if (current === 'no_face') {
+          ElMessage.info('未检测到人脸')
+        } else {
+          ElMessage.warning('人脸识别失败')
+        }
+        await loadPhoto()
+      }
+    }, 2000))
+
+    addTimer(setTimeout(() => {
+      clearInterval(timer)
+      faceDetecting.value = false
+    }, 120000))
+  } catch (error: any) {
+    faceDetecting.value = false
+    ElMessage.error(error.response?.data?.error?.message || error.message || '人脸识别入队失败')
   }
 }
 

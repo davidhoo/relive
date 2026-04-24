@@ -646,6 +646,30 @@ func (h *PeopleHandler) EnqueueUnprocessed(c *gin.Context) {
 	})
 }
 
+func (h *PeopleHandler) EnqueuePhotoForDetection(c *gin.Context) {
+	photoID, ok := parseUintParam(c, "id", "Invalid photo ID")
+	if !ok {
+		return
+	}
+
+	// force=true: 如果已有识别结果，会重新检测
+	force := c.Query("force") == "true"
+
+	if err := h.service.EnqueuePhoto(photoID, model.PeopleJobSourceManual, 80, force); err != nil {
+		writePeopleError(c, http.StatusInternalServerError, "ENQUEUE_FAILED", err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "人脸识别任务已入队",
+		Data: gin.H{
+			"photo_id": photoID,
+			"force":    force,
+		},
+	})
+}
+
 func (h *PeopleHandler) ResetAllPeople(c *gin.Context) {
 	count, err := h.service.ResetAllPeople()
 	if err != nil {

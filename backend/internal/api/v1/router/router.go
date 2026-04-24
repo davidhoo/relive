@@ -227,6 +227,7 @@ func Setup(db *gorm.DB, cfg *config.Config, appState *lifecycle.State) (*gin.Eng
 				photos.GET("/:id", handlers.Photo.GetPhotoByID)
 				photos.GET("/:id/adjacent", handlers.Photo.GetAdjacentPhotos)
 				photos.GET("/:id/people", handlers.People.GetPhotoPeople)
+				photos.POST("/:id/face-detection", handlers.People.EnqueuePhotoForDetection)
 				photos.PATCH("/:id/category", handlers.Photo.UpdateCategory)
 				photos.PATCH("/:id/location", handlers.Photo.SetManualLocation)
 				photos.PATCH("/:id/rotation", handlers.Photo.UpdateRotation)
