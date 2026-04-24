@@ -56,6 +56,7 @@ func setupPeopleServiceTestDB(t *testing.T) *gorm.DB {
 		&model.Face{},
 		&model.Person{},
 		&model.PeopleJob{},
+		&model.PeopleMergeJob{},
 		&model.ScanJob{},
 	))
 

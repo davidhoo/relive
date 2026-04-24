@@ -155,6 +155,9 @@ func NewPeopleService(db *gorm.DB, photoRepo repository.PhotoRepository, faceRep
 		logger.Errorf("Failed to interrupt non-terminal people jobs: %v", err)
 	}
 
+	// 清理上次异常退出遗留的合并任务（processing/pending → failed）
+	recoverStuckMergeJobs(mergeJobRepo)
+
 	// 重置被中断任务遗留的 stuck 照片状态（pending/processing → none）
 	if err := db.Model(&model.Photo{}).
 		Where("face_process_status IN ?", []string{model.FaceProcessStatusPending, model.FaceProcessStatusProcessing}).
@@ -1514,6 +1517,20 @@ func (s *peopleService) setMergeSuggestionDirtyHook(hook func(string) error) {
 
 func (s *peopleService) setANNCandidateFn(fn func(probes []faceWithEmbedding, k int) map[uint]struct{}) {
 	s.annCandidateFn = fn
+}
+
+// recoverStuckMergeJobs marks processing/pending merge jobs as failed on startup.
+// These are left over from a previous server crash or restart where the goroutine
+// executing the job was lost (e.g., due to a deadlock or OOM kill).
+func recoverStuckMergeJobs(repo repository.PeopleMergeJobRepository) {
+	affected, err := repo.RecoverStuck("job interrupted by server restart")
+	if err != nil {
+		logger.Errorf("failed to recover stuck merge jobs: %v", err)
+		return
+	}
+	if affected > 0 {
+		logger.Infof("recovered %d stuck merge jobs (marked as failed)", affected)
+	}
 }
 
 func (s *peopleService) markMergeSuggestionsDirty(reason string) {

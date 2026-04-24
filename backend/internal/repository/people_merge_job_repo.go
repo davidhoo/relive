@@ -13,6 +13,7 @@ type PeopleMergeJobRepository interface {
 	UpdateStatus(id uint, status string, errorMsg string) error
 	Complete(id uint, result string) error
 	Fail(id uint, errorMsg string) error
+	RecoverStuck(errorMsg string) (int64, error)
 }
 
 // peopleMergeJobRepository 实现
@@ -73,4 +74,18 @@ func (r *peopleMergeJobRepository) Fail(id uint, errorMsg string) error {
 		"error_message": errorMsg,
 		"completed_at":  &now,
 	}).Error
+}
+
+// RecoverStuck marks all pending/processing merge jobs as failed.
+// Called on startup to clean up jobs whose goroutines were lost in a crash/restart.
+func (r *peopleMergeJobRepository) RecoverStuck(errorMsg string) (int64, error) {
+	now := r.db.NowFunc()
+	result := r.db.Model(&model.PeopleMergeJob{}).
+		Where("status IN ?", []string{model.PeopleMergeJobStatusPending, model.PeopleMergeJobStatusProcessing}).
+		Updates(map[string]interface{}{
+			"status":        model.PeopleMergeJobStatusFailed,
+			"error_message": errorMsg,
+			"completed_at":  &now,
+		})
+	return result.RowsAffected, result.Error
 }
