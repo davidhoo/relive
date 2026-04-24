@@ -83,6 +83,7 @@ type PeopleConfig struct {
 	MergeSuggestionMaxPairsPerRun  int     `yaml:"merge_suggestion_max_pairs_per_run"`
 	MergeSuggestionBatchSize       int     `yaml:"merge_suggestion_batch_size"`
 	MergeSuggestionCooldownSeconds int     `yaml:"merge_suggestion_cooldown_seconds"`
+	ClusteringIntervalMs           int     `yaml:"clustering_interval_ms"`
 }
 
 const (
@@ -90,6 +91,7 @@ const (
 	defaultMergeSuggestionMaxPairsPerRun  = 200
 	defaultMergeSuggestionBatchSize       = 100
 	defaultMergeSuggestionCooldownSeconds = 300
+	defaultClusteringIntervalMs           = 300
 )
 
 // LegacyMLConfig 兼容旧版人物配置块
@@ -338,6 +340,9 @@ func Load(path string) (*Config, error) {
 	if cfg.People.MergeSuggestionCooldownSeconds == 0 {
 		cfg.People.MergeSuggestionCooldownSeconds = defaultMergeSuggestionCooldownSeconds
 	}
+	if cfg.People.ClusteringIntervalMs == 0 {
+		cfg.People.ClusteringIntervalMs = defaultClusteringIntervalMs
+	}
 
 	// 从环境变量覆盖敏感配置
 	if secret := os.Getenv("JWT_SECRET"); secret != "" {
@@ -422,6 +427,9 @@ func (c *Config) Validate() error {
 	}
 	if c.People.MergeSuggestionCooldownSeconds <= 0 {
 		return fmt.Errorf("people.merge_suggestion_cooldown_seconds must be greater than 0")
+	}
+	if c.People.ClusteringIntervalMs < 50 {
+		return fmt.Errorf("people.clustering_interval_ms must be at least 50")
 	}
 	if c.People.AttachThreshold > 0 && c.People.MergeSuggestionThreshold >= c.People.AttachThreshold {
 		return fmt.Errorf("people.merge_suggestion_threshold must be less than people.attach_threshold")

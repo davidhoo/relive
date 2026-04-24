@@ -52,7 +52,6 @@ const (
 	// Clustering optimization constants to prevent CPU overload on NAS
 	// See: https://github.com/davidhoo/relive/issues/XXX
 	peopleClusteringBatchSize    = 50  // Max pending faces to cluster at once
-	peopleClusteringInterval     = 100 // Milliseconds to sleep after clustering
 	peopleClusteringTaskInterval = 5   // Cluster every N tasks (0 = always)
 	clustProtoCacheTTL           = 5 * time.Minute // Prototype cache TTL; avoids reloading 220K rows per 50-face batch
 )
@@ -917,6 +916,8 @@ func (s *peopleService) runBackground(active *activePeopleTask) {
 			if err != nil {
 				s.appendBackgroundLog(fmt.Sprintf("处理待聚类人脸失败：%v", err))
 				time.Sleep(300 * time.Millisecond)
+			} else {
+				time.Sleep(s.clusteringInterval())
 			}
 			continue
 		}
@@ -1405,6 +1406,16 @@ func (s *peopleService) setBackgroundBusy(busy bool) {
 	s.backgroundBusyMu.Lock()
 	defer s.backgroundBusyMu.Unlock()
 	s.backgroundBusy = busy
+}
+
+// clusteringInterval returns the configured pause between clustering batches.
+// This prevents CPU overload on NAS devices while allowing desktop users to
+// tune for faster processing.
+func (s *peopleService) clusteringInterval() time.Duration {
+	if s.config != nil && s.config.People.ClusteringIntervalMs > 0 {
+		return time.Duration(s.config.People.ClusteringIntervalMs) * time.Millisecond
+	}
+	return 300 * time.Millisecond
 }
 
 func (s *peopleService) setMergeSuggestionDirtyHook(hook func(string) error) {
@@ -1952,10 +1963,6 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 	if len(pendingFaces) == 0 {
 		return nil, nil, nil
 	}
-
-	// Rate limiting: sleep after clustering to prevent CPU overload on NAS
-	// This allows API requests to be processed between clustering batches
-	defer time.Sleep(peopleClusteringInterval * time.Millisecond)
 
 	if s.protoCache == nil || time.Since(s.protoCache.builtAt) > clustProtoCacheTTL {
 		assignedPersonIDs, err := s.faceRepo.ListAssignedPersonIDs()
