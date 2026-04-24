@@ -7,6 +7,26 @@ import (
 	"gorm.io/gorm"
 )
 
+// sqliteVarLimit is the maximum number of host parameters per SQLite statement.
+// SQLite default is 999 (older builds) or 32766 (3.32+). Use 500 for safety.
+const sqliteVarLimit = 500
+
+// chunkIDs splits a slice into chunks no larger than sqliteVarLimit.
+func chunkIDs(ids []uint) [][]uint {
+	if len(ids) <= sqliteVarLimit {
+		return [][]uint{ids}
+	}
+	var chunks [][]uint
+	for i := 0; i < len(ids); i += sqliteVarLimit {
+		end := i + sqliteVarLimit
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunks = append(chunks, ids[i:end])
+	}
+	return chunks
+}
+
 type FaceRepository interface {
 	Create(face *model.Face) error
 	Update(face *model.Face) error
@@ -60,7 +80,12 @@ func (r *faceRepository) UpdateClusterFields(ids []uint, fields map[string]inter
 	if len(ids) == 0 || len(fields) == 0 {
 		return nil
 	}
-	return r.db.Model(&model.Face{}).Where("id IN ?", ids).Updates(fields).Error
+	for _, chunk := range chunkIDs(ids) {
+		if err := r.db.Model(&model.Face{}).Where("id IN ?", chunk).Updates(fields).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *faceRepository) GetByID(id uint) (*model.Face, error) {
@@ -117,12 +142,18 @@ func (r *faceRepository) ListByPersonIDPaginated(personID uint, page, pageSize i
 }
 
 func (r *faceRepository) ListByIDs(ids []uint) ([]*model.Face, error) {
-	var faces []*model.Face
 	if len(ids) == 0 {
-		return faces, nil
+		return nil, nil
 	}
-	err := r.db.Where("id IN ?", ids).Order("id ASC").Find(&faces).Error
-	return faces, err
+	var allFaces []*model.Face
+	for _, chunk := range chunkIDs(ids) {
+		var faces []*model.Face
+		if err := r.db.Where("id IN ?", chunk).Order("id ASC").Find(&faces).Error; err != nil {
+			return nil, err
+		}
+		allFaces = append(allFaces, faces...)
+	}
+	return allFaces, nil
 }
 
 func (r *faceRepository) ListAssigned() ([]*model.Face, error) {
@@ -188,30 +219,34 @@ func (r *faceRepository) GetPendingStats() (*PendingFaceStats, error) {
 }
 
 func (r *faceRepository) ListTopByPersonIDs(personIDs []uint, perPerson int) ([]*model.Face, error) {
-	var faces []*model.Face
 	if len(personIDs) == 0 {
-		return faces, nil
+		return nil, nil
 	}
 
-	err := r.db.
-		Where("person_id IN ?", personIDs).
-		Order("person_id ASC").
-		Order("manual_locked DESC").
-		Order("quality_score DESC").
-		Order("confidence DESC").
-		Order("id ASC").
-		Find(&faces).Error
-	if err != nil {
-		return nil, err
+	var allFaces []*model.Face
+	for _, chunk := range chunkIDs(personIDs) {
+		var faces []*model.Face
+		err := r.db.
+			Where("person_id IN ?", chunk).
+			Order("person_id ASC").
+			Order("manual_locked DESC").
+			Order("quality_score DESC").
+			Order("confidence DESC").
+			Order("id ASC").
+			Find(&faces).Error
+		if err != nil {
+			return nil, err
+		}
+		allFaces = append(allFaces, faces...)
 	}
 
 	if perPerson <= 0 {
-		return faces, nil
+		return allFaces, nil
 	}
 
-	topFaces := make([]*model.Face, 0, len(faces))
+	topFaces := make([]*model.Face, 0, len(allFaces))
 	counts := make(map[uint]int, len(personIDs))
-	for _, face := range faces {
+	for _, face := range allFaces {
 		if face == nil || face.PersonID == nil || *face.PersonID == 0 {
 			continue
 		}
@@ -235,20 +270,27 @@ func (r *faceRepository) ListPrototypeEmbeddings(personIDs []uint, perPerson int
 		perPerson = 1
 	}
 
-	var faces []*model.Face
-	err := r.db.Raw(`
-		SELECT id, person_id, embedding FROM (
-			SELECT id, person_id, embedding,
-				ROW_NUMBER() OVER (
-					PARTITION BY person_id
-					ORDER BY manual_locked DESC, quality_score DESC, confidence DESC, id ASC
-				) AS rn
-			FROM faces
-			WHERE person_id IN ?
-		) sub
-		WHERE rn <= ?
-	`, personIDs, perPerson).Scan(&faces).Error
-	return faces, err
+	var allFaces []*model.Face
+	for _, chunk := range chunkIDs(personIDs) {
+		var faces []*model.Face
+		err := r.db.Raw(`
+			SELECT id, person_id, embedding FROM (
+				SELECT id, person_id, embedding,
+					ROW_NUMBER() OVER (
+						PARTITION BY person_id
+						ORDER BY manual_locked DESC, quality_score DESC, confidence DESC, id ASC
+					) AS rn
+				FROM faces
+				WHERE person_id IN ?
+			) sub
+			WHERE rn <= ?
+		`, chunk, perPerson).Scan(&faces).Error
+		if err != nil {
+			return nil, err
+		}
+		allFaces = append(allFaces, faces...)
+	}
+	return allFaces, nil
 }
 
 func (r *faceRepository) ReassignFaces(faceIDs []uint, personID uint, reason string) error {
@@ -256,7 +298,7 @@ func (r *faceRepository) ReassignFaces(faceIDs []uint, personID uint, reason str
 		return nil
 	}
 	now := time.Now()
-	return r.db.Model(&model.Face{}).Where("id IN ?", faceIDs).Updates(map[string]interface{}{
+	fields := map[string]interface{}{
 		"person_id":          personID,
 		"cluster_status":     model.FaceClusterStatusManual,
 		"cluster_score":      1.0,
@@ -264,7 +306,13 @@ func (r *faceRepository) ReassignFaces(faceIDs []uint, personID uint, reason str
 		"manual_lock_reason": reason,
 		"manual_locked_at":   &now,
 		"clustered_at":       &now,
-	}).Error
+	}
+	for _, chunk := range chunkIDs(faceIDs) {
+		if err := r.db.Model(&model.Face{}).Where("id IN ?", chunk).Updates(fields).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *faceRepository) ListLowConfidence(threshold float64, maxGeneration int) ([]*model.Face, error) {
@@ -279,11 +327,17 @@ func (r *faceRepository) ResetForRecluster(ids []uint) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	return r.db.Model(&model.Face{}).
-		Where("id IN ? AND manual_locked = ?", ids, false).
-		Updates(map[string]interface{}{
-			"person_id":            nil,
-			"cluster_status":       model.FaceClusterStatusPending,
-			"recluster_generation": gorm.Expr("recluster_generation + 1"),
-		}).Error
+	fields := map[string]interface{}{
+		"person_id":            nil,
+		"cluster_status":       model.FaceClusterStatusPending,
+		"recluster_generation": gorm.Expr("recluster_generation + 1"),
+	}
+	for _, chunk := range chunkIDs(ids) {
+		if err := r.db.Model(&model.Face{}).
+			Where("id IN ? AND manual_locked = ?", chunk, false).
+			Updates(fields).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }

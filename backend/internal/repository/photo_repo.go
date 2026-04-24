@@ -397,9 +397,18 @@ func (r *photoRepository) ListAll() ([]*model.Photo, error) {
 
 // ListByIDs 根据 ID 列表获取照片
 func (r *photoRepository) ListByIDs(ids []uint) ([]*model.Photo, error) {
-	var photos []*model.Photo
-	err := r.db.Where("id IN ?", ids).Find(&photos).Error
-	return photos, err
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var allPhotos []*model.Photo
+	for _, chunk := range chunkIDs(ids) {
+		var photos []*model.Photo
+		if err := r.db.Where("id IN ?", chunk).Find(&photos).Error; err != nil {
+			return nil, err
+		}
+		allPhotos = append(allPhotos, photos...)
+	}
+	return allPhotos, nil
 }
 
 // ListPhotosByPersonID 通过 JOIN 查询获取人物关联的所有照片（优化：避免先查 faces 再查 photos）
@@ -793,8 +802,18 @@ func (r *photoRepository) ListWithGPS() ([]*model.Photo, error) {
 
 // BatchUpdateStatus 批量更新照片状态
 func (r *photoRepository) BatchUpdateStatus(ids []uint, status string) (int64, error) {
-	result := r.db.Model(&model.Photo{}).Where("id IN ?", ids).Update("status", status)
-	return result.RowsAffected, result.Error
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	var total int64
+	for _, chunk := range chunkIDs(ids) {
+		result := r.db.Model(&model.Photo{}).Where("id IN ?", chunk).Update("status", status)
+		if result.Error != nil {
+			return total, result.Error
+		}
+		total += result.RowsAffected
+	}
+	return total, nil
 }
 
 // UpdateCategory 更新照片分类
@@ -829,30 +848,40 @@ func (r *photoRepository) RecomputeTopPersonCategory(photoIDs []uint) error {
 		CategoryRank int  `gorm:"column:category_rank"`
 	}
 
-	var rows []row
-	err := r.db.Model(&model.Photo{}).
-		Select(`
-			photos.id AS photo_id,
-			COUNT(faces.id) AS face_count,
-			MAX(CASE people.category
-				WHEN 'family' THEN 4
-				WHEN 'friend' THEN 3
-				WHEN 'acquaintance' THEN 2
-				WHEN 'stranger' THEN 1
-				ELSE 0
-			END) AS category_rank
-		`).
-		Joins("LEFT JOIN faces ON faces.photo_id = photos.id").
-		Joins("LEFT JOIN people ON people.id = faces.person_id").
-		Where("photos.id IN ?", dedupedIDs).
-		Group("photos.id").
-		Scan(&rows).Error
-	if err != nil {
-		return err
+	var allRows []row
+	for i := 0; i < len(dedupedIDs); i += sqliteVarLimit {
+		end := i + sqliteVarLimit
+		if end > len(dedupedIDs) {
+			end = len(dedupedIDs)
+		}
+		chunk := dedupedIDs[i:end]
+
+		var rows []row
+		err := r.db.Model(&model.Photo{}).
+			Select(`
+				photos.id AS photo_id,
+				COUNT(faces.id) AS face_count,
+				MAX(CASE people.category
+					WHEN 'family' THEN 4
+					WHEN 'friend' THEN 3
+					WHEN 'acquaintance' THEN 2
+					WHEN 'stranger' THEN 1
+					ELSE 0
+				END) AS category_rank
+			`).
+			Joins("LEFT JOIN faces ON faces.photo_id = photos.id").
+			Joins("LEFT JOIN people ON people.id = faces.person_id").
+			Where("photos.id IN ?", chunk).
+			Group("photos.id").
+			Scan(&rows).Error
+		if err != nil {
+			return err
+		}
+		allRows = append(allRows, rows...)
 	}
 
-	byPhotoID := make(map[uint]row, len(rows))
-	for _, row := range rows {
+	byPhotoID := make(map[uint]row, len(allRows))
+	for _, row := range allRows {
 		byPhotoID[row.PhotoID] = row
 	}
 

@@ -60,12 +60,16 @@ func (r *photoTagRepository) GetTagsByPhotoIDs(ids []uint) (map[uint][]string, e
 		return result, nil
 	}
 
-	var tags []model.PhotoTag
-	if err := r.db.Where("photo_id IN ?", ids).Order("photo_id, tag").Find(&tags).Error; err != nil {
-		return nil, err
+	var allTags []model.PhotoTag
+	for _, chunk := range chunkIDs(ids) {
+		var tags []model.PhotoTag
+		if err := r.db.Where("photo_id IN ?", chunk).Order("photo_id, tag").Find(&tags).Error; err != nil {
+			return nil, err
+		}
+		allTags = append(allTags, tags...)
 	}
 
-	for _, t := range tags {
+	for _, t := range allTags {
 		result[t.PhotoID] = append(result[t.PhotoID], t.Tag)
 	}
 	return result, nil

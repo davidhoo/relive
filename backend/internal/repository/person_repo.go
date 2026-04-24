@@ -71,12 +71,18 @@ func (r *personRepository) ListAll() ([]*model.Person, error) {
 }
 
 func (r *personRepository) ListByIDs(ids []uint) ([]*model.Person, error) {
-	var people []*model.Person
 	if len(ids) == 0 {
-		return people, nil
+		return nil, nil
 	}
-	err := r.db.Where("id IN ?", ids).Order("id ASC").Find(&people).Error
-	return people, err
+	var allPeople []*model.Person
+	for _, chunk := range chunkIDs(ids) {
+		var people []*model.Person
+		if err := r.db.Where("id IN ?", chunk).Order("id ASC").Find(&people).Error; err != nil {
+			return nil, err
+		}
+		allPeople = append(allPeople, people...)
+	}
+	return allPeople, nil
 }
 
 func (r *personRepository) ListWithAvatar() ([]*model.Person, error) {
@@ -139,26 +145,30 @@ func (r *personRepository) MergeInto(targetPersonID uint, sourcePersonIDs []uint
 			return gorm.ErrRecordNotFound
 		}
 
+		allPersonIDs := append([]uint{targetPersonID}, sourceIDs...)
 		if err := tx.Model(&model.Face{}).
 			Distinct("photo_id").
-			Where("person_id IN ?", append([]uint{targetPersonID}, sourceIDs...)).
+			Where("person_id IN ?", allPersonIDs).
 			Order("photo_id ASC").
 			Pluck("photo_id", &affectedPhotoIDs).Error; err != nil {
 			return err
 		}
 
-		if err := tx.Model(&model.Face{}).
-			Where("person_id IN ?", sourceIDs).
-			Updates(map[string]interface{}{
-				"person_id":          targetPersonID,
-				"cluster_status":     model.FaceClusterStatusManual,
-				"cluster_score":      1.0,
-				"manual_locked":      true,
-				"manual_lock_reason": "merge",
-				"manual_locked_at":   time.Now(),
-				"clustered_at":       time.Now(),
-			}).Error; err != nil {
-			return err
+		mergeFields := map[string]interface{}{
+			"person_id":          targetPersonID,
+			"cluster_status":     model.FaceClusterStatusManual,
+			"cluster_score":      1.0,
+			"manual_locked":      true,
+			"manual_lock_reason": "merge",
+			"manual_locked_at":   time.Now(),
+			"clustered_at":       time.Now(),
+		}
+		for _, chunk := range chunkIDs(sourceIDs) {
+			if err := tx.Model(&model.Face{}).
+				Where("person_id IN ?", chunk).
+				Updates(mergeFields).Error; err != nil {
+				return err
+			}
 		}
 
 		if err := tx.Delete(&model.Person{}, sourceIDs).Error; err != nil {
