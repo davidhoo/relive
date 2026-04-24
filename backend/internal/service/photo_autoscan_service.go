@@ -94,7 +94,11 @@ func (s *photoService) saveScanPathsConfig(cfg scanPathsConfig) error {
 	if err != nil {
 		return err
 	}
-	return s.configService.Set("photos.scan_paths", string(data))
+	if err := s.configService.Set("photos.scan_paths", string(data)); err != nil {
+		return err
+	}
+	s.InvalidateScanPathsCache()
+	return nil
 }
 
 func (s *photoService) scanTreeConfigKey(pathID string) string {

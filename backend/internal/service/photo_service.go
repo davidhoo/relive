@@ -32,6 +32,7 @@ type PhotoService interface {
 	// 查询
 	GetPhotoByID(id uint) (*model.Photo, error)
 	GetPhotos(req *model.GetPhotosRequest) ([]*model.Photo, int64, error)
+	GetPhotosSummary(req *model.GetPhotosRequest) ([]*model.PhotoSummary, int64, error)
 	GetAdjacentPhotos(id uint, req *model.GetPhotosRequest) (*model.AdjacentPhotosResponse, error)
 
 	// 统计
@@ -73,6 +74,9 @@ type PhotoService interface {
 	// 事件聚类服务注入（解决循环初始化）
 	SetEventClusteringService(EventClusteringService)
 	SetPeopleService(PeopleService)
+
+	// 缓存管理
+	InvalidateScanPathsCache()
 }
 
 // photoService 照片服务实现
@@ -93,6 +97,11 @@ type photoService struct {
 	taskMutex              sync.RWMutex
 	autoScanMutex          sync.Mutex
 	lastAutoScanCheck      time.Time
+
+	// 扫描路径缓存
+	enabledPathsCache     []string
+	enabledPathsCacheTime time.Time
+	enabledPathsCacheMu   sync.RWMutex
 }
 
 func (s *photoService) SetPeopleService(peopleService PeopleService) {
@@ -145,8 +154,8 @@ func (s *photoService) GetPhotos(req *model.GetPhotosRequest) ([]*model.Photo, i
 	if req.PageSize < 1 {
 		req.PageSize = 20
 	}
-	if req.PageSize > 1000 {
-		req.PageSize = 1000
+	if req.PageSize > 200 {
+		req.PageSize = 200
 	}
 
 	// 获取启用的扫描路径
@@ -164,6 +173,32 @@ func (s *photoService) GetPhotos(req *model.GetPhotosRequest) ([]*model.Photo, i
 	}
 	s.enrichPhotoTags(photos)
 	return photos, total, nil
+}
+
+// GetPhotosSummary 获取照片摘要列表（仅返回网格视图所需字段）
+func (s *photoService) GetPhotosSummary(req *model.GetPhotosRequest) ([]*model.PhotoSummary, int64, error) {
+	if req.Page < 1 {
+		req.Page = 1
+	}
+	if req.PageSize < 1 {
+		req.PageSize = 20
+	}
+	if req.PageSize > 200 {
+		req.PageSize = 200
+	}
+
+	enabledPaths, err := s.getEnabledScanPaths()
+	if err != nil {
+		logger.Warnf("Failed to get enabled scan paths: %v", err)
+		enabledPaths = nil
+	}
+
+	summaries, total, err := s.repo.ListSummaries(req.Page, req.PageSize, req.Analyzed, req.HasThumbnail, req.HasGPS, req.Location, req.Search, req.Category, req.Tag, req.SortBy, req.SortDesc, enabledPaths, req.Status)
+	if err != nil {
+		return nil, 0, err
+	}
+	s.enrichPhotoSummariesTags(summaries)
+	return summaries, total, nil
 }
 
 // GetAdjacentPhotos 获取相邻照片 ID
@@ -224,6 +259,27 @@ func (s *photoService) enrichPhotoTags(photos []*model.Photo) {
 		return
 	}
 	for _, p := range photos {
+		if tags, ok := tagMap[p.ID]; ok {
+			p.TagList = tags
+		}
+	}
+}
+
+// enrichPhotoSummariesTags 从 photo_tags 表批量加载标签填充到 PhotoSummary 的 TagList 字段
+func (s *photoService) enrichPhotoSummariesTags(summaries []*model.PhotoSummary) {
+	if len(summaries) == 0 || s.photoTagRepo == nil {
+		return
+	}
+	ids := make([]uint, 0, len(summaries))
+	for _, p := range summaries {
+		ids = append(ids, p.ID)
+	}
+	tagMap, err := s.photoTagRepo.GetTagsByPhotoIDs(ids)
+	if err != nil {
+		logger.Warnf("Failed to load photo tags: %v", err)
+		return
+	}
+	for _, p := range summaries {
 		if tags, ok := tagMap[p.ID]; ok {
 			p.TagList = tags
 		}
@@ -367,8 +423,39 @@ func (s *photoService) SetEventClusteringService(svc EventClusteringService) {
 	s.eventClusteringService = svc
 }
 
-// getEnabledScanPaths 获取启用的扫描路径列表
+// getEnabledScanPaths 获取启用的扫描路径列表（带 30 秒缓存）
 func (s *photoService) getEnabledScanPaths() ([]string, error) {
+	s.enabledPathsCacheMu.RLock()
+	if time.Since(s.enabledPathsCacheTime) < 30*time.Second && s.enabledPathsCache != nil {
+		result := s.enabledPathsCache
+		s.enabledPathsCacheMu.RUnlock()
+		return result, nil
+	}
+	s.enabledPathsCacheMu.RUnlock()
+
+	paths, err := s.loadEnabledPathsFromDB()
+	if err != nil {
+		return nil, err
+	}
+
+	s.enabledPathsCacheMu.Lock()
+	s.enabledPathsCache = paths
+	s.enabledPathsCacheTime = time.Now()
+	s.enabledPathsCacheMu.Unlock()
+
+	return paths, nil
+}
+
+// InvalidateScanPathsCache 清除扫描路径缓存（路径更新时调用）
+func (s *photoService) InvalidateScanPathsCache() {
+	s.enabledPathsCacheMu.Lock()
+	s.enabledPathsCache = nil
+	s.enabledPathsCacheTime = time.Time{}
+	s.enabledPathsCacheMu.Unlock()
+}
+
+// loadEnabledPathsFromDB 从数据库加载启用的扫描路径
+func (s *photoService) loadEnabledPathsFromDB() ([]string, error) {
 	configValue, err := s.configService.GetWithDefault("photos.scan_paths", "")
 	if err != nil {
 		return nil, fmt.Errorf("get scan paths config: %w", err)

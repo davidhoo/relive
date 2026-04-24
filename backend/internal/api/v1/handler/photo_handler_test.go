@@ -14,11 +14,12 @@ import (
 
 // stubPhotoService implements the minimal PhotoService methods needed for handler tests.
 type stubPhotoService struct {
-	getPhotosFunc       func(req *model.GetPhotosRequest) ([]*model.Photo, int64, error)
-	getPhotoByIDFunc    func(id uint) (*model.Photo, error)
-	countAllFunc        func() (int64, error)
-	countAnalyzedFunc   func() (int64, error)
-	countUnanalyzedFunc func() (int64, error)
+	getPhotosFunc        func(req *model.GetPhotosRequest) ([]*model.Photo, int64, error)
+	getPhotosSummaryFunc func(req *model.GetPhotosRequest) ([]*model.PhotoSummary, int64, error)
+	getPhotoByIDFunc     func(id uint) (*model.Photo, error)
+	countAllFunc         func() (int64, error)
+	countAnalyzedFunc    func() (int64, error)
+	countUnanalyzedFunc  func() (int64, error)
 }
 
 func (s *stubPhotoService) GetPhotos(req *model.GetPhotosRequest) ([]*model.Photo, int64, error) {
@@ -93,6 +94,13 @@ func (s *stubPhotoService) GetAdjacentPhotos(_ uint, _ *model.GetPhotosRequest) 
 }
 func (s *stubPhotoService) SetEventClusteringService(_ service.EventClusteringService) {}
 func (s *stubPhotoService) SetPeopleService(_ service.PeopleService)                   {}
+func (s *stubPhotoService) InvalidateScanPathsCache()                                  {}
+func (s *stubPhotoService) GetPhotosSummary(req *model.GetPhotosRequest) ([]*model.PhotoSummary, int64, error) {
+	if s.getPhotosSummaryFunc != nil {
+		return s.getPhotosSummaryFunc(req)
+	}
+	return nil, 0, nil
+}
 
 func TestPhotoHandler_GetPhotoStats_Success(t *testing.T) {
 	svc := &stubPhotoService{
@@ -140,7 +148,7 @@ func TestPhotoHandler_GetPhotos_Success(t *testing.T) {
 
 func TestPhotoHandler_GetPhotos_Error(t *testing.T) {
 	svc := &stubPhotoService{
-		getPhotosFunc: func(req *model.GetPhotosRequest) ([]*model.Photo, int64, error) {
+		getPhotosSummaryFunc: func(req *model.GetPhotosRequest) ([]*model.PhotoSummary, int64, error) {
 			return nil, 0, errors.New("query error")
 		},
 	}

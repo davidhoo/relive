@@ -40,7 +40,7 @@ type CleanupPhotosResponse struct {
 // GetPhotosRequest 获取照片列表请求
 type GetPhotosRequest struct {
 	Page         int    `form:"page" binding:"omitempty,min=1"`
-	PageSize     int    `form:"page_size" binding:"omitempty,min=1,max=1000"`
+	PageSize     int    `form:"page_size" binding:"omitempty,min=1,max=200"`
 	Analyzed     *bool  `form:"analyzed"`      // 是否已分析（可选）
 	HasThumbnail *bool  `form:"has_thumbnail"` // 是否有缩略图（可选）
 	HasGPS       *bool  `form:"has_gps"`       // 是否有GPS位置（可选）

@@ -368,6 +368,7 @@ func (h *PhotoHandler) GetPhotos(c *gin.Context) {
 	sortBy := c.DefaultQuery("sort_by", "taken_at")
 	sortDesc := c.DefaultQuery("sort_desc", "true") == "true"
 	status := c.Query("status") // active(默认)/excluded/all
+	view := c.Query("view")     // summary(默认)/full
 
 	// 构建请求
 	req := &model.GetPhotosRequest{
@@ -385,37 +386,75 @@ func (h *PhotoHandler) GetPhotos(c *gin.Context) {
 		Status:       status,
 	}
 
-	// 查询照片
-	photos, total, err := h.photoService.GetPhotos(req)
-	if err != nil {
-		logger.Errorf("Get photos failed: %v", err)
-		c.JSON(http.StatusInternalServerError, model.Response{
-			Success: false,
-			Error: &model.ErrorInfo{
-				Code:    "QUERY_FAILED",
-				Message: "Failed to get photos: " + err.Error(),
-			},
-		})
-		return
-	}
+	var items interface{}
+	var total int64
+	var geocodeIDs []uint
 
-	if h.geocodeTaskService != nil {
+	if view == "full" {
+		photos, t, err := h.photoService.GetPhotos(req)
+		if err != nil {
+			logger.Errorf("Get photos failed: %v", err)
+			c.JSON(http.StatusInternalServerError, model.Response{
+				Success: false,
+				Error: &model.ErrorInfo{
+					Code:    "QUERY_FAILED",
+					Message: "Failed to get photos: " + err.Error(),
+				},
+			})
+			return
+		}
+		items = photos
+		total = t
 		for _, photo := range photos {
-			if photo.GPSLatitude == nil || photo.GPSLongitude == nil || strings.TrimSpace(photo.Location) != "" {
-				continue
+			if photo.GPSLatitude != nil && photo.GPSLongitude != nil && strings.TrimSpace(photo.Location) == "" {
+				geocodeIDs = append(geocodeIDs, photo.ID)
 			}
-			if err := h.geocodeTaskService.EnqueuePhoto(photo.ID, model.GeocodeJobSourcePassive, 100, false); err != nil {
-				logger.Warnf("Passive geocode enqueue failed for photo %d: %v", photo.ID, err)
+		}
+	} else {
+		summaries, t, err := h.photoService.GetPhotosSummary(req)
+		if err != nil {
+			logger.Errorf("Get photos summary failed: %v", err)
+			c.JSON(http.StatusInternalServerError, model.Response{
+				Success: false,
+				Error: &model.ErrorInfo{
+					Code:    "QUERY_FAILED",
+					Message: "Failed to get photos: " + err.Error(),
+				},
+			})
+			return
+		}
+		items = summaries
+		total = t
+		for _, s := range summaries {
+			if s.GPSLatitude != nil && s.GPSLongitude != nil && strings.TrimSpace(s.Location) == "" {
+				geocodeIDs = append(geocodeIDs, s.ID)
 			}
 		}
 	}
 
+	// 异步入队被动 geocode 任务（不阻塞响应）
+	if h.geocodeTaskService != nil && len(geocodeIDs) > 0 {
+		geocodeSvc := h.geocodeTaskService
+		go func() {
+			for _, id := range geocodeIDs {
+				if err := geocodeSvc.EnqueuePhotoByID(id, model.GeocodeJobSourcePassive, 100); err != nil {
+					logger.Warnf("Passive geocode enqueue failed for photo %d: %v", id, err)
+				}
+			}
+		}()
+	}
+
 	// 构建分页响应
+	totalPages := 0
+	if pageSize > 0 {
+		totalPages = int((total + int64(pageSize) - 1) / int64(pageSize))
+	}
 	pagedResp := model.PagedResponse{
-		Items:    photos,
-		Total:    total,
-		Page:     page,
-		PageSize: pageSize,
+		Items:      items,
+		Total:      total,
+		Page:       page,
+		PageSize:   pageSize,
+		TotalPages: totalPages,
 	}
 
 	c.JSON(http.StatusOK, model.Response{

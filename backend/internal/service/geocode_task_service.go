@@ -28,6 +28,7 @@ type GeocodeTaskService interface {
 	GetBackgroundLogs() []string
 	RepairLegacyStatus() (int64, error)
 	EnqueuePhoto(photoID uint, source string, priority int, force bool) error
+	EnqueuePhotoByID(photoID uint, source string, priority int) error
 	EnqueueByPath(path string, source string, priority int) (int, error)
 	GeocodePhoto(photoID uint) error
 	SetManualLocation(photoID uint, lat, lon float64) (string, error)
@@ -172,6 +173,30 @@ func (s *geocodeTaskService) EnqueuePhoto(photoID uint, source string, priority 
 		return err
 	}
 	return s.enqueuePhotoModel(photo, source, priority, force)
+}
+
+// EnqueuePhotoByID 直接按 ID 创建 geocode 任务，跳过 GetByID（调用方已验证条件）
+func (s *geocodeTaskService) EnqueuePhotoByID(photoID uint, source string, priority int) error {
+	if source == "" {
+		source = model.GeocodeJobSourcePassive
+	}
+	if priority <= 0 {
+		priority = geocodePriorityPassive
+	}
+	s.photoRepo.UpdateFields(photoID, map[string]interface{}{
+		"geocode_status": model.GeocodeStatusPending,
+		"geocoded_at":    nil,
+	})
+	activeJob, err := s.jobRepo.GetActiveByPhotoID(photoID)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	if activeJob != nil {
+		return s.jobRepo.UpdateFields(activeJob.ID, map[string]interface{}{"priority": priority, "source": source, "last_requested_at": &now, "status": model.GeocodeJobStatusQueued})
+	}
+	job := &model.GeocodeJob{PhotoID: photoID, Status: model.GeocodeJobStatusQueued, Priority: priority, Source: source, QueuedAt: now, LastRequestedAt: &now}
+	return s.jobRepo.Create(job)
 }
 
 func (s *geocodeTaskService) EnqueueByPath(path string, source string, priority int) (int, error) {

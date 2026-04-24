@@ -191,3 +191,20 @@ func (p *Photo) HasGPS() bool {
 func (p *Photo) IsActive() bool {
 	return p.Status == PhotoStatusActive
 }
+
+// PhotoSummary 照片列表摘要（仅含网格视图所需字段）
+type PhotoSummary struct {
+	ID              uint       `json:"id"`
+	FilePath        string     `json:"file_path"`
+	AIAnalyzed      bool       `json:"ai_analyzed"`
+	OverallScore    int        `json:"overall_score"`
+	ThumbnailStatus string     `json:"thumbnail_status"`
+	Location        string     `json:"location"`
+	GPSLatitude     *float64   `json:"gps_latitude"`
+	GPSLongitude    *float64   `json:"gps_longitude"`
+	TakenAt         *time.Time `json:"taken_at"`
+	Width           int        `json:"width"`
+	Height          int        `json:"height"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	TagList         []string   `json:"tags"`
+}

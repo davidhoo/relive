@@ -31,6 +31,7 @@ type PhotoRepository interface {
 
 	// 列表查询
 	List(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string) ([]*model.Photo, int64, error)
+	ListSummaries(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string) ([]*model.PhotoSummary, int64, error)
 	ListAll() ([]*model.Photo, error)
 	ListByIDs(ids []uint) ([]*model.Photo, error)
 	ListPhotosByPersonID(personID uint) ([]*model.Photo, error) // 通过 JOIN 直接获取人物关联照片
@@ -296,6 +297,51 @@ func (r *photoRepository) List(page, pageSize int, analyzed *bool, hasThumbnail 
 	}
 
 	return photos, total, nil
+}
+
+// photoSummaryWithTotal 用于 COUNT(*) OVER() 查询
+type photoSummaryWithTotal struct {
+	model.PhotoSummary
+	TotalCount int64 `gorm:"column:total_count"`
+}
+
+// ListSummaries 分页列表查询（仅返回摘要字段，单次查询含总数）
+func (r *photoRepository) ListSummaries(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string) ([]*model.PhotoSummary, int64, error) {
+	if enabledPaths != nil && len(enabledPaths) == 0 {
+		return []*model.PhotoSummary{}, 0, nil
+	}
+
+	query := r.db.Model(&model.Photo{})
+	query = r.applyPhotoFilters(query, analyzed, hasThumbnail, hasGPS, location, search, category, tag, enabledPaths, status)
+
+	sortBy = sanitizeSortBy(sortBy)
+	orderClause := sortBy
+	if sortDesc {
+		orderClause += " DESC"
+	} else {
+		orderClause += " ASC"
+	}
+
+	offset := (page - 1) * pageSize
+	var results []photoSummaryWithTotal
+	if err := query.Select("id, file_path, ai_analyzed, overall_score, thumbnail_status, location, gps_latitude, gps_longitude, taken_at, width, height, updated_at, COUNT(*) OVER() as total_count").
+		Order(orderClause).
+		Offset(offset).
+		Limit(pageSize).
+		Find(&results).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var total int64
+	summaries := make([]*model.PhotoSummary, len(results))
+	for i := range results {
+		summaries[i] = &results[i].PhotoSummary
+		if results[i].TotalCount > 0 {
+			total = results[i].TotalCount
+		}
+	}
+
+	return summaries, total, nil
 }
 
 // GetAdjacent 获取指定照片在同一筛选/排序条件下的前后相邻照片 ID

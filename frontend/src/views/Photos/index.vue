@@ -621,7 +621,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ArrowUp, Check, CircleCheck, CircleClose, Clock, Close, Collection, Delete, Files, Filter, Folder, FolderOpened, FullScreen, Loading, Location, MagicStick, Picture, PictureFilled, Plus, PriceTag, QuestionFilled, Refresh, RefreshLeft, RefreshRight, Search, Select, Star, SwitchButton, Timer } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -633,16 +633,18 @@ import { photoApi } from '@/api/photo'
 import { peopleApi } from '@/api/people'
 import { configApi, type ScanPathConfig, type AutoScanConfig } from '@/api/config'
 import type { Photo, TagInfo } from '@/types/photo'
+import { usePhotoStore } from '@/stores/photo'
 import { v4 as uuidv4 } from 'uuid'
 
 const router = useRouter()
+const photoStore = usePhotoStore()
 
 const photos = ref<Photo[]>([])
 const loading = ref(false)
 const currentPage = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
-const systemTotal = ref(0) // 系统中所有照片的总数（不带筛选）
+const systemTotal = computed(() => photoStore.photoCounts.active)
 const searchQuery = ref('')
 const filterCategory = ref('')  // 分类精确筛选
 const filterTag = ref('')       // 标签筛选
@@ -650,7 +652,7 @@ const filterAnalyzed = ref('')
 const filterThumbnail = ref('')
 const filterGPS = ref('')
 const filterStatus = ref('') // '': active(默认), 'excluded': 回收站
-const scanPaths = ref<ScanPathConfig[]>([])
+const scanPaths = computed(() => photoStore.scanPaths)
 const scanPathLoading = ref(false)
 const scanPathsCollapsed = ref(localStorage.getItem('photos_scanPaths_collapsed') === 'true')
 const scanningPathId = ref<string>('')
@@ -661,7 +663,7 @@ const currentTaskStatus = ref<string>('')
 const currentScanPath = ref<string>('') // 当前正在扫描的路径
 const currentScanType = ref<'scan' | 'rebuild' | ''>('') // 当前扫描类型
 const cleaningUp = ref(false)
-const autoScanConfig = ref<AutoScanConfig>(configApi.getDefaultAutoScanConfig())
+const autoScanConfig = computed(() => photoStore.autoScanConfig)
 const selectedPhotos = ref<Set<number>>(new Set())
 const lastSelectedIndex = ref<number>(-1) // Shift 多选锚点
 const batchSelectMode = ref(false)
@@ -798,11 +800,11 @@ const handleBatchLocationConfirm = async (coords: { latitude: number; longitude:
   loadPathDerivedStatus()
 }
 
-const excludedCount = ref(0)
-const categories = ref<string[]>([])
-const hotTags = ref<TagInfo[]>([])
-const totalTagCount = ref(0)
-const tagsLoaded = ref(false)
+const excludedCount = computed(() => photoStore.photoCounts.excluded)
+const categories = computed(() => photoStore.categories)
+const hotTags = computed(() => photoStore.hotTags as TagInfo[])
+const totalTagCount = computed(() => photoStore.totalTagCount)
+const tagsLoaded = computed(() => photoStore.categories.length > 0)
 const tempSelectedTag = ref<TagInfo | null>(null)
 const tagCloudVisible = ref(false)
 const tagCloudSearch = ref('')
@@ -853,8 +855,14 @@ const loadPathPhotoCounts = async () => {
   }
 }
 
+let pathDerivedStatusLoading = false
 const loadPathDerivedStatus = async () => {
-  if (scanPaths.value.length === 0) return
+  if (pathDerivedStatusLoading) return
+  pathDerivedStatusLoading = true
+  if (scanPaths.value.length === 0) {
+    pathDerivedStatusLoading = false
+    return
+  }
 
   try {
     const paths = scanPaths.value.map(p => p.path)
@@ -862,6 +870,8 @@ const loadPathDerivedStatus = async () => {
     pathDerivedStatus.value = res.data?.data?.stats || {}
   } catch (error) {
     console.error('Failed to load path derived status:', error)
+  } finally {
+    pathDerivedStatusLoading = false
   }
 }
 
@@ -1125,10 +1135,7 @@ const handleDeletePath = async (path: ScanPathConfig) => {
 // 加载系统照片计数（active + excluded，单条 SQL）
 const loadPhotoCounts = async () => {
   try {
-    const res = await photoApi.getCounts()
-    const data = res.data?.data
-    systemTotal.value = data?.active_count || 0
-    excludedCount.value = data?.excluded_count || 0
+    await photoStore.fetchPhotoCounts()
   } catch (error: any) {
     console.error('Failed to load photo counts:', error)
   }
@@ -1210,7 +1217,7 @@ const handlePageChange = () => {
 
 // 加载自动扫描配置
 const loadAutoScanConfig = async () => {
-  autoScanConfig.value = await configApi.getAutoScanConfig()
+  await photoStore.fetchAutoScanConfig()
 }
 
 // 保存自动扫描配置（开关切换）
@@ -1237,13 +1244,12 @@ const handleAutoScanIntervalChange = async () => {
 const loadScanPaths = async () => {
   scanPathLoading.value = true
   try {
-    const config = await configApi.getScanPaths()
-    scanPaths.value = config.paths || []
+    await photoStore.fetchScanPaths()
   } catch (error: any) {
     console.error('Failed to load scan paths:', error)
     ElMessage.error('加载扫描路径失败')
   } finally {
-    scanPathLoading.value = false  // 路径列表立即可见
+    scanPathLoading.value = false
   }
   // 派生状态异步加载，不阻塞路径表显示
   loadPathDerivedStatus().then(() => {
@@ -1258,15 +1264,10 @@ const loadScanPaths = async () => {
 // 加载分类和热门标签
 const loadCategoriesAndTags = async () => {
   try {
-    const [categoriesRes, tagsRes] = await Promise.all([
-      photoApi.getCategories(),
-      photoApi.getTags({ limit: 15 })
+    await Promise.all([
+      photoStore.fetchCategories(),
+      photoStore.fetchTags(),
     ])
-    categories.value = categoriesRes.data?.data || []
-    const tagsData = tagsRes.data?.data
-    hotTags.value = tagsData?.items || []
-    totalTagCount.value = tagsData?.total || 0
-    tagsLoaded.value = true
   } catch (error: any) {
     console.error('Failed to load categories and tags:', error)
   }
@@ -1556,6 +1557,7 @@ const startPollingScanProgress = (pathName: string) => {
 
         // 刷新数据
         clearPathPhotoCountDelta(task.path || currentScanPath.value)
+        photoStore.invalidateAll()
         await loadPhotos()
         await loadScanPaths()
         await Promise.all([loadPathPhotoCounts(), loadPathDerivedStatus()])
@@ -1694,21 +1696,8 @@ const shouldShowRebuildButton = (path: ScanPathConfig) => {
   return !!path.last_scanned_at
 }
 
-onMounted(() => {
-  // Load scan paths and auto scan config
-  loadScanPaths()
-  loadAutoScanConfig()
-
-  // 加载系统照片计数
-  loadPhotoCounts()
-
-  // 加载分类和标签
-  loadCategoriesAndTags()
-
-  // 检查是否有正在进行的扫描任务
-  checkOngoingScanTask()
-
-  // 从 URL 参数恢复状态
+onMounted(async () => {
+  // 从 URL 参数恢复状态（同步操作，先执行）
   const query = router.currentRoute.value.query
 
   // 恢复分页参数
@@ -1744,9 +1733,16 @@ onMounted(() => {
     filterTag.value = String(query.tag)
   }
 
-  // 如果 URL 没有 query 参数但有本地存储的状态，恢复它
-  // 或者同步当前状态到 URL（确保浏览器返回按钮能正常工作）
   syncStateToURL()
+
+  // 并行加载所有独立数据
+  await Promise.all([
+    loadScanPaths(),
+    loadAutoScanConfig(),
+    loadPhotoCounts(),
+    loadCategoriesAndTags(),
+    checkOngoingScanTask(),
+  ])
 
   loadPhotos()
 })

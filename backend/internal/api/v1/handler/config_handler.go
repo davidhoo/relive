@@ -561,6 +561,7 @@ func (h *ConfigHandler) DeleteScanPath(c *gin.Context) {
 		return
 	}
 
+	h.photoService.InvalidateScanPathsCache()
 	if err := h.service.Delete("photos.scan_tree." + pathID); err != nil {
 		logger.Warnf("Failed to delete scan tree snapshot for path %s: %v", pathID, err)
 	}
