@@ -106,7 +106,8 @@ type peopleService struct {
 	// writeGate serializes foreground mutations (merge/split/move) with background
 	// clustering writes. Foreground ops take Lock (exclusive); worker takes RLock (shared).
 	// This prevents SQLite "database is locked" when both paths write faces/people tables.
-	writeGate sync.RWMutex
+	writeGate  sync.RWMutex
+	idleCount  int // consecutive idle loops, used for polling backoff
 
 	feedbackMu            sync.Mutex
 	feedbackRunning       bool
@@ -912,58 +913,77 @@ func (s *peopleService) runBackground(active *activePeopleTask) {
 		job, err := s.jobRepo.ClaimNextJob()
 		if err != nil {
 			s.appendBackgroundLog(fmt.Sprintf("领取人物任务失败：%v", err))
+			s.idleCount = 0
 			time.Sleep(300 * time.Millisecond)
 			continue
 		}
-		if job == nil {
-			pendingFaceStats, statsErr := s.faceRepo.GetPendingStats()
-			if statsErr != nil {
-				s.appendBackgroundLog(fmt.Sprintf("查询待聚类人脸失败：%v", statsErr))
-				time.Sleep(300 * time.Millisecond)
-				continue
-			}
-			if pendingFaceStats.Total == 0 {
-				s.setTaskState(model.TaskStatusIdle, "idle", "队列已清空，等待新任务入队", nil)
-				time.Sleep(300 * time.Millisecond)
-				continue
-			}
-
-			s.setTaskState(model.TaskStatusRunning, "clustering",
-				fmt.Sprintf("正在处理 %d 张待聚类人脸", pendingFaceStats.Total), nil)
+		if job != nil {
+			s.idleCount = 0
+			s.setTaskState(model.TaskStatusRunning, "detecting",
+				fmt.Sprintf("正在处理照片 #%d", job.PhotoID), &job.PhotoID)
 			s.setBackgroundBusy(true)
 			s.writeGate.RLock()
-			err = s.processPendingFaces()
+			err = s.processJob(job)
 			s.writeGate.RUnlock()
 			s.setBackgroundBusy(false)
 			if err != nil {
-				s.appendBackgroundLog(fmt.Sprintf("处理待聚类人脸失败：%v", err))
-				time.Sleep(300 * time.Millisecond)
-			} else {
-				time.Sleep(s.clusteringInterval())
+				s.appendBackgroundLog(fmt.Sprintf("处理人物任务 %d 失败：%v", job.ID, err))
 			}
+
+			s.taskMutex.Lock()
+			if s.task != nil {
+				s.task.CurrentPhotoID = job.PhotoID
+				s.task.ProcessedJobs++
+			}
+			s.taskMutex.Unlock()
 			continue
 		}
 
-		s.setTaskState(model.TaskStatusRunning, "detecting",
-			fmt.Sprintf("正在处理照片 #%d", job.PhotoID), &job.PhotoID)
-		s.setBackgroundBusy(true)
-		s.writeGate.RLock()
-		err = s.processJob(job)
-		s.writeGate.RUnlock()
-		s.setBackgroundBusy(false)
-		if err != nil {
-			s.appendBackgroundLog(fmt.Sprintf("处理人物任务 %d 失败：%v", job.ID, err))
+		// No detection job — check for pending faces and cluster
+		pendingFaceStats, statsErr := s.faceRepo.GetPendingStats()
+		if statsErr != nil {
+			s.appendBackgroundLog(fmt.Sprintf("查询待聚类人脸失败：%v", statsErr))
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		if pendingFaceStats.Total == 0 {
+			s.setTaskState(model.TaskStatusIdle, "idle", "队列已清空，等待新任务入队", nil)
+			s.idleCount++
+			time.Sleep(s.idleInterval())
+			continue
 		}
 
-		s.taskMutex.Lock()
-		if s.task != nil {
-			s.task.CurrentPhotoID = job.PhotoID
-			s.task.ProcessedJobs++
+		// Cluster pending faces — loop directly without re-checking ClaimNextJob/GetPendingStats
+		// until no more work, then return to normal cycle.
+		s.idleCount = 0
+		s.setTaskState(model.TaskStatusRunning, "clustering",
+			fmt.Sprintf("正在处理 %d 张待聚类人脸", pendingFaceStats.Total), nil)
+		for {
+			active.mu.Lock()
+			stopRequested := active.stop
+			active.mu.Unlock()
+			if stopRequested {
+				return
+			}
+
+			s.setBackgroundBusy(true)
+			s.writeGate.RLock()
+			hasMore, clusterErr := s.processPendingFaces()
+			s.writeGate.RUnlock()
+			s.setBackgroundBusy(false)
+			if clusterErr != nil {
+				s.appendBackgroundLog(fmt.Sprintf("处理待聚类人脸失败：%v", clusterErr))
+				time.Sleep(300 * time.Millisecond)
+				break
+			}
+			if !hasMore {
+				break
+			}
+			time.Sleep(s.clusteringInterval())
 		}
-		s.taskMutex.Unlock()
 	}
-}
 
+}
 func (s *peopleService) processJob(job *model.PeopleJob) error {
 	photo, skip, err := s.preflightCheck(job)
 	if err != nil {
@@ -983,23 +1003,25 @@ func (s *peopleService) processJob(job *model.PeopleJob) error {
 	return s.ApplyDetectionResult(job, photo, detectionResult)
 }
 
-func (s *peopleService) processPendingFaces() error {
+func (s *peopleService) processPendingFaces() (bool, error) {
 	affectedPersonIDs, affectedPhotoIDs, err := s.runIncrementalClustering()
 	if err != nil {
-		return err
+		return false, err
 	}
+
+	hasMore := len(affectedPersonIDs) > 0 || len(affectedPhotoIDs) > 0
 
 	for _, personID := range affectedPersonIDs {
 		if err := s.syncPersonState(personID); err != nil {
-			return err
+			return false, err
 		}
 	}
 	if len(affectedPhotoIDs) > 0 {
 		if err := s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return nil
+	return hasMore, nil
 }
 
 // preflightCheck performs pre-flight checks and returns the photo, whether to skip, and any error.
@@ -1440,6 +1462,21 @@ func (s *peopleService) clusteringInterval() time.Duration {
 		return time.Duration(s.config.People.ClusteringIntervalMs) * time.Millisecond
 	}
 	return 300 * time.Millisecond
+}
+
+// idleInterval returns the polling interval when the worker is idle (no jobs, no pending faces).
+// Uses exponential backoff: 300ms → 600ms → 1.2s → 2.4s → 3s (capped).
+func (s *peopleService) idleInterval() time.Duration {
+	base := 300 * time.Millisecond
+	max := 3 * time.Second
+	d := base
+	for i := 0; i < s.idleCount; i++ {
+		d *= 2
+		if d >= max {
+			return max
+		}
+	}
+	return d
 }
 
 // AcquireWriteGate locks the write gate exclusively and returns a release function.
@@ -2003,7 +2040,7 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 		}
 		var protoFaces []*model.Face
 		if len(assignedPersonIDs) > 0 {
-			protoFaces, err = s.faceRepo.ListTopByPersonIDs(assignedPersonIDs, peoplePrototypeCandidates)
+			protoFaces, err = s.faceRepo.ListPrototypeEmbeddings(assignedPersonIDs, peoplePrototypeCandidates)
 			if err != nil {
 				return nil, nil, err
 			}

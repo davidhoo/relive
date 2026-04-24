@@ -260,8 +260,8 @@ func (r *faceRepository) ListTopByPersonIDs(personIDs []uint, perPerson int) ([]
 	return topFaces, nil
 }
 
-// ListPrototypeEmbeddings loads only id, person_id, and embedding for the top perPerson faces
-// per person, using a window function to avoid fetching all faces and truncating in Go.
+// ListPrototypeEmbeddings loads lightweight metadata and embedding for the top perPerson
+// faces per person, using a window function to avoid fetching all faces from the DB.
 func (r *faceRepository) ListPrototypeEmbeddings(personIDs []uint, perPerson int) ([]*model.Face, error) {
 	if len(personIDs) == 0 {
 		return nil, nil
@@ -274,8 +274,8 @@ func (r *faceRepository) ListPrototypeEmbeddings(personIDs []uint, perPerson int
 	for _, chunk := range chunkIDs(personIDs) {
 		var faces []*model.Face
 		err := r.db.Raw(`
-			SELECT id, person_id, embedding FROM (
-				SELECT id, person_id, embedding,
+			SELECT id, person_id, quality_score, manual_locked, embedding FROM (
+				SELECT id, person_id, quality_score, manual_locked, embedding,
 					ROW_NUMBER() OVER (
 						PARTITION BY person_id
 						ORDER BY manual_locked DESC, quality_score DESC, confidence DESC, id ASC
