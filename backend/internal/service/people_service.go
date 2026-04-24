@@ -550,9 +550,6 @@ func (s *peopleService) MergePeopleAsync(targetPersonID uint, sourcePersonIDs []
 
 // executeMergeJob 执行合并任务
 func (s *peopleService) executeMergeJob(jobID uint) {
-	s.writeGate.Lock()
-	defer s.writeGate.Unlock()
-
 	job, err := s.mergeJobRepo.GetByID(jobID)
 	if err != nil {
 		logger.Errorf("Failed to get merge job %d: %v", jobID, err)
