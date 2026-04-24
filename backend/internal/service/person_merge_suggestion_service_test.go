@@ -444,3 +444,37 @@ func TestPersonMergeSuggestionService_EndToEndReviewFlow(t *testing.T) {
 	require.Len(t, finalSuggestions, 1)
 	assert.Equal(t, otherTarget.ID, finalSuggestions[0].TargetPersonID)
 }
+
+func TestPersonMergeSuggestionService_FiltersDeletedCandidatesFromStaleANN(t *testing.T) {
+	// Regression test: after a merge deletes a candidate person, the stale ANN index
+	// may still return that person's ID. buildAssignments must validate candidates
+	// against the database and filter out deleted/non-existent persons.
+	svc, db, repos, _ := newPersonMergeSuggestionServiceForTest(t)
+
+	target := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0}, []float32{0.98, 0.02})
+	candidate := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{1, 0.01})
+
+	// Build the ANN index so it contains the candidate
+	require.NoError(t, svc.MarkDirty("initial"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	got := pendingSuggestionCandidatesByTarget(t, repos.MergeSuggestion)
+	require.Contains(t, got[target.ID], candidate.ID)
+
+	// Simulate what happens after a merge: delete the candidate person directly
+	// (MergeInto would do this). The ANN index is now stale.
+	require.NoError(t, db.Delete(&model.Person{}, candidate.ID).Error)
+
+	// Mark dirty but DON'T rebuild the ANN index (simulates the 30-min cooldown)
+	// The stale ANN still has candidate's embeddings.
+	require.NoError(t, svc.MarkDirty("post-merge"))
+
+	// Run background slice — it should NOT generate suggestions referencing the deleted person
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	got = pendingSuggestionCandidatesByTarget(t, repos.MergeSuggestion)
+	// The deleted candidate should NOT appear in any suggestion
+	for _, candidateIDs := range got {
+		assert.NotContains(t, candidateIDs, candidate.ID)
+	}
+}

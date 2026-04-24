@@ -66,6 +66,11 @@ type personMergeSuggestionService struct {
 	// This ensures foreground merge operations exclude the background clustering worker
 	// from writing faces/people tables simultaneously, preventing SQLite "database is locked".
 	writeGateFn func() func()
+
+	// postMergeFn is called after a suggestion-based merge completes.
+	// It handles syncPersonState, cannot-link cleanup, RecomputeTopPersonCategory,
+	// and feedback recluster — mirroring the cleanup that MergePeople does.
+	postMergeFn func(targetPersonID uint, sourcePersonIDs []uint, affectedPhotoIDs []uint)
 }
 
 type mergeSuggestionCandidate struct {
@@ -109,6 +114,11 @@ func NewPersonMergeSuggestionService(
 // SetWriteGateHook injects the write gate acquire function from peopleService.
 func (s *personMergeSuggestionService) SetWriteGateHook(fn func() func()) {
 	s.writeGateFn = fn
+}
+
+// SetPostMergeHook injects the post-merge cleanup function from peopleService.
+func (s *personMergeSuggestionService) SetPostMergeHook(fn func(targetPersonID uint, sourcePersonIDs []uint, affectedPhotoIDs []uint)) {
+	s.postMergeFn = fn
 }
 
 func (s *personMergeSuggestionService) GetTask() *model.PersonMergeSuggestionTask {
@@ -395,12 +405,20 @@ func (s *personMergeSuggestionService) ApplySuggestion(suggestionID uint, candid
 		defer release()
 	}
 
-	if _, err := s.personRepo.MergeInto(suggestion.TargetPersonID, candidateIDs); err != nil {
+	affectedPhotoIDs, err := s.personRepo.MergeInto(suggestion.TargetPersonID, candidateIDs)
+	if err != nil {
 		return err
 	}
 	if err := s.mergeSuggestionRepo.MarkItemsStatus(suggestionID, candidateIDs, model.PersonMergeSuggestionItemStatusMerged); err != nil {
 		return err
 	}
+
+	// Post-merge cleanup (syncPersonState, cannot-link cleanup, RecomputeTopPersonCategory,
+	// feedback recluster) — mirrors the cleanup in MergePeople.
+	if s.postMergeFn != nil {
+		s.postMergeFn(suggestion.TargetPersonID, candidateIDs, affectedPhotoIDs)
+	}
+
 	return s.MarkDirty("apply merge suggestion candidates")
 }
 
@@ -540,6 +558,36 @@ func (s *personMergeSuggestionService) buildAssignments(targets []*model.Person)
 			continue
 		}
 		candidatesByTarget[target.ID] = idx.annCandidates(target.ID, targetProtos, annSearchK)
+	}
+
+	// Phase 3.5: validate candidate persons against the database.
+	// The ANN index may be stale (up to 30-min cooldown), returning candidate
+	// IDs for persons that have been deleted (e.g., after a merge). Filter these
+	// out before the expensive exact re-scoring phase.
+	allCandidateIDs := make([]uint, 0)
+	for _, cands := range candidatesByTarget {
+		for cid := range cands {
+			allCandidateIDs = append(allCandidateIDs, cid)
+		}
+	}
+	if len(allCandidateIDs) > 0 {
+		validPeople, err := s.personRepo.ListByIDs(uniqueUintIDs(allCandidateIDs))
+		if err != nil {
+			return nil, fmt.Errorf("validate candidates: %w", err)
+		}
+		validCandidates := make(map[uint]struct{}, len(validPeople))
+		for _, p := range validPeople {
+			if p != nil && p.FaceCount > 0 {
+				validCandidates[p.ID] = struct{}{}
+			}
+		}
+		for tid, cands := range candidatesByTarget {
+			for cid := range cands {
+				if _, ok := validCandidates[cid]; !ok {
+					delete(candidatesByTarget[tid], cid)
+				}
+			}
+		}
 	}
 
 	// Phase 4: exact re-scoring on shortlisted candidates — parallelized with 4 workers.

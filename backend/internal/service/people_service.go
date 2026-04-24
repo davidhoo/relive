@@ -1487,6 +1487,28 @@ func (s *peopleService) AcquireWriteGate() func() {
 	return s.writeGate.Unlock
 }
 
+// PostMergeCleanup performs post-merge cleanup for suggestion-based merges.
+// It mirrors the cleanup steps in MergePeople that ApplySuggestion would otherwise miss.
+func (s *peopleService) PostMergeCleanup(targetPersonID uint, sourcePersonIDs []uint, affectedPhotoIDs []uint) {
+	// Clean up cannot-link constraints for merged (deleted) persons
+	for _, sourceID := range sourcePersonIDs {
+		if err := s.cannotLinkRepo.DeleteByPersonID(sourceID); err != nil {
+			logger.Warnf("failed to clean cannot-link for merged person %d: %v", sourceID, err)
+		}
+	}
+	// Sync target person state (updates avatar, refreshes stats)
+	if err := s.syncPersonState(targetPersonID); err != nil {
+		logger.Warnf("post-merge syncPersonState failed for target %d: %v", targetPersonID, err)
+	}
+	// Recompute top_person_category on affected photos
+	if len(affectedPhotoIDs) > 0 {
+		if err := s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs); err != nil {
+			logger.Warnf("post-merge RecomputeTopPersonCategory failed: %v", err)
+		}
+	}
+	s.scheduleFeedbackRecluster()
+}
+
 func (s *peopleService) setMergeSuggestionDirtyHook(hook func(string) error) {
 	s.taskMutex.Lock()
 	defer s.taskMutex.Unlock()
