@@ -698,7 +698,7 @@ func (s *peopleService) UpdatePersonCategory(personID uint, category string) err
 	if err := s.personRepo.UpdateFields(personID, map[string]interface{}{"category": category}); err != nil {
 		return err
 	}
-	faces, err := s.faceRepo.ListByPersonID(personID)
+	faces, err := s.faceRepo.ListByPersonIDSummary(personID)
 	if err != nil {
 		return err
 	}
@@ -738,7 +738,7 @@ func (s *peopleService) DissolvePerson(personID uint) (int, error) {
 		return 0, fmt.Errorf("person %d not found", personID)
 	}
 
-	faces, err := s.faceRepo.ListByPersonID(personID)
+	faces, err := s.faceRepo.ListByPersonIDSummary(personID)
 	if err != nil {
 		return 0, fmt.Errorf("list faces for person %d: %w", personID, err)
 	}
@@ -2246,7 +2246,7 @@ func (s *peopleService) syncPersonState(personID uint) error {
 		return nil
 	}
 
-	faces, err := s.faceRepo.ListByPersonID(personID)
+	faces, err := s.faceRepo.ListByPersonIDSummary(personID)
 	if err != nil {
 		return err
 	}
