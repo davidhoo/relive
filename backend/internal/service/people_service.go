@@ -103,6 +103,11 @@ type peopleService struct {
 	backgroundBusyMu sync.RWMutex
 	backgroundBusy   bool
 
+	// writeGate serializes foreground mutations (merge/split/move) with background
+	// clustering writes. Foreground ops take Lock (exclusive); worker takes RLock (shared).
+	// This prevents SQLite "database is locked" when both paths write faces/people tables.
+	writeGate sync.RWMutex
+
 	feedbackMu            sync.Mutex
 	feedbackRunning       bool
 	feedbackPending       bool
@@ -464,6 +469,9 @@ func (s *peopleService) ResetAllPeople() (int, error) {
 }
 
 func (s *peopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint) (*model.ReclusterResult, error) {
+	s.writeGate.Lock()
+	defer s.writeGate.Unlock()
+
 	affectedPhotoIDs, err := s.personRepo.MergeInto(targetPersonID, sourcePersonIDs)
 	if err != nil {
 		return nil, err
@@ -541,6 +549,9 @@ func (s *peopleService) MergePeopleAsync(targetPersonID uint, sourcePersonIDs []
 
 // executeMergeJob 执行合并任务
 func (s *peopleService) executeMergeJob(jobID uint) {
+	s.writeGate.Lock()
+	defer s.writeGate.Unlock()
+
 	job, err := s.mergeJobRepo.GetByID(jobID)
 	if err != nil {
 		logger.Errorf("Failed to get merge job %d: %v", jobID, err)
@@ -595,6 +606,9 @@ func (s *peopleService) GetMergeJobStatus(jobID uint) (*model.PeopleMergeJob, er
 }
 
 func (s *peopleService) SplitPerson(faceIDs []uint) (*model.Person, *model.ReclusterResult, error) {
+	s.writeGate.Lock()
+	defer s.writeGate.Unlock()
+
 	faces, err := s.faceRepo.ListByIDs(faceIDs)
 	if err != nil {
 		return nil, nil, err
@@ -658,6 +672,9 @@ func (s *peopleService) SplitPerson(faceIDs []uint) (*model.Person, *model.Reclu
 }
 
 func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) (*model.ReclusterResult, error) {
+	s.writeGate.Lock()
+	defer s.writeGate.Unlock()
+
 	faces, err := s.faceRepo.ListByIDs(faceIDs)
 	if err != nil {
 		return nil, err
@@ -730,6 +747,9 @@ func (s *peopleService) UpdatePersonAvatar(personID uint, faceID uint) error {
 // DissolvePerson 解散指定人物：将其所有人脸（含人工确认）打回 pending，删除人物记录和约束。
 // 返回被释放的人脸数量。不触发自动重聚类，由后台任务自然处理。
 func (s *peopleService) DissolvePerson(personID uint) (int, error) {
+	s.writeGate.Lock()
+	defer s.writeGate.Unlock()
+
 	person, err := s.personRepo.GetByID(personID)
 	if err != nil {
 		return 0, err
@@ -911,7 +931,9 @@ func (s *peopleService) runBackground(active *activePeopleTask) {
 			s.setTaskState(model.TaskStatusRunning, "clustering",
 				fmt.Sprintf("正在处理 %d 张待聚类人脸", pendingFaceStats.Total), nil)
 			s.setBackgroundBusy(true)
+			s.writeGate.RLock()
 			err = s.processPendingFaces()
+			s.writeGate.RUnlock()
 			s.setBackgroundBusy(false)
 			if err != nil {
 				s.appendBackgroundLog(fmt.Sprintf("处理待聚类人脸失败：%v", err))
@@ -925,7 +947,9 @@ func (s *peopleService) runBackground(active *activePeopleTask) {
 		s.setTaskState(model.TaskStatusRunning, "detecting",
 			fmt.Sprintf("正在处理照片 #%d", job.PhotoID), &job.PhotoID)
 		s.setBackgroundBusy(true)
+		s.writeGate.RLock()
 		err = s.processJob(job)
+		s.writeGate.RUnlock()
 		s.setBackgroundBusy(false)
 		if err != nil {
 			s.appendBackgroundLog(fmt.Sprintf("处理人物任务 %d 失败：%v", job.ID, err))
@@ -1416,6 +1440,14 @@ func (s *peopleService) clusteringInterval() time.Duration {
 		return time.Duration(s.config.People.ClusteringIntervalMs) * time.Millisecond
 	}
 	return 300 * time.Millisecond
+}
+
+// AcquireWriteGate locks the write gate exclusively and returns a release function.
+// Foreground mutations (merge/split/move) call this to ensure the background
+// clustering worker yields before writing faces/people tables.
+func (s *peopleService) AcquireWriteGate() func() {
+	s.writeGate.Lock()
+	return s.writeGate.Unlock
 }
 
 func (s *peopleService) setMergeSuggestionDirtyHook(hook func(string) error) {

@@ -61,6 +61,11 @@ type personMergeSuggestionService struct {
 	annIdx         *annIndex
 	annDirty       bool      // index is stale; rebuild when cooldown passes
 	annBuiltAt     time.Time // when index was last successfully built
+
+	// writeGateFn acquires the write gate from peopleService and returns a release function.
+	// This ensures foreground merge operations exclude the background clustering worker
+	// from writing faces/people tables simultaneously, preventing SQLite "database is locked".
+	writeGateFn func() func()
 }
 
 type mergeSuggestionCandidate struct {
@@ -99,6 +104,11 @@ func NewPersonMergeSuggestionService(
 	}
 	_ = svc.loadState()
 	return svc
+}
+
+// SetWriteGateHook injects the write gate acquire function from peopleService.
+func (s *personMergeSuggestionService) SetWriteGateHook(fn func() func()) {
+	s.writeGateFn = fn
 }
 
 func (s *personMergeSuggestionService) GetTask() *model.PersonMergeSuggestionTask {
@@ -376,6 +386,13 @@ func (s *personMergeSuggestionService) ApplySuggestion(suggestionID uint, candid
 	}
 	if suggestion == nil {
 		return fmt.Errorf("merge suggestion %d not found", suggestionID)
+	}
+
+	// Acquire write gate to exclude background clustering worker from
+	// writing faces/people tables during the merge, preventing SQLite lock contention.
+	if s.writeGateFn != nil {
+		release := s.writeGateFn()
+		defer release()
 	}
 
 	if _, err := s.personRepo.MergeInto(suggestion.TargetPersonID, candidateIDs); err != nil {
