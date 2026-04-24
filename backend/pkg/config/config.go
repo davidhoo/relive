@@ -84,6 +84,8 @@ type PeopleConfig struct {
 	MergeSuggestionBatchSize       int     `yaml:"merge_suggestion_batch_size"`
 	MergeSuggestionCooldownSeconds int     `yaml:"merge_suggestion_cooldown_seconds"`
 	ClusteringIntervalMs           int     `yaml:"clustering_interval_ms"`
+	ANNBuildBatchSize              int     `yaml:"ann_build_batch_size"`    // HNSW nodes per insert batch (default 100)
+	ANNBuildCPUDuty                float64 `yaml:"ann_build_cpu_duty"`      // target CPU duty cycle 0.3-1.0 (default 0.5)
 }
 
 const (
@@ -92,6 +94,8 @@ const (
 	defaultMergeSuggestionBatchSize       = 100
 	defaultMergeSuggestionCooldownSeconds = 300
 	defaultClusteringIntervalMs           = 300
+	defaultANNBuildBatchSize              = 100
+	defaultANNBuildCPUDuty                = 0.5
 )
 
 // LegacyMLConfig 兼容旧版人物配置块
@@ -343,6 +347,12 @@ func Load(path string) (*Config, error) {
 	if cfg.People.ClusteringIntervalMs == 0 {
 		cfg.People.ClusteringIntervalMs = defaultClusteringIntervalMs
 	}
+	if cfg.People.ANNBuildBatchSize == 0 {
+		cfg.People.ANNBuildBatchSize = defaultANNBuildBatchSize
+	}
+	if cfg.People.ANNBuildCPUDuty == 0 {
+		cfg.People.ANNBuildCPUDuty = defaultANNBuildCPUDuty
+	}
 
 	// 从环境变量覆盖敏感配置
 	if secret := os.Getenv("JWT_SECRET"); secret != "" {
@@ -430,6 +440,12 @@ func (c *Config) Validate() error {
 	}
 	if c.People.ClusteringIntervalMs < 50 {
 		return fmt.Errorf("people.clustering_interval_ms must be at least 50")
+	}
+	if c.People.ANNBuildBatchSize < 10 {
+		return fmt.Errorf("people.ann_build_batch_size must be at least 10")
+	}
+	if c.People.ANNBuildCPUDuty < 0.3 || c.People.ANNBuildCPUDuty > 1.0 {
+		return fmt.Errorf("people.ann_build_cpu_duty must be between 0.3 and 1.0")
 	}
 	if c.People.AttachThreshold > 0 && c.People.MergeSuggestionThreshold >= c.People.AttachThreshold {
 		return fmt.Errorf("people.merge_suggestion_threshold must be less than people.attach_threshold")

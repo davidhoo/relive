@@ -12,8 +12,6 @@ const (
 	annHNSWM           = 8              // max neighbors per node; 8 halves build time vs 16 with negligible recall loss at this scale
 	annHNSWEfSearch    = 100            // search beam width; high value ensures recall near threshold boundary
 	annRebuildCooldown = 30 * time.Minute // min interval between ANN rebuilds triggered by MarkDirty
-	annBuildBatchSize  = 500            // nodes per HNSW insert batch
-	annBuildBatchSleep = 5 * time.Millisecond // pause between batches to yield CPU
 )
 
 // annIndex is a cached HNSW nearest-neighbor index over all person prototype embeddings.
@@ -114,16 +112,27 @@ func (s *personMergeSuggestionService) buildANNIndex() (*annIndex, error) {
 		}
 	}
 
-	// Insert in batches with brief pauses to avoid pinning CPU on NAS devices.
-	// This adds ~5-10% overhead to build time but keeps the system responsive.
-	for i := 0; i < len(nodes); i += annBuildBatchSize {
-		end := i + annBuildBatchSize
+	// Insert in batches with adaptive throttling: measure actual CPU time per
+	// batch and sleep proportionally to maintain the target CPU duty cycle.
+	// This prevents the HNSW build from pinning the CPU on NAS devices while
+	// adding only ~2x overhead vs unchecked full-speed construction.
+	batchSize := s.annBuildBatchSize()
+	targetDuty := s.annBuildCPUDuty()
+	for i := 0; i < len(nodes); i += batchSize {
+		end := i + batchSize
 		if end > len(nodes) {
 			end = len(nodes)
 		}
+		batchStart := time.Now()
 		g.Add(nodes[i:end]...)
-		if end < len(nodes) {
-			time.Sleep(annBuildBatchSleep)
+		if end < len(nodes) && targetDuty < 1.0 {
+			batchElapsed := time.Since(batchStart)
+			// Dilate to target duty cycle: work / (work + sleep) = duty
+			// → sleep = work * (1/duty - 1)
+			sleepDuration := time.Duration(float64(batchElapsed) * (1/targetDuty - 1))
+			if sleepDuration > 0 {
+				time.Sleep(sleepDuration)
+			}
 		}
 	}
 	g.EfSearch = annHNSWEfSearch
@@ -199,4 +208,18 @@ func (s *personMergeSuggestionService) appendANNBuildLog(persons, nodes int, ela
 	s.appendBackgroundLogLocked(
 		fmt.Sprintf("ANN 索引重建完成：%d 人物 / %d 面部向量 / 耗时 %s", persons, nodes, elapsed.Round(time.Millisecond)),
 	)
+}
+
+func (s *personMergeSuggestionService) annBuildBatchSize() int {
+	if s.config != nil && s.config.People.ANNBuildBatchSize > 0 {
+		return s.config.People.ANNBuildBatchSize
+	}
+	return 100
+}
+
+func (s *personMergeSuggestionService) annBuildCPUDuty() float64 {
+	if s.config != nil && s.config.People.ANNBuildCPUDuty > 0 {
+		return s.config.People.ANNBuildCPUDuty
+	}
+	return 0.5
 }
