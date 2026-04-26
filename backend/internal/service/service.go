@@ -6,6 +6,7 @@ import (
 	"github.com/davidhoo/relive/internal/mlclient"
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/pkg/config"
+	"github.com/davidhoo/relive/pkg/database"
 	"github.com/davidhoo/relive/pkg/logger"
 	"gorm.io/gorm"
 )
@@ -81,6 +82,13 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		configService,
 		cfg,
 	)
+	// Inject a dedicated background DB pool so that merge-suggestion background
+	// work does not starve the API connection pool.
+	if bgDB, err := database.NewBackgroundDB(cfg.Database); err == nil {
+		mergeSuggestionService.(*personMergeSuggestionService).SetBackgroundDB(bgDB)
+	} else {
+		logger.Warnf("Failed to create background DB pool: %v", err)
+	}
 	peopleSvc.(*peopleService).setMergeSuggestionDirtyHook(mergeSuggestionService.MarkDirty)
 	peopleSvc.(*peopleService).setANNCandidateFn(mergeSuggestionService.(*personMergeSuggestionService).FindCandidates)
 		mergeSuggestionService.(*personMergeSuggestionService).SetWriteGateHook(peopleSvc.(*peopleService).AcquireWriteGate)

@@ -15,6 +15,7 @@ type PersonRepository interface {
 	Delete(id uint) error
 	ListAll() ([]*model.Person, error)
 	ListByIDs(ids []uint) ([]*model.Person, error)
+	ListMergeSuggestionTargets(cursorID uint, limit int) ([]*model.Person, error) // cursor 分页，只返回 family/friend 且有脸的人物
 	ListWithAvatar() ([]*model.Person, error) // 只返回有头像的人物（用于合并/移动候选列表）
 	ListPeople(opts ListPeopleOptions) ([]*model.Person, int64, error) // 数据库层分页查询
 	RefreshStats(personID uint) error
@@ -67,6 +68,22 @@ func (r *personRepository) Delete(id uint) error {
 func (r *personRepository) ListAll() ([]*model.Person, error) {
 	var people []*model.Person
 	err := r.db.Order("id ASC").Find(&people).Error
+	return people, err
+}
+
+func (r *personRepository) ListMergeSuggestionTargets(cursorID uint, limit int) ([]*model.Person, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var people []*model.Person
+	q := r.db.Where("category IN ? AND face_count > 0", []string{
+		model.PersonCategoryFamily,
+		model.PersonCategoryFriend,
+	}).Order("id ASC").Limit(limit)
+	if cursorID > 0 {
+		q = q.Where("id > ?", cursorID)
+	}
+	err := q.Find(&people).Error
 	return people, err
 }
 

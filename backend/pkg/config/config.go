@@ -84,8 +84,10 @@ type PeopleConfig struct {
 	MergeSuggestionBatchSize       int     `yaml:"merge_suggestion_batch_size"`
 	MergeSuggestionCooldownSeconds int     `yaml:"merge_suggestion_cooldown_seconds"`
 	ClusteringIntervalMs           int     `yaml:"clustering_interval_ms"`
-	ANNBuildBatchSize              int     `yaml:"ann_build_batch_size"`    // HNSW nodes per insert batch (default 100)
-	ANNBuildCPUDuty                float64 `yaml:"ann_build_cpu_duty"`      // target CPU duty cycle 0.3-1.0 (default 0.5)
+	ANNBuildBatchSize      int     `yaml:"ann_build_batch_size"`       // HNSW nodes per insert batch (default 100)
+	ANNBuildCPUDuty        float64 `yaml:"ann_build_cpu_duty"`         // target CPU duty cycle 0.3-1.0 (default 0.5)
+	ANNRebuildWindowStart  int     `yaml:"ann_rebuild_window_start"`   // hour (0-23) start of daily ANN rebuild window (default 2)
+	ANNRebuildWindowEnd    int     `yaml:"ann_rebuild_window_end"`     // hour (0-23) end of daily ANN rebuild window (default 5)
 }
 
 const (
@@ -94,8 +96,10 @@ const (
 	defaultMergeSuggestionBatchSize       = 100
 	defaultMergeSuggestionCooldownSeconds = 300
 	defaultClusteringIntervalMs           = 300
-	defaultANNBuildBatchSize              = 100
-	defaultANNBuildCPUDuty                = 0.5
+	defaultANNBuildBatchSize      = 100
+	defaultANNBuildCPUDuty        = 0.5
+	defaultANNRebuildWindowStart  = 2
+	defaultANNRebuildWindowEnd    = 5
 )
 
 // LegacyMLConfig 兼容旧版人物配置块
@@ -353,6 +357,11 @@ func Load(path string) (*Config, error) {
 	if cfg.People.ANNBuildCPUDuty == 0 {
 		cfg.People.ANNBuildCPUDuty = defaultANNBuildCPUDuty
 	}
+
+		if cfg.People.ANNRebuildWindowStart == 0 && cfg.People.ANNRebuildWindowEnd == 0 {
+			cfg.People.ANNRebuildWindowStart = defaultANNRebuildWindowStart
+			cfg.People.ANNRebuildWindowEnd = defaultANNRebuildWindowEnd
+		}
 
 	// 从环境变量覆盖敏感配置
 	if secret := os.Getenv("JWT_SECRET"); secret != "" {

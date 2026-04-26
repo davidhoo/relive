@@ -62,6 +62,14 @@ type personMergeSuggestionService struct {
 	annDirty       bool      // index is stale; rebuild when cooldown passes
 	annBuiltAt     time.Time // when index was last successfully built
 
+	// Dedicated background DB pool (separate from the API pool) so that
+	// long-running merge-suggestion work does not starve API connections.
+	bgDB                *gorm.DB
+	bgPersonRepo        repository.PersonRepository
+	bgFaceRepo          repository.FaceRepository
+	bgCannotLinkRepo    repository.CannotLinkRepository
+	bgMergeSuggestionRepo repository.PersonMergeSuggestionRepository
+
 	// writeGateFn acquires the write gate from peopleService and returns a release function.
 	// This ensures foreground merge operations exclude the background clustering worker
 	// from writing faces/people tables simultaneously, preventing SQLite "database is locked".
@@ -109,6 +117,21 @@ func NewPersonMergeSuggestionService(
 	}
 	_ = svc.loadState()
 	return svc
+}
+
+// SetBackgroundDB sets a dedicated DB pool for background operations.
+// When set, background slice work (RunBackgroundSlice) uses repos backed by this
+// pool instead of the shared API pool, preventing long-running background work
+// from starving API connections.
+func (s *personMergeSuggestionService) SetBackgroundDB(bgDB *gorm.DB) {
+	if bgDB == nil {
+		return
+	}
+	s.bgDB = bgDB
+	s.bgPersonRepo = repository.NewPersonRepository(bgDB)
+	s.bgFaceRepo = repository.NewFaceRepository(bgDB)
+	s.bgCannotLinkRepo = repository.NewCannotLinkRepository(bgDB)
+	s.bgMergeSuggestionRepo = repository.NewPersonMergeSuggestionRepository(bgDB)
 }
 
 // SetWriteGateHook injects the write gate acquire function from peopleService.
@@ -263,6 +286,15 @@ func (s *personMergeSuggestionService) MarkDirty(reason string) error {
 	return s.saveStateLocked()
 }
 
+// bgRepos returns the background-dedicated repos if a background DB pool is set,
+// otherwise falls back to the shared repos.
+func (s *personMergeSuggestionService) bgRepos() (personRepo repository.PersonRepository, faceRepo repository.FaceRepository, cannotLinkRepo repository.CannotLinkRepository, mergeSuggestionRepo repository.PersonMergeSuggestionRepository) {
+	if s.bgDB != nil {
+		return s.bgPersonRepo, s.bgFaceRepo, s.bgCannotLinkRepo, s.bgMergeSuggestionRepo
+	}
+	return s.personRepo, s.faceRepo, s.cannotLinkRepo, s.mergeSuggestionRepo
+}
+
 func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 	// 快速检查是否暂停（持锁）
 	s.mu.Lock()
@@ -288,24 +320,16 @@ func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 	cursor := s.state.CursorTargetID
 	s.mu.Unlock()
 
-	// 耗时操作在锁外执行
-	targets, err := s.listSuggestionTargets()
+	// Use background-dedicated repos for the heavy work in this slice.
+	_, _, _, bgMergeSuggestionRepo := s.bgRepos()
+
+	// 用 SQL cursor 分页获取目标人物（不再全量加载）
+	targets, err := s.listSuggestionTargets(cursor)
 	if err != nil {
 		return err
 	}
 	if len(targets) == 0 {
-		s.mu.Lock()
-		s.finishSliceLocked(time.Now(), 0, "没有可巡检的人物目标")
-		s.mu.Unlock()
-		return nil
-	}
-
-	batchSize, err := s.currentBatchSize()
-	if err != nil {
-		return err
-	}
-	selected := selectNextSuggestionTargets(targets, cursor, batchSize)
-	if len(selected) == 0 {
+		// 没有更多目标，本轮巡检完成
 		s.mu.Lock()
 		now := time.Now()
 		s.state.CursorTargetID = 0
@@ -320,7 +344,7 @@ func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 	}
 
 	// 最耗时的操作：计算相似度
-	assignments, err := s.buildAssignments(selected)
+	assignments, err := s.buildAssignments(targets)
 	if err != nil {
 		return err
 	}
@@ -337,23 +361,17 @@ func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 	s.task.CurrentMessage = "保存合并建议"
 
 	processedPairs := 0
-	for _, target := range selected {
+	for _, target := range targets {
 		items := assignments[target.ID]
-		if err := s.mergeSuggestionRepo.ReplacePendingForTarget(target.ID, target.Category, items); err != nil {
+		if err := bgMergeSuggestionRepo.ReplacePendingForTarget(target.ID, target.Category, items); err != nil {
 			return err
 		}
 		processedPairs += len(items)
 	}
 
 	s.task.ProcessedPairs += int64(processedPairs)
-	lastTargetID := selected[len(selected)-1].ID
-	if lastTargetID >= targets[len(targets)-1].ID {
-		s.state.CursorTargetID = 0
-		s.state.Dirty = false
-	} else {
-		s.state.CursorTargetID = lastTargetID
-	}
-	s.finishSliceLocked(now, processedPairs, fmt.Sprintf("完成 %d 个目标人物巡检", len(selected)))
+	s.state.CursorTargetID = targets[len(targets)-1].ID
+	s.finishSliceLocked(now, processedPairs, fmt.Sprintf("完成 %d 个目标人物巡检", len(targets)))
 	return nil
 }
 
@@ -457,48 +475,19 @@ func (s *personMergeSuggestionService) GetPendingByID(id uint) (*model.PersonMer
 	return &responses[0], nil
 }
 
-func (s *personMergeSuggestionService) listSuggestionTargets() ([]*model.Person, error) {
-	people, err := s.personRepo.ListAll()
+func (s *personMergeSuggestionService) listSuggestionTargets(cursorID uint) ([]*model.Person, error) {
+	batchSize, err := s.currentBatchSize()
 	if err != nil {
 		return nil, err
 	}
-
-	targets := make([]*model.Person, 0, len(people))
-	for _, person := range people {
-		if person == nil {
-			continue
-		}
-		if person.Category != model.PersonCategoryFamily && person.Category != model.PersonCategoryFriend {
-			continue
-		}
-		if person.FaceCount <= 0 {
-			continue
-		}
-		targets = append(targets, person)
-	}
-
-	sort.Slice(targets, func(i, j int) bool { return targets[i].ID < targets[j].ID })
-	return targets, nil
+	bgPersonRepo, _, _, _ := s.bgRepos()
+	return bgPersonRepo.ListMergeSuggestionTargets(cursorID, batchSize)
 }
 
 func (s *personMergeSuggestionService) currentBatchSize() (int, error) {
 	batchSize := 100
 	if s.config != nil && s.config.People.MergeSuggestionBatchSize > 0 {
 		batchSize = s.config.People.MergeSuggestionBatchSize
-	}
-
-	jobStats, err := s.jobRepo.GetStats()
-	if err != nil {
-		return 0, err
-	}
-	pendingFaceStats, err := s.faceRepo.GetPendingStats()
-	if err != nil {
-		return 0, err
-	}
-	if jobStats.Pending+jobStats.Queued+jobStats.Processing > 0 || pendingFaceStats.Total > 0 {
-		if batchSize > 1 {
-			return 1, nil
-		}
 	}
 	if batchSize <= 0 {
 		return 1, nil
@@ -524,6 +513,8 @@ func (s *personMergeSuggestionService) AttachThreshold() float64 {
 }
 
 func (s *personMergeSuggestionService) buildAssignments(targets []*model.Person) (map[uint][]model.PersonMergeSuggestionItem, error) {
+	bgPersonRepo, _, bgCannotLinkRepo, _ := s.bgRepos()
+
 	// Phase 1: ensure ANN index is ready (lazy build, cached across slices).
 	idx, err := s.ensureANNIndex()
 	if err != nil {
@@ -532,7 +523,7 @@ func (s *personMergeSuggestionService) buildAssignments(targets []*model.Person)
 
 	// Phase 2: load cannot-link constraints.
 	cannotLinkCache := make(map[uint]map[uint]bool)
-	allCannotLinks, err := s.cannotLinkRepo.ListAll()
+	allCannotLinks, err := bgCannotLinkRepo.ListAll()
 	if err != nil {
 		return nil, err
 	}
@@ -571,7 +562,7 @@ func (s *personMergeSuggestionService) buildAssignments(targets []*model.Person)
 		}
 	}
 	if len(allCandidateIDs) > 0 {
-		validPeople, err := s.personRepo.ListByIDs(uniqueUintIDs(allCandidateIDs))
+		validPeople, err := bgPersonRepo.ListByIDs(uniqueUintIDs(allCandidateIDs))
 		if err != nil {
 			return nil, fmt.Errorf("validate candidates: %w", err)
 		}
@@ -810,32 +801,6 @@ func clonePersonMergeSuggestionTask(task *model.PersonMergeSuggestionTask) *mode
 	}
 	cloned := *task
 	return &cloned
-}
-
-func selectNextSuggestionTargets(targets []*model.Person, cursorTargetID uint, batchSize int) []*model.Person {
-	if batchSize <= 0 {
-		batchSize = 1
-	}
-
-	start := 0
-	if cursorTargetID != 0 {
-		start = len(targets)
-		for i, target := range targets {
-			if target != nil && target.ID > cursorTargetID {
-				start = i
-				break
-			}
-		}
-	}
-	if start >= len(targets) {
-		return nil
-	}
-
-	end := start + batchSize
-	if end > len(targets) {
-		end = len(targets)
-	}
-	return targets[start:end]
 }
 
 func bestSuggestionSimilarity(targetEmbeddings, candidateEmbeddings []faceWithEmbedding) float64 {

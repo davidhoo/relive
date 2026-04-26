@@ -101,6 +101,38 @@ func GetDB() *gorm.DB {
 	return globalDB
 }
 
+// NewBackgroundDB creates a second SQLite connection pool for background tasks.
+// It uses the same WAL-mode settings but a smaller pool (2 connections) so that
+// long-running background work does not starve the API connection pool.
+func NewBackgroundDB(cfg config.DatabaseConfig) (*gorm.DB, error) {
+	if cfg.Type != "sqlite" {
+		return nil, fmt.Errorf("NewBackgroundDB: unsupported database type: %s", cfg.Type)
+	}
+
+	gormConfig := &gorm.Config{
+		NowFunc: func() time.Time { return time.Now().UTC() },
+		Logger:  gormlogger.Default.LogMode(gormlogger.Silent), // background pool: silent logging
+	}
+
+	sqlitePath := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=60000&_synchronous=NORMAL&_cache_size=-64000&_temp_store=memory",
+		cfg.Path)
+	db, err := gorm.Open(sqlite.Open(sqlitePath), gormConfig)
+	if err != nil {
+		return nil, fmt.Errorf("open background sqlite: %w", err)
+	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, err
+	}
+	db.Exec("PRAGMA foreign_keys=ON")
+	sqlDB.SetMaxOpenConns(2)
+	sqlDB.SetMaxIdleConns(1)
+	sqlDB.SetConnMaxLifetime(time.Hour)
+
+	return db, nil
+}
+
 // AutoMigrate 自动迁移数据库表
 func AutoMigrate(db *gorm.DB) error {
 	models := []interface{}{
@@ -186,6 +218,10 @@ func AutoMigrate(db *gorm.DB) error {
 
 	if err := migrateFaceEmbeddingBinary(db); err != nil {
 		log.Printf("[database] warning: face embedding binary migration failed: %v", err)
+	}
+
+	if err := migrateMergeSuggestionIndex(db); err != nil {
+		log.Printf("[database] warning: merge suggestion index migration failed: %v", err)
 	}
 
 	return nil
@@ -492,6 +528,26 @@ func migrateEnumValidation(db *gorm.DB) error {
 	}
 
 	log.Printf("[database] enum validation migration completed")
+	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
+	return nil
+}
+
+func migrateMergeSuggestionIndex(db *gorm.DB) error {
+	const migrationKey = "migration.merge_suggestion_index_v1"
+
+	var cfg model.AppConfig
+	if err := db.Where("key = ?", migrationKey).First(&cfg).Error; err == nil {
+		return nil
+	}
+
+	log.Printf("[database] creating merge suggestion targets index...")
+
+	if err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_people_merge_suggestion_targets
+		ON people(category, face_count, id)`).Error; err != nil {
+		return fmt.Errorf("create merge suggestion index: %w", err)
+	}
+
+	log.Printf("[database] merge suggestion targets index created")
 	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
 	return nil
 }

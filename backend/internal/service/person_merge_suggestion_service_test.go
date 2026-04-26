@@ -341,7 +341,7 @@ func TestPersonMergeSuggestionService_PauseResumeAndRebuildPersistState(t *testi
 	assert.Equal(t, float64(0), state["cursor_target_id"])
 }
 
-func TestPersonMergeSuggestionService_SlowsDownWhenPeopleBacklogIsHigh(t *testing.T) {
+func TestPersonMergeSuggestionService_ProcessesAllTargetsRegardlessOfPeopleJobs(t *testing.T) {
 	svc, _, repos, _ := newPersonMergeSuggestionServiceForTest(t)
 
 	targetA := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0}, []float32{0.99, 0.01})
@@ -376,15 +376,6 @@ func TestPersonMergeSuggestionService_SlowsDownWhenPeopleBacklogIsHigh(t *testin
 	require.NoError(t, svc.RunBackgroundSlice())
 
 	got := pendingSuggestionCandidatesByTarget(t, repos.MergeSuggestion)
-	require.Len(t, got, 1)
-	assert.Equal(t, []uint{candidateA.ID}, got[targetA.ID])
-	_, hasTargetB := got[targetB.ID]
-	assert.False(t, hasTargetB)
-
-	require.NoError(t, repos.PeopleJob.UpdateFields(1, map[string]interface{}{"status": model.PeopleJobStatusCompleted}))
-	require.NoError(t, svc.RunBackgroundSlice())
-
-	got = pendingSuggestionCandidatesByTarget(t, repos.MergeSuggestion)
 	require.Len(t, got, 2)
 	assert.Equal(t, []uint{candidateA.ID}, got[targetA.ID])
 	assert.Equal(t, []uint{candidateB.ID}, got[targetB.ID])
