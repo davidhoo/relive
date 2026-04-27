@@ -453,20 +453,19 @@ func (s *peopleService) ResetAllPeople() (int, error) {
 		return 0, err
 	}
 
-	photos, err := s.photoRepo.ListAll()
-	if err != nil {
-		return count, fmt.Errorf("list photos for re-enqueue: %w", err)
-	}
 	enqueued := 0
-	for _, photo := range photos {
-		if photo.Status == model.PhotoStatusExcluded {
-			continue
+	err = s.photoRepo.IterateActivePhotos([]string{"id", "status"}, 500, func(photos []*model.Photo) error {
+		for _, photo := range photos {
+			if err := s.enqueuePhotoModel(photo, "reset", peoplePriorityScan, true); err != nil {
+				logger.Warnf("re-enqueue photo %d after reset failed: %v", photo.ID, err)
+				continue
+			}
+			enqueued++
 		}
-		if err := s.enqueuePhotoModel(photo, "reset", peoplePriorityScan, true); err != nil {
-			logger.Warnf("re-enqueue photo %d after reset failed: %v", photo.ID, err)
-			continue
-		}
-		enqueued++
+		return nil
+	})
+	if err != nil {
+		return count, fmt.Errorf("iterate photos for re-enqueue: %w", err)
 	}
 	logger.Infof("people reset complete: %d photos reset, %d jobs enqueued", count, enqueued)
 	return enqueued, nil

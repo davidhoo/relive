@@ -33,6 +33,7 @@ type PhotoRepository interface {
 	List(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string) ([]*model.Photo, int64, error)
 	ListSummaries(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string) ([]*model.PhotoSummary, int64, error)
 	ListAll() ([]*model.Photo, error)
+	IterateActivePhotos(columns []string, batchSize int, fn func(photos []*model.Photo) error) error
 	ListByIDs(ids []uint) ([]*model.Photo, error)
 	ListPhotosByPersonID(personID uint) ([]*model.Photo, error) // 通过 JOIN 直接获取人物关联照片
 	ListPhotoSummariesByPersonID(personID uint) ([]*model.Photo, error) // 精简列 + SQL 排序
@@ -439,6 +440,33 @@ func (r *photoRepository) ListAll() ([]*model.Photo, error) {
 	var photos []*model.Photo
 	err := r.db.Scopes(activeScope).Find(&photos).Error
 	return photos, err
+}
+
+// IterateActivePhotos 游标分批遍历活跃照片，只查询指定列，内存占用恒定
+func (r *photoRepository) IterateActivePhotos(columns []string, batchSize int, fn func(photos []*model.Photo) error) error {
+	if batchSize <= 0 {
+		batchSize = 500
+	}
+	var lastID uint
+	for {
+		var batch []*model.Photo
+		err := r.db.Scopes(activeScope).
+			Select(columns).
+			Where("id > ?", lastID).
+			Order("id ASC").
+			Limit(batchSize).
+			Find(&batch).Error
+		if err != nil {
+			return err
+		}
+		if len(batch) == 0 {
+			return nil
+		}
+		if err := fn(batch); err != nil {
+			return err
+		}
+		lastID = batch[len(batch)-1].ID
+	}
 }
 
 // ListByIDs 根据 ID 列表获取照片

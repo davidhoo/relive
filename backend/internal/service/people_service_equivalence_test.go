@@ -54,7 +54,7 @@ func TestClusteringEquivalence(t *testing.T) {
 
 	var protoFaces []*model.Face
 	if len(assignedPersonIDs) > 0 {
-		protoFaces, err = repos.Face.ListTopByPersonIDs(assignedPersonIDs, peoplePrototypeCandidates)
+		protoFaces, err = repos.Face.ListPrototypeEmbeddings(assignedPersonIDs, peoplePrototypeCandidates)
 		if err != nil {
 			t.Fatalf("Failed to list prototype faces: %v", err)
 		}

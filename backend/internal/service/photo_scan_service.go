@@ -173,34 +173,30 @@ func (s *photoService) processPhoto(filePath string, info os.FileInfo) (*model.P
 func (s *photoService) CleanupNonExistentPhotos() (*model.CleanupPhotosResponse, error) {
 	logger.Info("Starting cleanup of non-existent photos")
 
-	// 1. 获取数据库中的所有照片
-	allPhotos, err := s.repo.ListAll()
-	if err != nil {
-		return nil, fmt.Errorf("list all photos: %w", err)
-	}
-
-	totalCount := len(allPhotos)
+	// 1. 游标分批检查照片文件是否存在
+	totalCount := 0
 	deletedCount := 0
 	skippedCount := 0
 
-	logger.Infof("Found %d photos in database to check", totalCount)
-
-	// 2. 检查每张照片的文件是否存在
-	for _, photo := range allPhotos {
-		// 检查文件是否存在
-		if _, err := os.Stat(photo.FilePath); os.IsNotExist(err) {
-			// 文件已不存在，软删除数据库记录
-			if err := s.repo.Delete(photo.ID); err != nil {
-				logger.Errorf("Soft delete photo failed: id=%d, path=%s, error=%v", photo.ID, photo.FilePath, err)
-				continue
+	err := s.repo.IterateActivePhotos([]string{"id", "file_path"}, 500, func(photos []*model.Photo) error {
+		totalCount += len(photos)
+		for _, photo := range photos {
+			if _, err := os.Stat(photo.FilePath); os.IsNotExist(err) {
+				if err := s.repo.Delete(photo.ID); err != nil {
+					logger.Errorf("Soft delete photo failed: id=%d, path=%s, error=%v", photo.ID, photo.FilePath, err)
+					continue
+				}
+				deletedCount++
+				logger.Infof("Soft deleted photo (file not exists): id=%d, path=%s", photo.ID, photo.FilePath)
+			} else if err != nil {
+				logger.Warnf("Cannot access photo file: id=%d, path=%s, error=%v", photo.ID, photo.FilePath, err)
+				skippedCount++
 			}
-			deletedCount++
-			logger.Infof("Soft deleted photo (file not exists): id=%d, path=%s", photo.ID, photo.FilePath)
-		} else if err != nil {
-			// 其他错误（如权限问题），记录警告但不删除
-			logger.Warnf("Cannot access photo file: id=%d, path=%s, error=%v", photo.ID, photo.FilePath, err)
-			skippedCount++
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("iterate photos for cleanup: %w", err)
 	}
 
 	logger.Infof("Photo cleanup completed: total=%d, deleted=%d, skipped=%d", totalCount, deletedCount, skippedCount)

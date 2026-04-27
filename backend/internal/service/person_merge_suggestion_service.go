@@ -911,11 +911,11 @@ func upsertMergeSuggestionState(db *gorm.DB, value string) error {
 // CalculateSimilarity 计算两个人物间的相似度（使用与合并建议相同的方法）
 func (s *personMergeSuggestionService) CalculateSimilarity(personID1, personID2 uint) (float64, error) {
 	// 获取两个人的原型人脸
-	person1Faces, err := s.faceRepo.ListTopByPersonIDs([]uint{personID1}, peoplePrototypeCandidates)
+	person1Faces, err := s.faceRepo.ListPrototypeEmbeddings([]uint{personID1}, peoplePrototypeCandidates)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get faces for person %d: %w", personID1, err)
 	}
-	person2Faces, err := s.faceRepo.ListTopByPersonIDs([]uint{personID2}, peoplePrototypeCandidates)
+	person2Faces, err := s.faceRepo.ListPrototypeEmbeddings([]uint{personID2}, peoplePrototypeCandidates)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get faces for person %d: %w", personID2, err)
 	}

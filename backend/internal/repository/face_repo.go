@@ -43,7 +43,6 @@ type FaceRepository interface {
 	ListAssignedPersonIDs() ([]uint, error)
 	ListPending(limit int) ([]*model.Face, error)
 	GetPendingStats() (*PendingFaceStats, error)
-	ListTopByPersonIDs(personIDs []uint, perPerson int) ([]*model.Face, error)
 	ListPrototypeEmbeddings(personIDs []uint, perPerson int) ([]*model.Face, error)
 	ReassignFaces(faceIDs []uint, personID uint, reason string) error
 	ListLowConfidence(threshold float64, maxGeneration int) ([]*model.Face, error)
@@ -218,48 +217,6 @@ func (r *faceRepository) GetPendingStats() (*PendingFaceStats, error) {
 	return stats, nil
 }
 
-func (r *faceRepository) ListTopByPersonIDs(personIDs []uint, perPerson int) ([]*model.Face, error) {
-	if len(personIDs) == 0 {
-		return nil, nil
-	}
-
-	var allFaces []*model.Face
-	for _, chunk := range chunkIDs(personIDs) {
-		var faces []*model.Face
-		err := r.db.
-			Where("person_id IN ?", chunk).
-			Order("person_id ASC").
-			Order("manual_locked DESC").
-			Order("quality_score DESC").
-			Order("confidence DESC").
-			Order("id ASC").
-			Find(&faces).Error
-		if err != nil {
-			return nil, err
-		}
-		allFaces = append(allFaces, faces...)
-	}
-
-	if perPerson <= 0 {
-		return allFaces, nil
-	}
-
-	topFaces := make([]*model.Face, 0, len(allFaces))
-	counts := make(map[uint]int, len(personIDs))
-	for _, face := range allFaces {
-		if face == nil || face.PersonID == nil || *face.PersonID == 0 {
-			continue
-		}
-		personID := *face.PersonID
-		if counts[personID] >= perPerson {
-			continue
-		}
-		topFaces = append(topFaces, face)
-		counts[personID]++
-	}
-	return topFaces, nil
-}
-
 // ListPrototypeEmbeddings loads lightweight metadata and embedding for the top perPerson
 // faces per person, using a window function to avoid fetching all faces from the DB.
 func (r *faceRepository) ListPrototypeEmbeddings(personIDs []uint, perPerson int) ([]*model.Face, error) {
@@ -317,8 +274,9 @@ func (r *faceRepository) ReassignFaces(faceIDs []uint, personID uint, reason str
 
 func (r *faceRepository) ListLowConfidence(threshold float64, maxGeneration int) ([]*model.Face, error) {
 	var faces []*model.Face
-	err := r.db.Where("manual_locked = ? AND cluster_status = ? AND cluster_score < ? AND recluster_generation < ?",
-		false, model.FaceClusterStatusAssigned, threshold, maxGeneration).
+	err := r.db.Select("id, person_id").
+		Where("manual_locked = ? AND cluster_status = ? AND cluster_score < ? AND recluster_generation < ?",
+			false, model.FaceClusterStatusAssigned, threshold, maxGeneration).
 		Find(&faces).Error
 	return faces, err
 }
