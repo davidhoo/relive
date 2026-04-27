@@ -38,6 +38,9 @@ func (r *stubPhotoRepo) List(page, pageSize int, analyzed *bool, hasThumbnail *b
 	return nil, 0, nil
 }
 func (r *stubPhotoRepo) ListAll() ([]*model.Photo, error)                { return r.listAllPhotos, nil }
+func (r *stubPhotoRepo) IterateActivePhotos(_ []string, _ int, _ func([]*model.Photo) error) error {
+	return nil
+}
 func (r *stubPhotoRepo) ListByIDs(ids []uint) ([]*model.Photo, error)    { return nil, nil }
 func (r *stubPhotoRepo) GetUnanalyzed(limit int) ([]*model.Photo, error) { return nil, nil }
 func (r *stubPhotoRepo) MarkAsAnalyzed(id uint, description, caption, mainCategory, tags string, memoryScore, beautyScore int) error {
