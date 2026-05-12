@@ -121,47 +121,49 @@ func (s *displayService) GenerateDailyBatch(date time.Time, force bool) (*model.
 	}
 
 	var saved *model.DailyDisplayBatch
-	if err := s.db.Transaction(func(tx *gorm.DB) error {
-		if existing != nil {
-			if err := deleteDailyBatch(tx, existing.ID); err != nil {
-				return err
-			}
-		}
-
-		if err := tx.Create(batch).Error; err != nil {
-			return err
-		}
-
-		for _, item := range items {
-			item.BatchID = batch.ID
-			if err := tx.Create(item).Error; err != nil {
-				return err
-			}
-			for _, asset := range assetsBySequence[item.Sequence] {
-				asset.ItemID = item.ID
-				if err := tx.Create(asset).Error; err != nil {
+	if err := s.executeWrite(func() error {
+		return s.db.Transaction(func(tx *gorm.DB) error {
+			if existing != nil {
+				if err := deleteDailyBatch(tx, existing.ID); err != nil {
 					return err
 				}
 			}
-		}
 
-		if err := tx.Model(&model.DevicePlaybackState{}).
-			Where("batch_date = ?", batchDate).
-			Updates(map[string]interface{}{
-				"batch_id":            batch.ID,
-				"current_sequence":    1,
-				"last_served_item_id": nil,
-				"last_served_at":      nil,
-			}).Error; err != nil {
-			return err
-		}
+			if err := tx.Create(batch).Error; err != nil {
+				return err
+			}
 
-		loaded, err := s.loadDailyBatchWithTx(tx, batchDate)
-		if err != nil {
-			return err
-		}
-		saved = loaded
-		return nil
+			for _, item := range items {
+				item.BatchID = batch.ID
+				if err := tx.Create(item).Error; err != nil {
+					return err
+				}
+				for _, asset := range assetsBySequence[item.Sequence] {
+					asset.ItemID = item.ID
+					if err := tx.Create(asset).Error; err != nil {
+						return err
+					}
+				}
+			}
+
+			if err := tx.Model(&model.DevicePlaybackState{}).
+				Where("batch_date = ?", batchDate).
+				Updates(map[string]interface{}{
+					"batch_id":            batch.ID,
+					"current_sequence":    1,
+					"last_served_item_id": nil,
+					"last_served_at":      nil,
+				}).Error; err != nil {
+				return err
+			}
+
+			loaded, err := s.loadDailyBatchWithTx(tx, batchDate)
+			if err != nil {
+				return err
+			}
+			saved = loaded
+			return nil
+		})
 	}); err != nil {
 		return nil, fmt.Errorf("save daily batch: %w", err)
 	}
@@ -212,18 +214,22 @@ func (s *displayService) StartGenerateDailyBatch(date time.Time, force bool) (*m
 			BatchDate: batchDate,
 			Status:    model.DailyDisplayBatchStatusRunning,
 		}
-		if err := s.db.Create(&batch).Error; err != nil {
+		if err := s.executeWrite(func() error {
+			return s.db.Create(&batch).Error
+		}); err != nil {
 			s.batchGenMu.Lock()
 			s.batchGenRunning = false
 			s.batchGenMu.Unlock()
 			return nil, err
 		}
 	} else {
-		if err := s.db.Model(&batch).Updates(map[string]interface{}{
-			"status":        model.DailyDisplayBatchStatusRunning,
-			"error_message": "",
-			"item_count":    0,
-		}).Error; err != nil {
+		if err := s.executeWrite(func() error {
+			return s.db.Model(&batch).Updates(map[string]interface{}{
+				"status":        model.DailyDisplayBatchStatusRunning,
+				"error_message": "",
+				"item_count":    0,
+			}).Error
+		}); err != nil {
 			s.batchGenMu.Lock()
 			s.batchGenRunning = false
 			s.batchGenMu.Unlock()
@@ -239,12 +245,14 @@ func (s *displayService) StartGenerateDailyBatch(date time.Time, force bool) (*m
 		}()
 		if _, err := s.GenerateDailyBatch(date, true); err != nil {
 			logger.Errorf("Async batch generation failed for %s: %v", batchDate, err)
-			s.db.Model(&model.DailyDisplayBatch{}).
-				Where("date(batch_date) = date(?) AND status = ?", batchDate, model.DailyDisplayBatchStatusRunning).
-				Updates(map[string]interface{}{
-					"status":        model.DailyDisplayBatchStatusFailed,
-					"error_message": err.Error(),
-				})
+			_ = s.executeWrite(func() error {
+				return s.db.Model(&model.DailyDisplayBatch{}).
+					Where("date(batch_date) = date(?) AND status = ?", batchDate, model.DailyDisplayBatchStatusRunning).
+					Updates(map[string]interface{}{
+						"status":        model.DailyDisplayBatchStatusFailed,
+						"error_message": err.Error(),
+					}).Error
+			})
 		}
 	}()
 
@@ -291,78 +299,80 @@ func (s *displayService) GetDeviceDisplay(deviceID uint, renderProfile string) (
 	}
 
 	selection := &model.DeviceDisplaySelection{}
-	if err := s.db.Transaction(func(tx *gorm.DB) error {
-		var state model.DevicePlaybackState
-		err := tx.Where("device_id = ?", deviceID).First(&state).Error
-		if err != nil {
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
+	if err := s.executeWrite(func() error {
+		return s.db.Transaction(func(tx *gorm.DB) error {
+			var state model.DevicePlaybackState
+			err := tx.Where("device_id = ?", deviceID).First(&state).Error
+			if err != nil {
+				if !errors.Is(err, gorm.ErrRecordNotFound) {
+					return err
+				}
+				state = model.DevicePlaybackState{
+					DeviceID:        deviceID,
+					BatchID:         batch.ID,
+					BatchDate:       batch.BatchDate,
+					CurrentSequence: 1,
+				}
+				if err := tx.Create(&state).Error; err != nil {
+					return err
+				}
+			}
+
+			state.BatchDate = normalizeBatchDateString(state.BatchDate)
+
+			if state.BatchID != batch.ID || state.BatchDate != batch.BatchDate || state.CurrentSequence < 1 || state.CurrentSequence > batch.ItemCount {
+				state.BatchID = batch.ID
+				state.BatchDate = batch.BatchDate
+				state.CurrentSequence = 1
+				if err := tx.Model(&state).Updates(map[string]interface{}{
+					"batch_id":            batch.ID,
+					"batch_date":          batch.BatchDate,
+					"current_sequence":    1,
+					"last_served_item_id": nil,
+					"last_served_at":      nil,
+				}).Error; err != nil {
+					return err
+				}
+			}
+
+			var item model.DailyDisplayItem
+			if err := tx.Where("batch_id = ? AND sequence = ?", batch.ID, state.CurrentSequence).First(&item).Error; err != nil {
 				return err
 			}
-			state = model.DevicePlaybackState{
-				DeviceID:        deviceID,
-				BatchID:         batch.ID,
-				BatchDate:       batch.BatchDate,
-				CurrentSequence: 1,
-			}
-			if err := tx.Create(&state).Error; err != nil {
-				return err
-			}
-		}
 
-		state.BatchDate = normalizeBatchDateString(state.BatchDate)
+			var asset model.DailyDisplayAsset
+			if err := tx.Where("item_id = ? AND render_profile = ?", item.ID, profile.Name).First(&asset).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					if err := tx.Where("item_id = ?", item.ID).Order("id ASC").First(&asset).Error; err != nil {
+						return err
+					}
+				} else {
+					return err
+				}
+			}
 
-		if state.BatchID != batch.ID || state.BatchDate != batch.BatchDate || state.CurrentSequence < 1 || state.CurrentSequence > batch.ItemCount {
-			state.BatchID = batch.ID
-			state.BatchDate = batch.BatchDate
-			state.CurrentSequence = 1
+			nextSequence := state.CurrentSequence + 1
+			if nextSequence > batch.ItemCount {
+				nextSequence = 1
+			}
+			now := time.Now().UTC()
 			if err := tx.Model(&state).Updates(map[string]interface{}{
+				"current_sequence":    nextSequence,
+				"last_served_item_id": item.ID,
+				"last_served_at":      &now,
 				"batch_id":            batch.ID,
 				"batch_date":          batch.BatchDate,
-				"current_sequence":    1,
-				"last_served_item_id": nil,
-				"last_served_at":      nil,
 			}).Error; err != nil {
 				return err
 			}
-		}
 
-		var item model.DailyDisplayItem
-		if err := tx.Where("batch_id = ? AND sequence = ?", batch.ID, state.CurrentSequence).First(&item).Error; err != nil {
-			return err
-		}
-
-		var asset model.DailyDisplayAsset
-		if err := tx.Where("item_id = ? AND render_profile = ?", item.ID, profile.Name).First(&asset).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				if err := tx.Where("item_id = ?", item.ID).Order("id ASC").First(&asset).Error; err != nil {
-					return err
-				}
-			} else {
-				return err
-			}
-		}
-
-		nextSequence := state.CurrentSequence + 1
-		if nextSequence > batch.ItemCount {
-			nextSequence = 1
-		}
-		now := time.Now().UTC()
-		if err := tx.Model(&state).Updates(map[string]interface{}{
-			"current_sequence":    nextSequence,
-			"last_served_item_id": item.ID,
-			"last_served_at":      &now,
-			"batch_id":            batch.ID,
-			"batch_date":          batch.BatchDate,
-		}).Error; err != nil {
-			return err
-		}
-
-		selection.BatchDate = normalizeBatchDateString(batch.BatchDate)
-		selection.TotalCount = batch.ItemCount
-		selection.Sequence = item.Sequence
-		selection.Item = &item
-		selection.Asset = &asset
-		return nil
+			selection.BatchDate = normalizeBatchDateString(batch.BatchDate)
+			selection.TotalCount = batch.ItemCount
+			selection.Sequence = item.Sequence
+			selection.Item = &item
+			selection.Asset = &asset
+			return nil
+		})
 	}); err != nil {
 		return nil, err
 	}

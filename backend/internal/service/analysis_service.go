@@ -9,6 +9,7 @@ import (
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/pkg/config"
+	"github.com/davidhoo/relive/pkg/database"
 	"github.com/davidhoo/relive/pkg/logger"
 	"gorm.io/gorm"
 )
@@ -39,6 +40,7 @@ type analysisService struct {
 	photoTagRepo repository.PhotoTagRepository
 	cfg          *config.Config
 	resultQueue  *ResultQueue
+	writeQueue   *database.WriteQueue
 }
 
 // NewAnalysisService 创建分析服务
@@ -48,7 +50,16 @@ func NewAnalysisService(db *gorm.DB, photoRepo repository.PhotoRepository, photo
 		photoRepo:    photoRepo,
 		photoTagRepo: photoTagRepo,
 		cfg:          cfg,
+		writeQueue:   database.GetWriteQueue(),
 	}
+}
+
+// executeWrite runs fn through WriteQueue if available, otherwise directly.
+func (s *analysisService) executeWrite(fn func() error) error {
+	if s.writeQueue != nil {
+		return s.writeQueue.Execute(fn)
+	}
+	return fn()
 }
 
 // SetResultQueue 设置结果队列（必须在 Start 之前调用）
@@ -61,27 +72,28 @@ func (s *analysisService) GetPendingTasks(limit int, analyzerID string) ([]model
 	var tasks []model.AnalysisTask
 	var totalRemaining int64
 
-	// 1. 统计剩余待分析数量
-	// 注意：不再要求 geocode_status = ready，分析不应依赖地理编码完成
-	err := s.db.Model(&model.Photo{}).
-		Where(`status = ?
+	err := s.executeWrite(func() error {
+		// 1. 统计剩余待分析数量
+		// 注意：不再要求 geocode_status = ready，分析不应依赖地理编码完成
+		err := s.db.Model(&model.Photo{}).
+			Where(`status = ?
 			AND ai_analyzed = ?
 			AND thumbnail_status = ?
 			AND (analysis_lock_expired_at IS NULL OR analysis_lock_expired_at < ?)
 			AND analysis_retry_count < ?`,
-			model.PhotoStatusActive, false, model.ThumbnailStatusReady, time.Now(), 10).
-		Count(&totalRemaining).Error
-	if err != nil {
-		return nil, 0, err
-	}
+				model.PhotoStatusActive, false, model.ThumbnailStatusReady, time.Now(), 10).
+			Count(&totalRemaining).Error
+		if err != nil {
+			return err
+		}
 
-	// 2. 获取待分析的照片（使用行级锁模拟：更新 lock 字段）
-	// SQLite 下使用单个 UPDATE 语句来"锁定"记录
-	lockExpiredAt := time.Now().Add(5 * time.Minute)
+		// 2. 获取待分析的照片（使用行级锁模拟：更新 lock 字段）
+		// SQLite 下使用单个 UPDATE 语句来"锁定"记录
+		lockExpiredAt := time.Now().Add(5 * time.Minute)
 
-	// 先更新一批记录来"锁定"它们
-	result := s.db.Model(&model.Photo{}).
-		Where(`id IN (
+		// 先更新一批记录来"锁定"它们
+		result := s.db.Model(&model.Photo{}).
+			Where(`id IN (
 			SELECT id FROM photos
 			WHERE status = ?
 			  AND ai_analyzed = ?
@@ -92,48 +104,53 @@ func (s *analysisService) GetPendingTasks(limit int, analyzerID string) ([]model
 			ORDER BY id ASC
 			LIMIT ?
 		)`, model.PhotoStatusActive, false, model.ThumbnailStatusReady, time.Now(), 10, limit).
-		Updates(map[string]interface{}{
-			"analysis_lock_id":         analyzerID,
-			"analysis_lock_expired_at": lockExpiredAt,
-		})
+			Updates(map[string]interface{}{
+				"analysis_lock_id":         analyzerID,
+				"analysis_lock_expired_at": lockExpiredAt,
+			})
 
-	if result.Error != nil {
-		return nil, 0, result.Error
-	}
+		if result.Error != nil {
+			return result.Error
+		}
 
-	// 3. 查询刚刚被锁定的照片
-	var photos []model.Photo
-	err = s.db.Where("analysis_lock_id = ? AND analysis_lock_expired_at = ?",
-		analyzerID, lockExpiredAt).
-		Find(&photos).Error
+		// 3. 查询刚刚被锁定的照片
+		var photos []model.Photo
+		err = s.db.Where("analysis_lock_id = ? AND analysis_lock_expired_at = ?",
+			analyzerID, lockExpiredAt).
+			Find(&photos).Error
+		if err != nil {
+			return err
+		}
+
+		// 4. 构建任务响应
+		tasks = make([]model.AnalysisTask, 0, len(photos))
+		baseURL := s.cfg.Server.ExternalURL
+		if baseURL == "" {
+			baseURL = fmt.Sprintf("http://%s:%d", s.cfg.Server.Host, s.cfg.Server.Port)
+		}
+		baseURL = strings.TrimSuffix(baseURL, "/")
+
+		for _, photo := range photos {
+			downloadURL := fmt.Sprintf("%s/api/v1/photos/%d/image", baseURL, photo.ID)
+
+			task := model.AnalysisTask{
+				ID:            fmt.Sprintf("task_%d_%d", photo.ID, time.Now().Unix()),
+				PhotoID:       photo.ID,
+				FilePath:      photo.FilePath,
+				DownloadURL:   downloadURL,
+				Width:         photo.Width,
+				Height:        photo.Height,
+				TakenAt:       photo.TakenAt,
+				Location:      photo.Location,
+				CameraModel:   photo.CameraModel,
+				LockExpiresAt: &lockExpiredAt,
+			}
+			tasks = append(tasks, task)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, 0, err
-	}
-
-	// 4. 构建任务响应
-	tasks = make([]model.AnalysisTask, 0, len(photos))
-	baseURL := s.cfg.Server.ExternalURL
-	if baseURL == "" {
-		baseURL = fmt.Sprintf("http://%s:%d", s.cfg.Server.Host, s.cfg.Server.Port)
-	}
-	baseURL = strings.TrimSuffix(baseURL, "/")
-
-	for _, photo := range photos {
-		downloadURL := fmt.Sprintf("%s/api/v1/photos/%d/image", baseURL, photo.ID)
-
-		task := model.AnalysisTask{
-			ID:                     fmt.Sprintf("task_%d_%d", photo.ID, time.Now().Unix()),
-			PhotoID:                photo.ID,
-			FilePath:               photo.FilePath,
-			DownloadURL:            downloadURL,
-			Width:                  photo.Width,
-			Height:                 photo.Height,
-			TakenAt:                photo.TakenAt,
-			Location:               photo.Location,
-			CameraModel:            photo.CameraModel,
-			LockExpiresAt:          &lockExpiredAt,
-		}
-		tasks = append(tasks, task)
 	}
 
 	return tasks, totalRemaining, nil
@@ -281,70 +298,72 @@ func (s *analysisService) SubmitResultsDirectly(results []model.AnalysisResult, 
 	}
 
 	// 第二阶段：批量处理（使用 CASE WHEN 减少锁定时间）
-	err := s.db.Transaction(func(tx *gorm.DB) error {
-		// 获取所有待更新的照片（一次性查询）
-		photoIDs := make([]uint, 0, len(validResults))
-		for _, vr := range validResults {
-			photoIDs = append(photoIDs, vr.result.PhotoID)
-		}
-
-		var photos []model.Photo
-		if err := tx.Where("id IN ?", photoIDs).Find(&photos).Error; err != nil {
-			return fmt.Errorf("fetch photos: %w", err)
-		}
-
-		// 构建照片状态映射
-		photoMap := make(map[uint]model.Photo)
-		for _, p := range photos {
-			photoMap[p.ID] = p
-		}
-
-		// 筛选出可以更新的结果（未分析过的）
-		toUpdate := make([]struct {
-			result       model.AnalysisResult
-			overallScore int
-			aiProvider   string
-		}, 0, len(validResults))
-		for _, vr := range validResults {
-			photo, exists := photoMap[vr.result.PhotoID]
-			if !exists {
-				resp.Rejected++
-				resp.RejectedItems = append(resp.RejectedItems, model.RejectedItem{
-					PhotoID: vr.result.PhotoID,
-					Reason:  "invalid_photo_id",
-					Message: "Photo not found",
-				})
-				continue
+	err := s.executeWrite(func() error {
+		return s.db.Transaction(func(tx *gorm.DB) error {
+			// 获取所有待更新的照片（一次性查询）
+			photoIDs := make([]uint, 0, len(validResults))
+			for _, vr := range validResults {
+				photoIDs = append(photoIDs, vr.result.PhotoID)
 			}
-			if photo.AIAnalyzed {
-				resp.Rejected++
-				resp.RejectedItems = append(resp.RejectedItems, model.RejectedItem{
-					PhotoID: vr.result.PhotoID,
-					Reason:  "duplicate_result",
-					Message: "Photo already analyzed",
-				})
-				continue
-			}
-			toUpdate = append(toUpdate, vr)
-		}
 
-		if len(toUpdate) == 0 {
+			var photos []model.Photo
+			if err := tx.Where("id IN ?", photoIDs).Find(&photos).Error; err != nil {
+				return fmt.Errorf("fetch photos: %w", err)
+			}
+
+			// 构建照片状态映射
+			photoMap := make(map[uint]model.Photo)
+			for _, p := range photos {
+				photoMap[p.ID] = p
+			}
+
+			// 筛选出可以更新的结果（未分析过的）
+			toUpdate := make([]struct {
+				result       model.AnalysisResult
+				overallScore int
+				aiProvider   string
+			}, 0, len(validResults))
+			for _, vr := range validResults {
+				photo, exists := photoMap[vr.result.PhotoID]
+				if !exists {
+					resp.Rejected++
+					resp.RejectedItems = append(resp.RejectedItems, model.RejectedItem{
+						PhotoID: vr.result.PhotoID,
+						Reason:  "invalid_photo_id",
+						Message: "Photo not found",
+					})
+					continue
+				}
+				if photo.AIAnalyzed {
+					resp.Rejected++
+					resp.RejectedItems = append(resp.RejectedItems, model.RejectedItem{
+						PhotoID: vr.result.PhotoID,
+						Reason:  "duplicate_result",
+						Message: "Photo already analyzed",
+					})
+					continue
+				}
+				toUpdate = append(toUpdate, vr)
+			}
+
+			if len(toUpdate) == 0 {
+				return nil
+			}
+
+			// 构建批量 CASE WHEN 更新 SQL
+			now := time.Now()
+			if err := s.batchUpdatePhotos(tx, toUpdate, now); err != nil {
+				logger.Errorf("Batch update failed: %v", err)
+				// 批量失败，记录所有为失败（会触发客户端重试）
+				for _, vr := range toUpdate {
+					resp.FailedPhotos = append(resp.FailedPhotos, vr.result.PhotoID)
+				}
+				return err
+			}
+
+			resp.Accepted = len(toUpdate)
 			return nil
-		}
-
-		// 构建批量 CASE WHEN 更新 SQL
-		now := time.Now()
-		if err := s.batchUpdatePhotos(tx, toUpdate, now); err != nil {
-			logger.Errorf("Batch update failed: %v", err)
-			// 批量失败，记录所有为失败（会触发客户端重试）
-			for _, vr := range toUpdate {
-				resp.FailedPhotos = append(resp.FailedPhotos, vr.result.PhotoID)
-			}
-			return err
-		}
-
-		resp.Accepted = len(toUpdate)
-		return nil
+		})
 	})
 
 	if err != nil {
@@ -451,18 +470,26 @@ func (s *analysisService) GetStats(deviceID uint) (*model.AnalyzerStatsResponse,
 
 // CleanExpiredLocks 清理过期的任务锁
 func (s *analysisService) CleanExpiredLocks() (int64, error) {
-	result := s.db.Model(&model.Photo{}).
-		Where("analysis_lock_expired_at < ? AND ai_analyzed = ? AND status = ?", time.Now(), false, model.PhotoStatusActive).
-		Updates(map[string]interface{}{
-			"analysis_lock_id":         nil,
-			"analysis_lock_expired_at": nil,
-		})
+	var cleanedCount int64
+	err := s.executeWrite(func() error {
+		result := s.db.Model(&model.Photo{}).
+			Where("analysis_lock_expired_at < ? AND ai_analyzed = ? AND status = ?", time.Now(), false, model.PhotoStatusActive).
+			Updates(map[string]interface{}{
+				"analysis_lock_id":         nil,
+				"analysis_lock_expired_at": nil,
+			})
 
-	if result.Error != nil {
-		return 0, result.Error
+		if result.Error != nil {
+			return result.Error
+		}
+
+		cleanedCount = result.RowsAffected
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
 
-	cleanedCount := result.RowsAffected
 	if cleanedCount > 0 {
 		logger.Infof("Cleaned %d expired locks", cleanedCount)
 	}

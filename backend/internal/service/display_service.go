@@ -8,6 +8,7 @@ import (
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/pkg/config"
+	"github.com/davidhoo/relive/pkg/database"
 	"github.com/davidhoo/relive/pkg/logger"
 	"gorm.io/gorm"
 )
@@ -46,6 +47,7 @@ type displayService struct {
 	eventRepo         repository.EventRepository
 	configService     ConfigService
 	config            *config.Config
+	writeQueue        *database.WriteQueue
 
 	batchGenMu      sync.Mutex
 	batchGenRunning bool
@@ -69,7 +71,16 @@ func NewDisplayService(
 		eventRepo:         eventRepo,
 		configService:     configService,
 		config:            cfg,
+		writeQueue:        database.GetWriteQueue(),
 	}
+}
+
+// executeWrite runs fn through WriteQueue if available, otherwise directly.
+func (s *displayService) executeWrite(fn func() error) error {
+	if s.writeQueue != nil {
+		return s.writeQueue.Execute(fn)
+	}
+	return fn()
 }
 
 // GetDisplayPhoto 获取展示照片

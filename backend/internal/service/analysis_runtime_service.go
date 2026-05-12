@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
+	"github.com/davidhoo/relive/pkg/database"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -29,15 +30,25 @@ type AnalysisRuntimeService interface {
 }
 
 type analysisRuntimeService struct {
-	db       *gorm.DB
-	leaseTTL time.Duration
+	db         *gorm.DB
+	leaseTTL   time.Duration
+	writeQueue *database.WriteQueue
 }
 
 func NewAnalysisRuntimeService(db *gorm.DB) AnalysisRuntimeService {
 	return &analysisRuntimeService{
-		db:       db,
-		leaseTTL: 30 * time.Second,
+		db:         db,
+		leaseTTL:   30 * time.Second,
+		writeQueue: database.GetWriteQueue(),
 	}
+}
+
+// executeWrite runs fn through WriteQueue if available, otherwise directly.
+func (s *analysisRuntimeService) executeWrite(fn func() error) error {
+	if s.writeQueue != nil {
+		return s.writeQueue.Execute(fn)
+	}
+	return fn()
 }
 
 func (s *analysisRuntimeService) AcquireGlobal(ownerType, ownerID, message string) (*model.AnalysisRuntimeLease, error) {
@@ -48,36 +59,38 @@ func (s *analysisRuntimeService) AcquireGlobal(ownerType, ownerID, message strin
 	now := time.Now().UTC()
 	expiresAt := now.Add(s.leaseTTL)
 
-	err := s.db.Transaction(func(tx *gorm.DB) error {
-		placeholder := &model.AnalysisRuntimeLease{
-			ResourceKey: model.GlobalAnalysisResourceKey,
-			OwnerType:   "",
-			Status:      model.AnalysisRuntimeStatusIdle,
-		}
+	err := s.executeWrite(func() error {
+		return s.db.Transaction(func(tx *gorm.DB) error {
+			placeholder := &model.AnalysisRuntimeLease{
+				ResourceKey: model.GlobalAnalysisResourceKey,
+				OwnerType:   "",
+				Status:      model.AnalysisRuntimeStatusIdle,
+			}
 
-		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(placeholder).Error; err != nil {
-			return err
-		}
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(placeholder).Error; err != nil {
+				return err
+			}
 
-		result := tx.Model(&model.AnalysisRuntimeLease{}).
-			Where("resource_key = ? AND (lease_expires_at IS NULL OR lease_expires_at < ? OR (owner_type = ? AND owner_id = ?))",
-				model.GlobalAnalysisResourceKey, now, ownerType, ownerID).
-			Updates(map[string]interface{}{
-				"owner_type":        ownerType,
-				"owner_id":          ownerID,
-				"status":            model.AnalysisRuntimeStatusRunning,
-				"message":           message,
-				"started_at":        now,
-				"last_heartbeat_at": now,
-				"lease_expires_at":  expiresAt,
-			})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected > 0 {
-			return nil
-		}
-		return ErrAnalysisRuntimeBusy
+			result := tx.Model(&model.AnalysisRuntimeLease{}).
+				Where("resource_key = ? AND (lease_expires_at IS NULL OR lease_expires_at < ? OR (owner_type = ? AND owner_id = ?))",
+					model.GlobalAnalysisResourceKey, now, ownerType, ownerID).
+				Updates(map[string]interface{}{
+					"owner_type":        ownerType,
+					"owner_id":          ownerID,
+					"status":            model.AnalysisRuntimeStatusRunning,
+					"message":           message,
+					"started_at":        now,
+					"last_heartbeat_at": now,
+					"lease_expires_at":  expiresAt,
+				})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected > 0 {
+				return nil
+			}
+			return ErrAnalysisRuntimeBusy
+		})
 	})
 	if err != nil {
 		if errors.Is(err, ErrAnalysisRuntimeBusy) {
@@ -104,17 +117,25 @@ func (s *analysisRuntimeService) HeartbeatGlobal(ownerType, ownerID string) (*mo
 
 	now := time.Now().UTC()
 	expiresAt := now.Add(s.leaseTTL)
-	result := s.db.Model(&model.AnalysisRuntimeLease{}).
-		Where("resource_key = ? AND owner_type = ? AND owner_id = ? AND status = ? AND lease_expires_at >= ?",
-			model.GlobalAnalysisResourceKey, ownerType, ownerID, model.AnalysisRuntimeStatusRunning, now).
-		Updates(map[string]interface{}{
-			"last_heartbeat_at": now,
-			"lease_expires_at":  expiresAt,
-		})
-	if result.Error != nil {
-		return nil, result.Error
+	var rowsAffected int64
+	err := s.executeWrite(func() error {
+		result := s.db.Model(&model.AnalysisRuntimeLease{}).
+			Where("resource_key = ? AND owner_type = ? AND owner_id = ? AND status = ? AND lease_expires_at >= ?",
+				model.GlobalAnalysisResourceKey, ownerType, ownerID, model.AnalysisRuntimeStatusRunning, now).
+			Updates(map[string]interface{}{
+				"last_heartbeat_at": now,
+				"lease_expires_at":  expiresAt,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		rowsAffected = result.RowsAffected
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	if result.RowsAffected == 0 {
+	if rowsAffected == 0 {
 		return nil, ErrAnalysisRuntimeOwnedByOther
 	}
 
@@ -130,22 +151,30 @@ func (s *analysisRuntimeService) ReleaseGlobal(ownerType, ownerID string) error 
 		return fmt.Errorf("owner type and owner id are required")
 	}
 
-	result := s.db.Model(&model.AnalysisRuntimeLease{}).
-		Where("resource_key = ? AND owner_type = ? AND owner_id = ?",
-			model.GlobalAnalysisResourceKey, ownerType, ownerID).
-		Updates(map[string]interface{}{
-			"owner_type":        model.AnalysisRuntimeStatusIdle,
-			"owner_id":          "",
-			"status":            model.AnalysisRuntimeStatusIdle,
-			"message":           "",
-			"started_at":        nil,
-			"last_heartbeat_at": nil,
-			"lease_expires_at":  nil,
-		})
-	if result.Error != nil {
-		return result.Error
+	var rowsAffected int64
+	err := s.executeWrite(func() error {
+		result := s.db.Model(&model.AnalysisRuntimeLease{}).
+			Where("resource_key = ? AND owner_type = ? AND owner_id = ?",
+				model.GlobalAnalysisResourceKey, ownerType, ownerID).
+			Updates(map[string]interface{}{
+				"owner_type":        model.AnalysisRuntimeStatusIdle,
+				"owner_id":          "",
+				"status":            model.AnalysisRuntimeStatusIdle,
+				"message":           "",
+				"started_at":        nil,
+				"last_heartbeat_at": nil,
+				"lease_expires_at":  nil,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		rowsAffected = result.RowsAffected
+		return nil
+	})
+	if err != nil {
+		return err
 	}
-	if result.RowsAffected == 0 {
+	if rowsAffected == 0 {
 		return ErrAnalysisRuntimeOwnedByOther
 	}
 	return nil
@@ -212,36 +241,38 @@ func (s *analysisRuntimeService) Acquire(resourceKey, ownerType, ownerID, messag
 	now := time.Now().UTC()
 	expiresAt := now.Add(s.leaseTTL)
 
-	err := s.db.Transaction(func(tx *gorm.DB) error {
-		placeholder := &model.AnalysisRuntimeLease{
-			ResourceKey: resourceKey,
-			OwnerType:   "",
-			Status:      model.AnalysisRuntimeStatusIdle,
-		}
+	err := s.executeWrite(func() error {
+		return s.db.Transaction(func(tx *gorm.DB) error {
+			placeholder := &model.AnalysisRuntimeLease{
+				ResourceKey: resourceKey,
+				OwnerType:   "",
+				Status:      model.AnalysisRuntimeStatusIdle,
+			}
 
-		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(placeholder).Error; err != nil {
-			return err
-		}
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(placeholder).Error; err != nil {
+				return err
+			}
 
-		result := tx.Model(&model.AnalysisRuntimeLease{}).
-			Where("resource_key = ? AND (lease_expires_at IS NULL OR lease_expires_at < ? OR (owner_type = ? AND owner_id = ?))",
-				resourceKey, now, ownerType, ownerID).
-			Updates(map[string]interface{}{
-				"owner_type":        ownerType,
-				"owner_id":          ownerID,
-				"status":            model.AnalysisRuntimeStatusRunning,
-				"message":           message,
-				"started_at":        now,
-				"last_heartbeat_at": now,
-				"lease_expires_at":  expiresAt,
-			})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected > 0 {
-			return nil
-		}
-		return ErrAnalysisRuntimeBusy
+			result := tx.Model(&model.AnalysisRuntimeLease{}).
+				Where("resource_key = ? AND (lease_expires_at IS NULL OR lease_expires_at < ? OR (owner_type = ? AND owner_id = ?))",
+					resourceKey, now, ownerType, ownerID).
+				Updates(map[string]interface{}{
+					"owner_type":        ownerType,
+					"owner_id":          ownerID,
+					"status":            model.AnalysisRuntimeStatusRunning,
+					"message":           message,
+					"started_at":        now,
+					"last_heartbeat_at": now,
+					"lease_expires_at":  expiresAt,
+				})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected > 0 {
+				return nil
+			}
+			return ErrAnalysisRuntimeBusy
+		})
 	})
 	if err != nil {
 		if errors.Is(err, ErrAnalysisRuntimeBusy) {
@@ -269,17 +300,25 @@ func (s *analysisRuntimeService) Heartbeat(resourceKey, ownerType, ownerID strin
 
 	now := time.Now().UTC()
 	expiresAt := now.Add(s.leaseTTL)
-	result := s.db.Model(&model.AnalysisRuntimeLease{}).
-		Where("resource_key = ? AND owner_type = ? AND owner_id = ? AND status = ? AND lease_expires_at >= ?",
-			resourceKey, ownerType, ownerID, model.AnalysisRuntimeStatusRunning, now).
-		Updates(map[string]interface{}{
-			"last_heartbeat_at": now,
-			"lease_expires_at":  expiresAt,
-		})
-	if result.Error != nil {
-		return nil, result.Error
+	var rowsAffected int64
+	err := s.executeWrite(func() error {
+		result := s.db.Model(&model.AnalysisRuntimeLease{}).
+			Where("resource_key = ? AND owner_type = ? AND owner_id = ? AND status = ? AND lease_expires_at >= ?",
+				resourceKey, ownerType, ownerID, model.AnalysisRuntimeStatusRunning, now).
+			Updates(map[string]interface{}{
+				"last_heartbeat_at": now,
+				"lease_expires_at":  expiresAt,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		rowsAffected = result.RowsAffected
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	if result.RowsAffected == 0 {
+	if rowsAffected == 0 {
 		return nil, ErrAnalysisRuntimeOwnedByOther
 	}
 
@@ -296,22 +335,30 @@ func (s *analysisRuntimeService) Release(resourceKey, ownerType, ownerID string)
 		return fmt.Errorf("resource key, owner type and owner id are required")
 	}
 
-	result := s.db.Model(&model.AnalysisRuntimeLease{}).
-		Where("resource_key = ? AND owner_type = ? AND owner_id = ?",
-			resourceKey, ownerType, ownerID).
-		Updates(map[string]interface{}{
-			"owner_type":        model.AnalysisRuntimeStatusIdle,
-			"owner_id":          "",
-			"status":            model.AnalysisRuntimeStatusIdle,
-			"message":           "",
-			"started_at":        nil,
-			"last_heartbeat_at": nil,
-			"lease_expires_at":  nil,
-		})
-	if result.Error != nil {
-		return result.Error
+	var rowsAffected int64
+	err := s.executeWrite(func() error {
+		result := s.db.Model(&model.AnalysisRuntimeLease{}).
+			Where("resource_key = ? AND owner_type = ? AND owner_id = ?",
+				resourceKey, ownerType, ownerID).
+			Updates(map[string]interface{}{
+				"owner_type":        model.AnalysisRuntimeStatusIdle,
+				"owner_id":          "",
+				"status":            model.AnalysisRuntimeStatusIdle,
+				"message":           "",
+				"started_at":        nil,
+				"last_heartbeat_at": nil,
+				"lease_expires_at":  nil,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		rowsAffected = result.RowsAffected
+		return nil
+	})
+	if err != nil {
+		return err
 	}
-	if result.RowsAffected == 0 {
+	if rowsAffected == 0 {
 		return ErrAnalysisRuntimeOwnedByOther
 	}
 	return nil

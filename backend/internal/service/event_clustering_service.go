@@ -10,6 +10,7 @@ import (
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
+	"github.com/davidhoo/relive/pkg/database"
 	"github.com/davidhoo/relive/pkg/logger"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -30,6 +31,7 @@ type eventClusteringService struct {
 	eventRepo    repository.EventRepository
 	photoTagRepo repository.PhotoTagRepository
 	config       model.EventClusteringConfig
+	writeQueue   *database.WriteQueue
 
 	activeTask *clusteringRuntime
 	taskMutex  sync.RWMutex
@@ -63,7 +65,16 @@ func NewEventClusteringService(db *gorm.DB, photoRepo repository.PhotoRepository
 		eventRepo:    eventRepo,
 		photoTagRepo: photoTagRepo,
 		config:       model.DefaultEventClusteringConfig(),
+		writeQueue:   database.GetWriteQueue(),
 	}
+}
+
+// executeWrite runs fn through WriteQueue if available, otherwise directly.
+func (s *eventClusteringService) executeWrite(fn func() error) error {
+	if s.writeQueue != nil {
+		return s.executeWrite(fn)
+	}
+	return fn()
 }
 
 // StartClustering 启动增量聚类任务
@@ -197,11 +208,16 @@ func (s *eventClusteringService) runRebuild(ctx context.Context, runtime *cluste
 	setPhase("discovering")
 	logger.Infof("[EventClustering] Rebuild: clearing all events and photo event_ids")
 
-	if err := s.eventRepo.DeleteAll(); err != nil {
-		return fmt.Errorf("delete all events: %w", err)
-	}
-	if err := s.db.Model(&model.Photo{}).Where("event_id IS NOT NULL").Update("event_id", nil).Error; err != nil {
-		return fmt.Errorf("clear photo event_ids: %w", err)
+	if err := s.executeWrite(func() error {
+		if err := s.eventRepo.DeleteAll(); err != nil {
+			return fmt.Errorf("delete all events: %w", err)
+		}
+		if err := s.db.Model(&model.Photo{}).Where("event_id IS NOT NULL").Update("event_id", nil).Error; err != nil {
+			return fmt.Errorf("clear photo event_ids: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	// 2. 查询所有有 taken_at 且 active 的照片
@@ -264,7 +280,9 @@ func (s *eventClusteringService) runRebuild(ctx context.Context, runtime *cluste
 		for i, p := range cluster.photos {
 			photoIDs[i] = p.ID
 		}
-		if err := s.db.Model(&model.Photo{}).Where("id IN ?", photoIDs).Update("event_id", event.ID).Error; err != nil {
+		if err := s.executeWrite(func() error {
+			return s.db.Model(&model.Photo{}).Where("id IN ?", photoIDs).Update("event_id", event.ID).Error
+		}); err != nil {
 			logger.Warnf("[EventClustering] Failed to update photo event_ids: %v", err)
 		}
 
@@ -347,7 +365,9 @@ func (s *eventClusteringService) runIncremental(ctx context.Context, runtime *cl
 			bestEvent := s.findBestMatchingEvent(cluster, existingEvents)
 			if bestEvent != nil {
 				// 更新照片的 event_id
-				if err := s.db.Model(&model.Photo{}).Where("id IN ?", photoIDs).Update("event_id", bestEvent.ID).Error; err != nil {
+				if err := s.executeWrite(func() error {
+					return s.db.Model(&model.Photo{}).Where("id IN ?", photoIDs).Update("event_id", bestEvent.ID).Error
+				}); err != nil {
 					logger.Warnf("[EventClustering] Failed to update photo event_ids: %v", err)
 					continue
 				}
@@ -383,7 +403,9 @@ func (s *eventClusteringService) runIncremental(ctx context.Context, runtime *cl
 			continue
 		}
 
-		if err := s.db.Model(&model.Photo{}).Where("id IN ?", photoIDs).Update("event_id", event.ID).Error; err != nil {
+		if err := s.executeWrite(func() error {
+			return s.db.Model(&model.Photo{}).Where("id IN ?", photoIDs).Update("event_id", event.ID).Error
+		}); err != nil {
 			logger.Warnf("[EventClustering] Failed to update photo event_ids: %v", err)
 		}
 
@@ -465,7 +487,10 @@ func (s *eventClusteringService) createEventFromCluster(cluster photoCluster) (*
 	// 画像
 	s.profileEvent(event, photos)
 
-	if err := s.eventRepo.Create(event); err != nil {
+	err := s.executeWrite(func() error {
+		return s.eventRepo.Create(event)
+	})
+	if err != nil {
 		return nil, err
 	}
 	return event, nil
@@ -566,7 +591,9 @@ func (s *eventClusteringService) reprofileEvent(eventID uint) error {
 	// 重新画像
 	s.profileEvent(event, photos)
 
-	return s.eventRepo.Update(event)
+	return s.executeWrite(func() error {
+		return s.eventRepo.Update(event)
+	})
 }
 
 // findBestMatchingEvent 在已有事件中找到最佳匹配（时间重叠最大的）

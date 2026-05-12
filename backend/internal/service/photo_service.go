@@ -13,6 +13,7 @@ import (
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/internal/util"
 	"github.com/davidhoo/relive/pkg/config"
+	"github.com/davidhoo/relive/pkg/database"
 	"github.com/davidhoo/relive/pkg/logger"
 )
 
@@ -92,6 +93,7 @@ type photoService struct {
 	geocodeTaskService     GeocodeTaskService
 	peopleService          PeopleService
 	eventClusteringService EventClusteringService
+	writeQueue             *database.WriteQueue
 	processPhotoFunc       func(string, os.FileInfo) (*model.Photo, error)
 	activeJob              *activeScanJob
 	taskMutex              sync.RWMutex
@@ -123,6 +125,7 @@ func NewPhotoService(repo repository.PhotoRepository, photoTagRepo repository.Ph
 		thumbnailGenerator: thumbnailGenerator,
 		thumbnailService:   thumbnailService,
 		geocodeTaskService: geocodeTaskService,
+		writeQueue:         database.GetWriteQueue(),
 	}
 	service.processPhotoFunc = service.processPhoto
 
@@ -133,6 +136,14 @@ func NewPhotoService(repo repository.PhotoRepository, photoTagRepo repository.Ph
 	}
 
 	return service
+}
+
+// executeWrite runs fn through WriteQueue if available, otherwise directly.
+func (s *photoService) executeWrite(fn func() error) error {
+	if s.writeQueue != nil {
+		return s.writeQueue.Execute(fn)
+	}
+	return fn()
 }
 
 // GetPhotoByID 根据 ID 获取照片
@@ -536,7 +547,9 @@ func (s *photoService) GeocodePhotoIfNeeded(photo *model.Photo) error {
 		POI:      location.POI,
 	}
 	go func() {
-		if err := s.repo.UpdateLocationFull(photo.ID, loc); err != nil {
+		if err := s.executeWrite(func() error {
+			return s.repo.UpdateLocationFull(photo.ID, loc)
+		}); err != nil {
 			logger.Errorf("Failed to update location for photo %d: %v", photo.ID, err)
 		} else {
 			logger.Debugf("Location saved to database for photo %d: %s", photo.ID, loc.Location)
