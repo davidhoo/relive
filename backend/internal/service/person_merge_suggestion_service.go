@@ -10,6 +10,7 @@ import (
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/pkg/config"
+	"github.com/davidhoo/relive/pkg/database"
 	"gorm.io/gorm"
 )
 
@@ -52,6 +53,7 @@ type personMergeSuggestionService struct {
 	mergeSuggestionRepo repository.PersonMergeSuggestionRepository
 	configService       ConfigService
 	config              *config.Config
+	writeQueue          *database.WriteQueue
 
 	mu             sync.RWMutex
 	task           *model.PersonMergeSuggestionTask
@@ -109,6 +111,7 @@ func NewPersonMergeSuggestionService(
 		mergeSuggestionRepo: mergeSuggestionRepo,
 		configService:       configService,
 		config:              cfg,
+		writeQueue:          database.GetWriteQueue(),
 		task: &model.PersonMergeSuggestionTask{
 			Status:         model.TaskStatusIdle,
 			CurrentMessage: "等待巡检",
@@ -132,6 +135,16 @@ func (s *personMergeSuggestionService) SetBackgroundDB(bgDB *gorm.DB) {
 	s.bgFaceRepo = repository.NewFaceRepository(bgDB)
 	s.bgCannotLinkRepo = repository.NewCannotLinkRepository(bgDB)
 	s.bgMergeSuggestionRepo = repository.NewPersonMergeSuggestionRepository(bgDB)
+}
+
+// executeWrite runs fn through WriteQueue if available, otherwise directly.
+// This serializes SQLite writes to prevent lock contention between background
+// merge-suggestion writes and foreground API writes.
+func (s *personMergeSuggestionService) executeWrite(fn func() error) error {
+	if s.writeQueue != nil {
+		return s.writeQueue.Execute(fn)
+	}
+	return fn()
 }
 
 // SetWriteGateHook injects the write gate acquire function from peopleService.
@@ -361,12 +374,18 @@ func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 	s.task.CurrentMessage = "保存合并建议"
 
 	processedPairs := 0
-	for _, target := range targets {
-		items := assignments[target.ID]
-		if err := bgMergeSuggestionRepo.ReplacePendingForTarget(target.ID, target.Category, items); err != nil {
-			return err
+	writeErr := s.executeWrite(func() error {
+		for _, target := range targets {
+			items := assignments[target.ID]
+			if err := bgMergeSuggestionRepo.ReplacePendingForTarget(target.ID, target.Category, items); err != nil {
+				return err
+			}
+			processedPairs += len(items)
 		}
-		processedPairs += len(items)
+		return nil
+	})
+	if writeErr != nil {
+		return writeErr
 	}
 
 	s.task.ProcessedPairs += int64(processedPairs)
@@ -388,16 +407,17 @@ func (s *personMergeSuggestionService) ExcludeCandidates(suggestionID uint, cand
 		return fmt.Errorf("merge suggestion %d not found", suggestionID)
 	}
 
-	for _, candidateID := range candidateIDs {
-		if candidateID == 0 {
-			continue
+	if err := s.executeWrite(func() error {
+		for _, candidateID := range candidateIDs {
+			if candidateID == 0 {
+				continue
+			}
+			if err := s.cannotLinkRepo.Create(suggestion.TargetPersonID, candidateID); err != nil {
+				return err
+			}
 		}
-		if err := s.cannotLinkRepo.Create(suggestion.TargetPersonID, candidateID); err != nil {
-			return err
-		}
-	}
-
-	if err := s.mergeSuggestionRepo.MarkItemsStatus(suggestionID, candidateIDs, model.PersonMergeSuggestionItemStatusExcluded); err != nil {
+		return s.mergeSuggestionRepo.MarkItemsStatus(suggestionID, candidateIDs, model.PersonMergeSuggestionItemStatusExcluded)
+	}); err != nil {
 		return err
 	}
 	return s.MarkDirty("exclude merge suggestion candidates")
@@ -423,11 +443,15 @@ func (s *personMergeSuggestionService) ApplySuggestion(suggestionID uint, candid
 		defer release()
 	}
 
-	affectedPhotoIDs, err := s.personRepo.MergeInto(suggestion.TargetPersonID, candidateIDs)
-	if err != nil {
-		return err
-	}
-	if err := s.mergeSuggestionRepo.MarkItemsStatus(suggestionID, candidateIDs, model.PersonMergeSuggestionItemStatusMerged); err != nil {
+	var affectedPhotoIDs []uint
+	if err := s.executeWrite(func() error {
+		var err error
+		affectedPhotoIDs, err = s.personRepo.MergeInto(suggestion.TargetPersonID, candidateIDs)
+		if err != nil {
+			return err
+		}
+		return s.mergeSuggestionRepo.MarkItemsStatus(suggestionID, candidateIDs, model.PersonMergeSuggestionItemStatusMerged)
+	}); err != nil {
 		return err
 	}
 

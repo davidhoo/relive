@@ -206,5 +206,5 @@ type PhotoSummary struct {
 	Width           int        `json:"width"`
 	Height          int        `json:"height"`
 	UpdatedAt       time.Time  `json:"updated_at"`
-	TagList         []string   `json:"tags"`
+	TagList         []string   `gorm:"-" json:"tags"`
 }
