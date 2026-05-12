@@ -17,6 +17,9 @@ import (
 // 全局数据库连接
 var globalDB *gorm.DB
 
+// globalWriteDB is a dedicated single-connection write database for SQLite serialized writes.
+var globalWriteDB *gorm.DB
+
 // FTS5Available indicates whether FTS5 full-text search is available
 var FTS5Available bool
 
@@ -74,6 +77,36 @@ func Init(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		sqlDB.SetMaxIdleConns(2)
 		sqlDB.SetConnMaxLifetime(time.Hour)
 
+		// 创建独立写连接（单连接，串行写入，避免 SQLite 写锁竞争）
+		writePath := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=60000&_synchronous=NORMAL&_cache_size=-64000&_temp_store=memory",
+			cfg.Path)
+		writeDB, wErr := gorm.Open(sqlite.Open(writePath), gormConfig)
+		if wErr != nil {
+			return nil, fmt.Errorf("open write connection: %w", wErr)
+		}
+		writeSQL, wErr := writeDB.DB()
+		if wErr != nil {
+			return nil, wErr
+		}
+		writeDB.Exec("PRAGMA foreign_keys=ON")
+		writeSQL.SetMaxOpenConns(1)
+		writeSQL.SetMaxIdleConns(1)
+		writeSQL.SetConnMaxLifetime(time.Hour)
+		globalWriteDB = writeDB
+
+		// 初始化 WriteQueue
+		wq := InitWriteQueue()
+		wq.SetBatchFlushFn(func(ops []WriteOp) error {
+			return writeDB.Transaction(func(tx *gorm.DB) error {
+				for _, op := range ops {
+					if err := op.Fn(); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
+		})
+
 	default:
 		return nil, fmt.Errorf("unsupported database type: %s", cfg.Type)
 	}
@@ -99,6 +132,11 @@ func Init(cfg config.DatabaseConfig) (*gorm.DB, error) {
 // GetDB returns the database connection
 func GetDB() *gorm.DB {
 	return globalDB
+}
+
+// GetWriteDB returns the dedicated write connection (single connection, serialized access)
+func GetWriteDB() *gorm.DB {
+	return globalWriteDB
 }
 
 // NewBackgroundDB creates a second SQLite connection pool for background tasks.
