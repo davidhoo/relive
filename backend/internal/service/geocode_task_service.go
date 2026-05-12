@@ -9,6 +9,7 @@ import (
 	internalgeocode "github.com/davidhoo/relive/internal/geocode"
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
+	"github.com/davidhoo/relive/pkg/database"
 	"github.com/davidhoo/relive/pkg/logger"
 	"gorm.io/gorm"
 )
@@ -40,6 +41,7 @@ type geocodeTaskService struct {
 	photoRepo      repository.PhotoRepository
 	jobRepo        repository.GeocodeJobRepository
 	geocodeService GeocodeService
+	writeQueue     *database.WriteQueue
 
 	taskMutex       sync.RWMutex
 	task            *model.GeocodeTask
@@ -56,7 +58,7 @@ type activeGeocodeTask struct {
 }
 
 func NewGeocodeTaskService(db *gorm.DB, photoRepo repository.PhotoRepository, jobRepo repository.GeocodeJobRepository, geocodeService GeocodeService) GeocodeTaskService {
-	return &geocodeTaskService{db: db, photoRepo: photoRepo, jobRepo: jobRepo, geocodeService: geocodeService}
+	return &geocodeTaskService{db: db, photoRepo: photoRepo, jobRepo: jobRepo, geocodeService: geocodeService, writeQueue: database.GetWriteQueue()}
 }
 
 func (s *geocodeTaskService) StartBackground() (*model.GeocodeTask, error) {
@@ -526,40 +528,24 @@ func (s *geocodeTaskService) runRegeocodeAll(active *activeGeocodeTask) {
 	s.appendBackgroundLog(fmt.Sprintf("全量重建完成：成功 %d，失败 %d，共 %d", updated, failed, total))
 }
 
-// updatePhotoWithRetry 带重试机制的 photo 更新
+// updatePhotoWithRetry uses WriteQueue to serialize DB writes
 func (s *geocodeTaskService) updatePhotoWithRetry(photoID uint, updates map[string]interface{}) error {
-	var lastErr error
-	for i := 0; i < 3; i++ {
-		err := s.photoRepo.UpdateFields(photoID, updates)
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-		if isSQLiteLockError(err) {
-			time.Sleep(time.Duration(i+1) * 50 * time.Millisecond)
-			continue
-		}
-		return err
+	if s.writeQueue == nil {
+		return s.photoRepo.UpdateFields(photoID, updates)
 	}
-	return lastErr
+	return s.writeQueue.Execute(func() error {
+		return s.photoRepo.UpdateFields(photoID, updates)
+	})
 }
 
-// updateJobWithRetry 带重试机制的 job 更新
+// updateJobWithRetry uses WriteQueue to serialize DB writes
 func (s *geocodeTaskService) updateJobWithRetry(jobID uint, updates map[string]interface{}) error {
-	var lastErr error
-	for i := 0; i < 3; i++ {
-		err := s.jobRepo.UpdateFields(jobID, updates)
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-		if isSQLiteLockError(err) {
-			time.Sleep(time.Duration(i+1) * 50 * time.Millisecond)
-			continue
-		}
-		return err
+	if s.writeQueue == nil {
+		return s.jobRepo.UpdateFields(jobID, updates)
 	}
-	return lastErr
+	return s.writeQueue.Execute(func() error {
+		return s.jobRepo.UpdateFields(jobID, updates)
+	})
 }
 
 func (s *geocodeTaskService) seedPendingJobs() error {
