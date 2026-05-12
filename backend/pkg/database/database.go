@@ -23,7 +23,10 @@ var globalWriteDB *gorm.DB
 // FTS5Available indicates whether FTS5 full-text search is available
 var FTS5Available bool
 
-// Init 初始化数据库
+// Init initializes the database with a three-tier connection architecture:
+//   - Main pool (4 connections): API read queries (SELECT)
+//   - WriteQueue (1 connection): all DB writes, serialized via globalWriteDB
+//   - Background pool (1 connection): merge suggestion reads (created separately via NewBackgroundDB)
 func Init(cfg config.DatabaseConfig) (*gorm.DB, error) {
 	var db *gorm.DB
 	var err error
@@ -71,13 +74,15 @@ func Init(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		// 启用外键约束（其他参数已在连接字符串中设置）
 		db.Exec("PRAGMA foreign_keys=ON")
 
-		// 设置连接池（WAL 模式下支持并发读，写仍是串行的）
-		// MaxOpenConns > 1 让读请求不被写事务阻塞
+		// Main read pool: serves API SELECT queries (4 connections for concurrency)
+		// WriteQueue handles all writes separately via globalWriteDB
+		// MaxOpenConns > 1 lets read requests proceed while writes are in progress
 		sqlDB.SetMaxOpenConns(4)
 		sqlDB.SetMaxIdleConns(2)
 		sqlDB.SetConnMaxLifetime(time.Hour)
 
-		// 创建独立写连接（单连接，串行写入，避免 SQLite 写锁竞争）
+		// WriteQueue write connection: single connection for serialized writes
+		// All DB writes go through WriteQueue → globalWriteDB, never through the main pool
 		writePath := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=60000&_synchronous=NORMAL&_cache_size=-64000&_temp_store=memory",
 			cfg.Path)
 		writeDB, wErr := gorm.Open(sqlite.Open(writePath), gormConfig)
@@ -139,9 +144,9 @@ func GetWriteDB() *gorm.DB {
 	return globalWriteDB
 }
 
-// NewBackgroundDB creates a second SQLite connection pool for background tasks.
-// It uses the same WAL-mode settings but a smaller pool (2 connections) so that
-// long-running background work does not starve the API connection pool.
+// NewBackgroundDB creates a dedicated SQLite connection pool for background read-only tasks
+// (e.g. personMergeSuggestionService). With all writes going through WriteQueue, this pool
+// only needs a single connection for heavy read operations (ANN index building, similarity search).
 func NewBackgroundDB(cfg config.DatabaseConfig) (*gorm.DB, error) {
 	if cfg.Type != "sqlite" {
 		return nil, fmt.Errorf("NewBackgroundDB: unsupported database type: %s", cfg.Type)
@@ -164,7 +169,7 @@ func NewBackgroundDB(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		return nil, err
 	}
 	db.Exec("PRAGMA foreign_keys=ON")
-	sqlDB.SetMaxOpenConns(2)
+	sqlDB.SetMaxOpenConns(1)
 	sqlDB.SetMaxIdleConns(1)
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
