@@ -182,7 +182,9 @@ func (s *photoService) CleanupNonExistentPhotos() (*model.CleanupPhotosResponse,
 		totalCount += len(photos)
 		for _, photo := range photos {
 			if _, err := os.Stat(photo.FilePath); os.IsNotExist(err) {
-				if err := s.repo.Delete(photo.ID); err != nil {
+				if err := s.executeWrite(func() error {
+					return s.repo.Delete(photo.ID)
+				}); err != nil {
 					logger.Errorf("Soft delete photo failed: id=%d, path=%s, error=%v", photo.ID, photo.FilePath, err)
 					continue
 				}
@@ -232,11 +234,13 @@ func (s *photoService) StopScanTask(id string) (*model.ScanTask, error) {
 
 	now := time.Now()
 	active.setTerminal(model.ScanJobStatusStopped, "task stopped by user")
-	if err := s.scanJobRepo.UpdateFields(active.id, map[string]interface{}{
-		"status":            model.ScanJobStatusStopping,
-		"phase":             model.ScanJobPhaseStopping,
-		"stop_requested_at": &now,
-		"last_heartbeat_at": &now,
+	if err := s.executeWrite(func() error {
+		return s.scanJobRepo.UpdateFields(active.id, map[string]interface{}{
+			"status":            model.ScanJobStatusStopping,
+			"phase":             model.ScanJobPhaseStopping,
+			"stop_requested_at": &now,
+			"last_heartbeat_at": &now,
+		})
 	}); err != nil {
 		return nil, err
 	}
@@ -269,17 +273,21 @@ func (s *photoService) HandleShutdown() error {
 		if s.scanJobRepo == nil {
 			return nil
 		}
-		return s.scanJobRepo.InterruptNonTerminal("task interrupted by service shutdown")
+		return s.executeWrite(func() error {
+			return s.scanJobRepo.InterruptNonTerminal("task interrupted by service shutdown")
+		})
 	}
 
 	now := time.Now()
 	active.setTerminal(model.ScanJobStatusInterrupted, "task interrupted by service shutdown")
-	if err := s.scanJobRepo.UpdateFields(active.id, map[string]interface{}{
-		"status":            model.ScanJobStatusInterrupted,
-		"phase":             model.ScanJobPhaseStopping,
-		"error_message":     "task interrupted by service shutdown",
-		"completed_at":      &now,
-		"last_heartbeat_at": &now,
+	if err := s.executeWrite(func() error {
+		return s.scanJobRepo.UpdateFields(active.id, map[string]interface{}{
+			"status":            model.ScanJobStatusInterrupted,
+			"phase":             model.ScanJobPhaseStopping,
+			"error_message":     "task interrupted by service shutdown",
+			"completed_at":      &now,
+			"last_heartbeat_at": &now,
+		})
 	}); err != nil {
 		return err
 	}
@@ -309,7 +317,9 @@ func (s *photoService) startScanJob(path string, taskType string, rebuild bool) 
 		StartedAt:       now,
 		LastHeartbeatAt: &now,
 	}
-	if err := s.scanJobRepo.Create(job); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.scanJobRepo.Create(job)
+	}); err != nil {
 		s.taskMutex.Unlock()
 		return nil, fmt.Errorf("create scan job: %w", err)
 	}
@@ -340,10 +350,12 @@ func (s *photoService) runScanTask(runtime *activeScanJob, path string, rebuild 
 	}()
 
 	now := time.Now()
-	if err := s.scanJobRepo.UpdateFields(runtime.id, map[string]interface{}{
-		"status":            model.ScanJobStatusRunning,
-		"phase":             model.ScanJobPhaseDiscovering,
-		"last_heartbeat_at": &now,
+	if err := s.executeWrite(func() error {
+		return s.scanJobRepo.UpdateFields(runtime.id, map[string]interface{}{
+			"status":            model.ScanJobStatusRunning,
+			"phase":             model.ScanJobPhaseDiscovering,
+			"last_heartbeat_at": &now,
+		})
 	}); err != nil {
 		logger.Errorf("[Task %s] Update start status failed: %v", runtime.id, err)
 		return
@@ -449,7 +461,9 @@ func (s *photoService) runScanTask(runtime *activeScanJob, path string, rebuild 
 			if ok {
 				continue
 			}
-			if err := s.repo.Delete(existing.ID); err != nil {
+			if err := s.executeWrite(func() error {
+					return s.repo.Delete(existing.ID)
+				}); err != nil {
 				logger.Warnf("[Task %s] Delete missing photo failed: %v", runtime.id, err)
 				continue
 			}
@@ -545,7 +559,9 @@ func (s *photoService) processScanFile(ctx context.Context, jobID string, task s
 
 	existing = existingByPath[photo.FilePath]
 	if existing == nil {
-		if err := s.repo.Create(photo); err != nil {
+		if err := s.executeWrite(func() error {
+			return s.repo.Create(photo)
+		}); err != nil {
 			logger.Errorf("[Task %s] Create photo failed: %v", jobID, err)
 			progress.incrementSkipped(1)
 		} else {
@@ -560,7 +576,9 @@ func (s *photoService) processScanFile(ctx context.Context, jobID string, task s
 
 	if rebuild {
 		photo.ID = existing.ID
-		if err := s.repo.UpdateFields(photo.ID, s.scanUpdateFields(photo)); err != nil {
+		if err := s.executeWrite(func() error {
+			return s.repo.UpdateFields(photo.ID, s.scanUpdateFields(photo))
+		}); err != nil {
 			logger.Errorf("[Task %s] Update photo failed: %v", jobID, err)
 			progress.incrementSkipped(1)
 		} else {
@@ -575,7 +593,9 @@ func (s *photoService) processScanFile(ctx context.Context, jobID string, task s
 
 	if existing.FileHash != photo.FileHash {
 		photo.ID = existing.ID
-		if err := s.repo.UpdateFields(photo.ID, s.scanUpdateFields(photo)); err != nil {
+		if err := s.executeWrite(func() error {
+			return s.repo.UpdateFields(photo.ID, s.scanUpdateFields(photo))
+		}); err != nil {
 			logger.Errorf("[Task %s] Update photo failed: %v", jobID, err)
 			progress.incrementSkipped(1)
 		} else {
@@ -697,7 +717,9 @@ func (s *photoService) flushScanProgress(jobID string, progress *scanProgress, f
 	}
 	now := time.Now()
 	fields["last_heartbeat_at"] = &now
-	if err := s.scanJobRepo.UpdateFields(jobID, fields); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.scanJobRepo.UpdateFields(jobID, fields)
+	}); err != nil {
 		logger.Warnf("[Task %s] Flush scan progress failed: %v", jobID, err)
 	}
 }
@@ -721,7 +743,9 @@ func (s *photoService) finishScanTask(runtime *activeScanJob, progress *scanProg
 	if status == model.ScanJobStatusStopped {
 		fields["stop_requested_at"] = completedAt
 	}
-	if err := s.scanJobRepo.UpdateFields(runtime.id, fields); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.scanJobRepo.UpdateFields(runtime.id, fields)
+	}); err != nil {
 		logger.Warnf("[Task %s] Finalize scan task failed: %v", runtime.id, err)
 	}
 }

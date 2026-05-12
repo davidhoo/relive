@@ -128,16 +128,19 @@ func (s *geocodeTaskService) GetTaskStatus() *model.GeocodeTask {
 
 func (s *geocodeTaskService) RepairLegacyStatus() (int64, error) {
 	now := time.Now()
-	result := s.db.Model(&model.Photo{}).
-		Where("status = ?", model.PhotoStatusActive).
-		Where("location != '' AND (geocode_status IS NULL OR geocode_status = '' OR geocode_status = 'none')").
-		Updates(map[string]interface{}{
-			"geocode_status":   model.GeocodeStatusReady,
-			"geocode_provider": gorm.Expr("COALESCE(NULLIF(geocode_provider, ''), ?)", "legacy"),
-			"geocoded_at":      gorm.Expr("COALESCE(geocoded_at, updated_at, created_at, ?)", now),
-		})
-	if result.Error != nil {
-		return 0, result.Error
+	var result *gorm.DB
+	if err := s.executeWrite(func() error {
+		result = s.db.Model(&model.Photo{}).
+			Where("status = ?", model.PhotoStatusActive).
+			Where("location != '' AND (geocode_status IS NULL OR geocode_status = '' OR geocode_status = 'none')").
+			Updates(map[string]interface{}{
+				"geocode_status":   model.GeocodeStatusReady,
+				"geocode_provider": gorm.Expr("COALESCE(NULLIF(geocode_provider, ''), ?)", "legacy"),
+				"geocoded_at":      gorm.Expr("COALESCE(geocoded_at, updated_at, created_at, ?)", now),
+			})
+		return result.Error
+	}); err != nil {
+		return 0, err
 	}
 	s.appendBackgroundLog(fmt.Sprintf("历史 GPS 状态修复完成，回填 %d 张照片", result.RowsAffected))
 	return result.RowsAffected, nil
@@ -185,20 +188,28 @@ func (s *geocodeTaskService) EnqueuePhotoByID(photoID uint, source string, prior
 	if priority <= 0 {
 		priority = geocodePriorityPassive
 	}
-	s.photoRepo.UpdateFields(photoID, map[string]interface{}{
-		"geocode_status": model.GeocodeStatusPending,
-		"geocoded_at":    nil,
-	})
+	if err := s.executeWrite(func() error {
+		return s.photoRepo.UpdateFields(photoID, map[string]interface{}{
+			"geocode_status": model.GeocodeStatusPending,
+			"geocoded_at":    nil,
+		})
+	}); err != nil {
+		return err
+	}
 	activeJob, err := s.jobRepo.GetActiveByPhotoID(photoID)
 	if err != nil {
 		return err
 	}
 	now := time.Now()
 	if activeJob != nil {
-		return s.jobRepo.UpdateFields(activeJob.ID, map[string]interface{}{"priority": priority, "source": source, "last_requested_at": &now, "status": model.GeocodeJobStatusQueued})
+		return s.executeWrite(func() error {
+			return s.jobRepo.UpdateFields(activeJob.ID, map[string]interface{}{"priority": priority, "source": source, "last_requested_at": &now, "status": model.GeocodeJobStatusQueued})
+		})
 	}
 	job := &model.GeocodeJob{PhotoID: photoID, Status: model.GeocodeJobStatusQueued, Priority: priority, Source: source, QueuedAt: now, LastRequestedAt: &now}
-	return s.jobRepo.Create(job)
+	return s.executeWrite(func() error {
+		return s.jobRepo.Create(job)
+	})
 }
 
 func (s *geocodeTaskService) EnqueueByPath(path string, source string, priority int) (int, error) {
@@ -242,8 +253,10 @@ func (s *geocodeTaskService) GeocodePhoto(photoID uint) error {
 	loc, err := s.geocodeService.ReverseGeocode(*photo.GPSLatitude, *photo.GPSLongitude)
 	now := time.Now()
 	if err != nil {
-		_ = s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
-			"geocode_status": model.GeocodeStatusFailed,
+		_ = s.executeWrite(func() error {
+			return s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
+				"geocode_status": model.GeocodeStatusFailed,
+			})
 		})
 		return fmt.Errorf("GPS 解析失败: %w", err)
 	}
@@ -258,7 +271,9 @@ func (s *geocodeTaskService) GeocodePhoto(photoID uint) error {
 	updates["geocode_provider"] = provider
 	updates["geocoded_at"] = &now
 
-	return s.photoRepo.UpdateFields(photo.ID, updates)
+	return s.executeWrite(func() error {
+		return s.photoRepo.UpdateFields(photo.ID, updates)
+	})
 }
 
 // SetManualLocation 手动设置照片 GPS 坐标并反向解析位置
@@ -292,7 +307,9 @@ func (s *geocodeTaskService) SetManualLocation(photoID uint, lat, lon float64) (
 	updates["geocode_provider"] = "manual"
 	updates["geocoded_at"] = &now
 
-	if err := s.photoRepo.UpdateFields(photoID, updates); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.photoRepo.UpdateFields(photoID, updates)
+	}); err != nil {
 		return "", fmt.Errorf("update photo location failed: %w", err)
 	}
 
@@ -325,15 +342,19 @@ func (s *geocodeTaskService) enqueuePhotoModel(photo *model.Photo, source string
 	}
 	if !force && strings.TrimSpace(photo.Location) != "" && (photo.GeocodeStatus == model.GeocodeStatusReady || photo.GeocodeStatus == "" || photo.GeocodeStatus == model.GeocodeStatusNone) {
 		now := time.Now()
-		return s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
-			"geocode_status": model.GeocodeStatusReady,
-			"geocoded_at":    gorm.Expr("COALESCE(geocoded_at, ?)", &now),
+		return s.executeWrite(func() error {
+			return s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
+				"geocode_status": model.GeocodeStatusReady,
+				"geocoded_at":    gorm.Expr("COALESCE(geocoded_at, ?)", &now),
+			})
 		})
 	}
 	now := time.Now()
-	if err := s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
-		"geocode_status": model.GeocodeStatusPending,
-		"geocoded_at":    nil,
+	if err := s.executeWrite(func() error {
+		return s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
+			"geocode_status": model.GeocodeStatusPending,
+			"geocoded_at":    nil,
+		})
 	}); err != nil {
 		return err
 	}
@@ -342,10 +363,14 @@ func (s *geocodeTaskService) enqueuePhotoModel(photo *model.Photo, source string
 		return err
 	}
 	if activeJob != nil {
-		return s.jobRepo.UpdateFields(activeJob.ID, map[string]interface{}{"priority": priority, "source": source, "last_requested_at": &now, "status": model.GeocodeJobStatusQueued})
+		return s.executeWrite(func() error {
+			return s.jobRepo.UpdateFields(activeJob.ID, map[string]interface{}{"priority": priority, "source": source, "last_requested_at": &now, "status": model.GeocodeJobStatusQueued})
+		})
 	}
 	job := &model.GeocodeJob{PhotoID: photo.ID, Status: model.GeocodeJobStatusQueued, Priority: priority, Source: source, QueuedAt: now, LastRequestedAt: &now}
-	return s.jobRepo.Create(job)
+	return s.executeWrite(func() error {
+		return s.jobRepo.Create(job)
+	})
 }
 
 func (s *geocodeTaskService) runBackground(active *activeGeocodeTask) {
@@ -536,6 +561,14 @@ func (s *geocodeTaskService) updatePhotoWithRetry(photoID uint, updates map[stri
 	return s.writeQueue.Execute(func() error {
 		return s.photoRepo.UpdateFields(photoID, updates)
 	})
+}
+
+// executeWrite runs fn through WriteQueue if available, otherwise directly.
+func (s *geocodeTaskService) executeWrite(fn func() error) error {
+	if s.writeQueue != nil {
+		return s.writeQueue.Execute(fn)
+	}
+	return fn()
 }
 
 // updateJobWithRetry uses WriteQueue to serialize DB writes

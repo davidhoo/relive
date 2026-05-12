@@ -5,6 +5,7 @@ import (
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
+	"github.com/davidhoo/relive/pkg/database"
 	"github.com/davidhoo/relive/pkg/logger"
 )
 
@@ -32,13 +33,21 @@ type ConfigService interface {
 // configService 配置服务实现
 type configService struct {
 	configRepo repository.ConfigRepository
+	writeQueue *database.WriteQueue
 }
 
-// NewConfigService 创建配置服务
 func NewConfigService(configRepo repository.ConfigRepository) ConfigService {
 	return &configService{
 		configRepo: configRepo,
+		writeQueue: database.GetWriteQueue(),
 	}
+}
+
+func (s *configService) executeWrite(fn func() error) error {
+	if s.writeQueue != nil {
+		return s.writeQueue.Execute(fn)
+	}
+	return fn()
 }
 
 // Get 获取配置
@@ -57,7 +66,9 @@ func (s *configService) Set(key, value string) error {
 		return err
 	}
 
-	if err := s.configRepo.Set(key, value); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.configRepo.Set(key, value)
+	}); err != nil {
 		return fmt.Errorf("set config: %w", err)
 	}
 
@@ -77,7 +88,9 @@ func (s *configService) Delete(key string) error {
 		return fmt.Errorf("config not found: %s", key)
 	}
 
-	if err := s.configRepo.Delete(key); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.configRepo.Delete(key)
+	}); err != nil {
 		return fmt.Errorf("delete config: %w", err)
 	}
 
@@ -113,7 +126,9 @@ func (s *configService) SetBatch(configs map[string]string) error {
 		}
 	}
 
-	if err := s.configRepo.SetBatch(configs); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.configRepo.SetBatch(configs)
+	}); err != nil {
 		return fmt.Errorf("set batch configs: %w", err)
 	}
 

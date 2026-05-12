@@ -10,6 +10,7 @@ import (
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/internal/util"
 	"github.com/davidhoo/relive/pkg/config"
+	"github.com/davidhoo/relive/pkg/database"
 	"github.com/davidhoo/relive/pkg/logger"
 )
 
@@ -42,16 +43,24 @@ type DeviceService interface {
 
 // deviceService 设备服务实现
 type deviceService struct {
-	repo   repository.DeviceRepository
-	config *config.Config
+	repo       repository.DeviceRepository
+	config     *config.Config
+	writeQueue *database.WriteQueue
 }
 
-// NewDeviceService 创建设备服务
 func NewDeviceService(repo repository.DeviceRepository, cfg *config.Config) DeviceService {
 	return &deviceService{
-		repo:   repo,
-		config: cfg,
+		repo:       repo,
+		config:     cfg,
+		writeQueue: database.GetWriteQueue(),
 	}
+}
+
+func (s *deviceService) executeWrite(fn func() error) error {
+	if s.writeQueue != nil {
+		return s.writeQueue.Execute(fn)
+	}
+	return fn()
 }
 
 // Create 创建设备（管理员操作）
@@ -92,7 +101,9 @@ func (s *deviceService) Create(req *model.CreateDeviceRequest) (*model.CreateDev
 		Online:        false,
 	}
 
-	if err := s.repo.Create(device); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.repo.Create(device)
+	}); err != nil {
 		return nil, fmt.Errorf("create device: %w", err)
 	}
 
@@ -112,12 +123,16 @@ func (s *deviceService) Create(req *model.CreateDeviceRequest) (*model.CreateDev
 
 // Delete 删除设备
 func (s *deviceService) Delete(id uint) error {
-	return s.repo.Delete(id)
+	return s.executeWrite(func() error {
+		return s.repo.Delete(id)
+	})
 }
 
 // Update 更新设备信息
 func (s *deviceService) Update(device *model.Device) error {
-	return s.repo.Update(device)
+	return s.executeWrite(func() error {
+		return s.repo.Update(device)
+	})
 }
 
 // UpdateEnabled 更新设备可用状态
@@ -128,7 +143,9 @@ func (s *deviceService) UpdateEnabled(id uint, enabled bool) error {
 	}
 
 	device.IsEnabled = enabled
-	if err := s.repo.Update(device); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.repo.Update(device)
+	}); err != nil {
 		return fmt.Errorf("update device enabled status: %w", err)
 	}
 
@@ -153,7 +170,9 @@ func (s *deviceService) UpdateRenderProfile(id uint, renderProfile string) error
 		}
 		device.RenderProfile = renderProfile
 	}
-	if err := s.repo.Update(device); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.repo.Update(device)
+	}); err != nil {
 		return fmt.Errorf("update render profile: %w", err)
 	}
 	logger.Infof("Device %s render profile updated to %s", device.DeviceID, device.RenderProfile)
@@ -235,7 +254,9 @@ func (s *deviceService) UpdateLastSeen(deviceID uint, ip string) {
 		device.IPAddress = ip
 	}
 
-	_ = s.repo.Update(device)
+	_ = s.executeWrite(func() error {
+		return s.repo.Update(device)
+	})
 }
 
 // generateDeviceID 生成设备 ID（8位随机字符串，便于显示和输入）

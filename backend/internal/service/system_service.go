@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
+	"github.com/davidhoo/relive/pkg/database"
 	"github.com/davidhoo/relive/pkg/logger"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -19,16 +20,24 @@ type SystemService interface {
 }
 
 type systemService struct {
-	db        *gorm.DB
-	startTime time.Time
+	db         *gorm.DB
+	startTime  time.Time
+	writeQueue *database.WriteQueue
 }
 
-// NewSystemService 创建系统服务
 func NewSystemService(db *gorm.DB) SystemService {
 	return &systemService{
-		db:        db,
-		startTime: time.Now(),
+		db:         db,
+		startTime:  time.Now(),
+		writeQueue: database.GetWriteQueue(),
 	}
+}
+
+func (s *systemService) executeWrite(fn func() error) error {
+	if s.writeQueue != nil {
+		return s.writeQueue.Execute(fn)
+	}
+	return fn()
 }
 
 // Ping 检查数据库连接
@@ -83,33 +92,34 @@ func (s *systemService) GetStats() (*model.SystemStatsResponse, time.Time, error
 	return &stats, s.startTime, nil
 }
 
-// ResetSystem 重置系统数据库状态
 func (s *systemService) ResetSystem() error {
-	return s.db.Transaction(func(tx *gorm.DB) error {
-		for _, table := range resettableNames() {
-			exists, err := tableExists(tx, table)
-			if err != nil {
-				return fmt.Errorf("check table %s exists: %w", table, err)
+	return s.executeWrite(func() error {
+		return s.db.Transaction(func(tx *gorm.DB) error {
+			for _, table := range resettableNames() {
+				exists, err := tableExists(tx, table)
+				if err != nil {
+					return fmt.Errorf("check table %s exists: %w", table, err)
+				}
+				if !exists {
+					continue
+				}
+
+				if err := tx.Exec(fmt.Sprintf("DELETE FROM %s", table)).Error; err != nil {
+					return fmt.Errorf("clear table %s: %w", table, err)
+				}
+				logger.Infof("Table %s cleared", table)
 			}
-			if !exists {
-				continue
+
+			if err := resetSQLiteSequences(tx); err != nil {
+				return err
 			}
 
-			if err := tx.Exec(fmt.Sprintf("DELETE FROM %s", table)).Error; err != nil {
-				return fmt.Errorf("clear table %s: %w", table, err)
+			if err := resetUserPasswordTx(tx); err != nil {
+				return err
 			}
-			logger.Infof("Table %s cleared", table)
-		}
 
-		if err := resetSQLiteSequences(tx); err != nil {
-			return err
-		}
-
-		if err := resetUserPasswordTx(tx); err != nil {
-			return err
-		}
-
-		return nil
+			return nil
+		})
 	})
 }
 

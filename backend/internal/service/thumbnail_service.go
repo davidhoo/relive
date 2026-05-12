@@ -193,10 +193,12 @@ func (s *thumbnailService) GeneratePhoto(photoID uint, force bool) error {
 		fullPath := filepath.Join(s.config.Photos.ThumbnailPath, thumbnailPath)
 		if _, err := os.Stat(fullPath); err == nil {
 			now := time.Now()
-			return s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
-				"thumbnail_path":         thumbnailPath,
-				"thumbnail_status":       model.ThumbnailStatusReady,
-				"thumbnail_generated_at": &now,
+			return s.executeWrite(func() error {
+				return s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
+					"thumbnail_path":         thumbnailPath,
+					"thumbnail_status":       model.ThumbnailStatusReady,
+					"thumbnail_generated_at": &now,
+				})
 			})
 		}
 	} else {
@@ -213,16 +215,20 @@ func (s *thumbnailService) GeneratePhoto(photoID uint, force bool) error {
 	relPath, err := s.generator.GenerateThumbnailWithRotation(photo.FilePath, photo.ManualRotation)
 	now := time.Now()
 	if err != nil {
-		_ = s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
-			"thumbnail_status": model.ThumbnailStatusFailed,
+		_ = s.executeWrite(func() error {
+			return s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
+				"thumbnail_status": model.ThumbnailStatusFailed,
+			})
 		})
 		return fmt.Errorf("生成缩略图失败: %w", err)
 	}
 
-	return s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
-		"thumbnail_path":         relPath,
-		"thumbnail_status":       model.ThumbnailStatusReady,
-		"thumbnail_generated_at": &now,
+	return s.executeWrite(func() error {
+		return s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
+			"thumbnail_path":         relPath,
+			"thumbnail_status":       model.ThumbnailStatusReady,
+			"thumbnail_generated_at": &now,
+		})
 	})
 }
 
@@ -249,10 +255,12 @@ func (s *thumbnailService) enqueuePhotoModel(photo *model.Photo, source string, 
 		if _, err := os.Stat(fullPath); err == nil {
 			// 文件已存在，更新数据库状态为 ready
 			generatedAt := time.Now()
-			updateErr := s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
-				"thumbnail_path":         thumbnailPath,
-				"thumbnail_status":       model.ThumbnailStatusReady,
-				"thumbnail_generated_at": &generatedAt,
+			updateErr := s.executeWrite(func() error {
+				return s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
+					"thumbnail_path":         thumbnailPath,
+					"thumbnail_status":       model.ThumbnailStatusReady,
+					"thumbnail_generated_at": &generatedAt,
+				})
 			})
 			if updateErr != nil {
 				logger.Warnf("Update photo %d thumbnail status to ready failed: %v", photo.ID, updateErr)
@@ -271,10 +279,12 @@ func (s *thumbnailService) enqueuePhotoModel(photo *model.Photo, source string, 
 	}
 
 	now := time.Now()
-	if err := s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
-		"thumbnail_path":         thumbnailPath,
-		"thumbnail_status":       model.ThumbnailStatusPending,
-		"thumbnail_generated_at": nil,
+	if err := s.executeWrite(func() error {
+		return s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
+			"thumbnail_path":         thumbnailPath,
+			"thumbnail_status":       model.ThumbnailStatusPending,
+			"thumbnail_generated_at": nil,
+		})
 	}); err != nil {
 		return err
 	}
@@ -292,7 +302,9 @@ func (s *thumbnailService) enqueuePhotoModel(photo *model.Photo, source string, 
 		if activeJob.Status == model.ThumbnailJobStatusPending {
 			updates["status"] = model.ThumbnailJobStatusQueued
 		}
-		return s.jobRepo.UpdateFields(activeJob.ID, updates)
+		return s.executeWrite(func() error {
+			return s.jobRepo.UpdateFields(activeJob.ID, updates)
+		})
 	}
 
 	job := &model.ThumbnailJob{
@@ -304,7 +316,9 @@ func (s *thumbnailService) enqueuePhotoModel(photo *model.Photo, source string, 
 		QueuedAt:        now,
 		LastRequestedAt: &now,
 	}
-	return s.jobRepo.Create(job)
+	return s.executeWrite(func() error {
+		return s.jobRepo.Create(job)
+	})
 }
 
 func (s *thumbnailService) runBackground(active *activeThumbnailTask) {
@@ -411,12 +425,16 @@ func (s *thumbnailService) processJob(job *model.ThumbnailJob) error {
 	photo, err := s.photoRepo.GetByID(job.PhotoID)
 	if err != nil {
 		now := time.Now()
-		_ = s.jobRepo.UpdateFields(job.ID, map[string]interface{}{"status": model.ThumbnailJobStatusFailed, "last_error": err.Error(), "completed_at": &now})
+		_ = s.executeWrite(func() error {
+			return s.jobRepo.UpdateFields(job.ID, map[string]interface{}{"status": model.ThumbnailJobStatusFailed, "last_error": err.Error(), "completed_at": &now})
+		})
 		return err
 	}
 	if photo.Status == model.PhotoStatusExcluded {
 		now := time.Now()
-		_ = s.jobRepo.UpdateFields(job.ID, map[string]interface{}{"status": model.ThumbnailJobStatusCancelled, "completed_at": &now})
+		_ = s.executeWrite(func() error {
+			return s.jobRepo.UpdateFields(job.ID, map[string]interface{}{"status": model.ThumbnailJobStatusCancelled, "completed_at": &now})
+		})
 		s.updateTaskProgress(func(task *model.ThumbnailTask) { task.ProcessedJobs++ })
 		return nil
 	}
@@ -460,6 +478,14 @@ func (s *thumbnailService) updatePhotoWithRetry(photoID uint, updates map[string
 	return s.writeQueue.Execute(func() error {
 		return s.photoRepo.UpdateFields(photoID, updates)
 	})
+}
+
+// executeWrite runs fn through WriteQueue if available, otherwise directly.
+func (s *thumbnailService) executeWrite(fn func() error) error {
+	if s.writeQueue != nil {
+		return s.writeQueue.Execute(fn)
+	}
+	return fn()
 }
 
 // updateJobWithRetry uses WriteQueue to serialize DB writes

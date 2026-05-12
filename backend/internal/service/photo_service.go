@@ -306,7 +306,9 @@ func (s *photoService) DeletePhotosByPathPrefix(pathPrefix string) (int64, error
 
 	count := int64(0)
 	for _, photo := range photos {
-		if err := s.repo.Delete(photo.ID); err != nil {
+		if err := s.executeWrite(func() error {
+			return s.repo.Delete(photo.ID)
+		}); err != nil {
 			logger.Warnf("Failed to delete photo %d: %v", photo.ID, err)
 			continue
 		}
@@ -369,17 +371,29 @@ func (s *photoService) CountByStatus() (*model.PhotoCountsResponse, error) {
 
 // BatchUpdateStatus 批量更新照片状态
 func (s *photoService) BatchUpdateStatus(req *model.BatchUpdateStatusRequest) (int64, error) {
-	return s.repo.BatchUpdateStatus(req.PhotoIDs, req.Status)
+	var count int64
+	if err := s.executeWrite(func() error {
+		var err error
+		count, err = s.repo.BatchUpdateStatus(req.PhotoIDs, req.Status)
+		return err
+	}); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 // UpdateCategory 更新照片分类
 func (s *photoService) UpdateCategory(id uint, category string) error {
-	return s.repo.UpdateCategory(id, category)
+	return s.executeWrite(func() error {
+		return s.repo.UpdateCategory(id, category)
+	})
 }
 
 // UpdateManualRotation 手动旋转并重新生成缩略图
 func (s *photoService) UpdateManualRotation(id uint, rotation int) error {
-	if err := s.repo.UpdateManualRotation(id, rotation); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.repo.UpdateManualRotation(id, rotation)
+	}); err != nil {
 		return err
 	}
 	logger.Infof("Photo %d manual_rotation updated to %d, regenerating thumbnail", id, rotation)
@@ -408,7 +422,9 @@ func (s *photoService) BatchRotate(req *model.BatchRotateRequest) (int64, error)
 		} else {
 			newRotation = (current + 270) % 360
 		}
-		if err := s.repo.UpdateManualRotation(id, newRotation); err != nil {
+		if err := s.executeWrite(func() error {
+			return s.repo.UpdateManualRotation(id, newRotation)
+		}); err != nil {
 			logger.Warnf("BatchRotate: failed to rotate photo %d: %v", id, err)
 			continue
 		}
@@ -605,7 +621,9 @@ func (s *photoService) RegeocodeAllPhotos() (int, error) {
 			Street:   location.Street,
 			POI:      location.POI,
 		}
-		if err := s.repo.UpdateLocationFull(photo.ID, loc); err != nil {
+		if err := s.executeWrite(func() error {
+			return s.repo.UpdateLocationFull(photo.ID, loc)
+		}); err != nil {
 			logger.Errorf("Failed to update location for photo %d: %v", photo.ID, err)
 			failed++
 			continue

@@ -535,7 +535,9 @@ func (s *displayService) updateEventDisplayCounts(photos []*model.Photo) {
 			continue
 		}
 		seen[eventID] = true
-		if err := s.eventRepo.IncrementDisplayCount(eventID); err != nil {
+		if err := s.executeWrite(func() error {
+			return s.eventRepo.IncrementDisplayCount(eventID)
+		}); err != nil {
 			logger.Warnf("Failed to increment display count for event %d: %v", eventID, err)
 		}
 	}
@@ -555,7 +557,9 @@ func (s *displayService) getOrCreateSystemDevice() (*model.Device, error) {
 		DeviceType: model.DeviceTypeService,
 		IsEnabled:  true,
 	}
-	if err := s.deviceRepo.Create(device); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.deviceRepo.Create(device)
+	}); err != nil {
 		return nil, err
 	}
 	return device, nil
@@ -569,11 +573,13 @@ func (s *displayService) recordBatchDisplayHistory(photos []*model.Photo, displa
 		return
 	}
 	for _, photo := range photos {
-		_ = s.displayRecordRepo.Create(&model.DisplayRecord{
-			PhotoID:     photo.ID,
-			DeviceID:    device.ID,
-			DisplayedAt: displayedAt,
-			TriggerType: model.TriggerTypeScheduled,
+		_ = s.executeWrite(func() error {
+			return s.displayRecordRepo.Create(&model.DisplayRecord{
+				PhotoID:     photo.ID,
+				DeviceID:    device.ID,
+				DisplayedAt: displayedAt,
+				TriggerType: model.TriggerTypeScheduled,
+			})
 		})
 	}
 }

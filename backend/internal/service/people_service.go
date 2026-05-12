@@ -488,20 +488,26 @@ func (s *peopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint)
 	s.writeGate.Lock()
 	defer s.writeGate.Unlock()
 
-	affectedPhotoIDs, err := s.personRepo.MergeInto(targetPersonID, sourcePersonIDs)
-	if err != nil {
-		return nil, err
-	}
-	// Clean up cannot-link constraints for merged (deleted) persons
-	for _, sourceID := range sourcePersonIDs {
-		if err := s.cannotLinkRepo.DeleteByPersonID(sourceID); err != nil {
-			logger.Warnf("failed to clean cannot-link for merged person %d: %v", sourceID, err)
+	var affectedPhotoIDs []uint
+	if err := s.executeWrite(func() error {
+		var err error
+		affectedPhotoIDs, err = s.personRepo.MergeInto(targetPersonID, sourcePersonIDs)
+		if err != nil {
+			return err
 		}
+		for _, sourceID := range sourcePersonIDs {
+			_ = s.cannotLinkRepo.DeleteByPersonID(sourceID)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	if err := s.syncPersonState(targetPersonID); err != nil {
 		return nil, err
 	}
-	if err := s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs)
+	}); err != nil {
 		return nil, err
 	}
 	s.markMergeSuggestionsDirty("merge_people")
@@ -551,7 +557,9 @@ func (s *peopleService) MergePeopleAsync(targetPersonID uint, sourcePersonIDs []
 		SourceIDs: string(sourceIDsJSON),
 	}
 
-	if err := s.mergeJobRepo.Create(job); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.mergeJobRepo.Create(job)
+	}); err != nil {
 		return 0, fmt.Errorf("failed to create merge job: %w", err)
 	}
 
@@ -587,7 +595,7 @@ func (s *peopleService) executeMergeJob(jobID uint) {
 	var sourcePersonIDs []uint
 	if err := json.Unmarshal([]byte(job.SourceIDs), &sourcePersonIDs); err != nil {
 		logger.Errorf("Failed to unmarshal source IDs for job %d: %v", jobID, err)
-		s.mergeJobRepo.Fail(jobID, fmt.Sprintf("invalid source IDs: %v", err))
+		_ = s.executeWrite(func() error { return s.mergeJobRepo.Fail(jobID, fmt.Sprintf("invalid source IDs: %v", err)) })
 		return
 	}
 
@@ -595,7 +603,7 @@ func (s *peopleService) executeMergeJob(jobID uint) {
 	result, err := s.MergePeople(job.TargetID, sourcePersonIDs)
 	if err != nil {
 		logger.Errorf("Merge job %d failed: %v", jobID, err)
-		s.mergeJobRepo.Fail(jobID, err.Error())
+		_ = s.executeWrite(func() error { return s.mergeJobRepo.Fail(jobID, err.Error()) })
 		return
 	}
 
@@ -605,7 +613,9 @@ func (s *peopleService) executeMergeJob(jobID uint) {
 		ReclusterResult:    result,
 	})
 
-	if err := s.mergeJobRepo.Complete(jobID, string(resultJSON)); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.mergeJobRepo.Complete(jobID, string(resultJSON))
+	}); err != nil {
 		logger.Errorf("Failed to complete merge job %d: %v", jobID, err)
 		return
 	}
@@ -653,10 +663,12 @@ func (s *peopleService) SplitPerson(faceIDs []uint) (*model.Person, *model.Reclu
 	}
 
 	newPerson := &model.Person{Category: sourcePerson.Category}
-	if err := s.personRepo.Create(newPerson); err != nil {
-		return nil, nil, err
-	}
-	if err := s.faceRepo.ReassignFaces(faceIDs, newPerson.ID, "split"); err != nil {
+	if err := s.executeWrite(func() error {
+		if err := s.personRepo.Create(newPerson); err != nil {
+			return err
+		}
+		return s.faceRepo.ReassignFaces(faceIDs, newPerson.ID, "split")
+	}); err != nil {
 		return nil, nil, err
 	}
 
@@ -666,13 +678,13 @@ func (s *peopleService) SplitPerson(faceIDs []uint) (*model.Person, *model.Reclu
 	if err := s.syncPersonState(newPerson.ID); err != nil {
 		return nil, nil, err
 	}
-	if err := s.photoRepo.RecomputeTopPersonCategory(facePhotoIDs(faces)); err != nil {
+	if err := s.executeWrite(func() error {
+		if err := s.photoRepo.RecomputeTopPersonCategory(facePhotoIDs(faces)); err != nil {
+			return err
+		}
+		return s.cannotLinkRepo.Create(sourcePersonID, newPerson.ID)
+	}); err != nil {
 		return nil, nil, err
-	}
-
-	// Record cannot-link: source person and new person must not be merged
-	if err := s.cannotLinkRepo.Create(sourcePersonID, newPerson.ID); err != nil {
-		logger.Warnf("failed to create cannot-link constraint: %v", err)
 	}
 
 	person, err := s.personRepo.GetByID(newPerson.ID)
@@ -703,7 +715,9 @@ func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) (*model.R
 		}
 	}
 
-	if err := s.faceRepo.ReassignFaces(faceIDs, targetPersonID, "move"); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.faceRepo.ReassignFaces(faceIDs, targetPersonID, "move")
+	}); err != nil {
 		return nil, err
 	}
 
@@ -716,7 +730,9 @@ func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) (*model.R
 		}
 	}
 
-	if err := s.photoRepo.RecomputeTopPersonCategory(facePhotoIDs(faces)); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.photoRepo.RecomputeTopPersonCategory(facePhotoIDs(faces))
+	}); err != nil {
 		return nil, err
 	}
 	s.markMergeSuggestionsDirty("move_faces")
@@ -725,14 +741,18 @@ func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) (*model.R
 }
 
 func (s *peopleService) UpdatePersonCategory(personID uint, category string) error {
-	if err := s.personRepo.UpdateFields(personID, map[string]interface{}{"category": category}); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.personRepo.UpdateFields(personID, map[string]interface{}{"category": category})
+	}); err != nil {
 		return err
 	}
 	faces, err := s.faceRepo.ListByPersonIDSummary(personID)
 	if err != nil {
 		return err
 	}
-	if err := s.photoRepo.RecomputeTopPersonCategory(facePhotoIDs(faces)); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.photoRepo.RecomputeTopPersonCategory(facePhotoIDs(faces))
+	}); err != nil {
 		return err
 	}
 	s.markMergeSuggestionsDirty("update_person_category")
@@ -740,7 +760,9 @@ func (s *peopleService) UpdatePersonCategory(personID uint, category string) err
 }
 
 func (s *peopleService) UpdatePersonName(personID uint, name string) error {
-	return s.personRepo.UpdateFields(personID, map[string]interface{}{"name": name})
+	return s.executeWrite(func() error {
+		return s.personRepo.UpdateFields(personID, map[string]interface{}{"name": name})
+	})
 }
 
 func (s *peopleService) UpdatePersonAvatar(personID uint, faceID uint) error {
@@ -802,7 +824,9 @@ func (s *peopleService) DissolvePerson(personID uint) (int, error) {
 		for pid := range photoIDs {
 			affectedPhotoIDs = append(affectedPhotoIDs, pid)
 		}
-		if err := s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs); err != nil {
+		if err := s.executeWrite(func() error {
+			return s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs)
+		}); err != nil {
 			logger.Warnf("recompute top person category after dissolve person %d: %v", personID, err)
 		}
 	}
@@ -857,7 +881,9 @@ func (s *peopleService) enqueuePhotoModel(photo *model.Photo, source string, pri
 		if force || activeJob.Status == model.PeopleJobStatusPending {
 			updates["status"] = model.PeopleJobStatusQueued
 		}
+		return s.executeWrite(func() error {
 		return s.jobRepo.UpdateFields(activeJob.ID, updates)
+	})
 	}
 
 	job := &model.PeopleJob{
@@ -869,7 +895,9 @@ func (s *peopleService) enqueuePhotoModel(photo *model.Photo, source string, pri
 		QueuedAt:        now,
 		LastRequestedAt: &now,
 	}
-	return s.jobRepo.Create(job)
+	return s.executeWrite(func() error {
+		return s.jobRepo.Create(job)
+	})
 }
 
 func (s *peopleService) runBackground(active *activePeopleTask) {
@@ -1029,7 +1057,9 @@ func (s *peopleService) processPendingFaces() (bool, error) {
 		}
 	}
 	if len(affectedPhotoIDs) > 0 {
-		if err := s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs); err != nil {
+		if err := s.executeWrite(func() error {
+			return s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs)
+		}); err != nil {
 			return false, err
 		}
 	}
@@ -1058,7 +1088,9 @@ func (s *peopleService) preflightCheck(job *model.PeopleJob) (*model.Photo, bool
 	}
 	if hasManualLockedFaces(existingFaces) {
 		s.appendBackgroundLog(fmt.Sprintf("照片 #%d 已有人工确认，跳过", photo.ID))
-		if err := s.photoRepo.RecomputeTopPersonCategory([]uint{photo.ID}); err != nil {
+		if err := s.executeWrite(func() error {
+		return s.photoRepo.RecomputeTopPersonCategory([]uint{photo.ID})
+	}); err != nil {
 			return nil, false, err
 		}
 		return nil, true, s.jobRepo.UpdateFields(job.ID, map[string]interface{}{
@@ -1254,7 +1286,9 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 	}
 
 	affectedPhotoIDs = append(affectedPhotoIDs, photo.ID)
-	if err := s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs)
+	}); err != nil {
 		return err
 	}
 
@@ -1508,7 +1542,9 @@ func (s *peopleService) AcquireWriteGate() func() {
 func (s *peopleService) PostMergeCleanup(targetPersonID uint, sourcePersonIDs []uint, affectedPhotoIDs []uint) {
 	// Clean up cannot-link constraints for merged (deleted) persons
 	for _, sourceID := range sourcePersonIDs {
-		if err := s.cannotLinkRepo.DeleteByPersonID(sourceID); err != nil {
+		if err := s.executeWrite(func() error {
+			return s.cannotLinkRepo.DeleteByPersonID(sourceID)
+		}); err != nil {
 			logger.Warnf("failed to clean cannot-link for merged person %d: %v", sourceID, err)
 		}
 	}
@@ -1518,7 +1554,9 @@ func (s *peopleService) PostMergeCleanup(targetPersonID uint, sourcePersonIDs []
 	}
 	// Recompute top_person_category on affected photos
 	if len(affectedPhotoIDs) > 0 {
-		if err := s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs); err != nil {
+		if err := s.executeWrite(func() error {
+			return s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs)
+		}); err != nil {
 			logger.Warnf("post-merge RecomputeTopPersonCategory failed: %v", err)
 		}
 	}
@@ -2011,13 +2049,15 @@ func (s *peopleService) markComponentPending(component []*model.Face, score floa
 
 	now := time.Now()
 	// 增加重试次数（用于退避策略）
-	if err := s.db.Model(&model.Face{}).Where("id IN ?", ids).Updates(map[string]interface{}{
-		"person_id":      nil,
-		"cluster_status": model.FaceClusterStatusPending,
-		"cluster_score":  score,
-		"clustered_at":   &now,
-		"retry_count":    gorm.Expr("retry_count + 1"),
-	}).Error; err != nil {
+	if err := s.executeWrite(func() error {
+		return s.db.Model(&model.Face{}).Where("id IN ?", ids).Updates(map[string]interface{}{
+			"person_id":      nil,
+			"cluster_status": model.FaceClusterStatusPending,
+			"cluster_score":  score,
+			"clustered_at":   &now,
+			"retry_count":    gorm.Expr("retry_count + 1"),
+		}).Error
+	}); err != nil {
 		return err
 	}
 
@@ -2185,13 +2225,15 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 					prevPersonIDs[*face.PersonID] = struct{}{}
 				}
 			}
-			if err := s.faceRepo.UpdateClusterFields(faceIDs(component), map[string]interface{}{
-				"person_id":      personID,
-				"cluster_status": model.FaceClusterStatusAssigned,
-				"cluster_score":  componentScore,
-				"clustered_at":   &now,
-				"retry_count":    0, // 聚类成功，重置重试次数
-			}); err != nil {
+				if err := s.executeWrite(func() error {
+					return s.faceRepo.UpdateClusterFields(faceIDs(component), map[string]interface{}{
+						"person_id":      personID,
+						"cluster_status": model.FaceClusterStatusAssigned,
+						"cluster_score":  score,
+						"clustered_at":   &now,
+						"retry_count":    0,
+					})
+				}); err != nil {
 				return nil, nil, err
 			}
 			for _, face := range component {
@@ -2293,7 +2335,9 @@ func (s *peopleService) triggerRecluster() model.ReclusterResult {
 		}
 
 		// Reset to pending for re-clustering
-		if err := s.faceRepo.ResetForRecluster(candidateIDs); err != nil {
+		if err := s.executeWrite(func() error {
+			return s.faceRepo.ResetForRecluster(candidateIDs)
+		}); err != nil {
 			logger.Warnf("recluster: failed to reset faces: %v", err)
 			break
 		}
@@ -2310,7 +2354,9 @@ func (s *peopleService) triggerRecluster() model.ReclusterResult {
 			_ = s.syncPersonState(pid)
 		}
 		if len(affectedPhotoIDs) > 0 {
-			_ = s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs)
+			_ = s.executeWrite(func() error {
+			return s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs)
+		})
 		}
 		// Also sync persons that lost faces
 		for _, oldPID := range prevAssign {
@@ -2374,11 +2420,15 @@ func (s *peopleService) syncPersonState(personID uint) error {
 		return err
 	}
 	if len(faces) == 0 {
+		return s.executeWrite(func() error {
 		_ = s.cannotLinkRepo.DeleteByPersonID(personID)
 		return s.personRepo.Delete(personID)
+	})
 	}
 
-	if err := s.personRepo.RefreshStats(personID); err != nil {
+	if err := s.executeWrite(func() error {
+		return s.personRepo.RefreshStats(personID)
+	}); err != nil {
 		return err
 	}
 
@@ -2408,7 +2458,9 @@ func (s *peopleService) syncPersonState(personID uint) error {
 	if !person.AvatarLocked {
 		updates["avatar_locked"] = false
 	}
-	return s.personRepo.UpdateFields(personID, updates)
+	return s.executeWrite(func() error {
+		return s.personRepo.UpdateFields(personID, updates)
+	})
 }
 
 func facePhotoIDs(faces []*model.Face) []uint {

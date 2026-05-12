@@ -241,7 +241,9 @@ func (s *displayService) getRandomPhoto(deviceIDStr string, cfg model.DisplayStr
 
 // RecordDisplay 记录展示
 func (s *displayService) RecordDisplay(record *model.DisplayRecord) error {
-	return s.displayRecordRepo.Create(record)
+	return s.executeWrite(func() error {
+		return s.displayRecordRepo.Create(record)
+	})
 }
 
 func (s *displayService) getOnThisDayPhotos(targetDate time.Time, excludePhotoIDs []uint, cfg model.DisplayStrategyConfig, limit int) ([]*model.Photo, error) {

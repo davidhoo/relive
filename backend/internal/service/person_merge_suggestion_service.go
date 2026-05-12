@@ -259,15 +259,17 @@ func (s *personMergeSuggestionService) Rebuild() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&model.PersonMergeSuggestion{}).
-			Where("status = ?", model.PersonMergeSuggestionStatusPending).
-			Update("status", model.PersonMergeSuggestionStatusObsolete).Error; err != nil {
-			return err
-		}
-		return tx.Model(&model.PersonMergeSuggestionItem{}).
-			Where("status = ?", model.PersonMergeSuggestionItemStatusPending).
-			Update("status", model.PersonMergeSuggestionItemStatusObsolete).Error
+	if err := s.executeWrite(func() error {
+		return s.db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Model(&model.PersonMergeSuggestion{}).
+				Where("status = ?", model.PersonMergeSuggestionStatusPending).
+				Update("status", model.PersonMergeSuggestionStatusObsolete).Error; err != nil {
+				return err
+			}
+			return tx.Model(&model.PersonMergeSuggestionItem{}).
+				Where("status = ?", model.PersonMergeSuggestionItemStatusPending).
+				Update("status", model.PersonMergeSuggestionItemStatusObsolete).Error
+		})
 	}); err != nil {
 		return err
 	}
@@ -795,7 +797,9 @@ func (s *personMergeSuggestionService) saveStateLocked() error {
 	if s.configService != nil {
 		return s.configService.Set(personMergeSuggestionStateKey, string(payload))
 	}
-	return upsertMergeSuggestionState(s.db, string(payload))
+	return s.executeWrite(func() error {
+		return upsertMergeSuggestionState(s.db, string(payload))
+	})
 }
 
 func (s *personMergeSuggestionService) finishSliceLocked(now time.Time, processedPairs int, message string) {
