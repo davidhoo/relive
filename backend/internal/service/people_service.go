@@ -15,6 +15,7 @@ import (
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/internal/util"
 	"github.com/davidhoo/relive/pkg/config"
+	"github.com/davidhoo/relive/pkg/database"
 	"github.com/davidhoo/relive/pkg/logger"
 	"github.com/viterin/vek/vek32"
 	"gorm.io/gorm"
@@ -106,8 +107,9 @@ type peopleService struct {
 	// writeGate serializes foreground mutations (merge/split/move) with background
 	// clustering writes. Foreground ops take Lock (exclusive); worker takes RLock (shared).
 	// This prevents SQLite "database is locked" when both paths write faces/people tables.
-	writeGate  sync.RWMutex
-	idleCount  int // consecutive idle loops, used for polling backoff
+	writeGate   sync.RWMutex
+	writeQueue  *database.WriteQueue // serializes SQLite write operations
+	idleCount   int // consecutive idle loops, used for polling backoff
 
 	feedbackMu            sync.Mutex
 	feedbackRunning       bool
@@ -176,6 +178,7 @@ func NewPeopleService(db *gorm.DB, photoRepo repository.PhotoRepository, faceRep
 		config:               cfg,
 		client:               client,
 		runtimeService:       runtimeService,
+		writeQueue:           database.GetWriteQueue(),
 		feedbackStopCh:       make(chan struct{}),
 		feedbackPollInterval: peopleFeedbackPollInterval,
 	}
@@ -422,32 +425,34 @@ func (s *peopleService) ResetAllPeople() (int, error) {
 	}
 
 	var count int
-	err := s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec("DELETE FROM faces").Error; err != nil {
-			return fmt.Errorf("delete faces: %w", err)
-		}
-		if err := tx.Exec("DELETE FROM people").Error; err != nil {
-			return fmt.Errorf("delete people: %w", err)
-		}
-		if err := tx.Exec("DELETE FROM people_jobs").Error; err != nil {
-			return fmt.Errorf("delete people_jobs: %w", err)
-		}
-		if err := tx.Exec("DELETE FROM cannot_link_constraints").Error; err != nil {
-			return fmt.Errorf("delete cannot_link_constraints: %w", err)
-		}
-		if err := tx.Model(&model.Photo{}).
-			Where("1 = 1").
-			Updates(map[string]interface{}{
-				"face_process_status": model.FaceProcessStatusNone,
-				"face_count":          0,
-				"top_person_category": "",
-			}).Error; err != nil {
-			return fmt.Errorf("reset photos: %w", err)
-		}
-		var affected int64
-		tx.Model(&model.Photo{}).Where("status != ?", model.PhotoStatusExcluded).Count(&affected)
-		count = int(affected)
-		return nil
+	err := s.writeQueue.Execute(func() error {
+		return s.db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Exec("DELETE FROM faces").Error; err != nil {
+				return fmt.Errorf("delete faces: %w", err)
+			}
+			if err := tx.Exec("DELETE FROM people").Error; err != nil {
+				return fmt.Errorf("delete people: %w", err)
+			}
+			if err := tx.Exec("DELETE FROM people_jobs").Error; err != nil {
+				return fmt.Errorf("delete people_jobs: %w", err)
+			}
+			if err := tx.Exec("DELETE FROM cannot_link_constraints").Error; err != nil {
+				return fmt.Errorf("delete cannot_link_constraints: %w", err)
+			}
+			if err := tx.Model(&model.Photo{}).
+				Where("1 = 1").
+				Updates(map[string]interface{}{
+					"face_process_status": model.FaceProcessStatusNone,
+					"face_count":          0,
+					"top_person_category": "",
+				}).Error; err != nil {
+				return fmt.Errorf("reset photos: %w", err)
+			}
+			var affected int64
+			tx.Model(&model.Photo{}).Where("status != ?", model.PhotoStatusExcluded).Count(&affected)
+			count = int(affected)
+			return nil
+		})
 	})
 	if err != nil {
 		return 0, err
@@ -1112,22 +1117,24 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 
 	if len(result.Faces) == 0 {
 		s.appendBackgroundLog(fmt.Sprintf("照片 #%d 无人脸", photo.ID))
-		if err := s.db.Transaction(func(tx *gorm.DB) error {
-			if err := tx.Where("photo_id = ?", photo.ID).Delete(&model.Face{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
-				"face_process_status": model.FaceProcessStatusNoFace,
-				"face_count":          0,
-				"top_person_category": "",
-			}).Error; err != nil {
-				return err
-			}
-			return tx.Model(&model.PeopleJob{}).Where("id = ?", job.ID).Updates(map[string]interface{}{
-				"status":       model.PeopleJobStatusCompleted,
-				"last_error":   "",
-				"completed_at": &now,
-			}).Error
+		if err := s.writeQueue.Execute(func() error {
+			return s.db.Transaction(func(tx *gorm.DB) error {
+				if err := tx.Where("photo_id = ?", photo.ID).Delete(&model.Face{}).Error; err != nil {
+					return err
+				}
+				if err := tx.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+					"face_process_status": model.FaceProcessStatusNoFace,
+					"face_count":          0,
+					"top_person_category": "",
+				}).Error; err != nil {
+					return err
+				}
+				return tx.Model(&model.PeopleJob{}).Where("id = ?", job.ID).Updates(map[string]interface{}{
+					"status":       model.PeopleJobStatusCompleted,
+					"last_error":   "",
+					"completed_at": &now,
+				}).Error
+			})
 		}); err != nil {
 			return err
 		}
@@ -1176,25 +1183,27 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 		createdFaces = append(createdFaces, face)
 	}
 
-	if err := s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("photo_id = ?", photo.ID).Delete(&model.Face{}).Error; err != nil {
-			return err
-		}
-
-		for _, face := range createdFaces {
-			if err := tx.Create(face).Error; err != nil {
+	if err := s.writeQueue.Execute(func() error {
+		return s.db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Where("photo_id = ?", photo.ID).Delete(&model.Face{}).Error; err != nil {
 				return err
 			}
-		}
 
-		if err := tx.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
-			"face_process_status": model.FaceProcessStatusReady,
-			"face_count":          len(createdFaces),
-			"top_person_category": "",
-		}).Error; err != nil {
-			return err
-		}
-		return nil
+			for _, face := range createdFaces {
+				if err := tx.Create(face).Error; err != nil {
+					return err
+				}
+			}
+
+			if err := tx.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+				"face_process_status": model.FaceProcessStatusReady,
+				"face_count":          len(createdFaces),
+				"top_person_category": "",
+			}).Error; err != nil {
+				return err
+			}
+			return nil
+		})
 	}); err != nil {
 		return err
 	}
@@ -2026,17 +2035,19 @@ func (s *peopleService) createPersonFromComponent(component []*model.Face, score
 
 	now := time.Now()
 	person := &model.Person{Category: model.PersonCategoryStranger}
-	if err := s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(person).Error; err != nil {
-			return err
-		}
-		return tx.Model(&model.Face{}).Where("id IN ?", ids).Updates(map[string]interface{}{
-			"person_id":      person.ID,
-			"cluster_status": model.FaceClusterStatusAssigned,
-			"cluster_score":  score,
-			"clustered_at":   &now,
-			"retry_count":    0, // 聚类成功，重置重试次数
-		}).Error
+	if err := s.writeQueue.Execute(func() error {
+		return s.db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Create(person).Error; err != nil {
+				return err
+			}
+			return tx.Model(&model.Face{}).Where("id IN ?", ids).Updates(map[string]interface{}{
+				"person_id":      person.ID,
+				"cluster_status": model.FaceClusterStatusAssigned,
+				"cluster_score":  score,
+				"clustered_at":   &now,
+				"retry_count":    0, // 聚类成功，重置重试次数
+			}).Error
+		})
 	}); err != nil {
 		return nil, err
 	}
