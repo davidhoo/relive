@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/davidhoo/relive/internal/repository"
+	"github.com/davidhoo/relive/pkg/database"
 	"github.com/davidhoo/relive/pkg/logger"
 )
 
@@ -17,6 +18,7 @@ type TaskScheduler struct {
 	mergeSuggestionService  PersonMergeSuggestionService
 	thumbnailJobRepo        repository.ThumbnailJobRepository
 	geocodeJobRepo          repository.GeocodeJobRepository
+	writeQueue              *database.WriteQueue
 	stopCh                  chan struct{}
 	wg                      sync.WaitGroup
 	running                 bool
@@ -39,6 +41,7 @@ func NewTaskScheduler(
 		mergeSuggestionService:  mergeSuggestionService,
 		thumbnailJobRepo:        thumbnailJobRepo,
 		geocodeJobRepo:          geocodeJobRepo,
+		writeQueue:              database.GetWriteQueue(),
 		stopCh:                  make(chan struct{}),
 	}
 }
@@ -124,7 +127,16 @@ func (s *TaskScheduler) cleanExpiredLocksTask() {
 
 // cleanExpiredLocks 执行清理过期锁
 func (s *TaskScheduler) cleanExpiredLocks() {
-	count, err := s.analysisService.CleanExpiredLocks()
+	var count int64
+	var err error
+	if s.writeQueue != nil {
+		err = s.writeQueue.Execute(func() error {
+			count, err = s.analysisService.CleanExpiredLocks()
+			return err
+		})
+	} else {
+		count, err = s.analysisService.CleanExpiredLocks()
+	}
 	if err != nil {
 		logger.Errorf("Failed to clean expired locks: %v", err)
 		return
@@ -203,8 +215,17 @@ func (s *TaskScheduler) ensureTodayDailyBatch() {
 	if s.displayService == nil {
 		return
 	}
-	if _, err := s.displayService.GenerateDailyBatch(time.Now(), false); err != nil {
-		logger.Warnf("Failed to ensure daily display batch: %v", err)
+	if s.writeQueue != nil {
+		if err := s.writeQueue.Execute(func() error {
+			_, err := s.displayService.GenerateDailyBatch(time.Now(), false)
+			return err
+		}); err != nil {
+			logger.Warnf("Failed to ensure daily display batch: %v", err)
+		}
+	} else {
+		if _, err := s.displayService.GenerateDailyBatch(time.Now(), false); err != nil {
+			logger.Warnf("Failed to ensure daily display batch: %v", err)
+		}
 	}
 }
 
@@ -302,7 +323,17 @@ func (s *TaskScheduler) cleanTerminalJobs() {
 	cutoff := time.Now().AddDate(0, 0, -7)
 
 	if s.thumbnailJobRepo != nil {
-		if count, err := s.thumbnailJobRepo.DeleteTerminalBefore(cutoff); err != nil {
+		var count int64
+		var err error
+		if s.writeQueue != nil {
+			err = s.writeQueue.Execute(func() error {
+				count, err = s.thumbnailJobRepo.DeleteTerminalBefore(cutoff)
+				return err
+			})
+		} else {
+			count, err = s.thumbnailJobRepo.DeleteTerminalBefore(cutoff)
+		}
+		if err != nil {
 			logger.Errorf("Failed to clean terminal thumbnail jobs: %v", err)
 		} else if count > 0 {
 			logger.Infof("Cleaned %d terminal thumbnail jobs older than 7 days", count)
@@ -310,7 +341,17 @@ func (s *TaskScheduler) cleanTerminalJobs() {
 	}
 
 	if s.geocodeJobRepo != nil {
-		if count, err := s.geocodeJobRepo.DeleteTerminalBefore(cutoff); err != nil {
+		var count int64
+		var err error
+		if s.writeQueue != nil {
+			err = s.writeQueue.Execute(func() error {
+				count, err = s.geocodeJobRepo.DeleteTerminalBefore(cutoff)
+				return err
+			})
+		} else {
+			count, err = s.geocodeJobRepo.DeleteTerminalBefore(cutoff)
+		}
+		if err != nil {
 			logger.Errorf("Failed to clean terminal geocode jobs: %v", err)
 		} else if count > 0 {
 			logger.Infof("Cleaned %d terminal geocode jobs older than 7 days", count)
