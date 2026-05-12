@@ -109,7 +109,7 @@ type peopleService struct {
 	// This prevents SQLite "database is locked" when both paths write faces/people tables.
 	writeGate   sync.RWMutex
 	writeQueue  *database.WriteQueue // serializes SQLite write operations
-	idleCount   int // consecutive idle loops, used for polling backoff
+	idleCount   int                  // consecutive idle loops, used for polling backoff
 
 	feedbackMu            sync.Mutex
 	feedbackRunning       bool
@@ -182,6 +182,14 @@ func NewPeopleService(db *gorm.DB, photoRepo repository.PhotoRepository, faceRep
 		feedbackStopCh:       make(chan struct{}),
 		feedbackPollInterval: peopleFeedbackPollInterval,
 	}
+}
+
+// executeWrite runs fn through WriteQueue if available, otherwise directly.
+func (s *peopleService) executeWrite(fn func() error) error {
+	if s.writeQueue != nil {
+		return s.writeQueue.Execute(fn)
+	}
+	return fn()
 }
 
 // linkThreshold returns the configured face graph link threshold, defaulting to 0.65.
@@ -425,7 +433,7 @@ func (s *peopleService) ResetAllPeople() (int, error) {
 	}
 
 	var count int
-	err := s.writeQueue.Execute(func() error {
+	err := s.executeWrite(func() error {
 		return s.db.Transaction(func(tx *gorm.DB) error {
 			if err := tx.Exec("DELETE FROM faces").Error; err != nil {
 				return fmt.Errorf("delete faces: %w", err)
@@ -1117,7 +1125,7 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 
 	if len(result.Faces) == 0 {
 		s.appendBackgroundLog(fmt.Sprintf("照片 #%d 无人脸", photo.ID))
-		if err := s.writeQueue.Execute(func() error {
+		if err := s.executeWrite(func() error {
 			return s.db.Transaction(func(tx *gorm.DB) error {
 				if err := tx.Where("photo_id = ?", photo.ID).Delete(&model.Face{}).Error; err != nil {
 					return err
@@ -1183,7 +1191,7 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 		createdFaces = append(createdFaces, face)
 	}
 
-	if err := s.writeQueue.Execute(func() error {
+	if err := s.executeWrite(func() error {
 		return s.db.Transaction(func(tx *gorm.DB) error {
 			if err := tx.Where("photo_id = ?", photo.ID).Delete(&model.Face{}).Error; err != nil {
 				return err
@@ -2035,7 +2043,7 @@ func (s *peopleService) createPersonFromComponent(component []*model.Face, score
 
 	now := time.Now()
 	person := &model.Person{Category: model.PersonCategoryStranger}
-	if err := s.writeQueue.Execute(func() error {
+	if err := s.executeWrite(func() error {
 		return s.db.Transaction(func(tx *gorm.DB) error {
 			if err := tx.Create(person).Error; err != nil {
 				return err
