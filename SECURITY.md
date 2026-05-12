@@ -430,6 +430,16 @@ fi
 
 ## 更新日志
 
+### v1.6.6 (2026-05-12)
+- ✅ 全部 12 个 service 写操作统一接入 WriteQueue 串行化，消除 SQLite 写锁争用
+- ✅ 修复 PhotoSummary.TagList GORM 解析错误
+
+### v1.6.5 (2026-05-12)
+- ✅ WriteQueue 读写分离，序列化所有 SQLite 写操作
+- ✅ 后台 DB 连接池独立，不再与 API 争用连接
+- ✅ WriteQueue 可重入死锁修复
+- ✅ peopleService.executeWrite 无限递归修复
+
 ### v1.6.4 (2026-04-24)
 - ✅ Write gate 防止前台合并操作与后台聚类 worker 的 SQLite 锁冲突
 - ✅ IN 子句批量分片，避免 SQLite 999 变量限制

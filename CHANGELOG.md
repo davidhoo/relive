@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.6] - 2026-05-12
+
+### Fixed
+- **SQLite 写锁争用导致 API 无响应** — 所有 12 个 service 的数据库写操作统一通过 WriteQueue 串行化，消除了后台任务与前台 API 并发写入时的锁竞争，解决了照片管理页加载超时 1-2 分钟的问题
+- **PhotoSummary.TagList GORM 解析错误** — `PhotoSummary.TagList` 缺少 `gorm:"-"` 标签，GORM 尝试扫描 `[]string` 类型报错
+
+### Changed
+- `configService`、`deviceService`、`authService`、`systemService` 新增 `writeQueue` 字段和 `executeWrite` 辅助方法
+- `peopleService` 包裹 40+ 处裸写操作
+- `photo_scan_service` 包裹 12 处裸写操作
+- `geocodeTaskService` 包裹 10 处前台裸写操作
+- `thumbnailService` 包裹 9 处前台裸写操作
+- `displayService` / `display_daily_service` 包裹 5 处裸写操作
+- `personMergeSuggestionService` 包裹 2 处遗留裸写操作
+
+---
+
 ## [1.6.5] - 2026-05-12
 
 ### Performance
