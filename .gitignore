@@ -88,4 +88,8 @@ docker-compose.prod.yml
 !docker-compose.yml.example
 !docker-compose.prod.yml.example
 
+# Deployment artifacts
+backup/
+*.bak
+
 .worktrees/
