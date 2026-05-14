@@ -437,6 +437,10 @@ func (s *peopleService) ResetAllPeople() (int, error) {
 		}
 	}
 
+	// Acquire write gate exclusively to ensure no background reads are in flight.
+	s.writeGate.Lock()
+	s.writeGate.Unlock()
+
 	var count int
 	err := s.executeWrite(func() error {
 		return s.db.Transaction(func(tx *gorm.DB) error {
@@ -506,6 +510,10 @@ func (s *peopleService) RedetectFaces() (int, error) {
 			return 0, fmt.Errorf("timeout waiting for background task to stop")
 		}
 	}
+
+	// Acquire write gate exclusively to ensure no background reads are in flight.
+	s.writeGate.Lock()
+	s.writeGate.Unlock()
 
 	var count int
 	err := s.executeWrite(func() error {
