@@ -552,7 +552,7 @@ func (s *peopleService) RedetectFaces() (int, error) {
 	enqueued := 0
 	err = s.photoRepo.IterateActivePhotos([]string{"id", "status"}, 500, func(photos []*model.Photo) error {
 		for _, photo := range photos {
-			if err := s.enqueuePhotoModel(photo, "redetect", peoplePriorityScan, true); err != nil {
+			if err := s.enqueuePhotoModel(photo, model.PeopleJobSourceManual, peoplePriorityScan, true); err != nil {
 				logger.Warnf("re-enqueue photo %d after redetect failed: %v", photo.ID, err)
 				continue
 			}
