@@ -90,10 +90,6 @@ export const peopleApi = {
     return http.post<ApiResponse<{ photos_enqueued: number; background_started: boolean }>>('/people/reset')
   },
 
-  redetectFaces() {
-    return http.post<ApiResponse<{ photos_enqueued: number; background_started: boolean }>>('/people/redetect')
-  },
-
   dissolvePerson(id: number) {
     return http.post<ApiResponse<{ faces_released: number }>>(`/people/${id}/dissolve`)
   },

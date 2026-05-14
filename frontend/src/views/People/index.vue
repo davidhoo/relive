@@ -194,16 +194,6 @@
                   >
                     全量重建
                   </el-button>
-                  <el-button
-                    size="small"
-                    type="warning"
-                    plain
-                    :loading="redetecting"
-                    :disabled="taskStopping"
-                    @click="handleRedetect"
-                  >
-                    重新检测
-                  </el-button>
                 </template>
               </SectionHeader>
             </template>
@@ -418,7 +408,6 @@ const mergeSuggestionAction = ref<'pause' | 'resume' | 'rebuild' | ''>('')
 const starting = ref(false)
 const stopping = ref(false)
 const resetting = ref(false)
-const redetecting = ref(false)
 const enqueueing = ref(false)
 const logContainerRef = ref<HTMLElement | null>(null)
 const mergeLogContainerRef = ref<HTMLElement | null>(null)
@@ -675,29 +664,6 @@ const handleReset = async () => {
     ElMessage.error(error.response?.data?.error?.message || error.message || '重建失败')
   } finally {
     resetting.value = false
-  }
-}
-
-const handleRedetect = async () => {
-  try {
-    await ElMessageBox.confirm(
-      '重新检测将对所有照片重新进行人脸检测和聚类。已命名的人物将保留名称并自动匹配回新人脸，未命名的人物将被清除。此操作不可撤销，确定继续？',
-      '重新检测确认',
-      { confirmButtonText: '确认检测', cancelButtonText: '取消', type: 'warning' },
-    )
-  } catch {
-    return
-  }
-  redetecting.value = true
-  try {
-    const res = await peopleApi.redetectFaces()
-    const data = res.data?.data
-    ElMessage.success(`重新检测已启动，已入队 ${data?.photos_enqueued || 0} 张照片`)
-    await loadTaskData()
-  } catch (error: any) {
-    ElMessage.error(error.response?.data?.error?.message || error.message || '重新检测失败')
-  } finally {
-    redetecting.value = false
   }
 }
 

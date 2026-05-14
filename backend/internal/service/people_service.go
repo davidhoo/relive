@@ -74,7 +74,6 @@ type PeopleService interface {
 	EnqueueByPath(path string, source string, priority int) (int, error)
 	EnqueueUnprocessed() (int, error)
 	ResetAllPeople() (int, error)
-	RedetectFaces() (int, error)
 	MergePeople(targetPersonID uint, sourcePersonIDs []uint) (*model.ReclusterResult, error)
 	MergePeopleAsync(targetPersonID uint, sourcePersonIDs []uint, jobType string) (uint, error)
 	GetMergeJobStatus(jobID uint) (*model.PeopleMergeJob, error)
@@ -490,88 +489,6 @@ func (s *peopleService) ResetAllPeople() (int, error) {
 		return count, fmt.Errorf("iterate photos for re-enqueue: %w", err)
 	}
 	logger.Infof("people reset complete: %d photos reset, %d jobs enqueued", count, enqueued)
-	return enqueued, nil
-}
-
-// RedetectFaces re-detects faces for all photos while preserving named persons.
-// It deletes all faces and unnamed persons, resets face_process_status, then
-// re-enqueues all photos. During re-clustering, new faces automatically attach
-// to preserved named persons via embedding similarity.
-func (s *peopleService) RedetectFaces() (int, error) {
-	s.taskMutex.RLock()
-	active := s.active
-	s.taskMutex.RUnlock()
-
-	if active != nil {
-		_ = s.StopBackground()
-		select {
-		case <-active.done:
-		case <-time.After(30 * time.Second):
-			return 0, fmt.Errorf("timeout waiting for background task to stop")
-		}
-	}
-
-	// Acquire write gate exclusively to ensure no background reads are in flight.
-	s.writeGate.Lock()
-	s.writeGate.Unlock()
-
-	var count int
-	err := s.executeWrite(func() error {
-		return s.db.Transaction(func(tx *gorm.DB) error {
-			if err := tx.Exec("DELETE FROM faces").Error; err != nil {
-				return fmt.Errorf("delete faces: %w", err)
-			}
-			if err := tx.Exec("DELETE FROM people_jobs").Error; err != nil {
-				return fmt.Errorf("delete people_jobs: %w", err)
-			}
-			if err := tx.Exec("DELETE FROM cannot_link_constraints").Error; err != nil {
-				return fmt.Errorf("delete cannot_link_constraints: %w", err)
-			}
-			// Delete unnamed persons; named persons are preserved for auto-attach.
-			if err := tx.Exec("DELETE FROM people WHERE name = '' OR name IS NULL").Error; err != nil {
-				return fmt.Errorf("delete unnamed people: %w", err)
-			}
-			// Reset face_count for preserved named persons so prototype cache rebuilds.
-			if err := tx.Exec("UPDATE people SET face_count = 0 WHERE name != '' AND name IS NOT NULL").Error; err != nil {
-				return fmt.Errorf("reset named people face_count: %w", err)
-			}
-			if err := tx.Model(&model.Photo{}).
-				Where("1 = 1").
-				Updates(map[string]interface{}{
-					"face_process_status": model.FaceProcessStatusNone,
-					"face_count":          0,
-					"top_person_category": "",
-				}).Error; err != nil {
-				return fmt.Errorf("reset photos: %w", err)
-			}
-			var affected int64
-			tx.Model(&model.Photo{}).Where("status != ?", model.PhotoStatusExcluded).Count(&affected)
-			count = int(affected)
-			return nil
-		})
-	})
-	if err != nil {
-		return 0, err
-	}
-
-	// Invalidate prototype cache so clustering doesn't use stale data.
-	s.protoCache = nil
-
-	enqueued := 0
-	err = s.photoRepo.IterateActivePhotos([]string{"id", "status"}, 500, func(photos []*model.Photo) error {
-		for _, photo := range photos {
-			if err := s.enqueuePhotoModel(photo, model.PeopleJobSourceManual, peoplePriorityScan, true); err != nil {
-				logger.Warnf("re-enqueue photo %d after redetect failed: %v", photo.ID, err)
-				continue
-			}
-			enqueued++
-		}
-		return nil
-	})
-	if err != nil {
-		return count, fmt.Errorf("iterate photos for re-enqueue: %w", err)
-	}
-	logger.Infof("people redetect complete: %d photos reset, %d jobs enqueued", count, enqueued)
 	return enqueued, nil
 }
 

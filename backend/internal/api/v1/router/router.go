@@ -241,7 +241,6 @@ func Setup(db *gorm.DB, cfg *config.Config, appState *lifecycle.State) (*gin.Eng
 				people.POST("/rescan-by-path", handlers.People.RescanByPath)
 				people.POST("/enqueue-unprocessed", handlers.People.EnqueueUnprocessed)
 				people.POST("/reset", handlers.People.ResetAllPeople)
-			people.POST("/redetect", handlers.People.RedetectFaces)
 				people.GET("/task", handlers.People.GetTask)
 				people.GET("/stats", handlers.People.GetStats)
 				people.GET("/background/logs", handlers.People.GetBackgroundLogs)

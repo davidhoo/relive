@@ -690,26 +690,6 @@ func (h *PeopleHandler) ResetAllPeople(c *gin.Context) {
 	})
 }
 
-func (h *PeopleHandler) RedetectFaces(c *gin.Context) {
-	// Run async: delete + re-enqueue thousands of photos is too slow for a single request.
-	go func() {
-		count, err := h.service.RedetectFaces()
-		if err != nil {
-			logger.Errorf("redetect faces failed: %v", err)
-			return
-		}
-		if _, err := h.service.StartBackground(); err != nil {
-			logger.Warnf("redetect: background task start failed: %v", err)
-		}
-		logger.Infof("redetect faces complete: %d photos enqueued", count)
-	}()
-
-	c.JSON(http.StatusOK, model.Response{
-		Success: true,
-		Message: "重新检测已在后台启动，已命名人物将自动匹配",
-	})
-}
-
 func (h *PeopleHandler) GetPhotoPeople(c *gin.Context) {
 	photoID, ok := parseUintParam(c, "id", "Invalid photo ID")
 	if !ok {
