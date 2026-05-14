@@ -782,7 +782,17 @@ func (h *PeopleHandler) GetFaceThumbnail(c *gin.Context) {
 			writePeopleError(c, http.StatusInternalServerError, "GET_FAILED", photoErr.Error())
 			return
 		}
-		thumbnailPath, genErr := util.GenerateFaceThumbnail(photo.FilePath, thumbnailRoot(h.cfg), face.BBoxX, face.BBoxY, face.BBoxWidth, face.BBoxHeight, photo.ManualRotation)
+		// Prefer display thumbnail — already EXIF-oriented and correctly rotated.
+		sourcePath := photo.FilePath
+		rotation := photo.ManualRotation
+		if photo.ThumbnailPath != "" {
+			thumbFullPath := filepath.Join(thumbnailRoot(h.cfg), photo.ThumbnailPath)
+			if _, statErr := os.Stat(thumbFullPath); statErr == nil {
+				sourcePath = thumbFullPath
+				rotation = 0
+			}
+		}
+		thumbnailPath, genErr := util.GenerateFaceThumbnail(sourcePath, thumbnailRoot(h.cfg), face.BBoxX, face.BBoxY, face.BBoxWidth, face.BBoxHeight, rotation)
 		if genErr != nil {
 			writePeopleError(c, http.StatusInternalServerError, "GENERATE_FAILED", genErr.Error())
 			return

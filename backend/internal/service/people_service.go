@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -1132,20 +1134,36 @@ func (s *peopleService) preflightCheck(job *model.PeopleJob) (*model.Photo, bool
 }
 
 // detectFacesLocally performs face detection using the local ML client.
+// Uses the display thumbnail as input when available — it already has correct
+// EXIF orientation and is sized to 1024px, ensuring face bounding boxes are
+// in the same coordinate space as face thumbnail generation.
 func (s *peopleService) detectFacesLocally(photo *model.Photo) (*mlclient.DetectFacesResponse, error) {
-	processor := util.NewImageProcessor(1024, 85)
-	processedImage, processErr := processor.ProcessForAI(photo.FilePath)
-	if processErr != nil {
-		logger.Warnf("process photo %d for people detect failed, falling back to image path: %v", photo.ID, processErr)
+	var imageBase64 string
+	var imagePath string
+
+	// Prefer display thumbnail: already EXIF-oriented and correctly rotated.
+	if thumbPath := s.displayThumbnailPath(photo); thumbPath != "" {
+		if data, err := os.ReadFile(thumbPath); err == nil {
+			imageBase64 = base64.StdEncoding.EncodeToString(data)
+			imagePath = thumbPath
+		}
 	}
 
-	var imageBase64 string
-	if len(processedImage) > 0 {
-		imageBase64 = base64.StdEncoding.EncodeToString(processedImage)
+	// Fallback to ProcessForAI from original if thumbnail unavailable.
+	if imageBase64 == "" {
+		processor := util.NewImageProcessor(1024, 85)
+		processedImage, processErr := processor.ProcessForAI(photo.FilePath)
+		if processErr != nil {
+			logger.Warnf("process photo %d for people detect failed, falling back to image path: %v", photo.ID, processErr)
+		}
+		if len(processedImage) > 0 {
+			imageBase64 = base64.StdEncoding.EncodeToString(processedImage)
+		}
+		imagePath = photo.FilePath
 	}
 
 	result, detectErr := s.client.DetectFaces(context.Background(), mlclient.DetectFacesRequest{
-		ImagePath:     photo.FilePath,
+		ImagePath:     imagePath,
 		ImageBase64:   imageBase64,
 		MinConfidence: 0.5,
 		MaxFaces:      20,
@@ -1218,7 +1236,18 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 			BBoxHeight: detected.BBox.Height,
 		})
 	}
-	thumbnailPaths, err := util.GenerateFaceThumbnails(photo.FilePath, s.faceThumbnailRoot(), thumbnailSpecs, photo.ManualRotation)
+	// Use display thumbnail as source for face thumbnails — same coordinate
+	// space as face detection, already EXIF-oriented and correctly rotated.
+	faceThumbnailSource := photo.FilePath
+	faceThumbnailRotation := photo.ManualRotation
+	if thumbPath := s.displayThumbnailPath(photo); thumbPath != "" {
+		if _, err := os.Stat(thumbPath); err == nil {
+			faceThumbnailSource = thumbPath
+			faceThumbnailRotation = 0 // thumbnail already has manual rotation applied
+		}
+	}
+
+	thumbnailPaths, err := util.GenerateFaceThumbnails(faceThumbnailSource, s.faceThumbnailRoot(), thumbnailSpecs, faceThumbnailRotation)
 	if err != nil {
 		return err
 	}
@@ -1695,7 +1724,16 @@ func (s *peopleService) generateFaceThumbnail(photo *model.Photo, bbox model.Bou
 	if photo == nil {
 		return "", fmt.Errorf("photo is nil")
 	}
-	return util.GenerateFaceThumbnail(photo.FilePath, s.faceThumbnailRoot(), bbox.X, bbox.Y, bbox.Width, bbox.Height, photo.ManualRotation)
+	// Prefer display thumbnail — already EXIF-oriented and correctly rotated.
+	sourcePath := photo.FilePath
+	rotation := photo.ManualRotation
+	if thumbPath := s.displayThumbnailPath(photo); thumbPath != "" {
+		if _, err := os.Stat(thumbPath); err == nil {
+			sourcePath = thumbPath
+			rotation = 0
+		}
+	}
+	return util.GenerateFaceThumbnail(sourcePath, s.faceThumbnailRoot(), bbox.X, bbox.Y, bbox.Width, bbox.Height, rotation)
 }
 
 func (s *peopleService) faceThumbnailRoot() string {
@@ -1703,6 +1741,17 @@ func (s *peopleService) faceThumbnailRoot() string {
 		return s.config.Photos.ThumbnailPath
 	}
 	return "./data/thumbnails"
+}
+
+// displayThumbnailPath returns the full path of the photo's display thumbnail,
+// or empty string if unavailable. The display thumbnail is already EXIF-oriented
+// and resized to 1024px, making it suitable as the source for face detection
+// and face thumbnail generation (consistent coordinate space, correct rotation).
+func (s *peopleService) displayThumbnailPath(photo *model.Photo) string {
+	if photo == nil || strings.TrimSpace(photo.ThumbnailPath) == "" {
+		return ""
+	}
+	return filepath.Join(s.faceThumbnailRoot(), photo.ThumbnailPath)
 }
 
 func clonePeopleTask(task *model.PeopleTask) *model.PeopleTask {
