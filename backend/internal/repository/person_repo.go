@@ -79,6 +79,7 @@ func (r *personRepository) ListMergeSuggestionTargets(cursorID uint, limit int) 
 	q := r.db.Where("category IN ? AND face_count > 0", []string{
 		model.PersonCategoryFamily,
 		model.PersonCategoryFriend,
+		model.PersonCategoryAcquaintance,
 	}).Order("id ASC").Limit(limit)
 	if cursorID > 0 {
 		q = q.Where("id > ?", cursorID)
