@@ -339,6 +339,7 @@ func (s *peopleService) GetStats() (*model.PeopleStatsResponse, error) {
 		PendingFacesTotal:          pendingFaceStats.Total,
 		PendingFacesNeverClustered: pendingFaceStats.NeverClustered,
 		PendingFacesRetried:        pendingFaceStats.Retried,
+		TotalFaces:                 pendingFaceStats.TotalFaces,
 	}
 
 	s.statsCacheMu.Lock()

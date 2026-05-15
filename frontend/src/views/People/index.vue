@@ -213,10 +213,11 @@
               <div v-if="clusteringPending > 0" class="queue-progress">
                 <div class="queue-progress-header">
                   <span>人脸聚类</span>
+                  <span class="queue-progress-numbers">{{ clusteringProgressPercent }}%</span>
                 </div>
-                <el-progress :percentage="0" :stroke-width="10" :show-text="false" :indeterminate="true" />
+                <el-progress :percentage="clusteringProgressPercent" :stroke-width="10" :show-text="false" />
                 <div class="queue-progress-detail">
-                  待聚类 {{ clusteringPending }}
+                  待聚类 {{ clusteringPending }} / 共 {{ stats.total_faces }}
                 </div>
               </div>
 
@@ -431,6 +432,12 @@ const taskStopping = computed(() => task.value?.status === 'stopping')
 
 const queuePending = computed(() => stats.value.pending + stats.value.queued + stats.value.processing)
 const clusteringPending = computed(() => stats.value.pending_faces_total)
+const clusteringProgressPercent = computed(() => {
+  const total = stats.value.total_faces
+  if (total === 0) return 0
+  const clustered = total - clusteringPending.value
+  return Math.round((clustered / total) * 100)
+})
 const queueProgressPercent = computed(() => {
   const done = stats.value.completed
   const totalCount = done + queuePending.value

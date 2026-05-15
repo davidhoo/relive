@@ -53,6 +53,7 @@ type PendingFaceStats struct {
 	Total          int64 `json:"total"`
 	NeverClustered int64 `json:"never_clustered"`
 	Retried        int64 `json:"retried"`
+	TotalFaces     int64 `json:"total_faces"`
 }
 
 type faceRepository struct {
@@ -214,6 +215,9 @@ func (r *faceRepository) GetPendingStats() (*PendingFaceStats, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	r.db.Model(&model.Face{}).Count(&stats.TotalFaces)
+
 	return stats, nil
 }
 

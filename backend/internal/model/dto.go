@@ -460,6 +460,7 @@ type PeopleStatsResponse struct {
 	PendingFacesTotal          int64 `json:"pending_faces_total"`
 	PendingFacesNeverClustered int64 `json:"pending_faces_never_clustered"`
 	PendingFacesRetried        int64 `json:"pending_faces_retried"`
+	TotalFaces                 int64 `json:"total_faces"`
 }
 
 type PersonMergeSuggestionTask struct {

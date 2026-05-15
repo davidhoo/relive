@@ -63,6 +63,7 @@ export interface PeopleStats {
   pending_faces_total: number
   pending_faces_never_clustered: number
   pending_faces_retried: number
+  total_faces: number
 }
 
 export interface PeopleBackgroundLogsResponse {
