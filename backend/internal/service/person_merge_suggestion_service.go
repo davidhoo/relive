@@ -324,15 +324,10 @@ func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 		return nil
 	}
 
-	// 冷却时间检查：避免频繁执行繁重的相似度计算
-	// 注意：如果有脏数据（Dirty=true），则跳过冷却检查，立即处理
-	cooldown := 300 // 默认 5 分钟
-	if s.config != nil && s.config.People.MergeSuggestionCooldownSeconds > 0 {
-		cooldown = s.config.People.MergeSuggestionCooldownSeconds
-	}
-	if !s.state.Dirty && !s.state.LastRunAt.IsZero() && time.Since(s.state.LastRunAt) < time.Duration(cooldown)*time.Second {
+	// 没有脏数据时不需要运行，等 MarkDirty 触发
+	if !s.state.Dirty {
 		s.mu.Unlock()
-		return nil // 还在冷却期内且无脏数据，跳过
+		return nil
 	}
 
 	// 读取状态后释放锁
