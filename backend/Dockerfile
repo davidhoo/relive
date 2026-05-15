@@ -19,6 +19,7 @@ COPY . .
 
 # 构建后端
 RUN CGO_ENABLED=1 GOOS=linux go build \
+    -tags "fts5" \
     -ldflags "-X main.Version=${VERSION:-dev} -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     -o relive \
     ./cmd/relive
@@ -26,6 +27,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
 # 构建 relive-analyzer
 WORKDIR /app/cmd/relive-analyzer
 RUN CGO_ENABLED=1 GOOS=linux go build \
+    -tags "fts5" \
     -ldflags "-X main.Version=${VERSION:-dev} -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     -o /app/relive-analyzer \
     .

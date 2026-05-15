@@ -10,6 +10,7 @@ GIT_COMMIT=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 
 # 使用 pkg/version 包的 LDFLAGS
 LDFLAGS=-ldflags "-X github.com/davidhoo/relive/pkg/version.BuildTime=${BUILD_TIME} -X github.com/davidhoo/relive/pkg/version.GitCommit=${GIT_COMMIT}"
+BUILDTAGS=-tags fts5
 
 # 默认目标：构建所有
 all: build build-analyzer build-people-worker
@@ -18,21 +19,21 @@ all: build build-analyzer build-people-worker
 build:
 	@echo "Building $(APP_NAME)..."
 	@mkdir -p bin
-	go build ${LDFLAGS} -o bin/$(APP_NAME) cmd/relive/main.go
+	go build ${BUILDTAGS} ${LDFLAGS} -o bin/$(APP_NAME) cmd/relive/main.go
 	@echo "Build complete: bin/$(APP_NAME)"
 
 # 构建离线分析工具
 build-analyzer:
 	@echo "Building $(ANALYZER_NAME)..."
 	@mkdir -p bin
-	go build ${LDFLAGS} -o bin/$(ANALYZER_NAME) ./cmd/relive-analyzer
+	go build ${BUILDTAGS} ${LDFLAGS} -o bin/$(ANALYZER_NAME) ./cmd/relive-analyzer
 	@echo "Build complete: bin/$(ANALYZER_NAME)"
 
 # 构建人物检测 Worker
 build-people-worker:
 	@echo "Building $(PEOPLE_WORKER_NAME)..."
 	@mkdir -p bin
-	go build ${LDFLAGS} -o bin/$(PEOPLE_WORKER_NAME) ./cmd/relive-people-worker
+	go build ${BUILDTAGS} ${LDFLAGS} -o bin/$(PEOPLE_WORKER_NAME) ./cmd/relive-people-worker
 	@echo "Build complete: bin/$(PEOPLE_WORKER_NAME)"
 
 # 运行主程序
