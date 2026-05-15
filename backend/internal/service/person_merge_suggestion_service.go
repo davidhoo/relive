@@ -348,7 +348,7 @@ func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 		return err
 	}
 	if len(targets) == 0 {
-		// 没有更多目标，本轮巡检完成
+		// 没有更多目标，本轮巡检完成 — 只写状态，不需要 writeGate
 		s.mu.Lock()
 		now := time.Now()
 		s.state.CursorTargetID = 0
@@ -362,10 +362,16 @@ func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 		return err
 	}
 
-	// 最耗时的操作：计算相似度
+	// 最耗时的操作：计算相似度（只读，不需要写门）
 	assignments, err := s.buildAssignments(targets)
 	if err != nil {
 		return err
+	}
+
+	// Acquire write gate before writing to serialize with ApplySuggestion/MergePeople
+	if s.writeGateFn != nil {
+		gateRelease := s.writeGateFn()
+		defer gateRelease()
 	}
 
 	// 写入数据库和更新状态（持锁）
