@@ -86,8 +86,8 @@ type PeopleConfig struct {
 	ClusteringIntervalMs           int     `yaml:"clustering_interval_ms"`
 	ANNBuildBatchSize      int     `yaml:"ann_build_batch_size"`       // HNSW nodes per insert batch (default 100)
 	ANNBuildCPUDuty        float64 `yaml:"ann_build_cpu_duty"`         // target CPU duty cycle 0.3-1.0 (default 0.5)
-	ANNRebuildWindowStart  int     `yaml:"ann_rebuild_window_start"`   // hour (0-23) start of daily ANN rebuild window (default 2)
-	ANNRebuildWindowEnd    int     `yaml:"ann_rebuild_window_end"`     // hour (0-23) end of daily ANN rebuild window (default 5)
+	ANNRebuildWindowStart  int     `yaml:"ann_rebuild_window_start"`   // deprecated: ANN rebuild now happens whenever dirty
+	ANNRebuildWindowEnd    int     `yaml:"ann_rebuild_window_end"`     // deprecated: ANN rebuild now happens whenever dirty
 }
 
 const (
@@ -98,8 +98,6 @@ const (
 	defaultClusteringIntervalMs           = 300
 	defaultANNBuildBatchSize      = 100
 	defaultANNBuildCPUDuty        = 0.5
-	defaultANNRebuildWindowStart  = 2
-	defaultANNRebuildWindowEnd    = 5
 )
 
 // LegacyMLConfig 兼容旧版人物配置块
@@ -358,10 +356,6 @@ func Load(path string) (*Config, error) {
 		cfg.People.ANNBuildCPUDuty = defaultANNBuildCPUDuty
 	}
 
-		if cfg.People.ANNRebuildWindowStart == 0 && cfg.People.ANNRebuildWindowEnd == 0 {
-			cfg.People.ANNRebuildWindowStart = defaultANNRebuildWindowStart
-			cfg.People.ANNRebuildWindowEnd = defaultANNRebuildWindowEnd
-		}
 
 	// 从环境变量覆盖敏感配置
 	if secret := os.Getenv("JWT_SECRET"); secret != "" {

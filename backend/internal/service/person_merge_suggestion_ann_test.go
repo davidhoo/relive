@@ -2,9 +2,7 @@ package service
 
 import (
 	"testing"
-	"time"
 
-	"github.com/davidhoo/relive/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -138,16 +136,8 @@ func TestMarkDirty_MarksANNDirtyWithoutDestroyingIndex(t *testing.T) {
 	assert.True(t, inner.annDirty)
 }
 
-func TestANNIndex_UsesStaleOutsideWindow(t *testing.T) {
-	svc, _, repos, _ := newPersonMergeSuggestionServiceWithConfigForTest(t, config.PeopleConfig{
-		MergeSuggestionThreshold:       0.62,
-		AttachThreshold:                1.10,
-		MergeSuggestionMaxPairsPerRun:  100,
-		MergeSuggestionBatchSize:       10,
-		MergeSuggestionCooldownSeconds: 1,
-		ANNRebuildWindowStart:          0,
-		ANNRebuildWindowEnd:            24,
-	})
+func TestEnsureANNIndex_RebuildsWhenDirty(t *testing.T) {
+	svc, _, repos, _ := newPersonMergeSuggestionServiceForTest(t)
 	inner := svc.(*personMergeSuggestionService)
 
 	createSuggestionTestPerson(t, repos, "family", ann512(0, 1.0))
@@ -157,23 +147,16 @@ func TestANNIndex_UsesStaleOutsideWindow(t *testing.T) {
 
 	require.NoError(t, svc.MarkDirty("test"))
 
-	// Already built this window → stale index returned
+	// Dirty index → should always rebuild regardless of time
 	second, err := inner.ensureANNIndex()
 	require.NoError(t, err)
 
-	assert.Same(t, first, second)
+	assert.NotSame(t, first, second)
+	assert.False(t, inner.annDirty)
 }
 
-func TestANNIndex_RebuildsInNewWindowAfterDirty(t *testing.T) {
-	svc, _, repos, _ := newPersonMergeSuggestionServiceWithConfigForTest(t, config.PeopleConfig{
-		MergeSuggestionThreshold:       0.62,
-		AttachThreshold:                1.10,
-		MergeSuggestionMaxPairsPerRun:  100,
-		MergeSuggestionBatchSize:       10,
-		MergeSuggestionCooldownSeconds: 1,
-		ANNRebuildWindowStart:          0,
-		ANNRebuildWindowEnd:            24,
-	})
+func TestEnsureANNIndex_ClearsDirtyAfterRebuild(t *testing.T) {
+	svc, _, repos, _ := newPersonMergeSuggestionServiceForTest(t)
 	inner := svc.(*personMergeSuggestionService)
 
 	createSuggestionTestPerson(t, repos, "family", ann512(0, 1.0))
@@ -182,12 +165,9 @@ func TestANNIndex_RebuildsInNewWindowAfterDirty(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, svc.MarkDirty("test"))
+	assert.True(t, inner.annDirty)
 
-	// Simulate window cycle rolling over: set annBuiltAt to before current window
-	inner.annMu.Lock()
-	inner.annBuiltAt = time.Now().Add(-25 * time.Hour)
-	inner.annMu.Unlock()
-
+	// Rebuild clears dirty flag
 	second, err := inner.ensureANNIndex()
 	require.NoError(t, err)
 
@@ -271,41 +251,20 @@ func TestFindCandidates_IsSafeToCallConcurrently(t *testing.T) {
 	}
 }
 
-func TestANNIndex_NoRebuildOutsideWindow(t *testing.T) {
-	// Use a narrow window that is unlikely to contain current hour
-	now := time.Now()
-	windowStart := (now.Hour() + 12) % 24
-	windowEnd := windowStart + 1
-
-	svc, _, repos, _ := newPersonMergeSuggestionServiceWithConfigForTest(t, config.PeopleConfig{
-		MergeSuggestionThreshold:       0.62,
-		AttachThreshold:                1.10,
-		MergeSuggestionMaxPairsPerRun:  100,
-		MergeSuggestionBatchSize:       10,
-		MergeSuggestionCooldownSeconds: 1,
-		ANNRebuildWindowStart:          windowStart,
-		ANNRebuildWindowEnd:            windowEnd,
-	})
+func TestEnsureANNIndex_NoRebuildWhenClean(t *testing.T) {
+	svc, _, repos, _ := newPersonMergeSuggestionServiceForTest(t)
 	inner := svc.(*personMergeSuggestionService)
 
 	createSuggestionTestPerson(t, repos, "family", ann512(0, 1.0))
 
-	// First call: annIdx is nil → always builds regardless of window
 	first, err := inner.ensureANNIndex()
 	require.NoError(t, err)
 	require.NotNil(t, first)
 
-	require.NoError(t, svc.MarkDirty("test"))
-
-	// Set annBuiltAt far back so alreadyBuiltThisWindow returns false,
-	// but current hour is outside window → should return stale index
-	inner.annMu.Lock()
-	inner.annBuiltAt = time.Now().Add(-25 * time.Hour)
-	inner.annMu.Unlock()
-
+	// Clean index → should return same cached instance
 	second, err := inner.ensureANNIndex()
 	require.NoError(t, err)
 
-	assert.Same(t, first, second, "should return stale index when outside rebuild window")
-	assert.True(t, inner.annDirty, "dirty flag should remain set")
+	assert.Same(t, first, second, "should return cached index when not dirty")
+	assert.False(t, inner.annDirty)
 }

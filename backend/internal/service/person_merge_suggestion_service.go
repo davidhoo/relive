@@ -61,7 +61,7 @@ type personMergeSuggestionService struct {
 	backgroundLogs []string
 	annMu          sync.Mutex // guards annIdx, annDirty, annBuiltAt for concurrent access
 	annIdx         *annIndex
-	annDirty       bool      // index is stale; rebuild when cooldown passes
+	annDirty       bool      // index is stale; rebuild on next ensureANNIndex call
 	annBuiltAt     time.Time // when index was last successfully built
 
 	// Dedicated background DB pool (separate from the API pool) so that

@@ -147,23 +147,16 @@ func (s *personMergeSuggestionService) buildANNIndex() (*annIndex, error) {
 }
 
 // ensureANNIndex returns the cached index, building it if necessary.
-// Rebuild only happens when: (1) no index exists yet (first call after restart), or
-// (2) index is dirty AND current time is within the configured rebuild window AND
-// the index was not already built during this window cycle.
+// Rebuild happens when: (1) no index exists yet (first call after restart), or
+// (2) index is dirty (data changed since last build).
+// CPU throttling (annBuildCPUDuty) prevents NAS CPU overload during rebuild.
 // Thread-safe: may be called concurrently with FindCandidates and MarkDirty.
 func (s *personMergeSuggestionService) ensureANNIndex() (*annIndex, error) {
 	s.annMu.Lock()
-	if s.annIdx != nil {
-		if !s.annDirty {
-			idx := s.annIdx
-			s.annMu.Unlock()
-			return idx, nil
-		}
-		if !s.withinRebuildWindow() || s.alreadyBuiltThisWindow() {
-			idx := s.annIdx
-			s.annMu.Unlock()
-			return idx, nil // dirty but outside window or already built this window; use stale index
-		}
+	if s.annIdx != nil && !s.annDirty {
+		idx := s.annIdx
+		s.annMu.Unlock()
+		return idx, nil
 	}
 	s.annMu.Unlock()
 
@@ -224,29 +217,3 @@ func (s *personMergeSuggestionService) annBuildCPUDuty() float64 {
 	return 0.5
 }
 
-// withinRebuildWindow returns true if the current hour is within the configured
-// ANN rebuild window. Must be called with annMu held.
-func (s *personMergeSuggestionService) withinRebuildWindow() bool {
-	start, end := s.annRebuildWindow()
-	hour := time.Now().Hour()
-	return hour >= start && hour < end
-}
-
-// alreadyBuiltThisWindow returns true if the ANN index was already built during
-// the current rebuild window cycle. Must be called with annMu held.
-func (s *personMergeSuggestionService) alreadyBuiltThisWindow() bool {
-	if s.annBuiltAt.IsZero() {
-		return false
-	}
-	start, end := s.annRebuildWindow()
-	now := time.Now()
-	windowStart := time.Date(now.Year(), now.Month(), now.Day(), start, 0, 0, 0, now.Location())
-	return !s.annBuiltAt.Before(windowStart) && s.annBuiltAt.Hour() < end
-}
-
-func (s *personMergeSuggestionService) annRebuildWindow() (start, end int) {
-	if s.config != nil && s.config.People.ANNRebuildWindowStart >= 0 && s.config.People.ANNRebuildWindowEnd > 0 {
-		return s.config.People.ANNRebuildWindowStart, s.config.People.ANNRebuildWindowEnd
-	}
-	return 2, 5
-}
