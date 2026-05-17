@@ -34,6 +34,10 @@ type PeopleJobRepository interface {
 	HeartbeatRemote(id uint, workerID string, progress int, statusMsg string, lockUntil time.Time) error
 	ReleaseRemote(id uint, workerID string, reason string, retryLater bool) error
 	CompleteRemote(id uint, workerID string) error
+
+	// RecoverStaleProcessing resets local processing jobs that have been running
+	// longer than timeout back to queued, so they can be reclaimed.
+	RecoverStaleProcessing(timeout time.Duration) (int, error)
 }
 
 type peopleJobRepository struct {
@@ -347,4 +351,22 @@ func (r *peopleJobRepository) CompleteRemote(id uint, workerID string) error {
 		return fmt.Errorf("job %d not found or not owned by worker %s", id, workerID)
 	}
 	return nil
+}
+
+// RecoverStaleProcessing resets local processing jobs that have been running
+// longer than timeout back to queued, so they can be reclaimed by ClaimNextJob.
+func (r *peopleJobRepository) RecoverStaleProcessing(timeout time.Duration) (int, error) {
+	cutoff := time.Now().Add(-timeout)
+	result := r.db.Model(&model.PeopleJob{}).
+		Where("status = ? AND (worker_id = ? OR worker_id IS NULL) AND started_at < ?",
+			model.PeopleJobStatusProcessing, "", cutoff).
+		Updates(map[string]interface{}{
+			"status":         model.PeopleJobStatusQueued,
+			"started_at":     nil,
+			"status_message": "recovered from stale processing",
+		})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return int(result.RowsAffected), nil
 }

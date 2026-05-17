@@ -972,11 +972,19 @@ func (s *peopleService) runBackground(active *activePeopleTask) {
 				fmt.Sprintf("正在处理照片 #%d", job.PhotoID), &job.PhotoID)
 			s.setBackgroundBusy(true)
 			s.writeGate.RLock()
-			err = s.processJob(job)
+			err = func() (retErr error) {
+				defer func() {
+					if r := recover(); r != nil {
+						retErr = fmt.Errorf("processJob panic: %v", r)
+					}
+				}()
+				return s.processJob(job)
+			}()
 			s.writeGate.RUnlock()
 			s.setBackgroundBusy(false)
 			if err != nil {
 				s.appendBackgroundLog(fmt.Sprintf("处理人物任务 %d 失败：%v", job.ID, err))
+				s.markJobFailed(job.ID, job.PhotoID, err.Error())
 			}
 
 			s.taskMutex.Lock()
@@ -986,6 +994,15 @@ func (s *peopleService) runBackground(active *activePeopleTask) {
 			}
 			s.taskMutex.Unlock()
 			continue
+		}
+
+		// No detection job — recover stale processing jobs before clustering.
+		recovered, recoverErr := s.jobRepo.RecoverStaleProcessing(30 * time.Minute)
+		if recoverErr != nil {
+			s.appendBackgroundLog(fmt.Sprintf("恢复超时任务失败：%v", recoverErr))
+		} else if recovered > 0 {
+			s.appendBackgroundLog(fmt.Sprintf("已恢复 %d 个超时的检测任务", recovered))
+			continue // re-check ClaimNextJob immediately
 		}
 
 		// No detection job — check for processable pending faces and cluster.
@@ -1023,7 +1040,14 @@ func (s *peopleService) runBackground(active *activePeopleTask) {
 
 			s.setBackgroundBusy(true)
 			s.writeGate.RLock()
-			hasMore, clusterErr := s.processPendingFaces()
+			hasMore, clusterErr := func() (hm bool, ce error) {
+				defer func() {
+					if r := recover(); r != nil {
+						ce = fmt.Errorf("processPendingFaces panic: %v", r)
+					}
+				}()
+				return s.processPendingFaces()
+			}()
 			s.writeGate.RUnlock()
 			s.setBackgroundBusy(false)
 			if clusterErr != nil {
@@ -1053,6 +1077,28 @@ func (s *peopleService) runBackground(active *activePeopleTask) {
 	}
 
 }
+
+// markJobFailed marks a processing job as failed and resets the photo's
+// face_process_status so it can be re-enqueued later.
+func (s *peopleService) markJobFailed(jobID uint, photoID uint, errMsg string) {
+	now := time.Now()
+	s.executeWrite(func() error {
+		return s.db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Model(&model.PeopleJob{}).Where("id = ? AND status = ?", jobID, model.PeopleJobStatusProcessing).
+				Updates(map[string]interface{}{
+					"status":       model.PeopleJobStatusFailed,
+					"last_error":   errMsg,
+					"completed_at": &now,
+				}).Error; err != nil {
+				return err
+			}
+			return tx.Model(&model.Photo{}).Where("id = ? AND face_process_status IN ?",
+				photoID, []string{model.FaceProcessStatusPending, model.FaceProcessStatusProcessing}).
+				Update("face_process_status", model.FaceProcessStatusNone).Error
+		})
+	})
+}
+
 func (s *peopleService) processJob(job *model.PeopleJob) error {
 	photo, skip, err := s.preflightCheck(job)
 	if err != nil {
