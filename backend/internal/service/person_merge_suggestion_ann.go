@@ -9,7 +9,7 @@ import (
 
 const (
 	annSearchK      = 50  // neighbors per prototype query
-	annHNSWM        = 8   // max neighbors per node; 8 halves build time vs 16 with negligible recall loss at this scale
+	annHNSWM        = 16  // max neighbors per node; 16 gives better recall at 60K+ scale vs 8
 	annHNSWEfSearch = 100 // search beam width; high value ensures recall near threshold boundary
 )
 
@@ -94,10 +94,10 @@ func (s *personMergeSuggestionService) buildANNIndex() (*annIndex, error) {
 	}
 
 	g := newHNSWGraph()
-	// Use lower efSearch during construction for speed; the graph quality is
-	// primarily determined by M=8. Restore to annHNSWEfSearch before returning
-	// so search queries use full beam width.
-	g.EfSearch = 20
+	// Use lower efSearch during construction for speed; graph quality is
+	// primarily determined by M. Use 2*M as efConstruction per HNSW guidelines.
+	// Restore to annHNSWEfSearch before returning so search queries use full beam width.
+	g.EfSearch = 32
 	faceOwner := make(map[uint]uint, len(personProtos)*peoplePrototypeCount)
 
 	nodes := make([]hnsw.Node[uint], 0, len(personProtos)*peoplePrototypeCount)
