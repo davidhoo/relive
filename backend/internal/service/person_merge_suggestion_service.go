@@ -339,10 +339,23 @@ func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 		return nil
 	}
 
-	// 没有脏数据时不需要运行，等 MarkDirty 触发
+	// 兜底重跑：距上次巡检超过配置时间自动标记 dirty
 	if !s.state.Dirty {
-		s.mu.Unlock()
-		return nil
+		staleSeconds := s.config.People.MergeSuggestionStaleSeconds
+		if staleSeconds <= 0 {
+			staleSeconds = 3600
+		}
+		if !s.state.LastRunAt.IsZero() && time.Since(s.state.LastRunAt) > time.Duration(staleSeconds)*time.Second {
+			s.state.Dirty = true
+			s.annMu.Lock()
+			s.annDirty = true
+			s.annMu.Unlock()
+			s.appendBackgroundLogLocked(fmt.Sprintf("自动重跑: 距上次巡检超过 %d 秒", staleSeconds))
+			_ = s.saveStateLocked()
+		} else {
+			s.mu.Unlock()
+			return nil
+		}
 	}
 
 	// 读取状态后释放锁

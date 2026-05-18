@@ -484,3 +484,38 @@ func TestPersonMergeSuggestionService_FiltersDeletedCandidatesFromStaleANN(t *te
 		assert.NotContains(t, candidateIDs, candidate.ID)
 	}
 }
+
+func TestPersonMergeSuggestionService_AutoRerunWhenStale(t *testing.T) {
+	// When LastRunAt is older than the configured stale threshold,
+	// RunBackgroundSlice should automatically mark dirty and run a full pass.
+	svc, _, repos, _ := newPersonMergeSuggestionServiceWithConfigForTest(t, config.PeopleConfig{
+		MergeSuggestionThreshold:       0.62,
+		AttachThreshold:                1.10,
+		MergeSuggestionMaxPairsPerRun:  100,
+		MergeSuggestionBatchSize:       10,
+		MergeSuggestionCooldownSeconds: 1,
+		MergeSuggestionStaleSeconds:    1, // 1 second for fast test
+	})
+
+	target := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0}, []float32{0.98, 0.02})
+	_ = target
+
+	// Run once to set LastRunAt
+	require.NoError(t, svc.MarkDirty("initial"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	// Verify not dirty after run
+	stats, err := svc.GetStats()
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), stats.Pending)
+
+	// Wait for stale threshold to pass
+	time.Sleep(1100 * time.Millisecond)
+
+	// RunBackgroundSlice should auto-mark dirty and re-run
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	// Verify it actually ran — LastRunAt should be recent now
+	task := svc.GetTask()
+	assert.Equal(t, model.TaskStatusIdle, task.Status)
+}

@@ -83,6 +83,7 @@ type PeopleConfig struct {
 	MergeSuggestionMaxPairsPerRun  int     `yaml:"merge_suggestion_max_pairs_per_run"`
 	MergeSuggestionBatchSize       int     `yaml:"merge_suggestion_batch_size"`
 	MergeSuggestionCooldownSeconds int     `yaml:"merge_suggestion_cooldown_seconds"`
+	MergeSuggestionStaleSeconds   int     `yaml:"merge_suggestion_stale_seconds"`
 	ClusteringIntervalMs           int     `yaml:"clustering_interval_ms"`
 	ANNBuildBatchSize      int     `yaml:"ann_build_batch_size"`       // HNSW nodes per insert batch (default 100)
 	ANNBuildCPUDuty        float64 `yaml:"ann_build_cpu_duty"`         // target CPU duty cycle 0.3-1.0 (default 0.5)
@@ -95,6 +96,7 @@ const (
 	defaultMergeSuggestionMaxPairsPerRun  = 200
 	defaultMergeSuggestionBatchSize       = 100
 	defaultMergeSuggestionCooldownSeconds = 300
+	defaultMergeSuggestionStaleSeconds   = 3600
 	defaultClusteringIntervalMs           = 300
 	defaultANNBuildBatchSize      = 100
 	defaultANNBuildCPUDuty        = 0.5
@@ -345,6 +347,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.People.MergeSuggestionCooldownSeconds == 0 {
 		cfg.People.MergeSuggestionCooldownSeconds = defaultMergeSuggestionCooldownSeconds
+	}
+	if cfg.People.MergeSuggestionStaleSeconds == 0 {
+		cfg.People.MergeSuggestionStaleSeconds = defaultMergeSuggestionStaleSeconds
 	}
 	if cfg.People.ClusteringIntervalMs == 0 {
 		cfg.People.ClusteringIntervalMs = defaultClusteringIntervalMs
