@@ -41,6 +41,10 @@ const (
 	// making it easier for new faces to join user-confirmed identities (e.g., family members).
 	confirmedPersonDiscount = 0.05
 
+	// attachTopK is the number of highest-quality faces used for fallback scoring
+	// when the full-component average falls below the attach threshold.
+	attachTopK = 5
+
 	// Adaptive threshold decay for long-pending faces
 	// retry_count 0-1: full threshold (no discount)
 	// retry_count 2-4: linear decay to floor
@@ -2109,6 +2113,27 @@ func (s *peopleService) scoreComponentAgainstPersonWithEmbeddings(component []fa
 	return total / float64(scored)
 }
 
+// topKFacesByQuality returns the k faces with the highest QualityScore from the component.
+func topKFacesByQuality(component []faceWithEmbedding, k int) []faceWithEmbedding {
+	if len(component) <= k {
+		return component
+	}
+	sorted := make([]faceWithEmbedding, len(component))
+	copy(sorted, component)
+	sort.Slice(sorted, func(i, j int) bool {
+		qi := 0.0
+		if sorted[i].face != nil {
+			qi = sorted[i].face.QualityScore
+		}
+		qj := 0.0
+		if sorted[j].face != nil {
+			qj = sorted[j].face.QualityScore
+		}
+		return qi > qj
+	})
+	return sorted[:k]
+}
+
 func (s *peopleService) attachComponentToExistingPerson(component []*model.Face, prototypes map[uint][]*model.Face, attachThreshold float64) (uint, float64, bool) {
 	if len(component) == 0 || len(prototypes) == 0 {
 		return 0, -1, false
@@ -2193,6 +2218,18 @@ func (s *peopleService) attachComponentToExistingPersonWithEmbeddings(
 
 	if bestScore >= attachThreshold {
 		return bestPersonID, bestScore, true
+	}
+
+	// Fallback: re-score using only the top-K highest-quality faces in the component.
+	// Low-quality faces (blurry, side-angle) drag down the average score, causing
+	// splits where a component should have attached to an existing person.
+	// If the top-K faces score above the threshold, attach anyway.
+	if bestPersonID != 0 && len(component) > attachTopK {
+		topK := topKFacesByQuality(component, attachTopK)
+		topKScore := s.scoreComponentAgainstPersonWithEmbeddings(topK, prototypesWithEmb[bestPersonID])
+		if topKScore >= attachThreshold {
+			return bestPersonID, topKScore, true
+		}
 	}
 
 	// Apply discount for confirmed persons (have manual-locked faces)

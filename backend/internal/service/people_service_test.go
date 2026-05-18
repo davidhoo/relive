@@ -369,6 +369,32 @@ func TestPeopleService_AttachComponentToExistingPerson(t *testing.T) {
 		assert.Zero(t, personID)
 		assert.Less(t, attachScore, 0.70) // defaultAttachThreshold
 	})
+
+	t.Run("component attaches via top-K fallback when low-quality faces drag down average", func(t *testing.T) {
+		// 5 high-quality faces close to personOne's prototypes, plus 5 low-quality orthogonal faces.
+		// The full-component average falls below threshold, but top-5 quality faces should pass.
+		component := []*model.Face{
+			{ID: 100, QualityScore: 0.9, Embedding: encodeEmbedding(t, []float32{1, 0, 0})},
+			{ID: 101, QualityScore: 0.85, Embedding: encodeEmbedding(t, []float32{0.98, 0.199, 0})},
+			{ID: 102, QualityScore: 0.80, Embedding: encodeEmbedding(t, []float32{0.97, 0.243, 0})},
+			{ID: 103, QualityScore: 0.75, Embedding: encodeEmbedding(t, []float32{0.99, 0.1, 0})},
+			{ID: 104, QualityScore: 0.70, Embedding: encodeEmbedding(t, []float32{0.96, 0.28, 0})},
+			// Low-quality orthogonal faces (drag down average)
+			{ID: 200, QualityScore: 0.1, Embedding: encodeEmbedding(t, []float32{0, 0, 1})},
+			{ID: 201, QualityScore: 0.1, Embedding: encodeEmbedding(t, []float32{0.05, 0.05, 0.99})},
+			{ID: 202, QualityScore: 0.1, Embedding: encodeEmbedding(t, []float32{0.02, 0.02, 0.999})},
+			{ID: 203, QualityScore: 0.1, Embedding: encodeEmbedding(t, []float32{0, 0.1, 0.995})},
+			{ID: 204, QualityScore: 0.1, Embedding: encodeEmbedding(t, []float32{0.03, 0, 0.999})},
+		}
+
+		fullScore := attacher.scoreComponentAgainstPerson(component, prototypes[personOneID])
+		assert.Less(t, fullScore, 0.70, "full component score should be below threshold due to low-quality faces")
+
+		personID, attachScore, attached := attacher.attachComponentToExistingPerson(component, prototypes, 0.70)
+		assert.True(t, attached, "should attach via top-K fallback")
+		assert.Equal(t, personOneID, personID)
+		assert.GreaterOrEqual(t, attachScore, 0.70)
+	})
 }
 
 func TestPeopleService_PendingComponent(t *testing.T) {
