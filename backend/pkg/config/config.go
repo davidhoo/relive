@@ -96,7 +96,7 @@ const (
 	defaultMergeSuggestionMaxPairsPerRun  = 200
 	defaultMergeSuggestionBatchSize       = 100
 	defaultMergeSuggestionCooldownSeconds = 300
-	defaultMergeSuggestionStaleSeconds   = 3600
+	defaultMergeSuggestionStaleSeconds   = 86400
 	defaultClusteringIntervalMs           = 300
 	defaultANNBuildBatchSize      = 100
 	defaultANNBuildCPUDuty        = 0.5

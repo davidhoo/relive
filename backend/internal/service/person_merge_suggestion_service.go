@@ -345,7 +345,7 @@ func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 	if !s.state.Dirty {
 		staleSeconds := s.config.People.MergeSuggestionStaleSeconds
 		if staleSeconds <= 0 {
-			staleSeconds = 3600
+			staleSeconds = 86400
 		}
 		if !s.state.LastRunAt.IsZero() && time.Since(s.state.LastRunAt) > time.Duration(staleSeconds)*time.Second {
 			s.state.Dirty = true
