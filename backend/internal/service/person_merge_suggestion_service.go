@@ -679,7 +679,7 @@ func (s *personMergeSuggestionService) buildAssignments(targets []*model.Person)
 				score1 := averageBestSuggestionSimilarity(tgtEmb, candidateEmbeddings)
 				score2 := averageBestSuggestionSimilarity(candidateEmbeddings, tgtEmb)
 				score := (score1 + score2) / 2
-				if score < threshold || score >= s.attachThreshold() {
+				if score < threshold {
 					continue
 				}
 

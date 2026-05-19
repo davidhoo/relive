@@ -258,7 +258,11 @@ func TestPersonMergeSuggestionService_AllowsFamilyAndFriendCandidates(t *testing
 	assert.Contains(t, allCandidateIDs, familyCandidate.ID)
 }
 
-func TestPersonMergeSuggestionService_DoesNotCreateSuggestionAtOrAboveAttachThreshold(t *testing.T) {
+func TestPersonMergeSuggestionService_CreatesSuggestionEvenAboveAttachThreshold(t *testing.T) {
+	// Candidates above the attach threshold should still produce merge suggestions.
+	// Previously they were skipped (logic: "above attach = auto-attach"), but since
+	// these faces are already assigned to existing persons, auto-attach never fires,
+	// creating a blind spot where high-similarity stranger pairs are never suggested.
 	svc, _, repos, _ := newPersonMergeSuggestionServiceWithConfigForTest(t, config.PeopleConfig{
 		MergeSuggestionThreshold:       0.90,
 		AttachThreshold:                0.95,
@@ -268,29 +272,30 @@ func TestPersonMergeSuggestionService_DoesNotCreateSuggestionAtOrAboveAttachThre
 	})
 
 	target := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0}, []float32{0.99, 0.01})
-	tooCloseCandidate := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{1, 0})
+	highSimilarityCandidate := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{1, 0})
 
 	require.NoError(t, svc.MarkDirty("attach-threshold-upper-bound"))
 	require.NoError(t, svc.RunBackgroundSlice())
 
 	got := pendingSuggestionCandidatesByTarget(t, repos.MergeSuggestion)
-	assert.NotContains(t, got, target.ID)
-	assert.NotContains(t, got[target.ID], tooCloseCandidate.ID)
+	assert.Contains(t, got[target.ID], highSimilarityCandidate.ID, "candidates above attach threshold should still produce suggestions")
 }
 
 func TestPersonMergeSuggestionService_UsesAverageBestSimilarityInsteadOfSingleMaxPair(t *testing.T) {
+	// Verify that a candidate with one high-similarity prototype and one low-similarity
+	// prototype stays below threshold when using average-best (not max-pair).
 	svc, _, repos, _ := newPersonMergeSuggestionServiceWithConfigForTest(t, config.PeopleConfig{
-		MergeSuggestionThreshold:       0.80,
-		AttachThreshold:                0.95,
+		MergeSuggestionThreshold:       0.90,
+		AttachThreshold:                1.10, // effectively disabled - never skip above attach
 		MergeSuggestionMaxPairsPerRun:  100,
 		MergeSuggestionBatchSize:       10,
 		MergeSuggestionCooldownSeconds: 1,
 	})
 
 	target := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0}, []float32{0, 1})
-	// One prototype matches perfectly, one is nearly orthogonal.
-	// Max-pair logic would suggest; average-best should stay below threshold.
-	candidate := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{1, 0}, []float32{0.2, 0.98})
+	// One prototype matches target[0] perfectly, one is nearly orthogonal to both.
+	// average-best is well below 0.90 threshold.
+	candidate := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{1, 0}, []float32{0.5, 0.5})
 
 	require.NoError(t, svc.MarkDirty("average-best-similarity"))
 	require.NoError(t, svc.RunBackgroundSlice())
