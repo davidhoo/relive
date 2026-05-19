@@ -8,9 +8,9 @@ import (
 )
 
 const (
-	annSearchK      = 50  // neighbors per prototype query
+	annSearchK      = 200 // neighbors per prototype query; 72K+ person pool needs wider net than 50
 	annHNSWM        = 16  // max neighbors per node; 16 gives better recall at 60K+ scale vs 8
-	annHNSWEfSearch = 100 // search beam width; high value ensures recall near threshold boundary
+	annHNSWEfSearch = 200 // search beam width; must be >= annSearchK
 )
 
 // annIndex is a cached HNSW nearest-neighbor index over all person prototype embeddings.
