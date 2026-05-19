@@ -37,10 +37,11 @@ type PersonMergeSuggestionService interface {
 }
 
 type personMergeSuggestionState struct {
-	Paused         bool      `json:"paused"`
-	Dirty          bool      `json:"dirty"`
-	CursorTargetID uint      `json:"cursor_target_id"`
-	LastRunAt      time.Time `json:"last_run_at,omitempty"`
+	Paused          bool      `json:"paused"`
+	Dirty           bool      `json:"dirty"`
+	CursorTargetID  uint      `json:"cursor_target_id"`
+	LastRunAt       time.Time `json:"last_run_at,omitempty"`
+	DirtyGeneration uint64    `json:"dirty_generation,omitempty"`
 }
 
 type personMergeSuggestionService struct {
@@ -306,6 +307,7 @@ func (s *personMergeSuggestionService) MarkDirty(reason string) error {
 
 	s.state.Dirty = true
 	s.state.CursorTargetID = 0
+	s.state.DirtyGeneration++
 	s.annMu.Lock()
 	s.annDirty = true
 	s.annMu.Unlock()
@@ -360,6 +362,7 @@ func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 
 	// 读取状态后释放锁
 	cursor := s.state.CursorTargetID
+	dirtyGen := s.state.DirtyGeneration
 	s.mu.Unlock()
 
 	// Use background-dedicated repos for the heavy work in this slice.
@@ -424,7 +427,13 @@ func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 	}
 
 	s.task.ProcessedPairs += int64(processedPairs)
-	s.state.CursorTargetID = targets[len(targets)-1].ID
+	// Only advance cursor if MarkDirty was not called during this slice.
+	// A concurrent MarkDirty resets cursor to 0 and bumps DirtyGeneration; if we
+	// detect the bump, keep cursor at 0 so the next run re-scans from scratch with
+	// a fresh ANN index built after the concurrent write.
+	if s.state.DirtyGeneration == dirtyGen {
+		s.state.CursorTargetID = targets[len(targets)-1].ID
+	}
 	s.finishSliceLocked(now, processedPairs, fmt.Sprintf("完成 %d 个目标人物巡检", len(targets)))
 	return nil
 }
