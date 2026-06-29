@@ -4,7 +4,12 @@ import (
 	"math"
 	"testing"
 
+	"github.com/davidhoo/relive/internal/model"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func TestHaversineDistance_SamePoint(t *testing.T) {
@@ -49,8 +54,65 @@ func TestGetCountryName_Unknown(t *testing.T) {
 }
 
 func TestGetProvinceName_China(t *testing.T) {
-	assert.Equal(t, "北京市", getProvinceName("CN", "01"))
-	assert.Equal(t, "四川省", getProvinceName("CN", "23"))
+	tests := map[string]string{
+		"01": "安徽省",
+		"02": "浙江省",
+		"03": "江西省",
+		"04": "江苏省",
+		"05": "吉林省",
+		"06": "青海省",
+		"07": "福建省",
+		"08": "黑龙江省",
+		"09": "河南省",
+		"10": "河北省",
+		"11": "湖南省",
+		"12": "湖北省",
+		"13": "新疆维吾尔自治区",
+		"14": "西藏自治区",
+		"15": "甘肃省",
+		"16": "广西壮族自治区",
+		"18": "贵州省",
+		"19": "辽宁省",
+		"20": "内蒙古自治区",
+		"21": "宁夏回族自治区",
+		"22": "北京市",
+		"23": "上海市",
+		"24": "山西省",
+		"25": "山东省",
+		"26": "陕西省",
+		"28": "天津市",
+		"29": "云南省",
+		"30": "广东省",
+		"31": "海南省",
+		"32": "四川省",
+		"33": "重庆市",
+	}
+
+	for code, want := range tests {
+		t.Run(code, func(t *testing.T) {
+			assert.Equal(t, want, getProvinceName("CN", code))
+		})
+	}
+}
+
+func TestOfflineProvider_Issue11UsesGeoNamesAdmin1Code(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Discard})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.City{}))
+	require.NoError(t, db.Create(&model.City{
+		GeonameID: 10001,
+		Name:      "Xiasha",
+		Country:   "CN",
+		AdminName: "02",
+		Latitude:  30.31023,
+		Longitude: 120.31718,
+	}).Error)
+
+	location, err := NewOfflineProvider(db, 100).ReverseGeocode(30.292125, 120.378533)
+	require.NoError(t, err)
+	assert.Equal(t, "浙江省", location.Province)
+	assert.Equal(t, "Xiasha", location.City)
+	assert.Equal(t, "浙江省Xiasha", location.FormatDisplay())
 }
 
 func TestGetProvinceName_NonChina(t *testing.T) {
