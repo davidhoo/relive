@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -219,7 +220,12 @@ security:
 		t.Fatalf("Load returned error: %v", err)
 	}
 
-	got := cfg.People
+	assertPeopleIdentityProfileDefaults(t, cfg.People)
+}
+
+func assertPeopleIdentityProfileDefaults(t *testing.T, got PeopleConfig) {
+	t.Helper()
+
 	if got.IdentityProfileMode != "legacy" {
 		t.Errorf("identity_profile_mode = %q, want legacy", got.IdentityProfileMode)
 	}
@@ -243,6 +249,24 @@ security:
 	}
 	if got.IdentityProfileCooldownMs != 500 {
 		t.Errorf("identity_profile_cooldown_ms = %d, want 500", got.IdentityProfileCooldownMs)
+	}
+}
+
+func TestPeopleIdentityProfileExampleConfigs(t *testing.T) {
+	_, testFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate config_test.go")
+	}
+	backendDir := filepath.Clean(filepath.Join(filepath.Dir(testFile), "..", ".."))
+
+	for _, name := range []string{"config.dev.yaml.example", "config.prod.yaml.example"} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := Load(filepath.Join(backendDir, name))
+			if err != nil {
+				t.Fatalf("Load(%s) returned error: %v", name, err)
+			}
+			assertPeopleIdentityProfileDefaults(t, cfg.People)
+		})
 	}
 }
 
@@ -272,15 +296,24 @@ func TestPeopleIdentityProfileRejectsInvalidConfig(t *testing.T) {
 	}{
 		{name: "unknown mode", field: "identity_profile_mode", apply: func(c *PeopleConfig) { c.IdentityProfileMode = "unknown" }},
 		{name: "zero max centers", field: "identity_profile_max_centers", apply: func(c *PeopleConfig) { c.IdentityProfileMaxCenters = 0 }},
+		{name: "negative max centers", field: "identity_profile_max_centers", apply: func(c *PeopleConfig) { c.IdentityProfileMaxCenters = -1 }},
 		{name: "too many centers", field: "identity_profile_max_centers", apply: func(c *PeopleConfig) { c.IdentityProfileMaxCenters = 9 }},
 		{name: "zero minimum center faces", field: "identity_profile_min_center_faces", apply: func(c *PeopleConfig) { c.IdentityProfileMinCenterFaces = 0 }},
+		{name: "negative minimum center faces", field: "identity_profile_min_center_faces", apply: func(c *PeopleConfig) { c.IdentityProfileMinCenterFaces = -1 }},
 		{name: "zero minimum center photos", field: "identity_profile_min_center_photos", apply: func(c *PeopleConfig) { c.IdentityProfileMinCenterPhotos = 0 }},
+		{name: "negative minimum center photos", field: "identity_profile_min_center_photos", apply: func(c *PeopleConfig) { c.IdentityProfileMinCenterPhotos = -1 }},
 		{name: "zero margin", field: "identity_profile_margin", apply: func(c *PeopleConfig) { c.IdentityProfileMargin = 0 }},
+		{name: "negative margin", field: "identity_profile_margin", apply: func(c *PeopleConfig) { c.IdentityProfileMargin = -0.1 }},
 		{name: "margin at upper bound", field: "identity_profile_margin", apply: func(c *PeopleConfig) { c.IdentityProfileMargin = 1 }},
+		{name: "margin above upper bound", field: "identity_profile_margin", apply: func(c *PeopleConfig) { c.IdentityProfileMargin = 1.1 }},
 		{name: "zero rescue threshold", field: "identity_profile_rescue_threshold", apply: func(c *PeopleConfig) { c.IdentityProfileRescueThreshold = 0 }},
+		{name: "negative rescue threshold", field: "identity_profile_rescue_threshold", apply: func(c *PeopleConfig) { c.IdentityProfileRescueThreshold = -0.1 }},
 		{name: "rescue threshold at upper bound", field: "identity_profile_rescue_threshold", apply: func(c *PeopleConfig) { c.IdentityProfileRescueThreshold = 1 }},
+		{name: "rescue threshold above upper bound", field: "identity_profile_rescue_threshold", apply: func(c *PeopleConfig) { c.IdentityProfileRescueThreshold = 1.1 }},
 		{name: "zero batch size", field: "identity_profile_batch_size", apply: func(c *PeopleConfig) { c.IdentityProfileBatchSize = 0 }},
+		{name: "negative batch size", field: "identity_profile_batch_size", apply: func(c *PeopleConfig) { c.IdentityProfileBatchSize = -1 }},
 		{name: "zero cooldown", field: "identity_profile_cooldown_ms", apply: func(c *PeopleConfig) { c.IdentityProfileCooldownMs = 0 }},
+		{name: "negative cooldown", field: "identity_profile_cooldown_ms", apply: func(c *PeopleConfig) { c.IdentityProfileCooldownMs = -1 }},
 	}
 
 	for _, tt := range tests {
@@ -304,4 +337,67 @@ func TestPeopleIdentityProfileRejectsInvalidConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPeopleIdentityProfileLoadRejectsExplicitInvalidValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+		value string
+	}{
+		{name: "zero max centers", field: "identity_profile_max_centers", value: "0"},
+		{name: "zero minimum center faces", field: "identity_profile_min_center_faces", value: "0"},
+		{name: "zero minimum center photos", field: "identity_profile_min_center_photos", value: "0"},
+		{name: "zero margin", field: "identity_profile_margin", value: "0"},
+		{name: "NaN margin", field: "identity_profile_margin", value: ".nan"},
+		{name: "zero rescue threshold", field: "identity_profile_rescue_threshold", value: "0"},
+		{name: "NaN rescue threshold", field: "identity_profile_rescue_threshold", value: ".nan"},
+		{name: "zero batch size", field: "identity_profile_batch_size", value: "0"},
+		{name: "zero cooldown", field: "identity_profile_cooldown_ms", value: "0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "config.yaml")
+			writeTestFile(t, configPath, identityProfileTestYAML(tt.field+": "+tt.value))
+
+			_, err := Load(configPath)
+			if err == nil {
+				t.Fatalf("Load accepted %s: %s", tt.field, tt.value)
+			}
+			if !strings.Contains(err.Error(), tt.field) {
+				t.Fatalf("Load error %q does not contain YAML field %q", err, tt.field)
+			}
+		})
+	}
+}
+
+func TestPeopleIdentityProfileOverrideExplicitZeroIsNotDefaulted(t *testing.T) {
+	dir := t.TempDir()
+	basePath := filepath.Join(dir, "config.base.yaml")
+	overridePath := filepath.Join(dir, "config.prod.yaml")
+	writeTestFile(t, basePath, identityProfileTestYAML("identity_profile_batch_size: 25"))
+	writeTestFile(t, overridePath, "people:\n  identity_profile_batch_size: 0\n")
+
+	_, err := Load(overridePath)
+	if err == nil {
+		t.Fatal("Load accepted override people.identity_profile_batch_size: 0")
+	}
+	if !strings.Contains(err.Error(), "identity_profile_batch_size") {
+		t.Fatalf("Load error %q does not contain YAML field identity_profile_batch_size", err)
+	}
+}
+
+func identityProfileTestYAML(peopleEntry string) string {
+	return `server:
+  port: 8080
+database:
+  type: "sqlite"
+photos:
+  root_path: "/tmp/photos"
+security:
+  jwt_Secret: "base-secret"
+people:
+  ` + peopleEntry + "\n"
 }

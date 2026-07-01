@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -511,10 +512,10 @@ func (c *Config) Validate() error {
 	if c.People.IdentityProfileMinCenterPhotos <= 0 {
 		return fmt.Errorf("people.identity_profile_min_center_photos must be greater than 0")
 	}
-	if c.People.IdentityProfileMargin <= 0 || c.People.IdentityProfileMargin >= 1 {
+	if math.IsNaN(c.People.IdentityProfileMargin) || c.People.IdentityProfileMargin <= 0 || c.People.IdentityProfileMargin >= 1 {
 		return fmt.Errorf("people.identity_profile_margin must be between 0 and 1")
 	}
-	if c.People.IdentityProfileRescueThreshold <= 0 || c.People.IdentityProfileRescueThreshold >= 1 {
+	if math.IsNaN(c.People.IdentityProfileRescueThreshold) || c.People.IdentityProfileRescueThreshold <= 0 || c.People.IdentityProfileRescueThreshold >= 1 {
 		return fmt.Errorf("people.identity_profile_rescue_threshold must be between 0 and 1")
 	}
 	if c.People.IdentityProfileBatchSize <= 0 {
