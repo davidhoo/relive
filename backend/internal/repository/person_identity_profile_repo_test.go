@@ -2,12 +2,15 @@ package repository
 
 import (
 	"errors"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func uintPtr(v uint) *uint { return &v }
@@ -604,4 +607,168 @@ func TestRepositories_IdentityProfileInitialized(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, dirty, 1)
 	assert.Equal(t, person.ID, dirty[0].PersonID)
+}
+
+// upsertProfileRaw 直接写入/覆盖一条 profile 行，用于测试 status/active_generation/model
+// 过滤条件（绕过 ReplaceGeneration 的 ready 强制），并确保 person 存在于 people 表。
+func upsertProfileRaw(t *testing.T, db *gorm.DB, personRepo PersonRepository, personID uint, embeddingModel, status string, activeGen int) {
+	t.Helper()
+	now := time.Now().UTC()
+	p := &model.PersonIdentityProfile{
+		PersonID:         personID,
+		Status:           status,
+		ActiveGeneration: activeGen,
+		NextGeneration:   activeGen + 1,
+		EmbeddingModel:   embeddingModel,
+		AlgorithmVersion: "v1",
+		UpdatedAt:        now,
+	}
+	require.NoError(t, db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "person_id"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{"status": status, "active_generation": activeGen, "embedding_model": embeddingModel, "updated_at": now}),
+	}).Create(p).Error)
+}
+
+// insertCenterRaw 直接写入一条中心行到指定 generation，用于测试过滤与排序。
+func insertCenterRaw(t *testing.T, db *gorm.DB, personID uint, gen, ordinal, support int, p10 float64) *model.PersonIdentityCenter {
+	t.Helper()
+	emb := model.EncodeEmbedding([]float32{1, 0, 0})
+	c := &model.PersonIdentityCenter{
+		PersonID:          personID,
+		Generation:        gen,
+		Ordinal:           ordinal,
+		CentroidEmbedding: emb,
+		SumEmbedding:      emb,
+		SupportCount:      support,
+		SimilarityP10:     p10,
+	}
+	require.NoError(t, db.Create(c).Error)
+	return c
+}
+
+func createPerson(t *testing.T, personRepo PersonRepository) *model.Person {
+	t.Helper()
+	p := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(p))
+	return p
+}
+
+func TestPersonIdentityProfileRepository_ListActiveCentersByPersonIDs_FiltersAndOrder(t *testing.T) {
+	repo, db := newProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	p1 := createPerson(t, personRepo) // emb-v1, ready, active gen 2 (含一个 stale gen1 中心)
+	p2 := createPerson(t, personRepo) // emb-v2 错误模型
+	p3 := createPerson(t, personRepo) // emb-v1 但 status=dirty
+	p4 := createPerson(t, personRepo) // emb-v1 ready 但人物将被删除
+	p5 := createPerson(t, personRepo) // emb-v1 ready 但 active_generation=0
+
+	// p1: ready, active gen 2, 两个 gen2 中心 + 一个 stale gen1 中心。
+	upsertProfileRaw(t, db, personRepo, p1.ID, "emb-v1", model.PersonIdentityProfileStatusReady, 2)
+	stale := insertCenterRaw(t, db, p1.ID, 1, 1, 5, 0.80)
+	c1 := insertCenterRaw(t, db, p1.ID, 2, 1, 5, 0.90)
+	c2 := insertCenterRaw(t, db, p1.ID, 2, 2, 4, 0.85)
+
+	// p2: 错误模型。
+	upsertProfileRaw(t, db, personRepo, p2.ID, "emb-v2", model.PersonIdentityProfileStatusReady, 1)
+	insertCenterRaw(t, db, p2.ID, 1, 1, 5, 0.90)
+
+	// p3: 非 ready。
+	upsertProfileRaw(t, db, personRepo, p3.ID, "emb-v1", model.PersonIdentityProfileStatusDirty, 1)
+	insertCenterRaw(t, db, p3.ID, 1, 1, 5, 0.90)
+
+	// p4: ready，但人物删除。
+	upsertProfileRaw(t, db, personRepo, p4.ID, "emb-v1", model.PersonIdentityProfileStatusReady, 1)
+	insertCenterRaw(t, db, p4.ID, 1, 1, 5, 0.90)
+	require.NoError(t, personRepo.Delete(p4.ID))
+
+	// p5: active_generation=0。
+	upsertProfileRaw(t, db, personRepo, p5.ID, "emb-v1", model.PersonIdentityProfileStatusReady, 0)
+	insertCenterRaw(t, db, p5.ID, 1, 1, 5, 0.90)
+
+	// 输入含重复、0。
+	got, err := repo.ListActiveCentersByPersonIDs([]uint{p1.ID, p2.ID, p3.ID, p4.ID, p5.ID, 0, p1.ID}, "emb-v1")
+	require.NoError(t, err)
+
+	// 只有 p1 的 gen2 中心应返回，按 ordinal ASC, id ASC。
+	require.Contains(t, got, p1.ID)
+	assert.Len(t, got, 1, "only p1 has valid active centers")
+	centers := got[p1.ID]
+	require.Len(t, centers, 2)
+	assert.Equal(t, c1.ID, centers[0].ID, "ordinal 1 first")
+	assert.Equal(t, c2.ID, centers[1].ID, "ordinal 2 second")
+	assert.NotEqual(t, stale.ID, centers[0].ID, "stale generation excluded")
+}
+
+func TestPersonIdentityProfileRepository_ListActiveCentersByPersonIDs_EmptyInput(t *testing.T) {
+	repo, db := newProfileRepo(t)
+	defer teardownTestDB(db)
+
+	got, err := repo.ListActiveCentersByPersonIDs(nil, "emb-v1")
+	require.NoError(t, err)
+	assert.Empty(t, got)
+
+	got, err = repo.ListActiveCentersByPersonIDs([]uint{0, 0}, "emb-v1")
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+// newCountingProfileRepo 返回一个仓库与查询计数器，用于验证批量查询而非逐候选 N+1。
+func newCountingProfileRepo(t *testing.T) (*personIdentityProfileRepository, *gorm.DB, *int32) {
+	t.Helper()
+	db := setupTestDB(t)
+	var count int32
+	db.Callback().Query().Before("gorm:query").Register("test_count_queries", func(tx *gorm.DB) {
+		atomic.AddInt32(&count, 1)
+	})
+	return NewPersonIdentityProfileRepository(db).(*personIdentityProfileRepository), db, &count
+}
+
+func TestPersonIdentityProfileRepository_ListActiveCentersByPersonIDs_BatchedNoNPlusOne(t *testing.T) {
+	repo, db, qcount := newCountingProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	persons := make([]*model.Person, 0, 5)
+	for i := 0; i < 5; i++ {
+		p := createPerson(t, personRepo)
+		upsertProfileRaw(t, db, personRepo, p.ID, "emb-v1", model.PersonIdentityProfileStatusReady, 1)
+		insertCenterRaw(t, db, p.ID, 1, 1, 5, 0.90)
+		persons = append(persons, p)
+	}
+
+	ids := make([]uint, 0, 5)
+	for _, p := range persons {
+		ids = append(ids, p.ID)
+	}
+	got, err := repo.ListActiveCentersByPersonIDs(ids, "emb-v1")
+	require.NoError(t, err)
+	assert.Len(t, got, 5, "all persons returned")
+	// 5 个 ID 低于 SQLite 参数上限，应仅 1 次批量查询（非逐人物 N+1）。
+	assert.Equal(t, int32(1), atomic.LoadInt32(qcount), "single batched query for small input")
+}
+
+func TestPersonIdentityProfileRepository_ListActiveCentersByPersonIDs_Chunking(t *testing.T) {
+	repo, db, qcount := newCountingProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	p1 := createPerson(t, personRepo)
+	upsertProfileRaw(t, db, personRepo, p1.ID, "emb-v1", model.PersonIdentityProfileStatusReady, 1)
+	insertCenterRaw(t, db, p1.ID, 1, 1, 5, 0.90)
+
+	// 构造 600 个 ID（其中只有 p1.ID 真实存在），触发分块。
+	ids := make([]uint, 0, 600)
+	ids = append(ids, p1.ID)
+	for i := 1; i < 600; i++ {
+		ids = append(ids, uint(1000000+i))
+	}
+
+	got, err := repo.ListActiveCentersByPersonIDs(ids, "emb-v1")
+	require.NoError(t, err)
+	require.Contains(t, got, p1.ID)
+	assert.Len(t, got[p1.ID], 1)
+	// 600 个 ID 超过 sqliteVarLimit(500)，应分 2 次批量查询。
+	assert.Equal(t, int32(2), atomic.LoadInt32(qcount), "query count follows chunk count, not person count")
 }

@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"sort"
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
@@ -51,6 +52,10 @@ type FaceRepository interface {
 	ReassignFaces(faceIDs []uint, personID uint, reason string) error
 	ListLowConfidence(threshold float64, maxGeneration int) ([]*model.Face, error)
 	ResetForRecluster(ids []uint) error
+	// ListPersonIDsCooccurringWithPhotos 批量返回在指定照片中出现、且属于候选人物集合的
+	// 人物 ID（去重升序）。用于 matcher 同照片共现负证据判断，避免逐候选 N+1 查询。
+	// 两组 ID 均去重并忽略 0；按 SQLite 参数上限对两个维度分块；任一输入为空直接返回 nil。
+	ListPersonIDsCooccurringWithPhotos(photoIDs []uint, candidatePersonIDs []uint) ([]uint, error)
 }
 
 type PendingFaceStats struct {
@@ -318,4 +323,43 @@ func (r *faceRepository) ResetForRecluster(ids []uint) error {
 		}
 	}
 	return nil
+}
+
+// ListPersonIDsCooccurringWithPhotos 批量返回在指定照片中出现、且属于候选人物集合的
+// 人物 ID。SQL 语义：
+//
+//	SELECT DISTINCT person_id FROM faces
+//	WHERE photo_id IN (...) AND person_id IN (...) AND person_id IS NOT NULL;
+//
+// photo/person ID 均去重并忽略 0；同时对两组参数分块，保证每条 SQL 总参数数不超过
+// sqliteVarLimit；利用现有 idx_face_photo / idx_face_person 索引，不做全表加载；
+// 返回人物 ID 去重升序；任一输入为空直接返回 nil；不允许每个候选执行一次 SQL。
+func (r *faceRepository) ListPersonIDsCooccurringWithPhotos(photoIDs []uint, candidatePersonIDs []uint) ([]uint, error) {
+	photos := dedupIDs(photoIDs)
+	persons := dedupIDs(candidatePersonIDs)
+	if len(photos) == 0 || len(persons) == 0 {
+		return nil, nil
+	}
+	seen := make(map[uint]struct{})
+	var out []uint
+	for _, pchunk := range chunkIDs(photos) {
+		for _, cchunk := range chunkIDs(persons) {
+			var ids []uint
+			err := r.db.Model(&model.Face{}).
+				Where("photo_id IN ? AND person_id IN ?", pchunk, cchunk).
+				Distinct("person_id").
+				Pluck("person_id", &ids).Error
+			if err != nil {
+				return nil, err
+			}
+			for _, id := range ids {
+				if _, ok := seen[id]; !ok {
+					seen[id] = struct{}{}
+					out = append(out, id)
+				}
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out, nil
 }

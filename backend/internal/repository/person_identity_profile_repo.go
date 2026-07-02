@@ -36,6 +36,15 @@ type PersonIdentityProfileRepository interface {
 	//   - profile.embedding_model 等于 embeddingModel（当前服务模型签名）；
 	//   - 对应人物仍存在于 people 表。
 	ListAllActiveCenters(embeddingModel string) ([]*model.PersonIdentityCenter, error)
+	// ListActiveCentersByPersonIDs 批量返回指定人物活动 generation 的中心，避免逐候选
+	// N+1 查询。仅返回满足以下全部条件的中心（数据库侧 JOIN 过滤）：
+	//   - center.generation = profile.active_generation 且 active_generation > 0；
+	//   - profile.status = ready；
+	//   - profile.embedding_model 等于 embeddingModel；
+	//   - 对应人物仍存在于 people 表。
+	// 输入去重并忽略 0；按 SQLite 参数上限分块；空输入直接返回空 map 不访问数据库。
+	// 返回顺序为 person_id ASC, ordinal ASC, center_id ASC。
+	ListActiveCentersByPersonIDs(personIDs []uint, embeddingModel string) (map[uint][]*model.PersonIdentityCenter, error)
 	// ReplaceGeneration 在单事务内写入新 generation（centers + members）并原子激活。
 	// build 中 accepted member 的 CenterID 为所属 center 的 Ordinal（逻辑引用），
 	// 持久化 center 取得真实主键后重映射为真实 ID。任何步骤失败整体回滚。
@@ -176,6 +185,40 @@ func (r *personIdentityProfileRepository) ListAllActiveCenters(embeddingModel st
 		return nil, err
 	}
 	return centers, nil
+}
+
+// ListActiveCentersByPersonIDs 批量返回指定人物活动 generation 的中心，用于 matcher
+// 在 ANN 召回后一次性加载所有候选中心做精确评分，避免逐候选调用 GetActive 产生 N+1。
+//
+// 过滤条件与 ListAllActiveCenters 一致，额外要求 profile.status = ready 并按 person ID
+// 集合限定。输入去重、忽略 0、按 SQLite 参数上限分块；每个分块一次批量查询。
+// 返回 map[personID][]centers，中心按 person_id ASC, ordinal ASC, id ASC 排序。
+// 空输入直接返回空 map，不访问数据库。
+func (r *personIdentityProfileRepository) ListActiveCentersByPersonIDs(personIDs []uint, embeddingModel string) (map[uint][]*model.PersonIdentityCenter, error) {
+	out := make(map[uint][]*model.PersonIdentityCenter)
+	ids := dedupIDs(personIDs)
+	if len(ids) == 0 {
+		return out, nil
+	}
+	for _, chunk := range chunkIDs(ids) {
+		var centers []*model.PersonIdentityCenter
+		q := r.db.Table("person_identity_centers AS c").
+			Select("c.*").
+			Joins("INNER JOIN person_identity_profiles AS p ON p.person_id = c.person_id").
+			Joins("INNER JOIN people ON people.id = c.person_id").
+			Where("c.generation = p.active_generation AND p.active_generation > 0").
+			Where("p.status = ?", model.PersonIdentityProfileStatusReady).
+			Where("p.embedding_model = ?", embeddingModel).
+			Where("c.person_id IN ?", chunk).
+			Order("c.person_id ASC, c.ordinal ASC, c.id ASC")
+		if err := q.Find(&centers).Error; err != nil {
+			return nil, err
+		}
+		for _, c := range centers {
+			out[c.PersonID] = append(out[c.PersonID], c)
+		}
+	}
+	return out, nil
 }
 
 // ReplaceGeneration 在单个 SQLite 事务内完成新 generation 的写入与激活。

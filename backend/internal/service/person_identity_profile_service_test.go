@@ -76,6 +76,9 @@ func (c *countingIdentityProfileRepo) ListAllActiveCenters(embeddingModel string
 	c.mu.Unlock()
 	return c.inner.ListAllActiveCenters(embeddingModel)
 }
+func (c *countingIdentityProfileRepo) ListActiveCentersByPersonIDs(personIDs []uint, embeddingModel string) (map[uint][]*model.PersonIdentityCenter, error) {
+	return c.inner.ListActiveCentersByPersonIDs(personIDs, embeddingModel)
+}
 func (c *countingIdentityProfileRepo) ReplaceGeneration(personID uint, build *model.PersonIdentityProfileBuild) error {
 	c.mu.Lock()
 	c.replaceGeneration++
@@ -556,6 +559,9 @@ func (r *failingReplaceRepo) GetStats() (*model.PersonIdentityProfileStats, erro
 func (r *failingReplaceRepo) ListAllActiveCenters(embeddingModel string) ([]*model.PersonIdentityCenter, error) {
 	return r.inner.ListAllActiveCenters(embeddingModel)
 }
+func (r *failingReplaceRepo) ListActiveCentersByPersonIDs(personIDs []uint, embeddingModel string) (map[uint][]*model.PersonIdentityCenter, error) {
+	return r.inner.ListActiveCentersByPersonIDs(personIDs, embeddingModel)
+}
 func (r *failingReplaceRepo) ReplaceGeneration(personID uint, build *model.PersonIdentityProfileBuild) error {
 	return errBoom
 }
@@ -805,6 +811,9 @@ func (r *failingListCentersRepo) GetStats() (*model.PersonIdentityProfileStats, 
 }
 func (r *failingListCentersRepo) ListAllActiveCenters(embeddingModel string) ([]*model.PersonIdentityCenter, error) {
 	return nil, errBoom
+}
+func (r *failingListCentersRepo) ListActiveCentersByPersonIDs(personIDs []uint, embeddingModel string) (map[uint][]*model.PersonIdentityCenter, error) {
+	return r.inner.ListActiveCentersByPersonIDs(personIDs, embeddingModel)
 }
 func (r *failingListCentersRepo) ReplaceGeneration(personID uint, build *model.PersonIdentityProfileBuild) error {
 	return r.inner.ReplaceGeneration(personID, build)
