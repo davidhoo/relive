@@ -36,7 +36,7 @@ type FaceRepository interface {
 	DeleteByPhotoID(photoID uint) error
 	ListByPhotoID(photoID uint) ([]*model.Face, error)
 	ListByPersonID(personID uint) ([]*model.Face, error)
-	ListByPersonIDSummary(personID uint) ([]*model.Face, error)       // 排除 embedding，按 quality_score 排序
+	ListByPersonIDSummary(personID uint) ([]*model.Face, error) // 排除 embedding，按 quality_score 排序
 	ListByPersonIDPaginated(personID uint, page, pageSize int) ([]*model.Face, int64, error)
 	ListByIDs(ids []uint) ([]*model.Face, error)
 	ListAssigned() ([]*model.Face, error)
@@ -44,6 +44,10 @@ type FaceRepository interface {
 	ListPending(limit int) ([]*model.Face, error)
 	GetPendingStats() (*PendingFaceStats, error)
 	ListPrototypeEmbeddings(personIDs []uint, perPerson int) ([]*model.Face, error)
+	// ListProfileFaces loads the lightweight fields plus embedding needed to build an
+	// identity profile for a person, ordered deterministically by manual lock, cluster
+	// confidence, quality, then ID.
+	ListProfileFaces(personID uint) ([]*model.Face, error)
 	ReassignFaces(faceIDs []uint, personID uint, reason string) error
 	ListLowConfidence(threshold float64, maxGeneration int) ([]*model.Face, error)
 	ResetForRecluster(ids []uint) error
@@ -191,8 +195,8 @@ func (r *faceRepository) ListPending(limit int) ([]*model.Face, error) {
 			"WHEN 2 THEN 1 " +
 			"WHEN 3 THEN 5 " +
 			"WHEN 4 THEN 15 " +
-			"ELSE 60 END").
-		Order("retry_count ASC").           // 重试次数少的优先
+							"ELSE 60 END").
+		Order("retry_count ASC").              // 重试次数少的优先
 		Order("clustered_at ASC NULLS FIRST"). // 从未尝试的优先
 		Order("id ASC")
 	if limit > 0 {
@@ -274,6 +278,18 @@ func (r *faceRepository) ReassignFaces(faceIDs []uint, personID uint, reason str
 		}
 	}
 	return nil
+}
+
+// ListProfileFaces selects only the fields an identity profile build needs (lightweight
+// metadata plus the embedding blob), avoiding thumbnails/bbox payloads. Ordering matches
+// the prototype loader so builds are deterministic regardless of insertion order.
+func (r *faceRepository) ListProfileFaces(personID uint) ([]*model.Face, error) {
+	var faces []*model.Face
+	err := r.db.Select("id, photo_id, person_id, confidence, quality_score, embedding, cluster_status, cluster_score, manual_locked, manual_lock_reason").
+		Where("person_id = ?", personID).
+		Order("manual_locked DESC, cluster_score DESC, quality_score DESC, confidence DESC, id ASC").
+		Find(&faces).Error
+	return faces, err
 }
 
 func (r *faceRepository) ListLowConfidence(threshold float64, maxGeneration int) ([]*model.Face, error) {

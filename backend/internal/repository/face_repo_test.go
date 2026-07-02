@@ -291,3 +291,67 @@ func TestFaceRepository_UpdateClusterFields(t *testing.T) {
 func ptrTime(t time.Time) *time.Time {
 	return &t
 }
+
+func TestFaceRepository_ListProfileFaces(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	faceRepo := NewFaceRepository(db)
+	personRepo := NewPersonRepository(db)
+
+	person := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(person))
+
+	emb := model.EncodeEmbedding([]float32{1, 0, 0})
+	// face1: manual-locked -> must sort first regardless of other fields.
+	face1 := &model.Face{
+		PhotoID: 1, PersonID: &person.ID,
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence: 0.5, QualityScore: 0.5, Embedding: emb,
+		ClusterStatus: model.FaceClusterStatusManual, ClusterScore: 0.0,
+		ManualLocked: true, ManualLockReason: "pin",
+	}
+	// face2: higher cluster_score than face3.
+	face2 := &model.Face{
+		PhotoID: 1, PersonID: &person.ID,
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence: 0.9, QualityScore: 0.9, Embedding: emb,
+		ClusterStatus: model.FaceClusterStatusAssigned, ClusterScore: 0.9,
+	}
+	// face3: lower cluster_score despite higher quality -> after face2.
+	face3 := &model.Face{
+		PhotoID: 1, PersonID: &person.ID,
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence: 0.7, QualityScore: 0.99, Embedding: emb,
+		ClusterStatus: model.FaceClusterStatusAssigned, ClusterScore: 0.5,
+	}
+	// face4: belongs to another person -> excluded.
+	other := &model.Person{Category: model.PersonCategoryStranger}
+	require.NoError(t, personRepo.Create(other))
+	face4 := &model.Face{
+		PhotoID: 1, PersonID: &other.ID,
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence: 0.99, QualityScore: 0.99, Embedding: emb,
+		ClusterStatus: model.FaceClusterStatusAssigned, ClusterScore: 1.0,
+	}
+	require.NoError(t, faceRepo.Create(face1))
+	require.NoError(t, faceRepo.Create(face2))
+	require.NoError(t, faceRepo.Create(face3))
+	require.NoError(t, faceRepo.Create(face4))
+
+	faces, err := faceRepo.ListProfileFaces(person.ID)
+	require.NoError(t, err)
+	require.Len(t, faces, 3, "only the target person's faces are returned")
+
+	// Deterministic ordering: manual lock, cluster_score, quality, id.
+	assert.Equal(t, face1.ID, faces[0].ID)
+	assert.Equal(t, face2.ID, faces[1].ID)
+	assert.Equal(t, face3.ID, faces[2].ID)
+
+	// Only the lightweight fields plus embedding are selected; thumbnail_path is absent.
+	assert.NotEmpty(t, faces[0].Embedding, "embedding loaded for profile builds")
+	assert.Equal(t, "pin", faces[0].ManualLockReason)
+	assert.Equal(t, person.ID, *faces[0].PersonID)
+	assert.Empty(t, faces[0].ThumbnailPath, "thumbnail_path not selected")
+	assert.Zero(t, faces[0].BBoxX, "bbox fields not selected")
+}
