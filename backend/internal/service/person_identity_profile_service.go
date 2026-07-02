@@ -96,6 +96,10 @@ type personIdentityProfileService struct {
 	bgFaceRepo repository.FaceRepository
 	enabled    bool
 
+	// ann 是身份中心 ANN 缓存。仅非 legacy 模式初始化；首次/按需重建只在后台切片中执行。
+	// legacy 模式下为 nil，保证对 ANN、Repository 和现有聚类调用链完全 no-op。
+	ann *identityProfileANN
+
 	// nowFn 注入时钟，测试无需真实 sleep。
 	nowFn func() time.Time
 
@@ -160,10 +164,17 @@ func NewPersonIdentityProfileService(
 		svc.bgRepo = repository.NewPersonIdentityProfileRepository(bgDB)
 		svc.bgFaceRepo = repository.NewFaceRepository(bgDB)
 		svc.enabled = true
+		// ANN 仅在非 legacy 模式初始化；首次构建延迟到后台切片，不阻塞构造与 HTTP 请求。
+		svc.ann = newIdentityProfileANN(embeddingModel)
+		svc.ann.rebuildRequested.Store(true) // 标记需要首次构建
 		// 加载并校验 backfill 状态；版本不一致时重置。
 		svc.loadAndAlignBackfillState()
 	} else if mode != identityProfileModeLegacy && bgDB == nil {
 		logger.Warnf("Identity profile background DB unavailable; background building disabled (mode=%s)", mode)
+		// 即使后台 DB 不可用，ANN 仍初始化（始终 ready=false），以便模式判断一致；
+		// 不执行任何后台重建。
+		svc.ann = newIdentityProfileANN(embeddingModel)
+		svc.ann.rebuildRequested.Store(true)
 	}
 
 	return svc
@@ -181,6 +192,10 @@ func (s *personIdentityProfileService) SetBackgroundDB(bgDB *gorm.DB) {
 	s.bgRepo = repository.NewPersonIdentityProfileRepository(bgDB)
 	s.bgFaceRepo = repository.NewFaceRepository(bgDB)
 	s.enabled = true
+	if s.ann == nil {
+		s.ann = newIdentityProfileANN(s.embeddingModel)
+		s.ann.rebuildRequested.Store(true)
+	}
 	if !s.stateLoaded {
 		s.loadAndAlignBackfillStateLocked()
 	}
@@ -283,7 +298,35 @@ func (s *personIdentityProfileService) RunBackgroundSlice() error {
 	// 2. 构建最多一个 dirty 人物画像。
 	s.buildOneDirtyPerson()
 
+	// 3. 按需重建身份中心 ANN（首次构建或失败后重建）。
+	//    仅在 rebuildRequested 时调用 ListAllActiveCenters，避免每个切片都全量加载。
+	s.rebuildANNIfNeeded()
+
 	return nil
+}
+
+// rebuildANNIfNeeded 在 rebuildRequested 时从活动中心重建 ANN snapshot。
+// 使用专用后台仓库查询，仅返回当前模型签名的活动中心。重建失败只标记不可用并请求重试，
+// 不影响画像 generation 与现有聚类。
+func (s *personIdentityProfileService) rebuildANNIfNeeded() {
+	if s.ann == nil || !s.ann.RebuildRequested() {
+		return
+	}
+	if s.bgRepo == nil {
+		return
+	}
+	centers, err := s.bgRepo.ListAllActiveCenters(s.embeddingModel)
+	if err != nil {
+		logger.Warnf("Identity profile ANN: list active centers failed: %v", err)
+		// 查询失败：保持 rebuildRequested=true，下次切片重试。
+		s.ann.RequestRebuild()
+		return
+	}
+	if err := s.ann.Rebuild(centers, s.embeddingModel); err != nil {
+		logger.Warnf("Identity profile ANN: rebuild failed: %v", err)
+		// Rebuild 内部已标记 unavailable + rebuildRequested。
+		return
+	}
 }
 
 // advanceBackfill 发现一批尚未构建画像的人物并标记 dirty，推进持久化游标。
@@ -383,10 +426,42 @@ func (s *personIdentityProfileService) buildOneDirtyPerson() {
 	}); err != nil {
 		logger.Warnf("Identity profile: cleanup inactive generations for person %d failed: %v", personID, err)
 	}
+
+	// 将新激活的 generation 接入 ANN delta。ReplaceGeneration 把 builder ordinal 重映射成
+	// 真实 center ID，因此必须从事务成功后的 GetActive 重新读取真实 center，不得直接用写入前的 build。
+	s.activateANN(personID)
+}
+
+// activateANN 从数据库读取人物活动 generation 的真实中心并接入 ANN delta。
+// ANN 更新失败只标记 ANN 不可用并请求重建，不回滚已成功激活的数据库 generation。
+func (s *personIdentityProfileService) activateANN(personID uint) {
+	if s.ann == nil {
+		return
+	}
+	build, err := s.bgRepo.GetActive(personID)
+	if err != nil {
+		logger.Warnf("Identity profile ANN: get active for person %d failed: %v", personID, err)
+		s.ann.RequestRebuild()
+		return
+	}
+	if build == nil || build.Profile == nil || build.Profile.ActiveGeneration == 0 {
+		// 无活动 generation（如构建为空）→ 失效该人物的旧中心即可。
+		s.ann.InvalidatePerson(personID)
+		return
+	}
+	if err := s.ann.Activate(personID, build.Profile.ActiveGeneration, build.Centers); err != nil {
+		// delta 更新失败（容量上限或非法中心）：标记不可用并请求完整重建。
+		logger.Warnf("Identity profile ANN: activate person %d failed: %v", personID, err)
+		s.ann.RequestRebuild()
+		return
+	}
 }
 
 // cleanupDeletedPerson 清理被删除人物的派生画像数据。
 func (s *personIdentityProfileService) cleanupDeletedPerson(personID uint) {
+	if s.ann != nil {
+		s.ann.InvalidatePerson(personID)
+	}
 	if err := s.executeWrite(func() error {
 		return s.bgRepo.DeleteByPersonIDs([]uint{personID})
 	}); err != nil {

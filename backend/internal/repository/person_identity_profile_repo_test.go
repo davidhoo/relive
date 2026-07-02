@@ -280,7 +280,7 @@ func TestPersonIdentityProfileRepository_ListAllActiveCenters(t *testing.T) {
 	seedActiveGeneration(t, repo, p1.ID) // p1: gen 1, 1 center
 	seedActiveGeneration(t, repo, p2.ID) // p2: gen 1, 1 center
 
-	centers, err := repo.ListAllActiveCenters()
+	centers, err := repo.ListAllActiveCenters("emb-v1")
 	require.NoError(t, err)
 	require.Len(t, centers, 2)
 
@@ -291,6 +291,91 @@ func TestPersonIdentityProfileRepository_ListAllActiveCenters(t *testing.T) {
 	}
 	assert.True(t, owners[p1.ID])
 	assert.True(t, owners[p2.ID])
+}
+
+// TestPersonIdentityProfileRepository_ListAllActiveCentersPrecisionGuard 验证
+// ListAllActiveCenters 在数据库侧严格过滤：模型签名不匹配、人物已删除、历史 generation
+// 均不返回；且只返回活动 generation 的中心。
+func TestPersonIdentityProfileRepository_ListAllActiveCentersPrecisionGuard(t *testing.T) {
+	repo, db := newProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	p1 := &model.Person{Category: model.PersonCategoryFriend}
+	p2 := &model.Person{Category: model.PersonCategoryFriend}
+	p3 := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(p1))
+	require.NoError(t, personRepo.Create(p2))
+	require.NoError(t, personRepo.Create(p3))
+
+	// p1/p2 用 emb-v1 构建；p3 用不同模型签名构建。
+	seedActiveGeneration(t, repo, p1.ID) // emb-v1
+	seedActiveGeneration(t, repo, p2.ID) // emb-v1
+	seedActiveGenerationWithModel(t, repo, p3.ID, "emb-other")
+
+	// 模型签名不匹配：只返回 p1/p2。
+	centers, err := repo.ListAllActiveCenters("emb-v1")
+	require.NoError(t, err)
+	require.Len(t, centers, 2, "centers with mismatched embedding model must be excluded")
+	for _, c := range centers {
+		assert.NotEqual(t, p3.ID, c.PersonID)
+	}
+
+	// 硬删除 p1（orphan 其派生数据）→ 其中心不再返回（people JOIN 过滤）。
+	require.NoError(t, db.Unscoped().Delete(&model.Person{}, p1.ID).Error)
+	centers, err = repo.ListAllActiveCenters("emb-v1")
+	require.NoError(t, err)
+	require.Len(t, centers, 1, "centers of deleted people must be excluded")
+	assert.Equal(t, p2.ID, centers[0].PersonID)
+
+	// 查询另一模型签名只返回 p3。
+	centers, err = repo.ListAllActiveCenters("emb-other")
+	require.NoError(t, err)
+	require.Len(t, centers, 1)
+	assert.Equal(t, p3.ID, centers[0].PersonID)
+
+	// 不存在的模型签名返回空集（而非错误）。
+	centers, err = repo.ListAllActiveCenters("nonexistent")
+	require.NoError(t, err)
+	assert.Empty(t, centers)
+}
+
+// seedActiveGenerationWithModel 与 seedActiveGeneration 相同，但允许指定 embedding_model，
+// 用于测试 ListAllActiveCenters 的模型签名过滤。
+func seedActiveGenerationWithModel(t *testing.T, repo *personIdentityProfileRepository, personID uint, embeddingModel string) *model.PersonIdentityProfileBuild {
+	t.Helper()
+	require.NoError(t, repo.MarkDirty([]uint{personID}, "seed"))
+
+	emb := model.EncodeEmbedding([]float32{1, 0, 0})
+	build := &model.PersonIdentityProfileBuild{
+		Profile: &model.PersonIdentityProfile{
+			PersonID:         personID,
+			AlgorithmVersion: "v1",
+			EmbeddingModel:   embeddingModel,
+		},
+		Centers: []*model.PersonIdentityCenter{
+			{
+				PersonID:          personID,
+				Ordinal:           1,
+				CentroidEmbedding: emb,
+				SumEmbedding:      emb,
+				MedoidFaceID:      uintPtr(101),
+				SupportCount:      2,
+				TotalWeight:       2.0,
+				SimilarityP10:     0.90,
+				SimilarityP50:     0.95,
+				Confirmed:         false,
+			},
+		},
+		Members: []*model.PersonIdentityCenterMember{
+			{PersonID: personID, FaceID: 101, PhotoID: 10, Similarity: 1.0, Weight: 1.0, State: model.PersonIdentityMemberStateAccepted, CenterID: uintPtr(1)},
+		},
+	}
+	require.NoError(t, repo.ReplaceGeneration(personID, build))
+	got, err := repo.GetActive(personID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Profile)
+	return got
 }
 
 func TestPersonIdentityProfileRepository_DeleteByPersonIDs(t *testing.T) {

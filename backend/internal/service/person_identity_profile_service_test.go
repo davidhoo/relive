@@ -70,11 +70,11 @@ func (c *countingIdentityProfileRepo) GetStats() (*model.PersonIdentityProfileSt
 	c.mu.Unlock()
 	return c.inner.GetStats()
 }
-func (c *countingIdentityProfileRepo) ListAllActiveCenters() ([]*model.PersonIdentityCenter, error) {
+func (c *countingIdentityProfileRepo) ListAllActiveCenters(embeddingModel string) ([]*model.PersonIdentityCenter, error) {
 	c.mu.Lock()
 	c.listAllActiveCenters++
 	c.mu.Unlock()
-	return c.inner.ListAllActiveCenters()
+	return c.inner.ListAllActiveCenters(embeddingModel)
 }
 func (c *countingIdentityProfileRepo) ReplaceGeneration(personID uint, build *model.PersonIdentityProfileBuild) error {
 	c.mu.Lock()
@@ -233,11 +233,13 @@ func TestPersonIdentityProfileService_LegacyNoRepoAccess(t *testing.T) {
 
 	c := deps.countingRepo
 	assert.Equal(t, "legacy", svc.Mode())
+	assert.Nil(t, svc.ann, "legacy must not initialize ANN")
 	assert.Equal(t, 0, c.markDirty, "legacy must not call repo.MarkDirty")
 	assert.Equal(t, 0, c.listDirty, "legacy must not call repo.ListDirty")
 	assert.Equal(t, 0, c.listBackfill, "legacy must not call repo.ListBackfillPersonIDs")
 	assert.Equal(t, 0, c.getActive, "legacy must not call repo.GetActive")
 	assert.Equal(t, 0, c.getStats, "legacy must not call repo.GetStats")
+	assert.Equal(t, 0, c.listAllActiveCenters, "legacy must not call repo.ListAllActiveCenters")
 	assert.NotNil(t, stats)
 	assert.Equal(t, int64(0), stats.Total)
 }
@@ -551,8 +553,8 @@ func (r *failingReplaceRepo) GetActive(personID uint) (*model.PersonIdentityProf
 func (r *failingReplaceRepo) GetStats() (*model.PersonIdentityProfileStats, error) {
 	return r.inner.GetStats()
 }
-func (r *failingReplaceRepo) ListAllActiveCenters() ([]*model.PersonIdentityCenter, error) {
-	return r.inner.ListAllActiveCenters()
+func (r *failingReplaceRepo) ListAllActiveCenters(embeddingModel string) ([]*model.PersonIdentityCenter, error) {
+	return r.inner.ListAllActiveCenters(embeddingModel)
 }
 func (r *failingReplaceRepo) ReplaceGeneration(personID uint, build *model.PersonIdentityProfileBuild) error {
 	return errBoom
@@ -682,4 +684,140 @@ func TestPersonIdentityProfileService_MarkDirtyDedupAndEmpty(t *testing.T) {
 	assert.Equal(t, 1, deps.countingRepo.markDirty)
 	// 去重后传入 {1,2}。
 	assert.ElementsMatch(t, []uint{1, 2}, deps.countingRepo.markDirtyPersonIDs)
+}
+
+// ---- ANN 接入（Task 7） ----
+
+// TestPersonIdentityProfileService_ANNInitializedOnlyNonLegacy 验证 ANN 仅在非 legacy 模式初始化。
+func TestPersonIdentityProfileService_ANNInitializedOnlyNonLegacy(t *testing.T) {
+	// shadow 初始化 ANN。
+	svc, _ := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+	require.NotNil(t, svc.ann, "shadow must initialize ANN")
+	assert.True(t, svc.ann.RebuildRequested(), "non-legacy must request initial rebuild")
+
+	// legacy 不初始化 ANN。
+	legacySvc, _ := newIdentityProfileServiceForTest(t, "legacy", "emb", 5, 0)
+	assert.Nil(t, legacySvc.ann, "legacy must not initialize ANN")
+}
+
+// TestPersonIdentityProfileService_ANNBuiltAndRecalls 验证后台切片完成首次 ANN 构建并可召回。
+func TestPersonIdentityProfileService_ANNBuiltAndRecalls(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+	person := createPersonWithFaces(t, deps.repos, 100, vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+
+	require.NoError(t, svc.MarkDirty([]uint{person.ID}, "manual"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	require.NotNil(t, svc.ann)
+	// ANN 已构建（snapshot 来自 ListAllActiveCenters），可召回该人物。
+	got, ready := svc.ann.Search(vec3(1, 0, 0), 5, "emb")
+	require.True(t, ready, "ANN must be ready after background build")
+	assert.Contains(t, got, person.ID, "ANN must recall the built person")
+	assert.GreaterOrEqual(t, deps.countingRepo.listAllActiveCenters, 1, "rebuild must query active centers")
+}
+
+// TestPersonIdentityProfileService_ANNActivateDoesNotRequireRebuild 验证 ReplaceGeneration 成功后
+// 通过 Activate 接入 delta，新人物无需等待完整重建即可召回。
+func TestPersonIdentityProfileService_ANNActivateDoesNotRequireRebuild(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+	p1 := createPersonWithFaces(t, deps.repos, 100, vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+	p2 := createPersonWithFaces(t, deps.repos, 200, vec3(0, 1, 0), vec3(0.01, 0.98, 0), vec3(0, 0.99, 0.01))
+
+	require.NoError(t, svc.MarkDirty([]uint{p1.ID}, "first"))
+	require.NoError(t, svc.RunBackgroundSlice()) // 构建 p1 + 首次 ANN 重建
+
+	// 第二次切片构建 p2：Activate 接入 delta。
+	require.NoError(t, svc.MarkDirty([]uint{p2.ID}, "second"))
+	runSliceWithClock(svc, time.Duration(svc.cooldownMs)*time.Millisecond+1)
+
+	// p2 应可通过 delta 召回（即便本次切片的 rebuild 用的是 Activate 之前的状态）。
+	got, ready := svc.ann.Search(vec3(0, 1, 0), 5, "emb")
+	require.True(t, ready)
+	assert.Contains(t, got, p2.ID, "newly activated person must be recallable via delta")
+}
+
+// TestPersonIdentityProfileService_ANNInvalidatesDeletedPerson 验证人物删除后 ANN 不再召回。
+func TestPersonIdentityProfileService_ANNInvalidatesDeletedPerson(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+	person := createPersonWithFaces(t, deps.repos, 100, vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+
+	require.NoError(t, svc.MarkDirty([]uint{person.ID}, "manual"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	got, ready := svc.ann.Search(vec3(1, 0, 0), 5, "emb")
+	require.True(t, ready)
+	require.Contains(t, got, person.ID)
+
+	// 清理删除人物 → InvalidatePerson。
+	svc.cleanupDeletedPerson(person.ID)
+
+	got, ready = svc.ann.Search(vec3(1, 0, 0), 5, "emb")
+	require.True(t, ready)
+	assert.NotContains(t, got, person.ID, "deleted person must not be recalled")
+}
+
+// TestPersonIdentityProfileService_ANNRebuildFailureDoesNotRollbackGeneration 验证 ANN 重建失败
+// 不回滚已成功激活的数据库 generation。
+func TestPersonIdentityProfileService_ANNRebuildFailureDoesNotRollbackGeneration(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+	person := createPersonWithFaces(t, deps.repos, 100, vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+
+	require.NoError(t, svc.MarkDirty([]uint{person.ID}, "manual"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	// generation 已激活。
+	active, err := svc.GetActive(person.ID)
+	require.NoError(t, err)
+	require.NotNil(t, active)
+	require.True(t, active.Profile.ActiveGeneration > 0)
+	genBefore := active.Profile.ActiveGeneration
+
+	// 注入会让 ListAllActiveCenters 失败的后台仓库，触发 ANN 重建失败。
+	svc.bgRepo = &failingListCentersRepo{inner: svc.bgRepo}
+	svc.ann.RequestRebuild()
+	runSliceWithClock(svc, time.Duration(svc.cooldownMs)*time.Millisecond+1)
+
+	// generation 不变（ANN 失败不回滚）。
+	active, err = svc.GetActive(person.ID)
+	require.NoError(t, err)
+	assert.Equal(t, genBefore, active.Profile.ActiveGeneration, "ANN rebuild failure must not roll back generation")
+}
+
+// failingListCentersRepo 包装仓库，使 ListAllActiveCenters 失败，其余方法透传。
+type failingListCentersRepo struct {
+	inner repository.PersonIdentityProfileRepository
+}
+
+func (r *failingListCentersRepo) MarkDirty(p []uint, reason string) error {
+	return r.inner.MarkDirty(p, reason)
+}
+func (r *failingListCentersRepo) ListDirty(cursor uint, limit int) ([]*model.PersonIdentityProfile, error) {
+	return r.inner.ListDirty(cursor, limit)
+}
+func (r *failingListCentersRepo) ListBackfillPersonIDs(cursor uint, limit int) ([]uint, error) {
+	return r.inner.ListBackfillPersonIDs(cursor, limit)
+}
+func (r *failingListCentersRepo) GetActive(personID uint) (*model.PersonIdentityProfileBuild, error) {
+	return r.inner.GetActive(personID)
+}
+func (r *failingListCentersRepo) GetStats() (*model.PersonIdentityProfileStats, error) {
+	return r.inner.GetStats()
+}
+func (r *failingListCentersRepo) ListAllActiveCenters(embeddingModel string) ([]*model.PersonIdentityCenter, error) {
+	return nil, errBoom
+}
+func (r *failingListCentersRepo) ReplaceGeneration(personID uint, build *model.PersonIdentityProfileBuild) error {
+	return r.inner.ReplaceGeneration(personID, build)
+}
+func (r *failingListCentersRepo) MarkFailed(personID uint, message string) error {
+	return r.inner.MarkFailed(personID, message)
+}
+func (r *failingListCentersRepo) DeleteByPersonIDs(personIDs []uint) error {
+	return r.inner.DeleteByPersonIDs(personIDs)
+}
+func (r *failingListCentersRepo) InvalidateDeletedPeople() error {
+	return r.inner.InvalidateDeletedPeople()
+}
+func (r *failingListCentersRepo) DeleteInactiveGenerations(personID uint, keep int) error {
+	return r.inner.DeleteInactiveGenerations(personID, keep)
 }

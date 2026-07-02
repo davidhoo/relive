@@ -30,8 +30,12 @@ type PersonIdentityProfileRepository interface {
 	// profile 不存在或 active_generation=0 时返回 (nil, nil)。
 	GetActive(personID uint) (*model.PersonIdentityProfileBuild, error)
 	// ListAllActiveCenters 通过 JOIN 一次查询返回所有人物活动 generation 的中心，
-	// 按 person_id ASC, ordinal ASC，不返回历史中心。
-	ListAllActiveCenters() ([]*model.PersonIdentityCenter, error)
+	// 按 person_id ASC, ordinal ASC，不返回历史中心。仅返回满足以下全部条件的中心，
+	// 使完整 snapshot 的输入天然满足 ANN 构建要求（数据库侧过滤，禁止全量加载后 Go 内过滤）：
+	//   - center.generation = profile.active_generation 且 active_generation > 0；
+	//   - profile.embedding_model 等于 embeddingModel（当前服务模型签名）；
+	//   - 对应人物仍存在于 people 表。
+	ListAllActiveCenters(embeddingModel string) ([]*model.PersonIdentityCenter, error)
 	// ReplaceGeneration 在单事务内写入新 generation（centers + members）并原子激活。
 	// build 中 accepted member 的 CenterID 为所属 center 的 Ordinal（逻辑引用），
 	// 持久化 center 取得真实主键后重映射为真实 ID。任何步骤失败整体回滚。
@@ -156,16 +160,19 @@ func (r *personIdentityProfileRepository) GetActive(personID uint) (*model.Perso
 	}, nil
 }
 
-func (r *personIdentityProfileRepository) ListAllActiveCenters() ([]*model.PersonIdentityCenter, error) {
+func (r *personIdentityProfileRepository) ListAllActiveCenters(embeddingModel string) ([]*model.PersonIdentityCenter, error) {
 	var centers []*model.PersonIdentityCenter
-	// JOIN 一次查询：center generation 必须等于 profile active generation，且存在活动 generation。
-	err := r.db.Table("person_identity_centers AS c").
+	// JOIN 一次查询：center generation 必须等于 profile active generation 且存在活动 generation；
+	// profile.embedding_model 必须等于当前服务模型签名；对应人物仍存在于 people 表。
+	// 全部条件在数据库侧过滤，避免全量加载后在 Go 内过滤。
+	q := r.db.Table("person_identity_centers AS c").
 		Select("c.*").
 		Joins("INNER JOIN person_identity_profiles AS p ON p.person_id = c.person_id").
+		Joins("INNER JOIN people ON people.id = c.person_id").
 		Where("c.generation = p.active_generation AND p.active_generation > 0").
-		Order("c.person_id ASC, c.ordinal ASC").
-		Find(&centers).Error
-	if err != nil {
+		Where("p.embedding_model = ?", embeddingModel).
+		Order("c.person_id ASC, c.ordinal ASC")
+	if err := q.Find(&centers).Error; err != nil {
 		return nil, err
 	}
 	return centers, nil
