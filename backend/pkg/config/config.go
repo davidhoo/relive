@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -90,6 +91,14 @@ type PeopleConfig struct {
 	ANNBuildCPUDuty                float64 `yaml:"ann_build_cpu_duty"`       // target CPU duty cycle 0.3-1.0 (default 0.5)
 	ANNRebuildWindowStart          int     `yaml:"ann_rebuild_window_start"` // deprecated: ANN rebuild now happens whenever dirty
 	ANNRebuildWindowEnd            int     `yaml:"ann_rebuild_window_end"`   // deprecated: ANN rebuild now happens whenever dirty
+	IdentityProfileMode            string  `yaml:"identity_profile_mode"`
+	IdentityProfileMaxCenters      int     `yaml:"identity_profile_max_centers"`
+	IdentityProfileMinCenterFaces  int     `yaml:"identity_profile_min_center_faces"`
+	IdentityProfileMinCenterPhotos int     `yaml:"identity_profile_min_center_photos"`
+	IdentityProfileMargin          float64 `yaml:"identity_profile_margin"`
+	IdentityProfileRescueThreshold float64 `yaml:"identity_profile_rescue_threshold"`
+	IdentityProfileBatchSize       int     `yaml:"identity_profile_batch_size"`
+	IdentityProfileCooldownMs      int     `yaml:"identity_profile_cooldown_ms"`
 }
 
 const (
@@ -101,6 +110,14 @@ const (
 	defaultClusteringIntervalMs           = 300
 	defaultANNBuildBatchSize              = 100
 	defaultANNBuildCPUDuty                = 0.5
+	defaultIdentityProfileMode            = "legacy"
+	defaultIdentityProfileMaxCenters      = 6
+	defaultIdentityProfileMinCenterFaces  = 3
+	defaultIdentityProfileMinCenterPhotos = 2
+	defaultIdentityProfileMargin          = 0.05
+	defaultIdentityProfileRescueThreshold = 0.65
+	defaultIdentityProfileBatchSize       = 25
+	defaultIdentityProfileCooldownMs      = 500
 )
 
 // LegacyMLConfig 兼容旧版人物配置块
@@ -316,7 +333,18 @@ func (g *GeocodeConfig) GetWeiboTimeout() int {
 
 // Load 加载配置文件
 func Load(path string) (*Config, error) {
-	var cfg Config
+	cfg := Config{
+		People: PeopleConfig{
+			IdentityProfileMode:            defaultIdentityProfileMode,
+			IdentityProfileMaxCenters:      defaultIdentityProfileMaxCenters,
+			IdentityProfileMinCenterFaces:  defaultIdentityProfileMinCenterFaces,
+			IdentityProfileMinCenterPhotos: defaultIdentityProfileMinCenterPhotos,
+			IdentityProfileMargin:          defaultIdentityProfileMargin,
+			IdentityProfileRescueThreshold: defaultIdentityProfileRescueThreshold,
+			IdentityProfileBatchSize:       defaultIdentityProfileBatchSize,
+			IdentityProfileCooldownMs:      defaultIdentityProfileCooldownMs,
+		},
+	}
 
 	basePath := filepath.Join(filepath.Dir(path), "config.base.yaml")
 	if filepath.Base(path) != "config.base.yaml" {
@@ -369,7 +397,6 @@ func Load(path string) (*Config, error) {
 	if cfg.People.ANNBuildCPUDuty == 0 {
 		cfg.People.ANNBuildCPUDuty = defaultANNBuildCPUDuty
 	}
-
 	// 从环境变量覆盖敏感配置
 	if secret := os.Getenv("JWT_SECRET"); secret != "" {
 		cfg.Security.JWTSecret = secret
@@ -466,6 +493,36 @@ func (c *Config) Validate() error {
 	}
 	if c.People.AttachThreshold > 0 && c.People.MergeSuggestionThreshold >= c.People.AttachThreshold {
 		return fmt.Errorf("people.merge_suggestion_threshold must be less than people.attach_threshold")
+	}
+	validIdentityProfileModes := map[string]bool{
+		"legacy":  true,
+		"shadow":  true,
+		"rescue":  true,
+		"primary": true,
+	}
+	if !validIdentityProfileModes[c.People.IdentityProfileMode] {
+		return fmt.Errorf("people.identity_profile_mode must be one of legacy, shadow, rescue, primary")
+	}
+	if c.People.IdentityProfileMaxCenters < 1 || c.People.IdentityProfileMaxCenters > 8 {
+		return fmt.Errorf("people.identity_profile_max_centers must be between 1 and 8")
+	}
+	if c.People.IdentityProfileMinCenterFaces <= 0 {
+		return fmt.Errorf("people.identity_profile_min_center_faces must be greater than 0")
+	}
+	if c.People.IdentityProfileMinCenterPhotos <= 0 {
+		return fmt.Errorf("people.identity_profile_min_center_photos must be greater than 0")
+	}
+	if math.IsNaN(c.People.IdentityProfileMargin) || c.People.IdentityProfileMargin <= 0 || c.People.IdentityProfileMargin >= 1 {
+		return fmt.Errorf("people.identity_profile_margin must be between 0 and 1")
+	}
+	if math.IsNaN(c.People.IdentityProfileRescueThreshold) || c.People.IdentityProfileRescueThreshold <= 0 || c.People.IdentityProfileRescueThreshold >= 1 {
+		return fmt.Errorf("people.identity_profile_rescue_threshold must be between 0 and 1")
+	}
+	if c.People.IdentityProfileBatchSize <= 0 {
+		return fmt.Errorf("people.identity_profile_batch_size must be greater than 0")
+	}
+	if c.People.IdentityProfileCooldownMs <= 0 {
+		return fmt.Errorf("people.identity_profile_cooldown_ms must be greater than 0")
 	}
 
 	return nil

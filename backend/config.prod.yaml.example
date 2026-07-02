@@ -85,6 +85,14 @@ people:
   merge_suggestion_max_pairs_per_run: 200
   merge_suggestion_batch_size: 100
   merge_suggestion_cooldown_seconds: 300
+  identity_profile_mode: legacy  # 默认保持现有聚合行为；shadow 数据校准前不得启用 rescue
+  identity_profile_max_centers: 6
+  identity_profile_min_center_faces: 3
+  identity_profile_min_center_photos: 2
+  identity_profile_margin: 0.05
+  identity_profile_rescue_threshold: 0.65
+  identity_profile_batch_size: 25
+  identity_profile_cooldown_ms: 500
 
 # 地理编码配置（启动默认值，运行时通过管理后台配置后以数据库为准）
 geocode:
