@@ -219,3 +219,104 @@ func TestPeopleConfigHasMergeSuggestionField(t *testing.T) {
 		t.Fatal("expected MergeSuggestionThreshold field to exist and hold value")
 	}
 }
+
+func TestAutoMigrateAddsPersonIdentity(t *testing.T) {
+	db := openMigratedTestDB(t)
+
+	// 五张表存在
+	for _, table := range []string{
+		"person_identity_profiles",
+		"person_identity_centers",
+		"person_identity_center_members",
+		"people_feedback_events",
+		"people_identity_decisions",
+	} {
+		if !db.Migrator().HasTable(table) {
+			t.Fatalf("expected %s table to exist after migration", table)
+		}
+	}
+
+	now := time.Now().UTC()
+
+	// person_id 画像唯一
+	if err := db.Exec(
+		`INSERT INTO person_identity_profiles (person_id, active_generation, next_generation, status, updated_at) VALUES (1, 0, 1, 'dirty', ?)`,
+		now,
+	).Error; err != nil {
+		t.Fatalf("insert profile: %v", err)
+	}
+	if err := db.Exec(
+		`INSERT INTO person_identity_profiles (person_id, active_generation, next_generation, status, updated_at) VALUES (1, 0, 1, 'dirty', ?)`,
+		now,
+	).Error; err == nil {
+		t.Fatal("expected duplicate person_id profile to be rejected")
+	}
+
+	// center 唯一键 (person_id, generation, ordinal)
+	if err := db.Exec(
+		`INSERT INTO person_identity_centers (person_id, generation, ordinal, updated_at) VALUES (1, 1, 0, ?)`,
+		now,
+	).Error; err != nil {
+		t.Fatalf("insert center: %v", err)
+	}
+	if err := db.Exec(
+		`INSERT INTO person_identity_centers (person_id, generation, ordinal, updated_at) VALUES (1, 1, 0, ?)`,
+		now,
+	).Error; err == nil {
+		t.Fatal("expected duplicate (person_id, generation, ordinal) center to be rejected")
+	}
+
+	// member 唯一键 (person_id, generation, face_id)
+	if err := db.Exec(
+		`INSERT INTO person_identity_center_members (person_id, generation, face_id, photo_id, state, updated_at) VALUES (1, 1, 100, 10, 'candidate', ?)`,
+		now,
+	).Error; err != nil {
+		t.Fatalf("insert member: %v", err)
+	}
+	if err := db.Exec(
+		`INSERT INTO person_identity_center_members (person_id, generation, face_id, photo_id, state, updated_at) VALUES (1, 1, 100, 10, 'candidate', ?)`,
+		now,
+	).Error; err == nil {
+		t.Fatal("expected duplicate (person_id, generation, face_id) member to be rejected")
+	}
+
+	// candidate member 可以使用空 center_id
+	if err := db.Exec(
+		`INSERT INTO person_identity_center_members (person_id, generation, center_id, face_id, photo_id, state, updated_at) VALUES (1, 1, NULL, 101, 11, 'candidate', ?)`,
+		now,
+	).Error; err != nil {
+		t.Fatalf("insert candidate member with null center_id: %v", err)
+	}
+
+	// 非法 profile status 被拒绝
+	if err := db.Exec(
+		`INSERT INTO person_identity_profiles (person_id, active_generation, next_generation, status, updated_at) VALUES (2, 0, 1, 'bad_status', ?)`,
+		now,
+	).Error; err == nil {
+		t.Fatal("expected invalid profile status to be rejected")
+	}
+
+	// 非法 member state 被拒绝
+	if err := db.Exec(
+		`INSERT INTO person_identity_center_members (person_id, generation, face_id, photo_id, state, updated_at) VALUES (1, 1, 102, 12, 'bad_state', ?)`,
+		now,
+	).Error; err == nil {
+		t.Fatal("expected invalid member state to be rejected")
+	}
+
+	// 四个指定复合索引真实存在于 sqlite_master
+	for _, indexName := range []string{
+		"idx_pip_status_updated",
+		"idx_pic_person_generation",
+		"idx_pfe_event_created",
+		"idx_pid_mode_created",
+	} {
+		var count int64
+		if err := db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?", indexName).Scan(&count).Error; err != nil {
+			t.Fatalf("query index %s: %v", indexName, err)
+		}
+		if count != 1 {
+			t.Fatalf("expected index %s to exist after migration", indexName)
+		}
+	}
+}
