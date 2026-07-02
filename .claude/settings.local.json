@@ -10,7 +10,8 @@
       "Bash(cd frontend && npm run build)",
       "Bash(npm run build --prefix frontend)",
       "Bash(go build *)",
-      "Bash(npx vue-tsc *)"
+      "Bash(npx vue-tsc *)",
+      "Bash(go test *)"
     ]
   },
   "permissionMode": "auto",
