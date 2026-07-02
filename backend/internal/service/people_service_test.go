@@ -62,6 +62,7 @@ func setupPeopleServiceTestDB(t *testing.T) *gorm.DB {
 		&model.PeopleMergeJob{},
 		&model.ScanJob{},
 		&model.CannotLinkConstraint{},
+		&model.PeopleFeedbackEvent{},
 	))
 
 	t.Cleanup(func() {

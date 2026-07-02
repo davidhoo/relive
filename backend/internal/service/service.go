@@ -92,8 +92,10 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	}
 	peopleSvc.(*peopleService).setMergeSuggestionDirtyHook(mergeSuggestionService.MarkDirty)
 	peopleSvc.(*peopleService).setANNCandidateFn(mergeSuggestionService.(*personMergeSuggestionService).FindCandidates)
+	peopleSvc.(*peopleService).SetFeedbackEventRepo(repos.FeedbackEvent)
 	mergeSuggestionService.(*personMergeSuggestionService).SetWriteGateHook(peopleSvc.(*peopleService).AcquireWriteGate)
 	mergeSuggestionService.(*personMergeSuggestionService).SetPostMergeHook(peopleSvc.(*peopleService).PostMergeCleanup)
+	mergeSuggestionService.(*personMergeSuggestionService).SetFeedbackEventRepo(repos.FeedbackEvent)
 	photoService.SetPeopleService(peopleSvc)
 	displayService := NewDisplayService(db, repos.Photo, repos.DisplayRecord, repos.Device, repos.Event, configService, cfg)
 

@@ -52,6 +52,7 @@ type personMergeSuggestionService struct {
 	jobRepo             repository.PeopleJobRepository
 	cannotLinkRepo      repository.CannotLinkRepository
 	mergeSuggestionRepo repository.PersonMergeSuggestionRepository
+	feedbackEventRepo   repository.PeopleFeedbackEventRepository
 	configService       ConfigService
 	config              *config.Config
 	writeQueue          *database.WriteQueue
@@ -168,6 +169,19 @@ func (s *personMergeSuggestionService) SetWriteGateHook(fn func() func()) {
 // SetPostMergeHook injects the post-merge cleanup function from peopleService.
 func (s *personMergeSuggestionService) SetPostMergeHook(fn func(targetPersonID uint, sourcePersonIDs []uint, affectedPhotoIDs []uint)) {
 	s.postMergeFn = fn
+}
+
+// SetFeedbackEventRepo 注入反馈事件仓库。生产环境由 service.go 装配时注入；
+// 测试可注入失败 stub 或 nil（nil 时反馈记录被静默跳过）。
+func (s *personMergeSuggestionService) SetFeedbackEventRepo(repo repository.PeopleFeedbackEventRepository) {
+	s.feedbackEventRepo = repo
+}
+
+// recordFeedbackEvent 在核心人物变更已提交后单独写入一条反馈事件。必须在任何
+// executeWrite 回调之外调用（由各业务方法在核心写入完成后调用），避免 WriteQueue
+// 重入死锁。写入失败仅记录脱敏 warning，不影响已成功的业务结果。
+func (s *personMergeSuggestionService) recordFeedbackEvent(event *model.PeopleFeedbackEvent) {
+	emitFeedbackEvent(s.feedbackEventRepo, s.executeWrite, event)
 }
 
 func (s *personMergeSuggestionService) GetTask() *model.PersonMergeSuggestionTask {
@@ -451,6 +465,11 @@ func (s *personMergeSuggestionService) ExcludeCandidates(suggestionID uint, cand
 		return fmt.Errorf("merge suggestion %d not found", suggestionID)
 	}
 
+	// 仅记录仍为 pending、实际被剔除的候选；已经 excluded 的重复请求不重复产生反馈。
+	// 在写入前查询 pending 项，交集即为本次真正发生状态转换的候选。
+	actuallyExcluded := s.pendingCandidatesInSuggestion(suggestionID, candidateIDs)
+	snapshot := s.candidateScoreSnapshotForCandidates(suggestionID, actuallyExcluded)
+
 	if err := s.executeWrite(func() error {
 		for _, candidateID := range candidateIDs {
 			if candidateID == 0 {
@@ -464,7 +483,57 @@ func (s *personMergeSuggestionService) ExcludeCandidates(suggestionID uint, cand
 	}); err != nil {
 		return err
 	}
+
+	// 核心写入已提交：一次 API 操作只记录一条 merge_rejected 事件，不按候选逐条写。
+	if len(actuallyExcluded) > 0 {
+		s.recordFeedbackEvent(buildFeedbackEvent(
+			repository.PeopleFeedbackEventMergeRejected,
+			suggestion.TargetPersonID,
+			actuallyExcluded,
+			nil,
+			peopleMergeSuggestionAlgorithmVersion,
+			snapshot,
+		))
+	}
 	return s.MarkDirty("exclude merge suggestion candidates")
+}
+
+// pendingCandidatesInSuggestion 返回指定建议中仍为 pending 且在 candidateIDs 列表内的候选。
+// 用于 ExcludeCandidates 判定本次真正被剔除的候选，避免对已 excluded 的重复请求重复产生反馈。
+func (s *personMergeSuggestionService) pendingCandidatesInSuggestion(suggestionID uint, candidateIDs []uint) []uint {
+	items, err := s.mergeSuggestionRepo.GetItems(suggestionID, model.PersonMergeSuggestionItemStatusPending)
+	if err != nil || len(items) == 0 {
+		return nil
+	}
+	want := make(map[uint]struct{}, len(candidateIDs))
+	for _, id := range candidateIDs {
+		if id != 0 {
+			want[id] = struct{}{}
+		}
+	}
+	var out []uint
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		if _, ok := want[item.CandidatePersonID]; ok {
+			out = append(out, item.CandidatePersonID)
+		}
+	}
+	return out
+}
+
+// candidateScoreSnapshotForCandidates 从建议项中提取指定候选的相似度分数快照。
+// 复用建议已有的分数，绝不现场重新计算。
+func (s *personMergeSuggestionService) candidateScoreSnapshotForCandidates(suggestionID uint, candidateIDs []uint) map[string]interface{} {
+	if len(candidateIDs) == 0 {
+		return nil
+	}
+	items, err := s.mergeSuggestionRepo.GetItems(suggestionID, "")
+	if err != nil {
+		return nil
+	}
+	return candidateScoreSnapshot(items, candidateIDs)
 }
 
 func (s *personMergeSuggestionService) ApplySuggestion(suggestionID uint, candidateIDs []uint) error {
@@ -487,6 +556,25 @@ func (s *personMergeSuggestionService) ApplySuggestion(suggestionID uint, candid
 		defer release()
 	}
 
+	// 建议项已有的分数快照，复用不现场计算；合并后建议项状态变化，需在写入前提取。
+	snapshot := s.candidateScoreSnapshotForCandidates(suggestionID, candidateIDs)
+
+	// coreCommitted 标记核心人物合并已落库；后续 postMergeFn/MarkDirty 失败仍记录事件。
+	coreCommitted := false
+	defer func() {
+		if coreCommitted {
+			// 异步合并最终不会走到 ApplySuggestion（异步走 MergePeople），此处与
+			// MergePeople 各自只记录一条 merge_confirmed，不重复。
+			s.recordFeedbackEvent(buildFeedbackEvent(
+				repository.PeopleFeedbackEventMergeConfirmed,
+				suggestion.TargetPersonID,
+				candidateIDs,
+				nil,
+				peopleMergeSuggestionAlgorithmVersion,
+				snapshot,
+			))
+		}
+	}()
 	var affectedPhotoIDs []uint
 	if err := s.executeWrite(func() error {
 		var err error
@@ -498,6 +586,7 @@ func (s *personMergeSuggestionService) ApplySuggestion(suggestionID uint, candid
 	}); err != nil {
 		return err
 	}
+	coreCommitted = true
 
 	// Post-merge cleanup (syncPersonState, cannot-link cleanup, RecomputeTopPersonCategory,
 	// feedback recluster) — mirrors the cleanup in MergePeople.

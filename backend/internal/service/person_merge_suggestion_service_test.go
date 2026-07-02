@@ -32,6 +32,7 @@ func setupPersonMergeSuggestionServiceTestDB(t *testing.T) *gorm.DB {
 		&model.CannotLinkConstraint{},
 		&model.PersonMergeSuggestion{},
 		&model.PersonMergeSuggestionItem{},
+		&model.PeopleFeedbackEvent{},
 	))
 
 	t.Cleanup(func() {

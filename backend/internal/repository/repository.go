@@ -13,6 +13,7 @@ type Repositories struct {
 	CannotLink      CannotLinkRepository
 	MergeSuggestion PersonMergeSuggestionRepository
 	IdentityProfile PersonIdentityProfileRepository
+	FeedbackEvent   PeopleFeedbackEventRepository
 	ScanJob         ScanJobRepository
 	ThumbnailJob    ThumbnailJobRepository
 	GeocodeJob      GeocodeJobRepository
@@ -36,6 +37,7 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		CannotLink:      NewCannotLinkRepository(db),
 		MergeSuggestion: NewPersonMergeSuggestionRepository(db),
 		IdentityProfile: NewPersonIdentityProfileRepository(db),
+		FeedbackEvent:   NewPeopleFeedbackEventRepository(db),
 		ScanJob:         NewScanJobRepository(db),
 		ThumbnailJob:    NewThumbnailJobRepository(db),
 		GeocodeJob:      NewGeocodeJobRepository(db),

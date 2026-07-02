@@ -98,6 +98,7 @@ type peopleService struct {
 	jobRepo          repository.PeopleJobRepository
 	mergeJobRepo     repository.PeopleMergeJobRepository
 	cannotLinkRepo   repository.CannotLinkRepository
+	feedbackEventRepo repository.PeopleFeedbackEventRepository
 	config           *config.Config
 	client           PeopleMLClient
 	runtimeService   AnalysisRuntimeService
@@ -539,6 +540,22 @@ func (s *peopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint)
 	}()
 
 	var affectedPhotoIDs []uint
+	// coreCommitted 标记核心人物合并是否已落库。一旦为 true，即便后续缓存同步或
+	// 照片分类刷新失败，也必须记录反馈事件——身份事实已经发生。
+	coreCommitted := false
+	defer func() {
+		if coreCommitted {
+			// 在 executeWrite 回调之外单独写事件，避免 WriteQueue 重入。
+			s.recordFeedbackEvent(buildFeedbackEvent(
+				repository.PeopleFeedbackEventMergeConfirmed,
+				targetPersonID,
+				sourcePersonIDs,
+				nil,
+				peopleManualAlgorithmVersion,
+				nil, // 手工合并不现场计算相似度，无可用快照
+			))
+		}
+	}()
 	if err = s.executeWrite(func() error {
 		var innerErr error
 		affectedPhotoIDs, innerErr = s.personRepo.MergeInto(targetPersonID, sourcePersonIDs)
@@ -552,6 +569,7 @@ func (s *peopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint)
 	}); err != nil {
 		return nil, err
 	}
+	coreCommitted = true
 	if err = s.syncPersonState(targetPersonID); err != nil {
 		return nil, err
 	}
@@ -713,6 +731,21 @@ func (s *peopleService) SplitPerson(faceIDs []uint) (*model.Person, *model.Reclu
 	}
 
 	newPerson := &model.Person{Category: sourcePerson.Category}
+	// coreCommitted 标记新人物创建与人脸重指派已落库；后续 syncPersonState/分类刷新
+	// 失败仍需记录 person_split 事件，因为身份事实已发生。
+	coreCommitted := false
+	defer func() {
+		if coreCommitted {
+			s.recordFeedbackEvent(buildFeedbackEvent(
+				repository.PeopleFeedbackEventPersonSplit,
+				newPerson.ID,
+				[]uint{sourcePersonID},
+				faceIDs,
+				peopleManualAlgorithmVersion,
+				nil,
+			))
+		}
+	}()
 	if err := s.executeWrite(func() error {
 		if err := s.personRepo.Create(newPerson); err != nil {
 			return err
@@ -721,6 +754,7 @@ func (s *peopleService) SplitPerson(faceIDs []uint) (*model.Person, *model.Reclu
 	}); err != nil {
 		return nil, nil, err
 	}
+	coreCommitted = true
 
 	if err := s.syncPersonState(sourcePersonID); err != nil {
 		return nil, nil, err
@@ -759,17 +793,36 @@ func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) (*model.R
 	}
 
 	sourcePersonIDs := make(map[uint]struct{})
+	movedFaceIDs := make([]uint, 0, len(faces))
 	for _, face := range faces {
 		if face.PersonID != nil && *face.PersonID != 0 && *face.PersonID != targetPersonID {
 			sourcePersonIDs[*face.PersonID] = struct{}{}
+			movedFaceIDs = append(movedFaceIDs, face.ID)
 		}
 	}
 
+	// 若所有人脸本来就属于目标人物，没有实际变化，则不产生事件。
+	willEmitEvent := len(movedFaceIDs) > 0
+	// coreCommitted 标记人脸重指派已落库；后续 syncPersonState/分类刷新失败仍记录。
+	coreCommitted := false
+	defer func() {
+		if coreCommitted && willEmitEvent {
+			s.recordFeedbackEvent(buildFeedbackEvent(
+				repository.PeopleFeedbackEventFaceMoved,
+				targetPersonID,
+				mapKeys(sourcePersonIDs),
+				movedFaceIDs,
+				peopleManualAlgorithmVersion,
+				nil,
+			))
+		}
+	}()
 	if err := s.executeWrite(func() error {
 		return s.faceRepo.ReassignFaces(faceIDs, targetPersonID, "move")
 	}); err != nil {
 		return nil, err
 	}
+	coreCommitted = true
 
 	if err := s.syncPersonState(targetPersonID); err != nil {
 		return nil, err
@@ -848,6 +901,24 @@ func (s *peopleService) DissolvePerson(personID uint) (int, error) {
 		return 0, fmt.Errorf("list faces for person %d: %w", personID, err)
 	}
 
+	// releasedFaceIDs 记录被释放回 pending 的人脸；coreCommitted 标记核心人脸重置
+	// 已落库。即便后续人物删除失败，只要人脸已释放，身份事实即已发生，须记录事件。
+	// 事件保留原 personID——反馈表中的人物 ID 不依赖强外键存活，人物随后删除也不影响。
+	var releasedFaceIDs []uint
+	coreCommitted := false
+	defer func() {
+		if coreCommitted {
+			s.recordFeedbackEvent(buildFeedbackEvent(
+				repository.PeopleFeedbackEventPersonDissolved,
+				personID,
+				nil,
+				releasedFaceIDs,
+				peopleManualAlgorithmVersion,
+				nil,
+			))
+		}
+	}()
+
 	if len(faces) > 0 {
 		faceIDs := make([]uint, len(faces))
 		photoIDs := make(map[uint]bool)
@@ -868,6 +939,8 @@ func (s *peopleService) DissolvePerson(personID uint) (int, error) {
 		}); err != nil {
 			return 0, fmt.Errorf("reset faces for person %d: %w", personID, err)
 		}
+		releasedFaceIDs = faceIDs
+		coreCommitted = true
 
 		// 更新受影响照片的 top_person_category
 		affectedPhotoIDs := make([]uint, 0, len(photoIDs))
@@ -1634,6 +1707,19 @@ func (s *peopleService) setMergeSuggestionDirtyHook(hook func(string) error) {
 
 func (s *peopleService) setANNCandidateFn(fn func(probes []faceWithEmbedding, k int) map[uint]struct{}) {
 	s.annCandidateFn = fn
+}
+
+// SetFeedbackEventRepo 注入反馈事件仓库。生产环境由 service.go 装配时注入；
+// 测试可注入失败 stub 或 nil（nil 时反馈记录被静默跳过）。
+func (s *peopleService) SetFeedbackEventRepo(repo repository.PeopleFeedbackEventRepository) {
+	s.feedbackEventRepo = repo
+}
+
+// recordFeedbackEvent 在核心人物变更已提交后单独写入一条反馈事件。必须在任何
+// executeWrite 回调之外调用（由各业务方法在核心写入完成后调用），避免 WriteQueue
+// 重入死锁。写入失败仅记录脱敏 warning，不影响已成功的业务结果。
+func (s *peopleService) recordFeedbackEvent(event *model.PeopleFeedbackEvent) {
+	emitFeedbackEvent(s.feedbackEventRepo, s.executeWrite, event)
 }
 
 // recoverStuckMergeJobs marks processing/pending merge jobs as failed on startup.
