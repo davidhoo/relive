@@ -21,6 +21,7 @@ type TaskScheduler struct {
 	geocodeJobRepo         repository.GeocodeJobRepository
 	peopleJobRepo          repository.PeopleJobRepository
 	identityProfileService PersonIdentityProfileService
+	identityDecisionRepo   repository.PeopleIdentityDecisionRepository
 	writeQueue             *database.WriteQueue
 	stopCh                 chan struct{}
 	wg                     sync.WaitGroup
@@ -38,6 +39,7 @@ func NewTaskScheduler(
 	geocodeJobRepo repository.GeocodeJobRepository,
 	peopleJobRepo repository.PeopleJobRepository,
 	identityProfileService PersonIdentityProfileService,
+	identityDecisionRepo repository.PeopleIdentityDecisionRepository,
 ) *TaskScheduler {
 	return &TaskScheduler{
 		analysisService:        analysisService,
@@ -48,6 +50,7 @@ func NewTaskScheduler(
 		geocodeJobRepo:         geocodeJobRepo,
 		peopleJobRepo:          peopleJobRepo,
 		identityProfileService: identityProfileService,
+		identityDecisionRepo:   identityDecisionRepo,
 		writeQueue:             database.GetWriteQueue(),
 		stopCh:                 make(chan struct{}),
 	}
@@ -395,6 +398,9 @@ func (s *TaskScheduler) cleanTerminalJobs() {
 
 	// 人物任务终态记录清理：分批物理删除，避免长事务/写锁
 	s.cleanTerminalPeopleJobs(cutoff)
+
+	// 身份画像决策遥测清理：仅非 legacy 模式，分批短事务删除过期记录
+	s.cleanIdentityDecisions()
 }
 
 // peopleJobsCleanupConfig 人物任务清理参数
@@ -525,6 +531,144 @@ func (s *TaskScheduler) executePeopleJobDelete(ids []uint, deleted *int64) error
 		})
 	}
 	n, err := s.peopleJobRepo.DeleteByIDs(ids)
+	*deleted = n
+	return err
+}
+
+// 身份画像决策遥测清理参数。复用现有每 6 小时清理调度（cleanTerminalJobs），
+// 不创建新的常驻 goroutine。每批 500 条、单轮上限 2000 条，历史积压多轮消化。
+const (
+	identityDecisionRetentionDays = 90
+	identityDecisionCleanupBatch  = 500
+	identityDecisionCleanupMaxRun = 2000
+)
+
+// identityDecisionCleanupConfig 身份画像决策清理参数。
+type identityDecisionCleanupConfig struct {
+	batchSize int // 每批删除 ID 数
+	maxPerRun int // 单次运行删除上限
+}
+
+func defaultIdentityDecisionCleanupConfig() identityDecisionCleanupConfig {
+	return identityDecisionCleanupConfig{
+		batchSize: identityDecisionCleanupBatch,
+		maxPerRun: identityDecisionCleanupMaxRun,
+	}
+}
+
+// identityDecisionCleanupResult 一次清理运行的统计结果。
+type identityDecisionCleanupResult struct {
+	deleted int64
+	batches int
+	capped  bool
+	elapsed time.Duration
+	err     error
+}
+
+// cleanIdentityDecisions 清理 90 天前的身份画像决策遥测。只在非 legacy 模式执行；
+// 分批查询过期 ID，每批通过 WriteQueue 独立短事务删除，单轮上限 2000 条。日志仅记录
+// cutoff/deleted/batches/capped/elapsed/错误类别，不记录 Face ID、Person ID 或决策内容。
+func (s *TaskScheduler) cleanIdentityDecisions() {
+	if s.identityDecisionRepo == nil {
+		return
+	}
+	if s.identityProfileService == nil || s.identityProfileService.Mode() == "legacy" {
+		return
+	}
+
+	cutoff := time.Now().AddDate(0, 0, -identityDecisionRetentionDays)
+	res := s.runIdentityDecisionCleanup(cutoff, defaultIdentityDecisionCleanupConfig())
+
+	errMsg := ""
+	if res.err != nil {
+		errMsg = res.err.Error()
+	}
+	logger.Infof(
+		"identity decision cleanup: cutoff=%s deleted=%d batches=%d elapsed=%s capped=%v err=%s",
+		cutoff.Format(time.RFC3339),
+		res.deleted,
+		res.batches,
+		res.elapsed.Round(time.Millisecond),
+		res.capped,
+		errMsg,
+	)
+	if res.err != nil {
+		logger.Errorf("Failed to clean identity decisions: %v", res.err)
+	}
+}
+
+// runIdentityDecisionCleanup 执行分批删除循环。每批：查询至多 batchSize 个过期 ID，通过写队列
+// 执行 DeleteByIDs（独立短事务）。删除失败立即停止本轮，不进入紧密重试。响应 stop signal。
+func (s *TaskScheduler) runIdentityDecisionCleanup(cutoff time.Time, cfg identityDecisionCleanupConfig) identityDecisionCleanupResult {
+	start := time.Now()
+	res := identityDecisionCleanupResult{}
+
+	if cfg.batchSize <= 0 {
+		cfg.batchSize = identityDecisionCleanupBatch
+	}
+	if cfg.maxPerRun <= 0 {
+		cfg.maxPerRun = identityDecisionCleanupMaxRun
+	}
+
+	for res.deleted < int64(cfg.maxPerRun) {
+		// 响应停止信号：长积压场景下允许调度器停止时中途退出
+		select {
+		case <-s.stopCh:
+			res.elapsed = time.Since(start)
+			return res
+		default:
+		}
+
+		ids, err := s.identityDecisionRepo.ListIDsBefore(cutoff, cfg.batchSize)
+		if err != nil {
+			res.err = fmt.Errorf("list identity decision ids: %w", err)
+			res.elapsed = time.Since(start)
+			return res
+		}
+		if len(ids) == 0 {
+			break // 无过期数据，不执行 DELETE
+		}
+
+		var batchDeleted int64
+		deleteErr := s.executeIdentityDecisionDelete(ids, &batchDeleted)
+		if deleteErr != nil {
+			res.err = fmt.Errorf("delete identity decisions batch: %w", deleteErr)
+			res.elapsed = time.Since(start)
+			return res
+		}
+
+		res.deleted += batchDeleted
+		res.batches++
+
+		if len(ids) < cfg.batchSize {
+			break
+		}
+	}
+
+	if res.deleted >= int64(cfg.maxPerRun) {
+		remaining, err := s.identityDecisionRepo.ListIDsBefore(cutoff, 1)
+		if err != nil {
+			res.err = fmt.Errorf("check remaining identity decisions: %w", err)
+			res.elapsed = time.Since(start)
+			return res
+		}
+		res.capped = len(remaining) > 0
+	}
+
+	res.elapsed = time.Since(start)
+	return res
+}
+
+// executeIdentityDecisionDelete 通过写队列串行执行单批删除（独立短事务）。
+func (s *TaskScheduler) executeIdentityDecisionDelete(ids []uint, deleted *int64) error {
+	if s.writeQueue != nil {
+		return s.writeQueue.Execute(func() error {
+			n, err := s.identityDecisionRepo.DeleteByIDs(ids)
+			*deleted = n
+			return err
+		})
+	}
+	n, err := s.identityDecisionRepo.DeleteByIDs(ids)
 	*deleted = n
 	return err
 }

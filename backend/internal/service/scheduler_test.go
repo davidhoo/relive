@@ -1,13 +1,16 @@
 package service
 
 import (
+	"errors"
 	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
+	"github.com/davidhoo/relive/pkg/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
@@ -375,4 +378,256 @@ func TestSchedulerRunPeopleJobsCleanup_NonTerminalPreserved(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, got, "non-terminal job %d must not be deleted", j.ID)
 	}
+}
+
+// ---- 身份画像决策遥测清理测试 ----
+
+// setupSchedulerIdentityDecisionDB 构造隔离的临时文件库并迁移 people_identity_decisions。
+func setupSchedulerIdentityDecisionDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	dsn := "file:" + filepath.Join(t.TempDir(), "identity_decision_test.db") + "?cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: gormlogger.Discard})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.PeopleIdentityDecision{}))
+	t.Cleanup(func() {
+		if sqlDB, _ := db.DB(); sqlDB != nil {
+			sqlDB.Close()
+		}
+	})
+	return db
+}
+
+// seedDecision 插入一条决策记录并按指定时间回填 created_at，返回其 ID。
+// when 必须传 time.Time（由 GORM 统一绑定格式），避免手写 RFC3339 字符串与
+// ListIDsBefore 的 cutoff 绑定格式不一致导致 SQLite 文本比较失效。
+func seedDecision(t *testing.T, db *gorm.DB, key string, when time.Time) uint {
+	t.Helper()
+	d := &model.PeopleIdentityDecision{
+		Mode:          model.PeopleIdentityModeShadow,
+		ComponentHash: "h-" + key,
+		ComponentSize: 1,
+		DecisionKey:   key,
+		Decision:      identityDecisionDisagree,
+	}
+	require.NoError(t, db.Create(d).Error)
+	require.NoError(t, db.Exec("UPDATE people_identity_decisions SET created_at = ? WHERE id = ?", when, d.ID).Error)
+	return d.ID
+}
+
+// failingDeleteDecisionRepo 委托真实仓库，但 DeleteByIDs 返回注入错误，用于验证失败即停止。
+type failingDeleteDecisionRepo struct {
+	repository.PeopleIdentityDecisionRepository
+	deleteErr error
+}
+
+func (r *failingDeleteDecisionRepo) DeleteByIDs(ids []uint) (int64, error) {
+	return 0, r.deleteErr
+}
+
+func TestSchedulerIdentityDecisionCleanup_LegacySkipped(t *testing.T) {
+	db := setupSchedulerIdentityDecisionDB(t)
+	repo := repository.NewPeopleIdentityDecisionRepository(db)
+
+	old := time.Now().Add(-100 * 24 * time.Hour)
+	for i := 0; i < 3; i++ {
+		seedDecision(t, db, "k"+strconv.Itoa(i), old)
+	}
+
+	scheduler := &TaskScheduler{
+		identityDecisionRepo:   repo,
+		identityProfileService: &identityProfileServiceStub{mode: "legacy"},
+		stopCh:                 make(chan struct{}),
+	}
+
+	// cleanIdentityDecisions 守卫：legacy 模式直接返回，不调用 runIdentityDecisionCleanup，
+	// 不执行任何 DELETE。runIdentityDecisionCleanup 本身不检查 mode，守卫在上层。
+	scheduler.cleanIdentityDecisions()
+
+	var count int64
+	require.NoError(t, db.Model(&model.PeopleIdentityDecision{}).Count(&count).Error)
+	assert.Equal(t, int64(3), count, "legacy mode must not delete any decisions")
+}
+
+func TestSchedulerIdentityDecisionCleanup_BatchedDeletion(t *testing.T) {
+	db := setupSchedulerIdentityDecisionDB(t)
+	repo := repository.NewPeopleIdentityDecisionRepository(db)
+
+	now := time.Now()
+	cutoff := now.Add(-identityDecisionRetentionDays * 24 * time.Hour)
+	old := cutoff.Add(-1 * time.Hour)
+
+	// 5 条过期记录
+	for i := 0; i < 5; i++ {
+		seedDecision(t, db, "k"+strconv.Itoa(i), old)
+	}
+	// 1 条保留期内记录
+	seedDecision(t, db, "keep", now)
+
+	scheduler := &TaskScheduler{
+		identityDecisionRepo:   repo,
+		identityProfileService: &identityProfileServiceStub{mode: "shadow"},
+		stopCh:                 make(chan struct{}),
+	}
+
+	// batchSize=2, maxPerRun=5：删完 5 条过期记录，保留期内不动
+	res := scheduler.runIdentityDecisionCleanup(cutoff, identityDecisionCleanupConfig{batchSize: 2, maxPerRun: 5})
+	require.NoError(t, res.err)
+	assert.Equal(t, int64(5), res.deleted)
+	assert.Equal(t, 3, res.batches) // 2+2+1
+	assert.False(t, res.capped)
+
+	var count int64
+	require.NoError(t, db.Model(&model.PeopleIdentityDecision{}).Count(&count).Error)
+	assert.Equal(t, int64(1), count, "only the in-retention record remains")
+}
+
+func TestSchedulerIdentityDecisionCleanup_MaxPerRunCap(t *testing.T) {
+	db := setupSchedulerIdentityDecisionDB(t)
+	repo := repository.NewPeopleIdentityDecisionRepository(db)
+
+	now := time.Now()
+	cutoff := now.Add(-identityDecisionRetentionDays * 24 * time.Hour)
+	old := cutoff.Add(-1 * time.Hour)
+
+	// 6 条过期记录
+	for i := 0; i < 6; i++ {
+		seedDecision(t, db, "k"+strconv.Itoa(i), old)
+	}
+
+	scheduler := &TaskScheduler{
+		identityDecisionRepo:   repo,
+		identityProfileService: &identityProfileServiceStub{mode: "shadow"},
+		stopCh:                 make(chan struct{}),
+	}
+
+	// maxPerRun=4：删 4 条，剩 2 条 → capped=true
+	res := scheduler.runIdentityDecisionCleanup(cutoff, identityDecisionCleanupConfig{batchSize: 2, maxPerRun: 4})
+	require.NoError(t, res.err)
+	assert.Equal(t, int64(4), res.deleted)
+	assert.True(t, res.capped)
+
+	// 第二轮清空剩余
+	res2 := scheduler.runIdentityDecisionCleanup(cutoff, identityDecisionCleanupConfig{batchSize: 2, maxPerRun: 50})
+	require.NoError(t, res2.err)
+	assert.Equal(t, int64(2), res2.deleted)
+	assert.False(t, res2.capped)
+}
+
+func TestSchedulerIdentityDecisionCleanup_NoDataNoDelete(t *testing.T) {
+	db := setupSchedulerIdentityDecisionDB(t)
+	repo := repository.NewPeopleIdentityDecisionRepository(db)
+
+	// 只插保留期内记录（now 远晚于 cutoff）
+	now := time.Now()
+	cutoff := now.Add(-identityDecisionRetentionDays * 24 * time.Hour)
+	seedDecision(t, db, "fresh", now)
+
+	scheduler := &TaskScheduler{
+		identityDecisionRepo:   repo,
+		identityProfileService: &identityProfileServiceStub{mode: "shadow"},
+		stopCh:                 make(chan struct{}),
+	}
+
+	res := scheduler.runIdentityDecisionCleanup(cutoff, identityDecisionCleanupConfig{batchSize: 500, maxPerRun: 2000})
+	require.NoError(t, res.err)
+	assert.Equal(t, int64(0), res.deleted)
+	assert.Equal(t, 0, res.batches, "no expired data must not issue any DELETE")
+}
+
+func TestSchedulerIdentityDecisionCleanup_DeleteFailureStops(t *testing.T) {
+	db := setupSchedulerIdentityDecisionDB(t)
+	realRepo := repository.NewPeopleIdentityDecisionRepository(db)
+
+	now := time.Now()
+	cutoff := now.Add(-identityDecisionRetentionDays * 24 * time.Hour)
+	old := cutoff.Add(-1 * time.Hour)
+	for i := 0; i < 5; i++ {
+		seedDecision(t, db, "k"+strconv.Itoa(i), old)
+	}
+
+	repo := &failingDeleteDecisionRepo{
+		PeopleIdentityDecisionRepository: realRepo,
+		deleteErr:                        errors.New("disk full"),
+	}
+	scheduler := &TaskScheduler{
+		identityDecisionRepo:   repo,
+		identityProfileService: &identityProfileServiceStub{mode: "shadow"},
+		stopCh:                 make(chan struct{}),
+	}
+
+	res := scheduler.runIdentityDecisionCleanup(cutoff, identityDecisionCleanupConfig{batchSize: 2, maxPerRun: 100})
+	require.Error(t, res.err)
+	// 失败发生在 batches++ 之前（批次计数只计成功批），故 batches=0；
+	// 关键断言是：不重试、记录全部保留。
+	assert.Equal(t, 0, res.batches, "failed batch must not be counted; loop must stop without retry")
+	assert.Equal(t, int64(0), res.deleted)
+
+	// 失败后不进入紧密重试：所有记录仍在
+	var count int64
+	require.NoError(t, db.Model(&model.PeopleIdentityDecision{}).Count(&count).Error)
+	assert.Equal(t, int64(5), count)
+}
+
+func TestSchedulerIdentityDecisionCleanup_StopSignalInterrupts(t *testing.T) {
+	db := setupSchedulerIdentityDecisionDB(t)
+	repo := repository.NewPeopleIdentityDecisionRepository(db)
+
+	now := time.Now()
+	cutoff := now.Add(-identityDecisionRetentionDays * 24 * time.Hour)
+	old := cutoff.Add(-1 * time.Hour)
+	for i := 0; i < 10; i++ {
+		seedDecision(t, db, "k"+strconv.Itoa(i), old)
+	}
+
+	stopCh := make(chan struct{})
+	scheduler := &TaskScheduler{
+		identityDecisionRepo:   repo,
+		identityProfileService: &identityProfileServiceStub{mode: "shadow"},
+		stopCh:                 stopCh,
+	}
+
+	// 预先关闭 stop signal，验证循环能在长积压场景下退出
+	close(stopCh)
+	res := scheduler.runIdentityDecisionCleanup(cutoff, identityDecisionCleanupConfig{batchSize: 2, maxPerRun: 100})
+	// stopCh 已关闭，循环应在首次 select 检查时退出；deleted 可能为 0
+	assert.NoError(t, res.err)
+}
+
+func TestSchedulerIdentityDecisionCleanup_ViaWriteQueue(t *testing.T) {
+	db := setupSchedulerIdentityDecisionDB(t)
+	repo := repository.NewPeopleIdentityDecisionRepository(db)
+
+	now := time.Now()
+	cutoff := now.Add(-identityDecisionRetentionDays * 24 * time.Hour)
+	old := cutoff.Add(-1 * time.Hour)
+	for i := 0; i < 3; i++ {
+		seedDecision(t, db, "k"+strconv.Itoa(i), old)
+	}
+
+	wq := database.NewWriteQueue(nil)
+	defer wq.Stop()
+
+	scheduler := &TaskScheduler{
+		identityDecisionRepo:   repo,
+		identityProfileService: &identityProfileServiceStub{mode: "shadow"},
+		stopCh:                 make(chan struct{}),
+		writeQueue:             wq,
+	}
+
+	res := scheduler.runIdentityDecisionCleanup(cutoff, identityDecisionCleanupConfig{batchSize: 2, maxPerRun: 100})
+	require.NoError(t, res.err)
+	assert.Equal(t, int64(3), res.deleted)
+
+	var count int64
+	require.NoError(t, db.Model(&model.PeopleIdentityDecision{}).Count(&count).Error)
+	assert.Equal(t, int64(0), count, "WriteQueue path must delete all expired records")
+}
+
+func TestSchedulerIdentityDecisionCleanup_NilRepoNoop(t *testing.T) {
+	scheduler := &TaskScheduler{
+		identityProfileService: &identityProfileServiceStub{mode: "shadow"},
+		stopCh:                 make(chan struct{}),
+	}
+	// nil repo：cleanIdentityDecisions 直接返回，不 panic
+	assert.NotPanics(t, func() { scheduler.cleanIdentityDecisions() })
 }
