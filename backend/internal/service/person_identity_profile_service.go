@@ -255,6 +255,16 @@ func (s *personIdentityProfileService) Mode() string {
 	return s.mode
 }
 
+// ANN 返回身份中心 ANN 缓存与当前 embedding 模型签名。legacy 模式下 ANN 为 nil。
+// 仅供 Task 10 合并建议服务在非 legacy 模式下装配 profile 相似度 provider 使用；
+// 调用方不得直接驱动 ANN 重建或修改状态。返回的 (nil, "") 表示画像不可用，调用方须回退 legacy。
+func (s *personIdentityProfileService) ANN() (*identityProfileANN, string) {
+	if s.mode == identityProfileModeLegacy {
+		return nil, ""
+	}
+	return s.ann, s.embeddingModel
+}
+
 // MarkDirty 标记人物画像待重建。
 func (s *personIdentityProfileService) MarkDirty(personIDs []uint, reason string) error {
 	if s.mode == identityProfileModeLegacy {

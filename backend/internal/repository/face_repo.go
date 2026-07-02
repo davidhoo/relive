@@ -56,6 +56,12 @@ type FaceRepository interface {
 	// 人物 ID（去重升序）。用于 matcher 同照片共现负证据判断，避免逐候选 N+1 查询。
 	// 两组 ID 均去重并忽略 0；按 SQLite 参数上限对两个维度分块；任一输入为空直接返回 nil。
 	ListPersonIDsCooccurringWithPhotos(photoIDs []uint, candidatePersonIDs []uint) ([]uint, error)
+	// ListPersonIDsSharingPhotos 返回与 targetPersonID 出现在同一照片中的候选人物 ID
+	// （去重升序）。用于合并建议人工审核的同照片共现警告判断：仅判断两个已有人物是否
+	// 同照片共现，不加载目标人物全部照片，也不逐候选查询。
+	// 候选 ID 去重并忽略 0；按 SQLite 参数上限分块；利用 faces.photo_id / faces.person_id
+	// 索引；任一候选为空直接返回 nil。查询失败时调用方须回退 legacy，禁止静默忽略。
+	ListPersonIDsSharingPhotos(targetPersonID uint, candidatePersonIDs []uint) ([]uint, error)
 }
 
 type PendingFaceStats struct {
@@ -357,6 +363,50 @@ func (r *faceRepository) ListPersonIDsCooccurringWithPhotos(photoIDs []uint, can
 					seen[id] = struct{}{}
 					out = append(out, id)
 				}
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out, nil
+}
+
+// ListPersonIDsSharingPhotos 返回与 targetPersonID 出现在同一照片中的候选人物 ID。
+// SQL 语义：
+//
+//	SELECT DISTINCT candidate.person_id
+//	FROM faces AS target
+//	JOIN faces AS candidate ON candidate.photo_id = target.photo_id
+//	WHERE target.person_id = ?
+//	  AND candidate.person_id IN (...)
+//	  AND candidate.person_id != target.person_id;
+//
+// 仅做已有人物同照片共现判断：不加载目标人物全部 Photo ID，也不逐候选查询；候选 ID
+// 去重并忽略 0；按 SQLite 参数上限分块；利用 faces.photo_id / faces.person_id 索引；
+// 返回人物 ID 去重升序；任一候选为空直接返回 nil。
+func (r *faceRepository) ListPersonIDsSharingPhotos(targetPersonID uint, candidatePersonIDs []uint) ([]uint, error) {
+	persons := dedupIDs(candidatePersonIDs)
+	if targetPersonID == 0 || len(persons) == 0 {
+		return nil, nil
+	}
+	seen := make(map[uint]struct{})
+	var out []uint
+	for _, cchunk := range chunkIDs(persons) {
+		var ids []uint
+		err := r.db.Model(&model.Face{}).
+			Where("person_id IN ? AND photo_id IN (?)",
+				cchunk,
+				r.db.Model(&model.Face{}).Select("photo_id").Where("person_id = ?", targetPersonID),
+			).
+			Where("person_id != ?", targetPersonID).
+			Distinct("person_id").
+			Pluck("person_id", &ids).Error
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range ids {
+			if _, ok := seen[id]; !ok {
+				seen[id] = struct{}{}
+				out = append(out, id)
 			}
 		}
 	}

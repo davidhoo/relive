@@ -118,6 +118,8 @@ export interface PersonMergeSuggestionItem {
   similarity_score: number
   rank: number
   status: string
+  match_source: 'legacy' | 'identity_profile'
+  warning?: 'same_photo_cooccurrence'
   candidate_person?: Person
 }
 

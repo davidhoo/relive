@@ -86,6 +86,14 @@ export function sortMergeSuggestionCandidates<T extends Pick<PersonMergeSuggesti
   })
 }
 
+// 同照片共现警告文案：人工审核提示，不阻断建议。
+export const MERGE_SUGGESTION_SAME_PHOTO_WARNING = '两个人物曾出现在同一张照片中，请确认是否属于拼图、反射或屏幕内容。'
+
+// isMergeSuggestionWarning 判断候选是否携带人工审核警告，避免在 Vue 模板中散落判断规则。
+export function isMergeSuggestionWarning(item: Pick<PersonMergeSuggestionItem, 'warning'>): boolean {
+  return item.warning === 'same_photo_cooccurrence'
+}
+
 export function getMergeSuggestionTaskStatusMeta(task?: Pick<PersonMergeSuggestionTask, 'status'> | string | null): TaskStatusMeta {
   const status = typeof task === 'string' ? task : task?.status
   if (status === 'running') {

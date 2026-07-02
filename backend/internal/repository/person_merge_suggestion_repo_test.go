@@ -310,3 +310,34 @@ func TestPersonMergeSuggestionRepository_MarkItemsStatusOnTerminalSuggestionNoOp
 	require.NoError(t, err)
 	assert.Empty(t, mergedItems)
 }
+
+func TestPersonMergeSuggestionRepository_PersistsMatchSourceAndWarning(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	repo := NewPersonMergeSuggestionRepository(db)
+
+	require.NoError(t, repo.ReplacePendingForTarget(1100, model.PersonCategoryFamily, []model.PersonMergeSuggestionItem{
+		{CandidatePersonID: 1101, SimilarityScore: 0.95, Rank: 1}, // 默认 legacy / 无 warning
+		{CandidatePersonID: 1102, SimilarityScore: 0.91, Rank: 2,
+			MatchSource: model.PersonMergeMatchSourceIdentityProfile, Warning: model.PersonMergeWarningSamePhotoCooccurrence},
+	}))
+
+	suggestions, _, err := repo.ListPending(1, 10)
+	require.NoError(t, err)
+	require.Len(t, suggestions, 1)
+	items, err := repo.GetItems(suggestions[0].ID, model.PersonMergeSuggestionItemStatusPending)
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+
+	byCand := map[uint]*model.PersonMergeSuggestionItem{}
+	for _, it := range items {
+		byCand[it.CandidatePersonID] = it
+	}
+	// 未显式设置来源的历史/默认 item → legacy、空 warning。
+	assert.Equal(t, model.PersonMergeMatchSourceLegacy, byCand[1101].MatchSource)
+	assert.Empty(t, byCand[1101].Warning)
+	// 画像候选保留来源与警告。
+	assert.Equal(t, model.PersonMergeMatchSourceIdentityProfile, byCand[1102].MatchSource)
+	assert.Equal(t, model.PersonMergeWarningSamePhotoCooccurrence, byCand[1102].Warning)
+}

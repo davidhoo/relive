@@ -57,6 +57,10 @@ type personMergeSuggestionService struct {
 	config              *config.Config
 	writeQueue          *database.WriteQueue
 
+	// profileProvider 注入身份画像相似度 provider；仅非 legacy 模式注入。
+	// 为 nil 时合并建议完整走现有 prototype ANN 路径，行为与 Task 10 前一致。
+	profileProvider PersonProfileSimilarityProvider
+
 	mu             sync.RWMutex
 	task           *model.PersonMergeSuggestionTask
 	state          personMergeSuggestionState
@@ -90,6 +94,415 @@ type mergeSuggestionCandidate struct {
 	candidateID  uint
 	score        float64
 	targetPerson *model.Person
+	source       string // legacy / identity_profile
+	warning      string // "" / same_photo_cooccurrence
+}
+
+// mergeSuggestionProfileK 是非 legacy 模式下每个目标人物从身份画像召回的最大候选数。
+const mergeSuggestionProfileK = 50
+
+func (s *personMergeSuggestionService) buildAssignments(targets []*model.Person) (map[uint][]model.PersonMergeSuggestionItem, error) {
+	// Phase 1: ensure ANN index is ready (lazy build, cached across slices).
+	idx, err := s.ensureANNIndex()
+	if err != nil {
+		return nil, err
+	}
+
+	// Phase 2: load cannot-link constraints.
+	cannotLinkCache, err := s.loadCannotLinkCache()
+	if err != nil {
+		return nil, err
+	}
+
+	// legacy 模式（provider 未注入）完整走现有 prototype ANN 路径，行为与 Task 10 前一致。
+	if s.profileProvider == nil {
+		return s.legacyAssignments(targets, idx, cannotLinkCache)
+	}
+	return s.mixedAssignments(targets, idx, cannotLinkCache)
+}
+
+// loadCannotLinkCache 一次性加载全部 cannot-link 约束为对称缓存，供候选过滤使用。
+func (s *personMergeSuggestionService) loadCannotLinkCache() (map[uint]map[uint]bool, error) {
+	_, _, bgCannotLinkRepo, _ := s.bgRepos()
+	cannotLinkCache := make(map[uint]map[uint]bool)
+	allCannotLinks, err := bgCannotLinkRepo.ListAll()
+	if err != nil {
+		return nil, err
+	}
+	for _, cl := range allCannotLinks {
+		if cannotLinkCache[cl.PersonIDA] == nil {
+			cannotLinkCache[cl.PersonIDA] = make(map[uint]bool)
+		}
+		cannotLinkCache[cl.PersonIDA][cl.PersonIDB] = true
+		if cannotLinkCache[cl.PersonIDB] == nil {
+			cannotLinkCache[cl.PersonIDB] = make(map[uint]bool)
+		}
+		cannotLinkCache[cl.PersonIDB][cl.PersonIDA] = true
+	}
+	return cannotLinkCache, nil
+}
+
+// cannotLinkBlocked 返回 target 与 candidate 是否存在 cannot-link 约束（对称）。
+func cannotLinkBlocked(cannotLinkCache map[uint]map[uint]bool, targetID, candidateID uint) bool {
+	if cannotLinkCache[targetID] != nil && cannotLinkCache[targetID][candidateID] {
+		return true
+	}
+	if cannotLinkCache[candidateID] != nil && cannotLinkCache[candidateID][targetID] {
+		return true
+	}
+	return false
+}
+
+// legacyAssignments 是 Task 10 前的现有 prototype ANN 路径：批量召回 → DB 校验 → 并行精确评分 →
+// 全局 bestByCandidate。所有候选 MatchSource=legacy、Warning=""。legacy 模式下调用路径与结果不变。
+func (s *personMergeSuggestionService) legacyAssignments(targets []*model.Person, idx *annIndex, cannotLinkCache map[uint]map[uint]bool) (map[uint][]model.PersonMergeSuggestionItem, error) {
+	bgPersonRepo, _, _, _ := s.bgRepos()
+
+	// Phase 3: ANN candidate generation — serialized because hnsw.Graph is not thread-safe.
+	candidatesByTarget := make(map[uint]map[uint]struct{}, len(targets))
+	for _, target := range targets {
+		if target == nil {
+			continue
+		}
+		targetProtos := idx.personProtos[target.ID]
+		if len(targetProtos) == 0 {
+			continue
+		}
+		candidatesByTarget[target.ID] = idx.annCandidates(target.ID, targetProtos, annSearchK)
+	}
+
+	// Phase 3.5: validate candidate persons against the database.
+	allCandidateIDs := make([]uint, 0)
+	for _, cands := range candidatesByTarget {
+		for cid := range cands {
+			allCandidateIDs = append(allCandidateIDs, cid)
+		}
+	}
+	if len(allCandidateIDs) > 0 {
+		validPeople, err := bgPersonRepo.ListByIDs(uniqueUintIDs(allCandidateIDs))
+		if err != nil {
+			return nil, fmt.Errorf("validate candidates: %w", err)
+		}
+		validCandidates := make(map[uint]struct{}, len(validPeople))
+		for _, p := range validPeople {
+			if p != nil && p.FaceCount > 0 {
+				validCandidates[p.ID] = struct{}{}
+			}
+		}
+		for tid, cands := range candidatesByTarget {
+			for cid := range cands {
+				if _, ok := validCandidates[cid]; !ok {
+					delete(candidatesByTarget[tid], cid)
+				}
+			}
+		}
+	}
+
+	// Phase 4: exact re-scoring on shortlisted candidates — parallelized with 4 workers.
+	bestByCandidate := make(map[uint]mergeSuggestionCandidate)
+	bestMutex := sync.Mutex{}
+	threshold := s.mergeSuggestionThreshold()
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 4)
+
+	for _, target := range targets {
+		if target == nil {
+			continue
+		}
+		candidates := candidatesByTarget[target.ID]
+		if len(candidates) == 0 {
+			continue
+		}
+		targetProtos := idx.personProtos[target.ID]
+
+		wg.Add(1)
+		go func(tgt *model.Person, tgtEmb []faceWithEmbedding, candIDs map[uint]struct{}) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			for candidateID := range candIDs {
+				candidateEmbeddings := idx.personProtos[candidateID]
+				if len(candidateEmbeddings) == 0 {
+					continue
+				}
+				if cannotLinkBlocked(cannotLinkCache, tgt.ID, candidateID) {
+					continue
+				}
+
+				score := legacyPrototypePairScore(tgtEmb, candidateEmbeddings)
+				if score < threshold {
+					continue
+				}
+
+				bestMutex.Lock()
+				current, exists := bestByCandidate[candidateID]
+				if !exists || score > current.score || (score == current.score && tgt.ID < current.targetID) {
+					bestByCandidate[candidateID] = mergeSuggestionCandidate{
+						targetID:     tgt.ID,
+						candidateID:  candidateID,
+						score:        score,
+						targetPerson: tgt,
+						source:       model.PersonMergeMatchSourceLegacy,
+						warning:      "",
+					}
+				}
+				bestMutex.Unlock()
+			}
+		}(target, targetProtos, candidates)
+	}
+	wg.Wait()
+
+	return s.buildItemsFromBest(bestByCandidate, targets), nil
+}
+
+// mixedAssignments 在非 legacy 模式下接入身份画像 provider：逐目标尝试画像召回 + 中心/medoid
+// 精确验证，profile 不可用时逐目标回退 legacy prototype 路径，medoid 验证失败时逐对回退 legacy。
+// cannot-link 对 profile/legacy 候选都硬阻断；同照片共现的画像候选写入 warning 供人工审核。
+func (s *personMergeSuggestionService) mixedAssignments(targets []*model.Person, idx *annIndex, cannotLinkCache map[uint]map[uint]bool) (map[uint][]model.PersonMergeSuggestionItem, error) {
+	_, bgFaceRepo, _, _ := s.bgRepos()
+	threshold := s.mergeSuggestionThreshold()
+
+	targetIDs := make([]uint, 0, len(targets))
+	for _, t := range targets {
+		if t == nil {
+			continue
+		}
+		targetIDs = append(targetIDs, t.ID)
+	}
+
+	// 整批画像召回不可用 → 完整回退 legacy（结果等同现有路径）。
+	profileMatches, profileOK := s.profileProvider.SimilarPeople(targetIDs, mergeSuggestionProfileK)
+	if !profileOK {
+		return s.legacyAssignments(targets, idx, cannotLinkCache)
+	}
+
+	bestByCandidate := make(map[uint]mergeSuggestionCandidate)
+
+	for _, t := range targets {
+		if t == nil {
+			continue
+		}
+		matches := profileMatches[t.ID]
+		// 该目标无 ready profile（或无召回）→ 逐目标回退 legacy。
+		if len(matches) == 0 {
+			s.scoreLegacyTarget(t, idx, cannotLinkCache, threshold, bestByCandidate)
+			continue
+		}
+
+		// 对该目标的画像候选批量做中心 + medoid 精确验证。
+		pairs := make([]PersonPair, 0, len(matches))
+		for _, m := range matches {
+			pairs = append(pairs, PersonPair{TargetID: t.ID, CandidateID: m.PersonID})
+		}
+		comparisons, cmpOK := s.profileProvider.ComparePeople(pairs)
+		if !cmpOK {
+			// 画像精确比较不可用 → 该目标回退 legacy。
+			s.scoreLegacyTarget(t, idx, cannotLinkCache, threshold, bestByCandidate)
+			continue
+		}
+
+		// 收集该目标的候选：profile 可用候选 + medoid 失败的逐对 legacy 回退候选。
+		type profileCandidate struct {
+			candidateID uint
+			score       float64
+		}
+		var profileCands []profileCandidate
+		for _, m := range matches {
+			candID := m.PersonID
+			if cannotLinkBlocked(cannotLinkCache, t.ID, candID) {
+				continue // cannot-link 硬阻断，profile/legacy 候选均不生成
+			}
+			comp := comparisons[PersonPair{TargetID: t.ID, CandidateID: candID}]
+			if comp.Available {
+				if comp.Score >= threshold {
+					profileCands = append(profileCands, profileCandidate{candidateID: candID, score: comp.Score})
+				}
+				continue
+			}
+			// medoid 验证失败 → 该对回退 prototype 精确评分。
+			protoScore := legacyPrototypePairScore(idx.personProtos[t.ID], idx.personProtos[candID])
+			if protoScore >= threshold {
+				s.updateBestCandidate(bestByCandidate, mergeSuggestionCandidate{
+					targetID:     t.ID,
+					candidateID:  candID,
+					score:        protoScore,
+					targetPerson: t,
+					source:       model.PersonMergeMatchSourceLegacy,
+					warning:      "",
+				})
+			}
+		}
+
+		if len(profileCands) == 0 {
+			continue
+		}
+
+		// 同照片共现查询：仅画像候选参与（legacy 候选不写 warning）。
+		candIDs := make([]uint, 0, len(profileCands))
+		for _, pc := range profileCands {
+			candIDs = append(candIDs, pc.candidateID)
+		}
+		sharing, err := bgFaceRepo.ListPersonIDsSharingPhotos(t.ID, candIDs)
+		if err != nil {
+			// 共现查询失败 → 守住精度，该目标画像候选回退 legacy。
+			s.scoreLegacyTarget(t, idx, cannotLinkCache, threshold, bestByCandidate)
+			continue
+		}
+		sharingSet := make(map[uint]struct{}, len(sharing))
+		for _, id := range sharing {
+			sharingSet[id] = struct{}{}
+		}
+		for _, pc := range profileCands {
+			warning := ""
+			if _, ok := sharingSet[pc.candidateID]; ok {
+				warning = model.PersonMergeWarningSamePhotoCooccurrence
+			}
+			s.updateBestCandidate(bestByCandidate, mergeSuggestionCandidate{
+				targetID:     t.ID,
+				candidateID:  pc.candidateID,
+				score:        pc.score,
+				targetPerson: t,
+				source:       model.PersonMergeMatchSourceIdentityProfile,
+				warning:      warning,
+			})
+		}
+	}
+
+	return s.buildItemsFromBest(bestByCandidate, targets), nil
+}
+
+// scoreLegacyTarget 对单个目标执行 prototype ANN 召回 + DB 校验 + 精确评分，结果写入 bestByCandidate。
+// 用于非 legacy 模式下逐目标/逐对 legacy 回退。所有候选 MatchSource=legacy、Warning=""。
+func (s *personMergeSuggestionService) scoreLegacyTarget(t *model.Person, idx *annIndex, cannotLinkCache map[uint]map[uint]bool, threshold float64, bestByCandidate map[uint]mergeSuggestionCandidate) {
+	bgPersonRepo, _, _, _ := s.bgRepos()
+	targetProtos := idx.personProtos[t.ID]
+	if len(targetProtos) == 0 {
+		return
+	}
+	cands := idx.annCandidates(t.ID, targetProtos, annSearchK)
+	if len(cands) == 0 {
+		return
+	}
+	candIDs := make([]uint, 0, len(cands))
+	for cid := range cands {
+		candIDs = append(candIDs, cid)
+	}
+	validPeople, err := bgPersonRepo.ListByIDs(uniqueUintIDs(candIDs))
+	if err != nil {
+		return // 无法校验 → 该目标 fail-closed，不生成候选
+	}
+	validCandidates := make(map[uint]struct{}, len(validPeople))
+	for _, p := range validPeople {
+		if p != nil && p.FaceCount > 0 {
+			validCandidates[p.ID] = struct{}{}
+		}
+	}
+	for candidateID := range cands {
+		if _, ok := validCandidates[candidateID]; !ok {
+			continue
+		}
+		candidateProtos := idx.personProtos[candidateID]
+		if len(candidateProtos) == 0 {
+			continue
+		}
+		if cannotLinkBlocked(cannotLinkCache, t.ID, candidateID) {
+			continue
+		}
+		score := legacyPrototypePairScore(targetProtos, candidateProtos)
+		if score < threshold {
+			continue
+		}
+		s.updateBestCandidate(bestByCandidate, mergeSuggestionCandidate{
+			targetID:     t.ID,
+			candidateID:  candidateID,
+			score:        score,
+			targetPerson: t,
+			source:       model.PersonMergeMatchSourceLegacy,
+			warning:      "",
+		})
+	}
+}
+
+// updateBestCandidate 按扩展确定性规则将候选写入全局 bestByCandidate：同一 candidate 只归属最佳 target。
+func (s *personMergeSuggestionService) updateBestCandidate(bestByCandidate map[uint]mergeSuggestionCandidate, cand mergeSuggestionCandidate) {
+	existing, ok := bestByCandidate[cand.candidateID]
+	if !ok || mergeCandidateBetter(cand, existing) {
+		bestByCandidate[cand.candidateID] = cand
+	}
+}
+
+// mergeCandidateBetter 实现候选归属的确定性比较：
+//
+//	finalScore DESC → 无 warning 优先于有 warning → profile 优先于 legacy → targetPersonID ASC
+func mergeCandidateBetter(a, b mergeSuggestionCandidate) bool {
+	if a.score != b.score {
+		return a.score > b.score
+	}
+	aWarn := a.warning != ""
+	bWarn := b.warning != ""
+	if aWarn != bWarn {
+		return !aWarn
+	}
+	if a.source != b.source {
+		return mergeSourceRank(a.source) < mergeSourceRank(b.source)
+	}
+	return a.targetID < b.targetID
+}
+
+// mergeSourceRank 给来源打确定性次序：identity_profile(0) 优先于 legacy(1)。
+func mergeSourceRank(source string) int {
+	if source == model.PersonMergeMatchSourceIdentityProfile {
+		return 0
+	}
+	return 1
+}
+
+// buildItemsFromBest 将全局 bestByCandidate 按 target 聚合，分数降序、candidate ID 升序排序并赋予 rank。
+func (s *personMergeSuggestionService) buildItemsFromBest(bestByCandidate map[uint]mergeSuggestionCandidate, targets []*model.Person) map[uint][]model.PersonMergeSuggestionItem {
+	assignments := make(map[uint][]model.PersonMergeSuggestionItem, len(targets))
+	for _, assignment := range bestByCandidate {
+		source := assignment.source
+		if source == "" {
+			source = model.PersonMergeMatchSourceLegacy
+		}
+		assignments[assignment.targetID] = append(assignments[assignment.targetID], model.PersonMergeSuggestionItem{
+			CandidatePersonID: assignment.candidateID,
+			SimilarityScore:   assignment.score,
+			Status:            model.PersonMergeSuggestionItemStatusPending,
+			MatchSource:       source,
+			Warning:           assignment.warning,
+		})
+	}
+	for _, target := range targets {
+		if target == nil {
+			continue
+		}
+		items := assignments[target.ID]
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].SimilarityScore == items[j].SimilarityScore {
+				return items[i].CandidatePersonID < items[j].CandidatePersonID
+			}
+			return items[i].SimilarityScore > items[j].SimilarityScore
+		})
+		for i := range items {
+			items[i].Rank = i + 1
+		}
+		assignments[target.ID] = items
+	}
+	return assignments
+}
+
+// legacyPrototypePairScore 使用 prototype embedding 计算两个人物的双向平均最佳相似度，
+// 与现有 legacy 评分一致。供 legacy 路径与画像 medoid 失败时的逐对回退复用。
+func legacyPrototypePairScore(targetEmbeddings, candidateEmbeddings []faceWithEmbedding) float64 {
+	if len(targetEmbeddings) == 0 || len(candidateEmbeddings) == 0 {
+		return -1
+	}
+	score1 := averageBestSuggestionSimilarity(targetEmbeddings, candidateEmbeddings)
+	score2 := averageBestSuggestionSimilarity(candidateEmbeddings, targetEmbeddings)
+	return (score1 + score2) / 2
 }
 
 func NewPersonMergeSuggestionService(
@@ -175,6 +588,12 @@ func (s *personMergeSuggestionService) SetPostMergeHook(fn func(targetPersonID u
 // 测试可注入失败 stub 或 nil（nil 时反馈记录被静默跳过）。
 func (s *personMergeSuggestionService) SetFeedbackEventRepo(repo repository.PeopleFeedbackEventRepository) {
 	s.feedbackEventRepo = repo
+}
+
+// SetProfileSimilarityProvider 注入身份画像相似度 provider。仅非 legacy 模式注入；
+// legacy 模式必须保持 nil，使合并建议完整走现有 prototype ANN 路径。测试通过 fake provider 注入。
+func (s *personMergeSuggestionService) SetProfileSimilarityProvider(provider PersonProfileSimilarityProvider) {
+	s.profileProvider = provider
 }
 
 // recordFeedbackEvent 在核心人物变更已提交后单独写入一条反馈事件。必须在任何
@@ -669,160 +1088,6 @@ func (s *personMergeSuggestionService) AttachThreshold() float64 {
 	return s.attachThreshold()
 }
 
-func (s *personMergeSuggestionService) buildAssignments(targets []*model.Person) (map[uint][]model.PersonMergeSuggestionItem, error) {
-	bgPersonRepo, _, bgCannotLinkRepo, _ := s.bgRepos()
-
-	// Phase 1: ensure ANN index is ready (lazy build, cached across slices).
-	idx, err := s.ensureANNIndex()
-	if err != nil {
-		return nil, err
-	}
-
-	// Phase 2: load cannot-link constraints.
-	cannotLinkCache := make(map[uint]map[uint]bool)
-	allCannotLinks, err := bgCannotLinkRepo.ListAll()
-	if err != nil {
-		return nil, err
-	}
-	for _, cl := range allCannotLinks {
-		if cannotLinkCache[cl.PersonIDA] == nil {
-			cannotLinkCache[cl.PersonIDA] = make(map[uint]bool)
-		}
-		cannotLinkCache[cl.PersonIDA][cl.PersonIDB] = true
-		if cannotLinkCache[cl.PersonIDB] == nil {
-			cannotLinkCache[cl.PersonIDB] = make(map[uint]bool)
-		}
-		cannotLinkCache[cl.PersonIDB][cl.PersonIDA] = true
-	}
-
-	// Phase 3: ANN candidate generation — serialized because hnsw.Graph is not thread-safe.
-	candidatesByTarget := make(map[uint]map[uint]struct{}, len(targets))
-	for _, target := range targets {
-		if target == nil {
-			continue
-		}
-		targetProtos := idx.personProtos[target.ID]
-		if len(targetProtos) == 0 {
-			continue
-		}
-		candidatesByTarget[target.ID] = idx.annCandidates(target.ID, targetProtos, annSearchK)
-	}
-
-	// Phase 3.5: validate candidate persons against the database.
-	// The ANN index may be stale (up to 30-min cooldown), returning candidate
-	// IDs for persons that have been deleted (e.g., after a merge). Filter these
-	// out before the expensive exact re-scoring phase.
-	allCandidateIDs := make([]uint, 0)
-	for _, cands := range candidatesByTarget {
-		for cid := range cands {
-			allCandidateIDs = append(allCandidateIDs, cid)
-		}
-	}
-	if len(allCandidateIDs) > 0 {
-		validPeople, err := bgPersonRepo.ListByIDs(uniqueUintIDs(allCandidateIDs))
-		if err != nil {
-			return nil, fmt.Errorf("validate candidates: %w", err)
-		}
-		validCandidates := make(map[uint]struct{}, len(validPeople))
-		for _, p := range validPeople {
-			if p != nil && p.FaceCount > 0 {
-				validCandidates[p.ID] = struct{}{}
-			}
-		}
-		for tid, cands := range candidatesByTarget {
-			for cid := range cands {
-				if _, ok := validCandidates[cid]; !ok {
-					delete(candidatesByTarget[tid], cid)
-				}
-			}
-		}
-	}
-
-	// Phase 4: exact re-scoring on shortlisted candidates — parallelized with 4 workers.
-	bestByCandidate := make(map[uint]mergeSuggestionCandidate)
-	bestMutex := sync.Mutex{}
-	threshold := s.mergeSuggestionThreshold()
-
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 4)
-
-	for _, target := range targets {
-		if target == nil {
-			continue
-		}
-		candidates := candidatesByTarget[target.ID]
-		if len(candidates) == 0 {
-			continue
-		}
-		targetProtos := idx.personProtos[target.ID]
-
-		wg.Add(1)
-		go func(tgt *model.Person, tgtEmb []faceWithEmbedding, candIDs map[uint]struct{}) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			for candidateID := range candIDs {
-				candidateEmbeddings := idx.personProtos[candidateID]
-				if len(candidateEmbeddings) == 0 {
-					continue
-				}
-				if cannotLinkCache[tgt.ID] != nil && cannotLinkCache[tgt.ID][candidateID] {
-					continue
-				}
-				if cannotLinkCache[candidateID] != nil && cannotLinkCache[candidateID][tgt.ID] {
-					continue
-				}
-
-				score1 := averageBestSuggestionSimilarity(tgtEmb, candidateEmbeddings)
-				score2 := averageBestSuggestionSimilarity(candidateEmbeddings, tgtEmb)
-				score := (score1 + score2) / 2
-				if score < threshold {
-					continue
-				}
-
-				bestMutex.Lock()
-				current, exists := bestByCandidate[candidateID]
-				if !exists || score > current.score || (score == current.score && tgt.ID < current.targetID) {
-					bestByCandidate[candidateID] = mergeSuggestionCandidate{
-						targetID:     tgt.ID,
-						candidateID:  candidateID,
-						score:        score,
-						targetPerson: tgt,
-					}
-				}
-				bestMutex.Unlock()
-			}
-		}(target, targetProtos, candidates)
-	}
-	wg.Wait()
-
-	assignments := make(map[uint][]model.PersonMergeSuggestionItem, len(targets))
-	for _, assignment := range bestByCandidate {
-		assignments[assignment.targetID] = append(assignments[assignment.targetID], model.PersonMergeSuggestionItem{
-			CandidatePersonID: assignment.candidateID,
-			SimilarityScore:   assignment.score,
-			Status:            model.PersonMergeSuggestionItemStatusPending,
-		})
-	}
-
-	for _, target := range targets {
-		items := assignments[target.ID]
-		sort.Slice(items, func(i, j int) bool {
-			if items[i].SimilarityScore == items[j].SimilarityScore {
-				return items[i].CandidatePersonID < items[j].CandidatePersonID
-			}
-			return items[i].SimilarityScore > items[j].SimilarityScore
-		})
-		for i := range items {
-			items[i].Rank = i + 1
-		}
-		assignments[target.ID] = items
-	}
-
-	return assignments, nil
-}
-
 func (s *personMergeSuggestionService) buildSuggestionResponses(
 	suggestions []*model.PersonMergeSuggestion,
 	items []*model.PersonMergeSuggestionItem,
@@ -859,6 +1124,8 @@ func (s *personMergeSuggestionService) buildSuggestionResponses(
 			SimilarityScore:   item.SimilarityScore,
 			Rank:              item.Rank,
 			Status:            item.Status,
+			MatchSource:       item.MatchSource,
+			Warning:           item.Warning,
 			CandidatePerson:   toSuggestionPersonResponse(peopleByID[item.CandidatePersonID]),
 		})
 	}

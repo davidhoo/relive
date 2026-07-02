@@ -2,8 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  MERGE_SUGGESTION_SAME_PHOTO_WARNING,
   getMergeSuggestionTaskStatusMeta,
   getMergeSuggestionVisibility,
+  isMergeSuggestionWarning,
   sortMergeSuggestionCandidates,
 } from '../src/views/People/peopleHelpers.ts'
 
@@ -28,6 +30,17 @@ test('getMergeSuggestionTaskStatusMeta 映射 paused 与 running 状态', () => 
   assert.deepEqual(getMergeSuggestionTaskStatusMeta('running'), { label: '巡检中', type: 'warning' })
   assert.deepEqual(getMergeSuggestionTaskStatusMeta('paused'), { label: '已暂停', type: 'info' })
   assert.deepEqual(getMergeSuggestionTaskStatusMeta('idle'), { label: '等待巡检', type: 'info' })
+})
+
+test('isMergeSuggestionWarning 仅识别 same_photo_cooccurrence 警告', () => {
+  assert.equal(isMergeSuggestionWarning({ warning: 'same_photo_cooccurrence' }), true)
+  assert.equal(isMergeSuggestionWarning({ warning: undefined }), false)
+  assert.equal(isMergeSuggestionWarning({}), false)
+})
+
+test('同照片共现警告文案非空且为人工审核提示', () => {
+  assert.ok(MERGE_SUGGESTION_SAME_PHOTO_WARNING.length > 0)
+  assert.match(MERGE_SUGGESTION_SAME_PHOTO_WARNING, /照片/)
 })
 
 test('merge suggestion UI includes avatars and candidate stats bindings required by design', async () => {

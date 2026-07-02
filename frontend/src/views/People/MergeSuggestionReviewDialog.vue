@@ -35,6 +35,7 @@
             v-for="item in sortedItems"
             :key="item.candidate_person_id"
             class="candidate-card"
+            :class="{ 'candidate-card--warning': isMergeSuggestionWarning(item) }"
           >
             <el-checkbox :value="item.candidate_person_id" />
             <el-avatar
@@ -55,6 +56,10 @@
                 <span>{{ item.candidate_person?.face_count || 0 }} 人脸</span>
                 <span>{{ `相似度 ${(item.similarity_score * 100).toFixed(1)}%` }}</span>
               </div>
+              <div v-if="isMergeSuggestionWarning(item)" class="candidate-warning">
+                <el-icon><WarningFilled /></el-icon>
+                <span>{{ MERGE_SUGGESTION_SAME_PHOTO_WARNING }}</span>
+              </div>
             </div>
           </label>
         </el-checkbox-group>
@@ -66,10 +71,10 @@
     <template #footer>
       <div class="review-footer">
         <div class="review-footer-left">
-          <el-button :disabled="sortedItems.length === 0" @click="selectAll">
+          <el-button :disabled="selectableIds.length === 0" @click="selectAll">
             {{ isAllSelected ? '取消全选' : '全选' }}
           </el-button>
-          <el-button :disabled="sortedItems.length === 0" @click="invertSelection">反选</el-button>
+          <el-button :disabled="selectableIds.length === 0" @click="invertSelection">反选</el-button>
         </div>
         <div class="review-footer-right">
           <el-button @click="emit('update:modelValue', false)">关闭</el-button>
@@ -98,9 +103,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { WarningFilled } from '@element-plus/icons-vue'
 
 import type { PersonCategory, PersonMergeSuggestion } from '@/types/people'
-import { getPersonAvatarFallback, getPersonCategoryLabel, sortMergeSuggestionCandidates } from './peopleHelpers'
+import { MERGE_SUGGESTION_SAME_PHOTO_WARNING, getPersonAvatarFallback, getPersonCategoryLabel, isMergeSuggestionWarning, sortMergeSuggestionCandidates } from './peopleHelpers'
 
 const router = useRouter()
 
@@ -122,21 +128,38 @@ const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/a
 
 const sortedItems = computed(() => sortMergeSuggestionCandidates(props.suggestion?.items || []))
 
-const allCandidateIds = computed(() => sortedItems.value.map(i => i.candidate_person_id))
+// 全选/反选仅在无 warning 候选范围内操作；warning 候选可手动勾选但不被批量默认选中。
+const selectableIds = computed(() => sortedItems.value.filter(item => !isMergeSuggestionWarning(item)).map(i => i.candidate_person_id))
 
-const isAllSelected = computed(() => allCandidateIds.value.length > 0 && selectedIds.value.length === allCandidateIds.value.length)
+const isAllSelected = computed(() => selectableIds.value.length > 0 && selectableIds.value.every(id => selectedIds.value.includes(id)))
 
 function selectAll() {
+  const selectableSet = new Set(selectableIds.value)
   if (isAllSelected.value) {
-    selectedIds.value = []
+    // 取消全选：仅移除无 warning 候选，保留用户手动选中的 warning 候选。
+    selectedIds.value = selectedIds.value.filter(id => !selectableSet.has(id))
   } else {
-    selectedIds.value = [...allCandidateIds.value]
+    // 全选：选中全部无 warning 候选，保留已选 warning 候选。
+    const merged = new Set(selectedIds.value)
+    for (const id of selectableIds.value) {
+      merged.add(id)
+    }
+    selectedIds.value = [...merged]
   }
 }
 
 function invertSelection() {
-  const selected = new Set(selectedIds.value)
-  selectedIds.value = allCandidateIds.value.filter(id => !selected.has(id))
+  // 反选只在无 warning 候选范围内操作；warning 候选的选中状态保持不变。
+  const selectableSet = new Set(selectableIds.value)
+  const inverted = new Set<number>(selectedIds.value.filter(id => !selectableSet.has(id)))
+  for (const id of selectableIds.value) {
+    if (inverted.has(id)) {
+      inverted.delete(id)
+    } else {
+      inverted.add(id)
+    }
+  }
+  selectedIds.value = [...inverted]
 }
 
 function goToPersonDetail(personId: number) {
@@ -267,5 +290,24 @@ watch(
 
 .candidate-avatar.clickable:hover {
   transform: scale(1.1);
+}
+
+.candidate-card--warning {
+  border-color: var(--el-color-warning);
+  background: var(--el-color-warning-light-9);
+}
+
+.candidate-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--el-color-warning);
+  line-height: 1.4;
+}
+
+.candidate-warning .el-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
 }
 </style>

@@ -76,13 +76,23 @@ func (r *personMergeSuggestionRepository) ReplacePendingForTarget(targetPersonID
 
 		records := make([]model.PersonMergeSuggestionItem, 0, len(items))
 		for _, item := range items {
-			records = append(records, model.PersonMergeSuggestionItem{
+			record := model.PersonMergeSuggestionItem{
 				SuggestionID:      suggestion.ID,
 				CandidatePersonID: item.CandidatePersonID,
 				SimilarityScore:   item.SimilarityScore,
 				Rank:              item.Rank,
 				Status:            model.PersonMergeSuggestionItemStatusPending,
-			})
+			}
+			// 保留来源与警告；未显式设置时按 legacy / 无警告兜底，保证历史与回退路径一致。
+			if item.MatchSource == model.PersonMergeMatchSourceIdentityProfile {
+				record.MatchSource = model.PersonMergeMatchSourceIdentityProfile
+			} else {
+				record.MatchSource = model.PersonMergeMatchSourceLegacy
+			}
+			if item.Warning == model.PersonMergeWarningSamePhotoCooccurrence {
+				record.Warning = model.PersonMergeWarningSamePhotoCooccurrence
+			}
+			records = append(records, record)
 		}
 		return tx.Create(&records).Error
 	})

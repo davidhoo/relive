@@ -525,3 +525,262 @@ func TestPersonMergeSuggestionService_AutoRerunWhenStale(t *testing.T) {
 	task := svc.GetTask()
 	assert.Equal(t, model.TaskStatusIdle, task.Status)
 }
+
+// ---- Task 10: 身份画像中心接入合并建议 ----
+
+// fakeProfileProvider 是测试用的 PersonProfileSimilarityProvider，返回预设结果。
+type fakeProfileProvider struct {
+	similar      map[uint][]IdentityProfileMatch
+	similarOK    bool
+	compare      map[PersonPair]IdentityProfileMatch
+	compareOK    bool
+	similarCalls int
+}
+
+func (f *fakeProfileProvider) SimilarPeople(_ []uint, _ int) (map[uint][]IdentityProfileMatch, bool) {
+	f.similarCalls++
+	return f.similar, f.similarOK
+}
+
+func (f *fakeProfileProvider) ComparePeople(_ []PersonPair) (map[PersonPair]IdentityProfileMatch, bool) {
+	return f.compare, f.compareOK
+}
+
+func injectFakeProfileProvider(t *testing.T, svc PersonMergeSuggestionService, provider PersonProfileSimilarityProvider) {
+	t.Helper()
+	svc.(*personMergeSuggestionService).SetProfileSimilarityProvider(provider)
+}
+
+// pendingSuggestionItemsByTarget 读取每个目标人物的 pending 建议项（含 MatchSource/Warning）。
+func pendingSuggestionItemsByTarget(t *testing.T, repo repository.PersonMergeSuggestionRepository) map[uint][]*model.PersonMergeSuggestionItem {
+	t.Helper()
+	suggestions, _, err := repo.ListPending(1, 100)
+	require.NoError(t, err)
+	got := make(map[uint][]*model.PersonMergeSuggestionItem, len(suggestions))
+	for _, s := range suggestions {
+		items, err := repo.GetItems(s.ID, model.PersonMergeSuggestionItemStatusPending)
+		require.NoError(t, err)
+		got[s.TargetPersonID] = items
+	}
+	return got
+}
+
+func TestPersonMergeSuggestionService_IdentityProfile_GeneratesSuggestion(t *testing.T) {
+	svc, _, repos, _ := newPersonMergeSuggestionServiceForTest(t)
+
+	target := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0})
+	cand := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{0.5, 0.5})
+
+	// 画像 provider 召回 cand 并通过 medoid 验证，分数高于阈值。
+	injectFakeProfileProvider(t, svc, &fakeProfileProvider{
+		similar:   map[uint][]IdentityProfileMatch{target.ID: {{Available: true, PersonID: cand.ID, Score: 0.95}}},
+		similarOK: true,
+		compare: map[PersonPair]IdentityProfileMatch{
+			{TargetID: target.ID, CandidateID: cand.ID}: {Available: true, PersonID: cand.ID, Score: 0.95},
+		},
+		compareOK: true,
+	})
+
+	require.NoError(t, svc.MarkDirty("profile"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	items := pendingSuggestionItemsByTarget(t, repos.MergeSuggestion)
+	require.Contains(t, items, target.ID)
+	require.Len(t, items[target.ID], 1)
+	assert.Equal(t, cand.ID, items[target.ID][0].CandidatePersonID)
+	assert.Equal(t, model.PersonMergeMatchSourceIdentityProfile, items[target.ID][0].MatchSource)
+	assert.Empty(t, items[target.ID][0].Warning)
+}
+
+func TestPersonMergeSuggestionService_IdentityProfile_UnavailableFallsBackToLegacy(t *testing.T) {
+	svc, _, repos, _ := newPersonMergeSuggestionServiceForTest(t)
+
+	target := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0}, []float32{0.99, 0.01})
+	cand := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{1, 0.01})
+
+	// 画像整批不可用 → 应完整回退 legacy 路径。
+	injectFakeProfileProvider(t, svc, &fakeProfileProvider{similarOK: false})
+
+	require.NoError(t, svc.MarkDirty("profile-unavailable"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	// legacy 路径仍应基于 prototype 相似度生成建议。
+	got := pendingSuggestionCandidatesByTarget(t, repos.MergeSuggestion)
+	assert.Contains(t, got[target.ID], cand.ID)
+
+	// 来源应为 legacy。
+	items := pendingSuggestionItemsByTarget(t, repos.MergeSuggestion)
+	require.Len(t, items[target.ID], 1)
+	assert.Equal(t, model.PersonMergeMatchSourceLegacy, items[target.ID][0].MatchSource)
+}
+
+func TestPersonMergeSuggestionService_IdentityProfile_LegacyModeDoesNotCallProvider(t *testing.T) {
+	svc, _, repos, _ := newPersonMergeSuggestionServiceForTest(t)
+
+	target := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0}, []float32{0.99, 0.01})
+	cand := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{1, 0.01})
+
+	// legacy 模式：不注入 provider（nil）。即使注入一个会失败的 provider 也不应被调用。
+	// 这里验证 nil provider 下结果与 legacy 一致。
+	require.Nil(t, svc.(*personMergeSuggestionService).profileProvider)
+
+	require.NoError(t, svc.MarkDirty("legacy"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	got := pendingSuggestionCandidatesByTarget(t, repos.MergeSuggestion)
+	assert.Contains(t, got[target.ID], cand.ID)
+}
+
+func TestPersonMergeSuggestionService_IdentityProfile_CannotLinkBlocksProfileCandidate(t *testing.T) {
+	svc, _, repos, _ := newPersonMergeSuggestionServiceForTest(t)
+
+	target := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0})
+	cand := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{0.5, 0.5})
+
+	require.NoError(t, repos.CannotLink.Create(target.ID, cand.ID))
+
+	injectFakeProfileProvider(t, svc, &fakeProfileProvider{
+		similar:   map[uint][]IdentityProfileMatch{target.ID: {{Available: true, PersonID: cand.ID, Score: 0.95}}},
+		similarOK: true,
+		compare: map[PersonPair]IdentityProfileMatch{
+			{TargetID: target.ID, CandidateID: cand.ID}: {Available: true, PersonID: cand.ID, Score: 0.95},
+		},
+		compareOK: true,
+	})
+
+	require.NoError(t, svc.MarkDirty("cannot-link"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	items := pendingSuggestionItemsByTarget(t, repos.MergeSuggestion)
+	assert.NotContains(t, items, target.ID, "cannot-link 硬阻断 profile 候选")
+}
+
+func TestPersonMergeSuggestionService_IdentityProfile_SamePhotoCooccurrenceWarning(t *testing.T) {
+	svc, _, repos, _ := newPersonMergeSuggestionServiceForTest(t)
+
+	target := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0})
+	cand := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{0.5, 0.5})
+
+	// 让 cand 在 target 的一张照片中也出现人脸 → 同照片共现。
+	targetFaces, err := repos.Face.ListByPersonID(target.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, targetFaces)
+	sharedFace := &model.Face{
+		PhotoID:  targetFaces[0].PhotoID,
+		PersonID: &cand.ID,
+		BBoxX:    0.6, BBoxY: 0.6, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence:    0.9,
+		ClusterStatus: model.FaceClusterStatusAssigned,
+		ClusterScore:  1.0,
+	}
+	require.NoError(t, repos.Face.Create(sharedFace))
+
+	injectFakeProfileProvider(t, svc, &fakeProfileProvider{
+		similar:   map[uint][]IdentityProfileMatch{target.ID: {{Available: true, PersonID: cand.ID, Score: 0.95}}},
+		similarOK: true,
+		compare: map[PersonPair]IdentityProfileMatch{
+			{TargetID: target.ID, CandidateID: cand.ID}: {Available: true, PersonID: cand.ID, Score: 0.95},
+		},
+		compareOK: true,
+	})
+
+	require.NoError(t, svc.MarkDirty("cooccurrence"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	items := pendingSuggestionItemsByTarget(t, repos.MergeSuggestion)
+	require.Contains(t, items, target.ID)
+	require.Len(t, items[target.ID], 1)
+	assert.Equal(t, model.PersonMergeMatchSourceIdentityProfile, items[target.ID][0].MatchSource)
+	assert.Equal(t, model.PersonMergeWarningSamePhotoCooccurrence, items[target.ID][0].Warning, "同照片共现写入 warning")
+}
+
+func TestPersonMergeSuggestionService_IdentityProfile_BelowThresholdNotSaved(t *testing.T) {
+	svc, _, repos, _ := newPersonMergeSuggestionServiceForTest(t)
+	// 默认阈值 0.62。
+
+	target := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0})
+	cand := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{0.5, 0.5})
+
+	// 画像分数低于阈值 → 不保存。
+	injectFakeProfileProvider(t, svc, &fakeProfileProvider{
+		similar:   map[uint][]IdentityProfileMatch{target.ID: {{Available: true, PersonID: cand.ID, Score: 0.3}}},
+		similarOK: true,
+		compare: map[PersonPair]IdentityProfileMatch{
+			{TargetID: target.ID, CandidateID: cand.ID}: {Available: true, PersonID: cand.ID, Score: 0.3},
+		},
+		compareOK: true,
+	})
+
+	require.NoError(t, svc.MarkDirty("below-threshold"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	items := pendingSuggestionItemsByTarget(t, repos.MergeSuggestion)
+	assert.NotContains(t, items, target.ID, "低于阈值的画像候选不保存")
+}
+
+func TestPersonMergeSuggestionService_IdentityProfile_CandidateBelongsToBestTarget(t *testing.T) {
+	svc, _, repos, _ := newPersonMergeSuggestionServiceWithConfigForTest(t, config.PeopleConfig{
+		MergeSuggestionThreshold:       0.50,
+		AttachThreshold:                1.10,
+		MergeSuggestionBatchSize:       10,
+		MergeSuggestionCooldownSeconds: 1,
+	})
+
+	bestTarget := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0})
+	otherTarget := createSuggestionTestPerson(t, repos, model.PersonCategoryFriend, []float32{0.5, 0.5})
+	cand := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{0.5, 0.5})
+
+	// 两个 target 都通过画像召回 cand；bestTarget 分数更高 → cand 只归属 bestTarget。
+	injectFakeProfileProvider(t, svc, &fakeProfileProvider{
+		similar: map[uint][]IdentityProfileMatch{
+			bestTarget.ID:  {{Available: true, PersonID: cand.ID, Score: 0.95}},
+			otherTarget.ID: {{Available: true, PersonID: cand.ID, Score: 0.70}},
+		},
+		similarOK: true,
+		compare: map[PersonPair]IdentityProfileMatch{
+			{TargetID: bestTarget.ID, CandidateID: cand.ID}:  {Available: true, PersonID: cand.ID, Score: 0.95},
+			{TargetID: otherTarget.ID, CandidateID: cand.ID}: {Available: true, PersonID: cand.ID, Score: 0.70},
+		},
+		compareOK: true,
+	})
+
+	require.NoError(t, svc.MarkDirty("best-target"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	items := pendingSuggestionItemsByTarget(t, repos.MergeSuggestion)
+	assert.Contains(t, items, bestTarget.ID)
+	assert.NotContains(t, items, otherTarget.ID, "candidate 只归属最佳 target")
+	assert.Equal(t, cand.ID, items[bestTarget.ID][0].CandidatePersonID)
+}
+
+func TestPersonMergeSuggestionService_IdentityProfile_PerTargetFallback(t *testing.T) {
+	svc, _, repos, _ := newPersonMergeSuggestionServiceForTest(t)
+
+	// targetA 有画像候选；targetB 无画像召回 → 走 legacy。
+	targetA := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0})
+	candA := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{0.5, 0.5})
+	targetB := createSuggestionTestPerson(t, repos, model.PersonCategoryFriend, []float32{0, 1}, []float32{0.01, 0.99})
+	candB := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{0.02, 1})
+
+	// SimilarPeople 只返回 targetA 的候选；targetB 无 entry → legacy。
+	injectFakeProfileProvider(t, svc, &fakeProfileProvider{
+		similar:   map[uint][]IdentityProfileMatch{targetA.ID: {{Available: true, PersonID: candA.ID, Score: 0.95}}},
+		similarOK: true,
+		compare: map[PersonPair]IdentityProfileMatch{
+			{TargetID: targetA.ID, CandidateID: candA.ID}: {Available: true, PersonID: candA.ID, Score: 0.95},
+		},
+		compareOK: true,
+	})
+
+	require.NoError(t, svc.MarkDirty("per-target"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	items := pendingSuggestionItemsByTarget(t, repos.MergeSuggestion)
+	// targetA 走画像。
+	require.Contains(t, items, targetA.ID)
+	assert.Equal(t, model.PersonMergeMatchSourceIdentityProfile, items[targetA.ID][0].MatchSource)
+	// targetB 走 legacy（prototype ANN 召回 candB）。
+	require.Contains(t, items, targetB.ID)
+	assert.Equal(t, model.PersonMergeMatchSourceLegacy, items[targetB.ID][0].MatchSource)
+	assert.Equal(t, candB.ID, items[targetB.ID][0].CandidatePersonID)
+}

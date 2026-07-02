@@ -118,6 +118,19 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		} else {
 			logger.Warnf("Failed to create identity profile background DB pool: %v", err)
 		}
+		// 非 legacy 模式：复用现有 identity profile service 的 ANN 与 embedding 模型签名，
+		// 以及现有 profile/face repository 装配合并建议的画像相似度 provider。
+		// 不创建第二个 ANN，不打开新连接池，不启动新 goroutine。
+		ann, embeddingModel := identityProfileService.(*personIdentityProfileService).ANN()
+		if ann != nil && embeddingModel != "" {
+			provider := NewPersonProfileSimilarityProvider(
+				ann,
+				repos.IdentityProfile,
+				repos.Face,
+				embeddingModel,
+			)
+			mergeSuggestionService.(*personMergeSuggestionService).SetProfileSimilarityProvider(provider)
+		}
 	}
 
 	// 创建定时任务调度器

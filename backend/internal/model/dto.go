@@ -504,6 +504,8 @@ type PersonMergeSuggestionItemResponse struct {
 	SimilarityScore   float64         `json:"similarity_score"`
 	Rank              int             `json:"rank"`
 	Status            string          `json:"status"`
+	MatchSource       string          `json:"match_source"`
+	Warning           string          `json:"warning,omitempty"`
 	CandidatePerson   *PersonResponse `json:"candidate_person,omitempty"`
 }
 

@@ -495,3 +495,87 @@ func TestFaceRepository_ListPersonIDsCooccurringWithPhotos_ChunkingBothDims(t *t
 	assert.Equal(t, []uint{p.ID}, got)
 	assert.Equal(t, int32(4), atomic.LoadInt32(qcount), "both dimensions chunked (2x2)")
 }
+
+func TestFaceRepository_ListPersonIDsSharingPhotos(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	faceRepo := NewFaceRepository(db)
+	personRepo := NewPersonRepository(db)
+	photoRepo := NewPhotoRepository(db)
+
+	// target=pa, 候选 pb/pc/pd。
+	pa := &model.Person{Category: model.PersonCategoryFriend}
+	pb := &model.Person{Category: model.PersonCategoryFriend}
+	pc := &model.Person{Category: model.PersonCategoryFriend}
+	pd := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(pa))
+	require.NoError(t, personRepo.Create(pb))
+	require.NoError(t, personRepo.Create(pc))
+	require.NoError(t, personRepo.Create(pd))
+
+	ph1 := &model.Photo{FileName: "1.jpg", FilePath: "/1.jpg"}
+	ph2 := &model.Photo{FileName: "2.jpg", FilePath: "/2.jpg"}
+	require.NoError(t, photoRepo.Create(ph1))
+	require.NoError(t, photoRepo.Create(ph2))
+
+	// ph1 中 pa 与 pb 共现（pb 应命中）。
+	require.NoError(t, faceRepo.Create(&model.Face{PhotoID: ph1.ID, PersonID: &pa.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2}))
+	require.NoError(t, faceRepo.Create(&model.Face{PhotoID: ph1.ID, PersonID: &pb.ID, BBoxX: 0.5, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2}))
+	// ph2 中 pa 与 pc 共现（pc 应命中）。
+	require.NoError(t, faceRepo.Create(&model.Face{PhotoID: ph2.ID, PersonID: &pa.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2}))
+	require.NoError(t, faceRepo.Create(&model.Face{PhotoID: ph2.ID, PersonID: &pc.ID, BBoxX: 0.5, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2}))
+	// pd 从不与 pa 同照片（不应命中）。
+	require.NoError(t, faceRepo.Create(&model.Face{PhotoID: ph2.ID, PersonID: &pd.ID, BBoxX: 0.5, BBoxY: 0.5, BBoxWidth: 0.2, BBoxHeight: 0.2}))
+	// 注意：pd 在 ph2 与 pc 同照片，但与 pa 不同照片（pa 在 ph2），故 pd 与 pa 实际同照片共现。
+	// 重新设计：让 pd 独占 ph3，确保不与 pa 共现。
+	ph3 := &model.Photo{FileName: "3.jpg", FilePath: "/3.jpg"}
+	require.NoError(t, photoRepo.Create(ph3))
+	require.NoError(t, faceRepo.Create(&model.Face{PhotoID: ph3.ID, PersonID: &pd.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2}))
+	// 移除 ph2 上的 pd 人脸以隔离。
+	require.NoError(t, db.Where("photo_id = ? AND person_id = ?", ph2.ID, pd.ID).Delete(&model.Face{}).Error)
+
+	got, err := faceRepo.ListPersonIDsSharingPhotos(pa.ID, []uint{pb.ID, pc.ID, pd.ID})
+	require.NoError(t, err)
+	assert.Equal(t, []uint{pb.ID, pc.ID}, got, "pb 与 pc 与 pa 同照片共现，pd 否则，结果升序")
+
+	// 候选包含 target 自身时应被排除。
+	got, err = faceRepo.ListPersonIDsSharingPhotos(pa.ID, []uint{pa.ID, pb.ID})
+	require.NoError(t, err)
+	assert.Equal(t, []uint{pb.ID}, got, "target 自身不计入共现")
+
+	// 空候选 / target=0 → nil。
+	got, err = faceRepo.ListPersonIDsSharingPhotos(pa.ID, nil)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+	got, err = faceRepo.ListPersonIDsSharingPhotos(0, []uint{pb.ID})
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestFaceRepository_ListPersonIDsSharingPhotos_NoNPlusOne(t *testing.T) {
+	faceRepo, db, qcount := newCountingFaceRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	photoRepo := NewPhotoRepository(db)
+	ph := &model.Photo{FileName: "x.jpg", FilePath: "/x.jpg"}
+	require.NoError(t, photoRepo.Create(ph))
+	target := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(target))
+	require.NoError(t, faceRepo.Create(&model.Face{PhotoID: ph.ID, PersonID: &target.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2}))
+
+	// 600 个候选 → 仅 1 次查询（不逐候选 N+1）。
+	candIDs := make([]uint, 0, 600)
+	candIDs = append(candIDs, target.ID)
+	for i := 1; i < 600; i++ {
+		candIDs = append(candIDs, uint(2000000+i))
+	}
+	got, err := faceRepo.ListPersonIDsSharingPhotos(target.ID, candIDs)
+	require.NoError(t, err)
+	assert.Empty(t, got, "无候选与 target 同照片")
+	// 600 候选按 sqliteVarLimit(500) 分块为 2 块；子查询与外层各触发一次查询回调，
+	// 总数远小于 600（非逐候选 N+1）。
+	assert.Less(t, atomic.LoadInt32(qcount), int32(600), "no per-candidate N+1; chunked and bounded")
+	assert.Greater(t, atomic.LoadInt32(qcount), int32(0))
+}
