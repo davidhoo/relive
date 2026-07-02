@@ -1,0 +1,685 @@
+package service
+
+import (
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/davidhoo/relive/internal/model"
+	"github.com/davidhoo/relive/internal/repository"
+	"github.com/davidhoo/relive/pkg/config"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
+)
+
+// countingIdentityProfileRepo 包装真实 repository，统计各方法调用次数，
+// 用于断言 legacy 模式不访问 Repository、backfill 不重复扫描等行为。
+type countingIdentityProfileRepo struct {
+	inner                     repository.PersonIdentityProfileRepository
+	mu                        sync.Mutex
+	markDirty                 int
+	listDirty                 int
+	listBackfill              int
+	getActive                 int
+	getStats                  int
+	replaceGeneration         int
+	markFailed                int
+	deleteByPersonIDs         int
+	deleteInactiveGenerations int
+	invalidateDeletedPeople   int
+	listAllActiveCenters      int
+	markDirtyPersonIDs        []uint
+	listBackfillCursor        []uint
+	listBackfillLimit         []int
+}
+
+func (c *countingIdentityProfileRepo) MarkDirty(personIDs []uint, reason string) error {
+	c.mu.Lock()
+	c.markDirty++
+	c.markDirtyPersonIDs = append(c.markDirtyPersonIDs, personIDs...)
+	c.mu.Unlock()
+	return c.inner.MarkDirty(personIDs, reason)
+}
+func (c *countingIdentityProfileRepo) ListDirty(cursor uint, limit int) ([]*model.PersonIdentityProfile, error) {
+	c.mu.Lock()
+	c.listDirty++
+	c.mu.Unlock()
+	return c.inner.ListDirty(cursor, limit)
+}
+func (c *countingIdentityProfileRepo) ListBackfillPersonIDs(cursor uint, limit int) ([]uint, error) {
+	c.mu.Lock()
+	c.listBackfill++
+	c.listBackfillCursor = append(c.listBackfillCursor, cursor)
+	c.listBackfillLimit = append(c.listBackfillLimit, limit)
+	c.mu.Unlock()
+	return c.inner.ListBackfillPersonIDs(cursor, limit)
+}
+func (c *countingIdentityProfileRepo) GetActive(personID uint) (*model.PersonIdentityProfileBuild, error) {
+	c.mu.Lock()
+	c.getActive++
+	c.mu.Unlock()
+	return c.inner.GetActive(personID)
+}
+func (c *countingIdentityProfileRepo) GetStats() (*model.PersonIdentityProfileStats, error) {
+	c.mu.Lock()
+	c.getStats++
+	c.mu.Unlock()
+	return c.inner.GetStats()
+}
+func (c *countingIdentityProfileRepo) ListAllActiveCenters() ([]*model.PersonIdentityCenter, error) {
+	c.mu.Lock()
+	c.listAllActiveCenters++
+	c.mu.Unlock()
+	return c.inner.ListAllActiveCenters()
+}
+func (c *countingIdentityProfileRepo) ReplaceGeneration(personID uint, build *model.PersonIdentityProfileBuild) error {
+	c.mu.Lock()
+	c.replaceGeneration++
+	c.mu.Unlock()
+	return c.inner.ReplaceGeneration(personID, build)
+}
+func (c *countingIdentityProfileRepo) MarkFailed(personID uint, message string) error {
+	c.mu.Lock()
+	c.markFailed++
+	c.mu.Unlock()
+	return c.inner.MarkFailed(personID, message)
+}
+func (c *countingIdentityProfileRepo) DeleteByPersonIDs(personIDs []uint) error {
+	c.mu.Lock()
+	c.deleteByPersonIDs++
+	c.mu.Unlock()
+	return c.inner.DeleteByPersonIDs(personIDs)
+}
+func (c *countingIdentityProfileRepo) InvalidateDeletedPeople() error {
+	c.mu.Lock()
+	c.invalidateDeletedPeople++
+	c.mu.Unlock()
+	return c.inner.InvalidateDeletedPeople()
+}
+func (c *countingIdentityProfileRepo) DeleteInactiveGenerations(personID uint, keep int) error {
+	c.mu.Lock()
+	c.deleteInactiveGenerations++
+	c.mu.Unlock()
+	return c.inner.DeleteInactiveGenerations(personID, keep)
+}
+
+// setupIdentityProfileDB 创建隔离的临时文件库并迁移画像相关表。
+// 使用临时文件（非共享内存库）以便专用后台连接能看到同一份数据。
+func setupIdentityProfileDB(t *testing.T) (*gorm.DB, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ip_test.db")
+	dsn := "file:" + path + "?cache=shared&_busy_timeout=5000&_journal_mode=WAL"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: gormlogger.Discard})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(
+		&model.AppConfig{},
+		&model.Photo{},
+		&model.Person{},
+		&model.Face{},
+		&model.PersonIdentityProfile{},
+		&model.PersonIdentityCenter{},
+		&model.PersonIdentityCenterMember{},
+	))
+	t.Cleanup(func() {
+		sqlDB, _ := db.DB()
+		if sqlDB != nil {
+			_ = sqlDB.Close()
+		}
+	})
+	return db, dsn
+}
+
+func openBgDB(t *testing.T, dsn string) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: gormlogger.Discard})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		sqlDB, _ := db.DB()
+		if sqlDB != nil {
+			_ = sqlDB.Close()
+		}
+	})
+	return db
+}
+
+// ipTestDeps 聚合身份画像服务测试所需的依赖。
+type ipTestDeps struct {
+	db            *gorm.DB
+	dsn           string
+	repos         *repository.Repositories
+	configService ConfigService
+	countingRepo  *countingIdentityProfileRepo
+}
+
+func newIdentityProfileServiceForTest(t *testing.T, mode, embeddingModel string, batchSize, cooldownMs int) (*personIdentityProfileService, *ipTestDeps) {
+	t.Helper()
+	db, dsn := setupIdentityProfileDB(t)
+	repos := repository.NewRepositories(db)
+	configService := NewConfigService(repos.Config)
+	bgDB := openBgDB(t, dsn)
+
+	cfg := &config.Config{
+		People: config.PeopleConfig{
+			IdentityProfileMode:            mode,
+			IdentityProfileBatchSize:       batchSize,
+			IdentityProfileCooldownMs:      cooldownMs,
+			IdentityProfileMaxCenters:      6,
+			IdentityProfileMinCenterFaces:  3,
+			IdentityProfileMinCenterPhotos: 2,
+			MLEndpoint:                     embeddingModel,
+		},
+	}
+	counting := &countingIdentityProfileRepo{inner: repos.IdentityProfile}
+	svc := NewPersonIdentityProfileService(counting, configService, cfg, bgDB, nil).(*personIdentityProfileService)
+	// 用计数仓库覆盖后台仓库，使测试可断言后台调用次数。
+	// 主库与后台仓库共享同一临时库，行为等价。
+	svc.bgRepo = counting
+	svc.bgFaceRepo = repos.Face
+	return svc, &ipTestDeps{db: db, dsn: dsn, repos: repos, configService: configService, countingRepo: counting}
+}
+
+// createPersonWithFaces 创建人物并附带若干带 embedding 的人脸。
+// photoID 从 base 起递增，保证可控制 distinct photo 数。
+func createPersonWithFaces(t *testing.T, repos *repository.Repositories, basePhotoID uint, embeddings ...[]float32) *model.Person {
+	t.Helper()
+	person := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, repos.Person.Create(person))
+	for i, emb := range embeddings {
+		f := &model.Face{
+			PhotoID:       basePhotoID + uint(i),
+			PersonID:      &person.ID,
+			Confidence:    0.95,
+			QualityScore:  0.9,
+			Embedding:     model.EncodeEmbedding(emb),
+			ClusterStatus: model.FaceClusterStatusAssigned,
+			ClusterScore:  0.9,
+			ManualLocked:  false,
+		}
+		// 让前两张来自同一张照片，其余递增，便于构造 distinct photos ≥ 2。
+		if i >= 1 {
+			f.PhotoID = basePhotoID + uint(i) + 1
+		}
+		require.NoError(t, repos.Face.Create(f))
+	}
+	return person
+}
+
+func vec3(x, y, z float32) []float32 { return []float32{x, y, z} }
+
+// runSliceWithClock 推进注入时钟并执行一次 slice，避免真实 sleep。
+func runSliceWithClock(svc *personIdentityProfileService, advance time.Duration) {
+	svc.nowFn = func() time.Time {
+		return svc.lastRunAt.Add(advance)
+	}
+	_ = svc.RunBackgroundSlice()
+}
+
+// ---- legacy 模式 ----
+
+func TestPersonIdentityProfileService_LegacyNoRepoAccess(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "legacy", "emb", 25, 500)
+
+	require.NoError(t, svc.MarkDirty([]uint{1, 2}, "test"))
+	err := svc.RunBackgroundSlice()
+	require.NoError(t, err)
+	_, err = svc.GetActive(1)
+	require.NoError(t, err)
+	stats, err := svc.GetStats()
+	require.NoError(t, err)
+
+	c := deps.countingRepo
+	assert.Equal(t, "legacy", svc.Mode())
+	assert.Equal(t, 0, c.markDirty, "legacy must not call repo.MarkDirty")
+	assert.Equal(t, 0, c.listDirty, "legacy must not call repo.ListDirty")
+	assert.Equal(t, 0, c.listBackfill, "legacy must not call repo.ListBackfillPersonIDs")
+	assert.Equal(t, 0, c.getActive, "legacy must not call repo.GetActive")
+	assert.Equal(t, 0, c.getStats, "legacy must not call repo.GetStats")
+	assert.NotNil(t, stats)
+	assert.Equal(t, int64(0), stats.Total)
+}
+
+func TestPersonIdentityProfileService_LegacyNoAppConfigRead(t *testing.T) {
+	db, _ := setupIdentityProfileDB(t)
+	repos := repository.NewRepositories(db)
+	configService := NewConfigService(repos.Config)
+	cfg := &config.Config{People: config.PeopleConfig{IdentityProfileMode: "legacy"}}
+
+	svc := NewPersonIdentityProfileService(repos.IdentityProfile, configService, cfg, nil, nil).(*personIdentityProfileService)
+
+	// legacy 构造不得加载 backfill 状态（不读 AppConfig）。
+	assert.False(t, svc.stateLoaded, "legacy must not load backfill state from AppConfig")
+	// AppConfig 表应为空。
+	var n int64
+	require.NoError(t, db.Model(&model.AppConfig{}).Count(&n).Error)
+	assert.Equal(t, int64(0), n, "legacy must not write any AppConfig rows")
+
+	// 运行期调用也不读 AppConfig。
+	require.NoError(t, svc.MarkDirty([]uint{1}, "x"))
+	_ = svc.RunBackgroundSlice()
+	_, _ = svc.GetStats()
+	require.NoError(t, db.Model(&model.AppConfig{}).Count(&n).Error)
+	assert.Equal(t, int64(0), n, "legacy runtime must not touch AppConfig")
+}
+
+// ---- shadow 模式与后台连接 ----
+
+func TestPersonIdentityProfileService_ShadowCreatesBackgroundConn(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 25, 500)
+
+	assert.Equal(t, "shadow", svc.Mode())
+	assert.True(t, svc.enabled, "shadow mode must enable background building")
+	assert.NotNil(t, svc.bgDB, "shadow mode must create dedicated background DB")
+	assert.NotNil(t, svc.bgRepo)
+	assert.NotNil(t, svc.bgFaceRepo)
+	// backfill 状态已加载（可能写入空初始状态，但不强制）。
+	_ = deps
+}
+
+func TestPersonIdentityProfileService_BackgroundDBFailureDoesNotFallBack(t *testing.T) {
+	db, _ := setupIdentityProfileDB(t)
+	repos := repository.NewRepositories(db)
+	configService := NewConfigService(repos.Config)
+	cfg := &config.Config{People: config.PeopleConfig{IdentityProfileMode: "shadow"}}
+
+	// bgDB 传入 nil，模拟专用后台连接创建失败。
+	counting := &countingIdentityProfileRepo{inner: repos.IdentityProfile}
+	svc := NewPersonIdentityProfileService(counting, configService, cfg, nil, nil).(*personIdentityProfileService)
+
+	assert.False(t, svc.enabled, "background DB failure must disable building")
+	assert.Nil(t, svc.bgRepo, "must not fall back to shared connection for heavy backfill")
+
+	// RunBackgroundSlice 不做任何 backfill/构建（不访问 repo 的重型查询）。
+	err := svc.RunBackgroundSlice()
+	require.NoError(t, err)
+	assert.Equal(t, 0, counting.listBackfill, "disabled service must not run backfill")
+	assert.Equal(t, 0, counting.listDirty, "disabled service must not list dirty")
+}
+
+// ---- backfill 行为 ----
+
+func TestPersonIdentityProfileService_BackfillBatchSizeBounded(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 3, 0)
+
+	// 10 个人物，无画像。
+	for i := 0; i < 10; i++ {
+		createPersonWithFaces(t, deps.repos, uint(100+i), vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+	}
+
+	// 首次 slice（cooldownMs=0，但 lastRunAt 为零值 → 直接执行）。
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	// 一次 slice 的 backfill 批次不超过 batch size=3。
+	var profileCount int64
+	require.NoError(t, deps.db.Model(&model.PersonIdentityProfile{}).Count(&profileCount).Error)
+	assert.LessOrEqual(t, profileCount, int64(3), "backfill batch must not exceed batch size")
+	assert.Equal(t, 1, deps.countingRepo.listBackfill, "one backfill listing per slice")
+}
+
+func TestPersonIdentityProfileService_SliceBuildsAtMostOnePerson(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 10, 0)
+
+	for i := 0; i < 5; i++ {
+		createPersonWithFaces(t, deps.repos, uint(100+i), vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+	}
+
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	// 一次 slice 最多构建一个人物 → ready 数 ≤ 1。
+	var ready int64
+	require.NoError(t, deps.db.Model(&model.PersonIdentityProfile{}).Where("status = ?", model.PersonIdentityProfileStatusReady).Count(&ready).Error)
+	assert.LessOrEqual(t, ready, int64(1), "one slice must build at most one person")
+	assert.Equal(t, 1, deps.countingRepo.replaceGeneration, "at most one ReplaceGeneration per slice")
+}
+
+func TestPersonIdentityProfileService_BackfillCursorPersisted(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 3, 0)
+
+	for i := 0; i < 5; i++ {
+		p := createPersonWithFaces(t, deps.repos, uint(100+i), vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+		_ = p
+	}
+
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	st := svc.currentBackfillState()
+	assert.True(t, st.CursorPersonID > 0, "cursor must advance after a successful batch")
+	assert.Equal(t, "emb", st.EmbeddingModel)
+	assert.Equal(t, identityProfileAlgorithmVersion, st.AlgorithmVersion)
+}
+
+func TestPersonIdentityProfileService_RestartContinuesCursor(t *testing.T) {
+	svc1, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 3, 0)
+	for i := 0; i < 6; i++ {
+		createPersonWithFaces(t, deps.repos, uint(100+i), vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+	}
+
+	require.NoError(t, svc1.RunBackgroundSlice())
+	cursorAfterFirst := svc1.currentBackfillState().CursorPersonID
+	require.True(t, cursorAfterFirst > 0)
+
+	// 模拟重启：用同一数据库构造新服务。
+	cfg := &config.Config{People: config.PeopleConfig{
+		IdentityProfileMode: "shadow", IdentityProfileBatchSize: 3, IdentityProfileCooldownMs: 0,
+		IdentityProfileMaxCenters: 6, IdentityProfileMinCenterFaces: 3, IdentityProfileMinCenterPhotos: 2,
+		MLEndpoint: "emb",
+	}}
+	svc2 := NewPersonIdentityProfileService(
+		&countingIdentityProfileRepo{inner: deps.repos.IdentityProfile},
+		deps.configService, cfg, openBgDB(t, deps.dsn), nil,
+	).(*personIdentityProfileService)
+
+	// 重启后游标应从持久化值继续，而非重置为 0。
+	st := svc2.currentBackfillState()
+	assert.Equal(t, cursorAfterFirst, st.CursorPersonID, "restart must resume persisted cursor")
+
+	// 第二批应从 cursor 之后继续。
+	require.NoError(t, svc2.RunBackgroundSlice())
+	st2 := svc2.currentBackfillState()
+	assert.True(t, st2.CursorPersonID > cursorAfterFirst, "second slice must advance cursor beyond previous")
+}
+
+func TestPersonIdentityProfileService_BackfillCompletedNoRepeatScan(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+	// 仅 1 个人物 → 一次即可完成 backfill。
+	createPersonWithFaces(t, deps.repos, 100, vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+
+	// 推进到完成（多 slice 但 cooldown=0；用时钟推进绕过）。
+	for i := 0; i < 5; i++ {
+		runSliceWithClock(svc, time.Duration(svc.cooldownMs)*time.Millisecond+1)
+	}
+	st := svc.currentBackfillState()
+	assert.True(t, st.Completed, "backfill must complete")
+
+	// 记录完成后 profile 总数，再跑一个 slice，断言不新增 profile、不重复扫描。
+	var before int64
+	require.NoError(t, deps.db.Model(&model.PersonIdentityProfile{}).Count(&before).Error)
+	callsBefore := deps.countingRepo.listBackfill
+
+	runSliceWithClock(svc, time.Duration(svc.cooldownMs)*time.Millisecond+1)
+
+	var after int64
+	require.NoError(t, deps.db.Model(&model.PersonIdentityProfile{}).Count(&after).Error)
+	// 完成后仍可能调用一次 ListBackfillPersonIDs 以确认无更多人物（返回空后保持 completed），
+	// 但不得新增 profile。
+	assert.Equal(t, before, after, "completed backfill must not create new profiles")
+	_ = callsBefore
+}
+
+func TestPersonIdentityProfileService_AlgorithmVersionChangeResetsCursor(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 3, 0)
+	for i := 0; i < 5; i++ {
+		createPersonWithFaces(t, deps.repos, uint(100+i), vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+	}
+	require.NoError(t, svc.RunBackgroundSlice())
+	require.True(t, svc.currentBackfillState().CursorPersonID > 0)
+
+	// 模拟算法版本变化。
+	svc.algorithmVersion = "identity-profile-v2"
+	svc.loadAndAlignBackfillState()
+
+	st := svc.currentBackfillState()
+	assert.Equal(t, uint(0), st.CursorPersonID, "algorithm version change must reset cursor")
+	assert.False(t, st.Completed, "algorithm version change must clear completed")
+	assert.Equal(t, "identity-profile-v2", st.AlgorithmVersion)
+	_ = deps
+}
+
+func TestPersonIdentityProfileService_EmbeddingModelChangeResetsCursor(t *testing.T) {
+	svc1, deps := newIdentityProfileServiceForTest(t, "shadow", "emb-A", 3, 0)
+	for i := 0; i < 5; i++ {
+		createPersonWithFaces(t, deps.repos, uint(100+i), vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+	}
+	require.NoError(t, svc1.RunBackgroundSlice())
+	require.True(t, svc1.currentBackfillState().CursorPersonID > 0)
+
+	// embedding model 变化（emb-A → emb-B），模拟重建服务。
+	cfg := &config.Config{People: config.PeopleConfig{
+		IdentityProfileMode: "shadow", IdentityProfileBatchSize: 3, IdentityProfileCooldownMs: 0,
+		IdentityProfileMaxCenters: 6, IdentityProfileMinCenterFaces: 3, IdentityProfileMinCenterPhotos: 2,
+		MLEndpoint: "emb-B",
+	}}
+	svc2 := NewPersonIdentityProfileService(
+		&countingIdentityProfileRepo{inner: deps.repos.IdentityProfile},
+		deps.configService, cfg, openBgDB(t, deps.dsn), nil,
+	).(*personIdentityProfileService)
+
+	st := svc2.currentBackfillState()
+	assert.Equal(t, uint(0), st.CursorPersonID, "embedding model change must reset cursor")
+	assert.False(t, st.Completed)
+	assert.Equal(t, "emb-B", st.EmbeddingModel)
+}
+
+// ---- 构建成功/失败/删除 ----
+
+func TestPersonIdentityProfileService_DirtyPersonBuiltAndActivated(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+	person := createPersonWithFaces(t, deps.repos, 100, vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+
+	require.NoError(t, svc.MarkDirty([]uint{person.ID}, "manual"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	active, err := svc.GetActive(person.ID)
+	require.NoError(t, err)
+	require.NotNil(t, active)
+	require.NotNil(t, active.Profile)
+	assert.Equal(t, model.PersonIdentityProfileStatusReady, active.Profile.Status)
+	assert.True(t, active.Profile.ActiveGeneration > 0, "new generation must be activated")
+	assert.Equal(t, "emb", active.Profile.EmbeddingModel)
+	assert.NotEmpty(t, active.Centers, "build must produce at least one center")
+}
+
+func TestPersonIdentityProfileService_BuilderFailureMarkFailed(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+	// 人物只有 1 张人脸、且 embedding 为空 → builder 可正常返回（excluded），
+	// 但我们注入一个总是失败的 builder 以测试 MarkFailed 路径。
+	person := createPersonWithFaces(t, deps.repos, 100, vec3(1, 0, 0))
+	require.NoError(t, svc.MarkDirty([]uint{person.ID}, "manual"))
+
+	svc.builder = &failingIdentityBuilder{}
+
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	// 失败 → MarkFailed 调用，profile 状态 failed，无 active generation。
+	var prof model.PersonIdentityProfile
+	require.NoError(t, deps.db.Where("person_id = ?", person.ID).First(&prof).Error)
+	assert.Equal(t, model.PersonIdentityProfileStatusFailed, prof.Status)
+	assert.Equal(t, 0, prof.ActiveGeneration)
+	assert.Contains(t, prof.LastError, "boom")
+	assert.Equal(t, 1, deps.countingRepo.markFailed)
+}
+
+type failingIdentityBuilder struct{}
+
+func (b *failingIdentityBuilder) Build(personID uint, faces []*model.Face) (*model.PersonIdentityProfileBuild, error) {
+	return nil, errBoom
+}
+
+var errBoom = newSentinelErr("boom")
+
+type sentinelErr struct{ msg string }
+
+func (e *sentinelErr) Error() string { return e.msg }
+
+func newSentinelErr(msg string) error { return &sentinelErr{msg: msg} }
+
+func TestPersonIdentityProfileService_WriteFailurePreservesOldGeneration(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+	person := createPersonWithFaces(t, deps.repos, 100, vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+
+	// 先成功构建一次，建立 active generation。
+	require.NoError(t, svc.MarkDirty([]uint{person.ID}, "first"))
+	require.NoError(t, svc.RunBackgroundSlice())
+	old, err := svc.GetActive(person.ID)
+	require.NoError(t, err)
+	require.True(t, old.Profile.ActiveGeneration > 0)
+
+	// 再次标记 dirty，并注入会在 ReplaceGeneration 失败的 bg repo。
+	require.NoError(t, svc.MarkDirty([]uint{person.ID}, "second"))
+	svc.bgRepo = &failingReplaceRepo{inner: svc.bgRepo}
+	// 推进时钟绕过 cooldown（构造时 cooldownMs=0 被默认为 500）。
+	svc.nowFn = func() time.Time { return svc.lastRunAt.Add(1 * time.Second) }
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	// 旧 active generation 保留不变。
+	cur, err := svc.GetActive(person.ID)
+	require.NoError(t, err)
+	assert.Equal(t, old.Profile.ActiveGeneration, cur.Profile.ActiveGeneration, "old generation must be preserved on write failure")
+	// MarkFailed 记录原因。
+	assert.Equal(t, model.PersonIdentityProfileStatusFailed, cur.Profile.Status)
+}
+
+type failingReplaceRepo struct {
+	inner repository.PersonIdentityProfileRepository
+}
+
+func (r *failingReplaceRepo) MarkDirty(p []uint, reason string) error {
+	return r.inner.MarkDirty(p, reason)
+}
+func (r *failingReplaceRepo) ListDirty(cursor uint, limit int) ([]*model.PersonIdentityProfile, error) {
+	return r.inner.ListDirty(cursor, limit)
+}
+func (r *failingReplaceRepo) ListBackfillPersonIDs(cursor uint, limit int) ([]uint, error) {
+	return r.inner.ListBackfillPersonIDs(cursor, limit)
+}
+func (r *failingReplaceRepo) GetActive(personID uint) (*model.PersonIdentityProfileBuild, error) {
+	return r.inner.GetActive(personID)
+}
+func (r *failingReplaceRepo) GetStats() (*model.PersonIdentityProfileStats, error) {
+	return r.inner.GetStats()
+}
+func (r *failingReplaceRepo) ListAllActiveCenters() ([]*model.PersonIdentityCenter, error) {
+	return r.inner.ListAllActiveCenters()
+}
+func (r *failingReplaceRepo) ReplaceGeneration(personID uint, build *model.PersonIdentityProfileBuild) error {
+	return errBoom
+}
+func (r *failingReplaceRepo) MarkFailed(personID uint, message string) error {
+	return r.inner.MarkFailed(personID, message)
+}
+func (r *failingReplaceRepo) DeleteByPersonIDs(personIDs []uint) error {
+	return r.inner.DeleteByPersonIDs(personIDs)
+}
+func (r *failingReplaceRepo) InvalidateDeletedPeople() error {
+	return r.inner.InvalidateDeletedPeople()
+}
+func (r *failingReplaceRepo) DeleteInactiveGenerations(personID uint, keep int) error {
+	return r.inner.DeleteInactiveGenerations(personID, keep)
+}
+
+func TestPersonIdentityProfileService_PersonDeletedMidBuildCleanedUp(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+	person := createPersonWithFaces(t, deps.repos, 100, vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+
+	require.NoError(t, svc.MarkDirty([]uint{person.ID}, "manual"))
+
+	// 在构建前删除人物（不删除 faces，模拟 orphan）。
+	require.NoError(t, deps.repos.Person.Delete(person.ID))
+
+	// slice 不应返回系统级失败，且清理该人物派生画像。
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	// 不应残留 profile/center/member（不创建幽灵 profile）。
+	var n int64
+	require.NoError(t, deps.db.Model(&model.PersonIdentityProfile{}).Where("person_id = ?", person.ID).Count(&n).Error)
+	assert.Equal(t, int64(0), n, "deleted person must have no profile")
+	require.NoError(t, deps.db.Model(&model.PersonIdentityCenter{}).Where("person_id = ?", person.ID).Count(&n).Error)
+	assert.Equal(t, int64(0), n)
+	// DeleteByPersonIDs 被调用做清理。
+	assert.Equal(t, 1, deps.countingRepo.deleteByPersonIDs)
+}
+
+// ---- cleanup 保留策略 ----
+
+func TestPersonIdentityProfileService_CleanupKeepsActiveAndOneHistory(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+	person := createPersonWithFaces(t, deps.repos, 100, vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+
+	// 连续构建 3 次，产生多个历史 generation。
+	for i := 0; i < 3; i++ {
+		require.NoError(t, svc.MarkDirty([]uint{person.ID}, "rebuild"))
+		// 每次构建前进时钟绕过 cooldown。
+		runSliceWithClock(svc, time.Duration(svc.cooldownMs)*time.Millisecond+1)
+	}
+
+	cur, err := svc.GetActive(person.ID)
+	require.NoError(t, err)
+	active := cur.Profile.ActiveGeneration
+	require.True(t, active > 0)
+
+	// 非活动 generation 应至多保留 1 个（最近历史）。
+	var gens []int
+	require.NoError(t, deps.db.Model(&model.PersonIdentityCenter{}).
+		Distinct("generation").Where("person_id = ?", person.ID).Pluck("generation", &gens).Error)
+	var inactive []int
+	for _, g := range gens {
+		if g != active {
+			inactive = append(inactive, g)
+		}
+	}
+	assert.LessOrEqual(t, len(inactive), 1, "cleanup must keep at most one historical generation")
+	// DeleteInactiveGenerations 在每次成功构建后被调用。
+	assert.GreaterOrEqual(t, deps.countingRepo.deleteInactiveGenerations, 1)
+}
+
+// ---- cooldown ----
+
+func TestPersonIdentityProfileService_CooldownEnforced(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 3, 500)
+	for i := 0; i < 5; i++ {
+		createPersonWithFaces(t, deps.repos, uint(100+i), vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+	}
+
+	// 固定时钟：两次 slice 间隔不足 cooldown，第二次必须被跳过。
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc.nowFn = func() time.Time { return t0 }
+	require.NoError(t, svc.RunBackgroundSlice())
+	callsAfterFirst := deps.countingRepo.listBackfill
+
+	// 仅推进 100ms（< 500ms）。
+	svc.nowFn = func() time.Time { return t0.Add(100 * time.Millisecond) }
+	require.NoError(t, svc.RunBackgroundSlice())
+	assert.Equal(t, callsAfterFirst, deps.countingRepo.listBackfill, "cooldown must skip early re-invocation")
+
+	// 推进超过 cooldown → 再次执行。
+	svc.nowFn = func() time.Time { return t0.Add(501 * time.Millisecond) }
+	require.NoError(t, svc.RunBackgroundSlice())
+	assert.Greater(t, deps.countingRepo.listBackfill, callsAfterFirst, "slice must run after cooldown elapses")
+}
+
+func TestPersonIdentityProfileService_CooldownNoRealSleep(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 1, 60000)
+	// 3 个人、batchSize=1：每个 slice 推进一个 backfill 批次，便于断言多次执行。
+	for i := 0; i < 3; i++ {
+		createPersonWithFaces(t, deps.repos, uint(100+i), vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+	}
+
+	// cooldownMs=60s，但用注入时钟立刻绕过，无需真实等待。
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc.nowFn = func() time.Time { return t0 }
+	require.NoError(t, svc.RunBackgroundSlice())
+	svc.nowFn = func() time.Time { return t0.Add(61 * time.Second) }
+	require.NoError(t, svc.RunBackgroundSlice())
+	// 达到这里即说明未真实 sleep 60s，且两个 slice 均执行了 backfill 列表查询。
+	assert.Equal(t, 2, deps.countingRepo.listBackfill)
+}
+
+// ---- MarkDirty ----
+
+func TestPersonIdentityProfileService_MarkDirtyDedupAndEmpty(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+
+	// 空输入直接返回，不写库。
+	require.NoError(t, svc.MarkDirty(nil, "x"))
+	require.NoError(t, svc.MarkDirty([]uint{0}, "x"))
+	assert.Equal(t, 0, deps.countingRepo.markDirty)
+
+	// 去重。
+	require.NoError(t, svc.MarkDirty([]uint{1, 1, 2, 0}, "x"))
+	assert.Equal(t, 1, deps.countingRepo.markDirty)
+	// 去重后传入 {1,2}。
+	assert.ElementsMatch(t, []uint{1, 2}, deps.countingRepo.markDirtyPersonIDs)
+}

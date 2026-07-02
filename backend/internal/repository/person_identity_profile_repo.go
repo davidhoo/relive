@@ -10,6 +10,10 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// ErrPersonNotFound 由 ReplaceGeneration 在目标人物不存在时返回，
+// 供上层服务区分"人物中途被删除"（应清理派生画像、不计为系统失败）与其他写入错误。
+var ErrPersonNotFound = errors.New("person not found")
+
 // PersonIdentityProfileRepository 持久化人物身份画像的派生数据：profile 元数据、
 // 各 generation 的 centers 与 members。所有写操作以 SQLite 事务保证原子性；
 // ReplaceGeneration 在事务内写入新 generation 的 center/member 后才原子切换 active_generation，
@@ -43,6 +47,11 @@ type PersonIdentityProfileRepository interface {
 	// DeleteInactiveGenerations 保留最近 keep 个非活动 generation，删除其余非活动 generation。
 	// 永远不删除当前活动 generation；keep=0 删除全部非活动 generation。
 	DeleteInactiveGenerations(personID uint, keep int) error
+	// ListBackfillPersonIDs 返回 id > cursor 且尚无任何 profile 记录的人物 ID，按 id ASC，
+	// 严格应用 limit。用于 backfill 一次性扫描：已存在 profile（哪怕 failed）的人物不再纳入。
+	ListBackfillPersonIDs(cursor uint, limit int) ([]uint, error)
+	// GetStats 汇总 profile 各 status 计数与人物总数，不做全量加载。
+	GetStats() (*model.PersonIdentityProfileStats, error)
 }
 
 type personIdentityProfileRepository struct {
@@ -174,7 +183,7 @@ func (r *personIdentityProfileRepository) ReplaceGeneration(personID uint, build
 		var person model.Person
 		if err := tx.Where("id = ?", personID).First(&person).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return fmt.Errorf("person %d not found", personID)
+				return fmt.Errorf("person %d not found: %w", personID, ErrPersonNotFound)
 			}
 			return err
 		}
@@ -347,4 +356,62 @@ func (r *personIdentityProfileRepository) DeleteInactiveGenerations(personID uin
 		return tx.Where("person_id = ? AND generation IN ?", personID, toDelete).
 			Delete(&model.PersonIdentityCenter{}).Error
 	})
+}
+
+// ListBackfillPersonIDs 返回尚无 profile 记录的人物 ID（id > cursor）。
+// 使用 NOT IN 子查询定位，避免全量内存扫描；已存在 profile 的人物（含 failed）不再纳入 backfill。
+func (r *personIdentityProfileRepository) ListBackfillPersonIDs(cursor uint, limit int) ([]uint, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	var ids []uint
+	err := r.db.Model(&model.Person{}).
+		Where("id > ? AND id NOT IN (SELECT person_id FROM person_identity_profiles)", cursor).
+		Order("id ASC").
+		Limit(limit).
+		Pluck("id", &ids).Error
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+// GetStats 汇总 profile 各 status 计数与人物总数，供 service 与监控查询。
+// backfill 游标与完成标志由 service 从持久化状态补充，此处只返回数据库聚合值。
+func (r *personIdentityProfileRepository) GetStats() (*model.PersonIdentityProfileStats, error) {
+	stats := &model.PersonIdentityProfileStats{}
+
+	rows, err := r.db.Model(&model.PersonIdentityProfile{}).
+		Select("status, COUNT(*) as count").
+		Group("status").
+		Rows()
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var status string
+		var count int64
+		if err := rows.Scan(&status, &count); err != nil {
+			return nil, err
+		}
+		stats.Total += count
+		switch status {
+		case model.PersonIdentityProfileStatusDirty:
+			stats.Dirty = count
+		case model.PersonIdentityProfileStatusBuilding:
+			stats.Building = count
+		case model.PersonIdentityProfileStatusReady:
+			stats.Ready = count
+		case model.PersonIdentityProfileStatusFailed:
+			stats.Failed = count
+		}
+	}
+
+	var people int64
+	if err := r.db.Model(&model.Person{}).Count(&people).Error; err != nil {
+		return nil, err
+	}
+	stats.TotalPeople = people
+	return stats, nil
 }

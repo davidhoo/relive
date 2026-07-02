@@ -95,6 +95,20 @@ type PersonIdentityProfileBuild struct {
 	Members []*PersonIdentityCenterMember
 }
 
+// PersonIdentityProfileStats 汇总身份画像的运行状态：各 status 的 profile 计数、
+// 人物总数与 backfill 进度。由 repository 提供原始计数，service 补充 backfill 游标。
+// legacy 模式下 service 返回零值结构而不查询数据库。
+type PersonIdentityProfileStats struct {
+	Total             int64 `json:"total"`
+	Dirty             int64 `json:"dirty"`
+	Building          int64 `json:"building"`
+	Ready             int64 `json:"ready"`
+	Failed            int64 `json:"failed"`
+	TotalPeople       int64 `json:"total_people"`
+	BackfillCursor    uint  `json:"backfill_cursor"`
+	BackfillCompleted bool  `json:"backfill_completed"`
+}
+
 // MemberByFaceID 返回指定人脸在本次构建中的成员记录，未找到返回 nil。
 func (b *PersonIdentityProfileBuild) MemberByFaceID(faceID uint) *PersonIdentityCenterMember {
 	if b == nil {

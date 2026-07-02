@@ -2,6 +2,7 @@ package service
 
 import (
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -83,7 +84,7 @@ func TestTaskSchedulerRunMergeSuggestionSlice(t *testing.T) {
 	stub := &mergeSuggestionServiceStub{}
 	scheduler := &TaskScheduler{
 		mergeSuggestionService: stub,
-		stopCh:                make(chan struct{}),
+		stopCh:                 make(chan struct{}),
 	}
 
 	scheduler.runMergeSuggestionSlice()
@@ -93,11 +94,133 @@ func TestTaskSchedulerRunMergeSuggestionSlice(t *testing.T) {
 	}
 }
 
+// identityProfileServiceStub 计数 RunBackgroundSlice 调用，用于调度器测试。
+type identityProfileServiceStub struct {
+	mode     string
+	runCalls atomic.Int64
+}
+
+func (s *identityProfileServiceStub) MarkDirty([]uint, string) error { return nil }
+func (s *identityProfileServiceStub) RunBackgroundSlice() error {
+	s.runCalls.Add(1)
+	return nil
+}
+func (s *identityProfileServiceStub) GetActive(uint) (*model.PersonIdentityProfileBuild, error) {
+	return nil, nil
+}
+func (s *identityProfileServiceStub) GetStats() (*model.PersonIdentityProfileStats, error) {
+	return &model.PersonIdentityProfileStats{}, nil
+}
+func (s *identityProfileServiceStub) Mode() string { return s.mode }
+
+// analysisServiceStub 是 AnalysisService 的最小桩，供调度器 Start() 测试使用，
+// 避免 cleanExpiredLocksTask 因 nil analysisService panic。
+type analysisServiceStub struct{}
+
+func (analysisServiceStub) GetPendingTasks(int, string) ([]model.AnalysisTask, int64, error) {
+	return nil, 0, nil
+}
+func (analysisServiceStub) ExtendTaskLock(string, string) (time.Time, error) {
+	return time.Time{}, nil
+}
+func (analysisServiceStub) ReleaseTask(string, string, string, string, bool) error { return nil }
+func (analysisServiceStub) SubmitResults([]model.AnalysisResult, uint) (*model.SubmitResultsResponse, error) {
+	return nil, nil
+}
+func (analysisServiceStub) SubmitResultsDirectly([]model.AnalysisResult, uint) (*model.SubmitResultsResponse, error) {
+	return nil, nil
+}
+func (analysisServiceStub) GetStats(uint) (*model.AnalyzerStatsResponse, error) { return nil, nil }
+func (analysisServiceStub) CleanExpiredLocks() (int64, error)                   { return 0, nil }
+func (analysisServiceStub) SetResultQueue(*ResultQueue)                         {}
+
+func TestTaskSchedulerIdentityProfileSliceRunsOncePerTick(t *testing.T) {
+	stub := &identityProfileServiceStub{mode: "shadow"}
+	scheduler := &TaskScheduler{
+		identityProfileService: stub,
+		stopCh:                 make(chan struct{}),
+	}
+
+	scheduler.runIdentityProfileSlice()
+	assert.Equal(t, int64(1), stub.runCalls.Load(), "each tick must call RunBackgroundSlice exactly once")
+}
+
+func TestTaskSchedulerIdentityProfileRunOnceSingleSlice(t *testing.T) {
+	stub := &identityProfileServiceStub{mode: "shadow"}
+	scheduler := &TaskScheduler{
+		analysisService:        analysisServiceStub{},
+		identityProfileService: stub,
+		stopCh:                 make(chan struct{}),
+	}
+	scheduler.RunOnce()
+	assert.Equal(t, int64(1), stub.runCalls.Load(), "RunOnce must execute exactly one identity profile slice")
+}
+
+func TestTaskSchedulerIdentityProfileSliceTaskStops(t *testing.T) {
+	stub := &identityProfileServiceStub{mode: "shadow"}
+	scheduler := &TaskScheduler{
+		identityProfileService: stub,
+		stopCh:                 make(chan struct{}),
+	}
+
+	scheduler.wg.Add(1)
+	done := make(chan struct{})
+	go func() {
+		scheduler.identityProfileSliceTask(5 * time.Millisecond)
+		close(done)
+	}()
+
+	time.Sleep(12 * time.Millisecond)
+	close(scheduler.stopCh)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("expected identity profile task to stop")
+	}
+	if stub.runCalls.Load() == 0 {
+		t.Fatal("expected identity profile slice to run at least once")
+	}
+}
+
+// TestTaskSchedulerStartSkipsIdentityProfileInLegacyMode 验证 legacy 模式不启动画像 goroutine。
+func TestTaskSchedulerStartSkipsIdentityProfileInLegacyMode(t *testing.T) {
+	stub := &identityProfileServiceStub{mode: "legacy"}
+	scheduler := &TaskScheduler{
+		analysisService:        analysisServiceStub{},
+		identityProfileService: stub,
+		stopCh:                 make(chan struct{}),
+	}
+	scheduler.Start()
+	defer scheduler.Stop()
+
+	// legacy 模式不应启动画像 goroutine；identityProfileSliceTask 启动时会立即执行一次 slice，
+	// 若 goroutine 未启动则 runCalls 保持 0。
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, int64(0), stub.runCalls.Load(), "legacy mode must not run identity profile slices")
+}
+
+// TestTaskSchedulerStartRunsIdentityProfileInShadowMode 验证非 legacy 模式启动画像 goroutine。
+func TestTaskSchedulerStartRunsIdentityProfileInShadowMode(t *testing.T) {
+	stub := &identityProfileServiceStub{mode: "shadow"}
+	scheduler := &TaskScheduler{
+		analysisService:        analysisServiceStub{},
+		identityProfileService: stub,
+		stopCh:                 make(chan struct{}),
+	}
+	scheduler.Start()
+	defer scheduler.Stop()
+
+	// identityProfileSliceTask 启动时立即执行一次 slice。
+	time.Sleep(50 * time.Millisecond)
+	assert.GreaterOrEqual(t, stub.runCalls.Load(), int64(1), "shadow mode must start identity profile goroutine")
+}
+
 func TestTaskSchedulerMergeSuggestionSliceTaskStops(t *testing.T) {
 	stub := &mergeSuggestionServiceStub{}
 	scheduler := &TaskScheduler{
 		mergeSuggestionService: stub,
-		stopCh:                make(chan struct{}),
+		stopCh:                 make(chan struct{}),
 	}
 
 	scheduler.wg.Add(1)

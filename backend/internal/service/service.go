@@ -13,24 +13,25 @@ import (
 
 // Services 所有服务的集合
 type Services struct {
-	Photo                PhotoService
-	People               PeopleService
-	MergeSuggestion      PersonMergeSuggestionService
-	Thumbnail            ThumbnailService
-	GeocodeTask          GeocodeTaskService
-	Display              DisplayService
-	Device               DeviceService
-	AI                   AIService
-	AnalysisRuntime      AnalysisRuntimeService
-	Config               ConfigService
-	Prompt               PromptService
-	Geocode              GeocodeService
-	Auth                 AuthService
-	Analysis             AnalysisService
-	System               SystemService
-	EventClustering      EventClusteringService
-	Scheduler            *TaskScheduler
-	ResultQueue          *ResultQueue // 结果队列服务
+	Photo           PhotoService
+	People          PeopleService
+	MergeSuggestion PersonMergeSuggestionService
+	Thumbnail       ThumbnailService
+	GeocodeTask     GeocodeTaskService
+	Display         DisplayService
+	Device          DeviceService
+	AI              AIService
+	AnalysisRuntime AnalysisRuntimeService
+	Config          ConfigService
+	Prompt          PromptService
+	Geocode         GeocodeService
+	Auth            AuthService
+	Analysis        AnalysisService
+	System          SystemService
+	EventClustering EventClusteringService
+	Scheduler       *TaskScheduler
+	ResultQueue     *ResultQueue // 结果队列服务
+	IdentityProfile PersonIdentityProfileService
 }
 
 // NewServices 创建所有服务
@@ -91,7 +92,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	}
 	peopleSvc.(*peopleService).setMergeSuggestionDirtyHook(mergeSuggestionService.MarkDirty)
 	peopleSvc.(*peopleService).setANNCandidateFn(mergeSuggestionService.(*personMergeSuggestionService).FindCandidates)
-		mergeSuggestionService.(*personMergeSuggestionService).SetWriteGateHook(peopleSvc.(*peopleService).AcquireWriteGate)
+	mergeSuggestionService.(*personMergeSuggestionService).SetWriteGateHook(peopleSvc.(*peopleService).AcquireWriteGate)
 	mergeSuggestionService.(*personMergeSuggestionService).SetPostMergeHook(peopleSvc.(*peopleService).PostMergeCleanup)
 	photoService.SetPeopleService(peopleSvc)
 	displayService := NewDisplayService(db, repos.Photo, repos.DisplayRecord, repos.Device, repos.Event, configService, cfg)
@@ -100,8 +101,25 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	eventClusteringService := NewEventClusteringService(db, repos.Photo, repos.Event, repos.PhotoTag)
 	photoService.SetEventClusteringService(eventClusteringService)
 
+	// 创建身份画像服务。legacy 模式下完全 no-op；shadow/rescue/primary 模式注入专用后台
+	// 数据库连接用于 backfill 与构建，写入仍通过全局 WriteQueue 串行化。
+	identityProfileService := NewPersonIdentityProfileService(
+		repos.IdentityProfile,
+		configService,
+		cfg,
+		nil, // background DB 在下方按需创建并注入
+		database.GetWriteQueue(),
+	)
+	if cfg != nil && cfg.People.IdentityProfileMode != "legacy" {
+		if bgDB, err := database.NewBackgroundDB(cfg.Database); err == nil {
+			identityProfileService.(*personIdentityProfileService).SetBackgroundDB(bgDB)
+		} else {
+			logger.Warnf("Failed to create identity profile background DB pool: %v", err)
+		}
+	}
+
 	// 创建定时任务调度器
-	scheduler := NewTaskScheduler(analysisService, displayService, photoService, mergeSuggestionService, repos.ThumbnailJob, repos.GeocodeJob, repos.PeopleJob)
+	scheduler := NewTaskScheduler(analysisService, displayService, photoService, mergeSuggestionService, repos.ThumbnailJob, repos.GeocodeJob, repos.PeopleJob, identityProfileService)
 
 	// 创建提示词配置服务
 	promptService := NewPromptService(repos.Config)
@@ -126,23 +144,24 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	analysisService.SetResultQueue(resultQueue)
 
 	return &Services{
-		Photo:                photoService,
-		People:               peopleSvc,
-		MergeSuggestion:      mergeSuggestionService,
-		Thumbnail:            thumbnailService,
-		GeocodeTask:          geocodeTaskService,
-		Display:              displayService,
-		Device:               deviceService,
-		AI:                   aiService,
-		AnalysisRuntime:      runtimeService,
-		Config:               configService,
-		Prompt:               promptService,
-		Geocode:              geocodeService,
-		Auth:                 authService,
-		Analysis:             analysisService,
-		System:               NewSystemService(db),
-		EventClustering:      eventClusteringService,
-		Scheduler:            scheduler,
-		ResultQueue:          resultQueue,
+		Photo:           photoService,
+		People:          peopleSvc,
+		MergeSuggestion: mergeSuggestionService,
+		Thumbnail:       thumbnailService,
+		GeocodeTask:     geocodeTaskService,
+		Display:         displayService,
+		Device:          deviceService,
+		AI:              aiService,
+		AnalysisRuntime: runtimeService,
+		Config:          configService,
+		Prompt:          promptService,
+		Geocode:         geocodeService,
+		Auth:            authService,
+		Analysis:        analysisService,
+		System:          NewSystemService(db),
+		EventClustering: eventClusteringService,
+		Scheduler:       scheduler,
+		ResultQueue:     resultQueue,
+		IdentityProfile: identityProfileService,
 	}
 }
