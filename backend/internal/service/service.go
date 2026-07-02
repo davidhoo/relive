@@ -130,6 +130,28 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 				embeddingModel,
 			)
 			mergeSuggestionService.(*personMergeSuggestionService).SetProfileSimilarityProvider(provider)
+
+			// Task 11：将身份画像 matcher 以 shadow 模式接入增量聚类。复用同一 ANN 与同一
+			// embedding 模型签名，不创建第二个索引；matcher / telemetry 由 peopleService 在
+			// 释放 writeGate 后 best-effort 调用，画像结果只计算只记录，不改变人物归属。
+			matcher := NewIdentityProfileMatcher(
+				ann,
+				repos.IdentityProfile,
+				repos.Face,
+				repos.CannotLink,
+				IdentityProfileMatcherConfig{
+					EmbeddingModel:  embeddingModel,
+					RescueThreshold: cfg.People.IdentityProfileRescueThreshold,
+					Margin:          cfg.People.IdentityProfileMargin,
+					MinCenterFaces:  cfg.People.IdentityProfileMinCenterFaces,
+				},
+			)
+			telemetry := NewIdentityProfileTelemetry(repos.IdentityDecision)
+			peopleSvc.(*peopleService).SetIdentityProfileShadowHooks(
+				cfg.People.IdentityProfileMode,
+				matcher.Match,
+				telemetry.Record,
+			)
 		}
 	}
 

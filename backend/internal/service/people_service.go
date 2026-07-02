@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -138,6 +139,18 @@ type peopleService struct {
 	// annCandidateFn, when set, pre-filters the O(N) attach scan to ~O(50) ANN candidates.
 	// Injected from personMergeSuggestionService which already maintains the HNSW index.
 	annCandidateFn func(probes []faceWithEmbedding, k int) map[uint]struct{}
+
+	// identityProfileMode / hooks wire the身份画像 matcher into incremental
+	// clustering in Task 11. legacy 模式下三者均为零值，runIncrementalClustering
+	// 不分配 observation、不复制 embedding、不调用 matcher/telemetry。shadow/
+	// rescue/primary 模式由 service.go 注入真实 matcher.Match 与 telemetry.Record；
+	// Task 11 阶段所有非 legacy 模式均只 shadow 计算与记录，不应用画像结果。
+	//
+	// hooks 在 service 装配时一次性注入（早于任何聚类批次），读取发生在 coordinator
+	// worker goroutine 内，与 setANNCandidateFn 同样无需额外同步。
+	identityProfileMode      string
+	identityProfileMatchFn   identityProfileMatchFn
+	identityDecisionRecordFn identityDecisionRecordFn
 
 	// In-memory cache for GetStats() to avoid scanning 78K+ faces rows on every poll.
 	statsCache   *model.PeopleStatsResponse
@@ -1709,6 +1722,33 @@ func (s *peopleService) setANNCandidateFn(fn func(probes []faceWithEmbedding, k 
 	s.annCandidateFn = fn
 }
 
+// identityProfileMatchFn 是身份画像 matcher 的可注入抽象，使 peopleService 不直接
+// 依赖 *IdentityProfileMatcher 实现。生产由 service.go 注入 matcher.Match，测试可
+// 注入 fake 以断言调用次数与输入。函数必须不访问 peopleService 的可变聚类缓存
+// （protoCache 等）；其 panic 由 processIdentityShadowObservations 恢复。
+type identityProfileMatchFn func(component []*model.Face) IdentityProfileMatch
+
+// identityDecisionRecordFn 是 Task 9 遥测记录器的可注入抽象。生产注入
+// telemetry.Record，best-effort、不返回错误、不重试、不持有 writeGate。
+type identityDecisionRecordFn func(input IdentityTelemetryInput)
+
+// SetIdentityProfileShadowHooks 注入身份画像 shadow 模式所需的模式与回调。生产由
+// service.go 装配时调用一次；测试可注入 fake matcher / recorder。
+//
+// legacy 模式（mode=="" 或 model.PeopleIdentityModeLegacy）不保存任何 hook：保持
+// matchFn/recordFn 为 nil，runIncrementalClustering 不分配 observation slice、不
+// 复制 embedding，processIdentityShadowObservations 直接返回。
+func (s *peopleService) SetIdentityProfileShadowHooks(mode string, matchFn identityProfileMatchFn, recordFn identityDecisionRecordFn) {
+	s.identityProfileMode = mode
+	if mode == "" || mode == model.PeopleIdentityModeLegacy {
+		s.identityProfileMatchFn = nil
+		s.identityDecisionRecordFn = nil
+		return
+	}
+	s.identityProfileMatchFn = matchFn
+	s.identityDecisionRecordFn = recordFn
+}
+
 // SetFeedbackEventRepo 注入反馈事件仓库。生产环境由 service.go 装配时注入；
 // 测试可注入失败 stub 或 nil（nil 时反馈记录被静默跳过）。
 func (s *peopleService) SetFeedbackEventRepo(repo repository.PeopleFeedbackEventRepository) {
@@ -2326,26 +2366,30 @@ func (s *peopleService) createPersonFromComponent(component []*model.Face, score
 // only be invoked from the clustering coordinator worker goroutine (via
 // peopleClusteringCoordinator.runClusterBatch). No other goroutine may call
 // it. This keeps protoCache single-goroutine and avoids concurrent access.
-func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
+//
+// 返回值除 affectedPersonIDs / affectedPhotoIDs / err 外，还携带本批次的 identity
+// shadow observations。observations 必须由调用方在释放 writeGate.RLock 后处理
+// （画像 matcher 与遥测不得在持有 writeGate 时执行）。legacy 模式不分配该 slice。
+func (s *peopleService) runIncrementalClustering() ([]uint, []uint, []identityShadowObservation, error) {
 	pendingFaces, err := s.faceRepo.ListPending(peopleClusteringBatchSize)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if len(pendingFaces) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	if s.protoCache == nil || time.Since(s.protoCache.builtAt) > clustProtoCacheTTL {
 		rebuildStart := time.Now()
 		assignedPersonIDs, err := s.faceRepo.ListAssignedPersonIDs()
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		var protoFaces []*model.Face
 		if len(assignedPersonIDs) > 0 {
 			protoFaces, err = s.faceRepo.ListPrototypeEmbeddings(assignedPersonIDs, peoplePrototypeCandidates)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 		}
 		orig := s.selectPersonPrototypes(protoFaces, peoplePrototypeCount)
@@ -2377,6 +2421,13 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 
 	affectedPersonIDs := make(map[uint]struct{})
 	affectedPhotoIDs := make(map[uint]struct{})
+	// shadow observations 只在非 legacy 模式下收集，避免 legacy 分配 slice 与复制
+	// embedding。nil slice 在 processIdentityShadowObservations 中无副作用。
+	shadowEnabled := s.identityShadowEnabled()
+	var shadowObservations []identityShadowObservation
+	if shadowEnabled {
+		shadowObservations = make([]identityShadowObservation, 0, len(components))
+	}
 
 	for _, componentIDs := range components {
 		component := make([]*model.Face, 0, len(componentIDs))
@@ -2428,6 +2479,22 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 		)
 		componentScore := nonNegativeScore(score)
 
+		// Shadow: 在任何 legacy 写入之前深拷贝组件，并记录 legacy 决策快照。observation
+		// 不参与分支选择；只有对应 legacy 操作成功后才进入待处理列表。画像 matcher 不得
+		// 在 executeWrite 闭包中执行（见 processIdentityShadowObservations，在 writeGate
+		// 释放后运行）。
+		var shadowObs *identityShadowObservation
+		if shadowEnabled {
+			shadowObs = &identityShadowObservation{
+				Component: cloneComponentForShadow(component),
+				Legacy: legacyIdentityResult{
+					Matched:  attached,
+					PersonID: personID,
+					Score:    nonNegativeScore(score),
+				},
+			}
+		}
+
 		if attached {
 			now := time.Now()
 			// Track previous person IDs to sync their state after face move
@@ -2446,7 +2513,7 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 					"retry_count":    0,
 				})
 			}); err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			for _, face := range component {
 				if face == nil {
@@ -2466,19 +2533,25 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 			for _, photoID := range facePhotoIDs(component) {
 				affectedPhotoIDs[photoID] = struct{}{}
 			}
+			if shadowObs != nil {
+				shadowObservations = append(shadowObservations, *shadowObs)
+			}
 			continue
 		}
 
 		if len(component) >= peopleMinClusterFaces && componentPhotoCount(component) >= 2 {
 			person, err := s.createPersonFromComponent(component, componentScore)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			if person != nil && person.ID != 0 {
 				affectedPersonIDs[person.ID] = struct{}{}
 			}
 			for _, photoID := range facePhotoIDs(component) {
 				affectedPhotoIDs[photoID] = struct{}{}
+			}
+			if shadowObs != nil {
+				shadowObservations = append(shadowObservations, *shadowObs)
 			}
 			continue
 		}
@@ -2487,7 +2560,7 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 		if maxRetry >= singleFaceFallbackRetries {
 			person, err := s.createPersonFromComponent(component, componentScore)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			if person != nil && person.ID != 0 {
 				affectedPersonIDs[person.ID] = struct{}{}
@@ -2495,11 +2568,18 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 			for _, photoID := range facePhotoIDs(component) {
 				affectedPhotoIDs[photoID] = struct{}{}
 			}
+			if shadowObs != nil {
+				shadowObservations = append(shadowObservations, *shadowObs)
+			}
 			continue
 		}
 
 		if err := s.markComponentPending(component, componentScore); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
+		}
+		// pending 更新成功也算一次完成的 legacy 决策，应进入 shadow。
+		if shadowObs != nil {
+			shadowObservations = append(shadowObservations, *shadowObs)
 		}
 		// Do NOT add affectedPhotoIDs for markComponentPending — these faces
 		// were already pending and just got retry_count+1. Adding them would
@@ -2507,7 +2587,7 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 		// loop on the same stale faces indefinitely.
 	}
 
-	return mapKeys(affectedPersonIDs), mapKeys(affectedPhotoIDs), nil
+	return mapKeys(affectedPersonIDs), mapKeys(affectedPhotoIDs), shadowObservations, nil
 }
 
 // triggerRecluster re-evaluates low-confidence face assignments using current prototypes.
@@ -2736,6 +2816,143 @@ func nonNegativeScore(score float64) float64 {
 		return 0
 	}
 	return score
+}
+
+// legacyIdentityResult 是一次 legacy 聚类决策的脱敏快照，供 shadow 比对使用。
+//
+//   - Matched=true：legacy 成功挂靠到已有人物（attach 分支），PersonID 为挂靠目标。
+//   - Matched=false：legacy 未找到可挂靠人物（走 create / single-face fallback / pending）。
+//     后续创建新人物不算 legacy identity match；PersonID 为 0。
+//   - Score 保存 legacy 最佳分数（即使未达到挂靠阈值），供遥测比对。
+type legacyIdentityResult struct {
+	Matched  bool
+	PersonID uint
+	Score    float64
+}
+
+// identityShadowObservation 是一个组件在 legacy 决策完成、写入成功后待 shadow 计算的
+// 最小快照。Component 为深拷贝，仅保留 shadow 所需字段，不包含图片/缩略图路径、人名
+// 等无关字段；observation 必须保存 legacy 写入前的组件状态（PersonID 等可能被 legacy
+// 修改，shadow matcher 看到的是 legacy attach 前的来源人物）。
+type identityShadowObservation struct {
+	Component []*model.Face
+	Legacy    legacyIdentityResult
+}
+
+// cloneComponentForShadow 深拷贝组件中 shadow matcher 实际读取的字段：ID、PhotoID、
+// PersonID（复制值，不共享原指针）、QualityScore、ManualLocked、Embedding（byte slice
+// 深拷贝）、RetryCount。不复制路径、缩略图、人名或时间字段。
+//
+// 必须在 legacy 写入前调用，确保 shadow matcher 看到的是 legacy attach 前的来源状态。
+func cloneComponentForShadow(component []*model.Face) []*model.Face {
+	cloned := make([]*model.Face, 0, len(component))
+	for _, f := range component {
+		if f == nil {
+			cloned = append(cloned, nil)
+			continue
+		}
+		var emb []byte
+		if len(f.Embedding) > 0 {
+			emb = make([]byte, len(f.Embedding))
+			copy(emb, f.Embedding)
+		}
+		var personID *uint
+		if f.PersonID != nil {
+			pid := *f.PersonID
+			personID = &pid
+		}
+		cloned = append(cloned, &model.Face{
+			ID:           f.ID,
+			PhotoID:      f.PhotoID,
+			PersonID:     personID,
+			QualityScore: f.QualityScore,
+			ManualLocked: f.ManualLocked,
+			Embedding:    emb,
+			RetryCount:   f.RetryCount,
+		})
+	}
+	return cloned
+}
+
+// identityShadowEnabled 报告当前是否启用身份画像 shadow 处理（非 legacy 模式且注入了
+// match hook）。legacy 模式或未注入 hook 时为 false，runIncrementalClustering 据此避免
+// 分配 observation slice 与复制 embedding。
+func (s *peopleService) identityShadowEnabled() bool {
+	return s.identityProfileMatchFn != nil && s.identityProfileMode != "" && s.identityProfileMode != model.PeopleIdentityModeLegacy
+}
+
+// processIdentityShadowObservations 在释放 writeGate.RLock 后对每个 legacy 决策计算画像
+// 结果并记录遥测。画像结果永远不被应用：legacy miss/profile hit、legacy/profile 分歧均只
+// 记录。matcher / ANN / Repository / telemetry 的任何失败或 panic 都不影响聚类，仅构造
+// 不可用结果供遥测。
+//
+// legacy 模式直接返回（不遍历 observations、不调用 matcher/recorder、不访问画像
+// Repository）。rescue/primary 模式在 Task 12 前同样按 shadow-only 处理：计算并记录，
+// 不应用结果，Mode 保留实际配置值。
+func (s *peopleService) processIdentityShadowObservations(observations []identityShadowObservation) {
+	if s.identityProfileMode == "" || s.identityProfileMode == model.PeopleIdentityModeLegacy {
+		return
+	}
+	matchFn := s.identityProfileMatchFn
+	if matchFn == nil {
+		return
+	}
+	recordFn := s.identityDecisionRecordFn
+
+	for _, obs := range observations {
+		faceIDs := faceIDs(obs.Component)
+		start := time.Now()
+
+		// matcher 失败/panic/非法结果一律 fail closed：构造不可用结果供遥测，保留 legacy。
+		profile := IdentityProfileMatch{Available: false, BlockReason: blockProfileUnavailable}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					// 仅记录脱敏字段，不输出 Face ID / Person ID / embedding / 路径。
+					logger.Warnf("identity profile shadow matcher panic: mode=%s err_category=%T elapsed=%s",
+						s.identityProfileMode, r, time.Since(start).Round(time.Millisecond))
+				}
+			}()
+			res := matchFn(obs.Component)
+			// 非法分数（NaN/Inf）视为不可用，避免污染遥测。
+			if mathIsNaNOrInf(res.Score) || mathIsNaNOrInf(res.SecondScore) || mathIsNaNOrInf(res.Margin) {
+				profile = IdentityProfileMatch{Available: false, BlockReason: blockProfileUnavailable}
+				return
+			}
+			profile = res
+		}()
+
+		elapsed := time.Since(start)
+
+		if recordFn != nil {
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Warnf("identity decision telemetry panic: mode=%s err_category=%T elapsed=%s",
+							s.identityProfileMode, r, elapsed.Round(time.Millisecond))
+					}
+				}()
+				recordFn(IdentityTelemetryInput{
+					Mode:                 s.identityProfileMode,
+					ComponentFaceIDs:     faceIDs,
+					LegacyTargetPersonID: obs.Legacy.PersonID,
+					LegacyScore:          obs.Legacy.Score,
+					LegacyMatched:        obs.Legacy.Matched,
+					Profile:              profile,
+					Elapsed:              elapsed,
+					AlgorithmVersion:     identityProfileAlgorithmVersion,
+					// IndexGeneration 暂为 0：Task 14 接入真实 ANN snapshot generation；
+					// 不在本任务临时发明第二套 generation。
+					IndexGeneration: 0,
+				})
+			}()
+		}
+	}
+}
+
+// mathIsNaNOrInf 报告分数是否为 NaN 或 Inf（matcher / 遥测非法结果守卫）。
+func mathIsNaNOrInf(v float64) bool {
+	return math.IsNaN(v) || math.IsInf(v, 0)
 }
 
 func hasManualLockedFaces(faces []*model.Face) bool {

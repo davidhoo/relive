@@ -9,8 +9,12 @@ import (
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
+	"github.com/davidhoo/relive/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 // TestCoordinatorSerializesBackgroundAndFeedback verifies requirement #1: when
@@ -360,9 +364,9 @@ func TestCoordinatorClusteringEquivalence(t *testing.T) {
 
 	// Assigned prototype face for the person.
 	require.NoError(t, faceRepo.Create(&model.Face{
-		PhotoID:       protoPhoto.ID,
-		PersonID:      &person.ID,
-		BBoxX:         0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		PhotoID:  protoPhoto.ID,
+		PersonID: &person.ID,
+		BBoxX:    0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
 		Confidence:    0.95,
 		QualityScore:  0.80,
 		Embedding:     encodeEmbedding(t, []float32{1, 0, 0}),
@@ -373,8 +377,8 @@ func TestCoordinatorClusteringEquivalence(t *testing.T) {
 
 	// Pending face identical to the prototype → similarity 1.0, must attach.
 	require.NoError(t, faceRepo.Create(&model.Face{
-		PhotoID:       pendingPhoto.ID,
-		BBoxX:         0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		PhotoID: pendingPhoto.ID,
+		BBoxX:   0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
 		Confidence:    0.99,
 		QualityScore:  0.80,
 		Embedding:     encodeEmbedding(t, []float32{1, 0, 0}),
@@ -456,4 +460,336 @@ func TestCoordinatorProtoCacheNoDataRace(t *testing.T) {
 
 	// Final clustering pass to exercise protoCache reuse after the merge.
 	_ = svc.clusteringCoordinator.submitBackground()
+}
+
+// ---- Task 11: 身份画像 shadow 接入增量聚类 ----
+
+// clusteringSnapshot 捕获一次聚类后 Faces / People 的业务字段，用于 legacy vs shadow
+// 等价性比对（忽略时间字段）。
+type clusteringSnapshot struct {
+	faces  []faceSnapshot
+	people []personSnapshot
+}
+
+type faceSnapshot struct {
+	ID                  uint
+	PersonID            *uint
+	ClusterStatus       string
+	ClusterScore        float64
+	RetryCount          int
+	ClusteredAtSet      bool
+	ReclusterGeneration int
+}
+
+type personSnapshot struct {
+	ID                   uint
+	FaceCount            int
+	PhotoCount           int
+	Category             string
+	RepresentativeFaceID *uint
+}
+
+func snapshotPeopleCluster(t *testing.T, db *gorm.DB) clusteringSnapshot {
+	t.Helper()
+	var faces []model.Face
+	require.NoError(t, db.Order("id ASC").Find(&faces).Error)
+	var people []model.Person
+	require.NoError(t, db.Order("id ASC").Find(&people).Error)
+
+	snap := clusteringSnapshot{}
+	for _, f := range faces {
+		var pid *uint
+		if f.PersonID != nil {
+			v := *f.PersonID
+			pid = &v
+		}
+		snap.faces = append(snap.faces, faceSnapshot{
+			ID:                  f.ID,
+			PersonID:            pid,
+			ClusterStatus:       f.ClusterStatus,
+			ClusterScore:        f.ClusterScore,
+			RetryCount:          f.RetryCount,
+			ClusteredAtSet:      f.ClusteredAt != nil,
+			ReclusterGeneration: f.ReclusterGeneration,
+		})
+	}
+	for _, p := range people {
+		snap.people = append(snap.people, personSnapshot{
+			ID:                   p.ID,
+			FaceCount:            p.FaceCount,
+			PhotoCount:           p.PhotoCount,
+			Category:             p.Category,
+			RepresentativeFaceID: p.RepresentativeFaceID,
+		})
+	}
+	return snap
+}
+
+// seedEquivalenceDataset 在一个全新 DB 中植入聚类数据集：1 个已分配人物 + 2 张待聚类
+// 脸（一张与原型相同→attach，一张独立→建人物或 pending）。tag 用于隔离不同测试间的
+// file_path 唯一约束（共享内存 DB）。返回各对象 ID 供断言。
+func seedEquivalenceDataset(t *testing.T, db *gorm.DB, tag string) {
+	t.Helper()
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+
+	photos := []*model.Photo{
+		{FilePath: "/photos/" + tag + "-proto.jpg", FileName: tag + "-proto.jpg", FileSize: 1, FileHash: tag + "-proto", Width: 100, Height: 100, Status: model.PhotoStatusActive},
+		{FilePath: "/photos/" + tag + "-attach.jpg", FileName: tag + "-attach.jpg", FileSize: 1, FileHash: tag + "-attach", Width: 100, Height: 100, Status: model.PhotoStatusActive},
+		{FilePath: "/photos/" + tag + "-solo.jpg", FileName: tag + "-solo.jpg", FileSize: 1, FileHash: tag + "-solo", Width: 100, Height: 100, Status: model.PhotoStatusActive},
+	}
+	for _, p := range photos {
+		require.NoError(t, photoRepo.Create(p))
+	}
+
+	person := &model.Person{Category: model.PersonCategoryFamily}
+	require.NoError(t, personRepo.Create(person))
+
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID: photos[0].ID, PersonID: &person.ID,
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence: 0.95, QualityScore: 0.8,
+		Embedding:     encodeEmbedding(t, []float32{1, 0, 0}),
+		ClusterStatus: model.FaceClusterStatusAssigned, ClusterScore: 0.95,
+	}))
+	require.NoError(t, personRepo.RefreshStats(person.ID))
+
+	// 与原型相同 → attach。
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID: photos[1].ID,
+		BBoxX:   0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence: 0.99, QualityScore: 0.8,
+		Embedding:     encodeEmbedding(t, []float32{1, 0, 0}),
+		ClusterStatus: model.FaceClusterStatusPending,
+	}))
+	// 正交向量 → 不 attach，单脸进 pending。
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID: photos[2].ID,
+		BBoxX:   0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence: 0.9, QualityScore: 0.8,
+		Embedding:     encodeEmbedding(t, []float32{0, 1, 0}),
+		ClusterStatus: model.FaceClusterStatusPending,
+	}))
+}
+
+// openIsolatedPeopleTestDB 打开一个独立（非共享）内存 SQLite，用于 legacy vs shadow
+// 等价性比对，避免 newPeopleServiceForTest 的共享内存 DB 让两个 service 互相看到对方数据。
+func openIsolatedPeopleTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	// 唯一 DSN：每个测试获得独立的内存数据库。
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:equivalence_%d?mode=memory&cache=shared&_busy_timeout=60000",
+		time.Now().UnixNano())),
+		&gorm.Config{Logger: gormlogger.Discard})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(
+		&model.AppConfig{}, &model.Photo{}, &model.PhotoTag{}, &model.Face{}, &model.Person{},
+		&model.PeopleJob{}, &model.PeopleMergeJob{}, &model.ScanJob{}, &model.CannotLinkConstraint{},
+		&model.PeopleFeedbackEvent{},
+	))
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil && sqlDB != nil {
+			sqlDB.Close()
+		}
+	})
+	return db
+}
+
+// newPeopleServiceOnDB 在给定 DB 上构造 peopleService（复用 newPeopleServiceForTest 的内部
+// 逻辑），用于等价性比对中分别指定 legacy / shadow 的独立 DB。
+func newPeopleServiceOnDB(t *testing.T, db *gorm.DB) *peopleService {
+	t.Helper()
+	cfg := &config.Config{
+		People: config.PeopleConfig{
+			MLEndpoint: "http://ml-service",
+			Timeout:    5,
+		},
+	}
+	svc := NewPeopleService(
+		db,
+		repository.NewPhotoRepository(db),
+		repository.NewFaceRepository(db),
+		repository.NewPersonRepository(db),
+		repository.NewPeopleJobRepository(db),
+		repository.NewPeopleMergeJobRepository(db),
+		repository.NewCannotLinkRepository(db),
+		cfg,
+		&fakePeopleMLClient{},
+		nil,
+	).(*peopleService)
+	svc.clusteringTaskCounter = peopleClusteringTaskInterval
+	t.Cleanup(func() { svc.clusteringCoordinator.stop() })
+	return svc
+}
+
+// TestClusteringPipelineEquivalence_LegacyVsShadow 验证 identity_profile_mode=legacy 与
+// =shadow 在相同初始数据库下产生完全一致的 Faces / People 业务结果（除遥测与时间外）。
+func TestClusteringPipelineEquivalence_LegacyVsShadow(t *testing.T) {
+	// legacy 快照（独立 DB）
+	dbLegacy := openIsolatedPeopleTestDB(t)
+	svcLegacy := newPeopleServiceOnDB(t, dbLegacy)
+	seedEquivalenceDataset(t, dbLegacy, "legacy")
+	resL := svcLegacy.clusteringCoordinator.submitBackground()
+	require.NoError(t, resL.err)
+	snapLegacy := snapshotPeopleCluster(t, dbLegacy)
+
+	// shadow 快照（独立 DB）
+	dbShadow := openIsolatedPeopleTestDB(t)
+	svcShadow := newPeopleServiceOnDB(t, dbShadow)
+	seedEquivalenceDataset(t, dbShadow, "shadow")
+	rec := &shadowHookRecorder{}
+	svcShadow.SetIdentityProfileShadowHooks(model.PeopleIdentityModeShadow, rec.match, rec.record)
+	resS := svcShadow.clusteringCoordinator.submitBackground()
+	require.NoError(t, resS.err)
+	snapShadow := snapshotPeopleCluster(t, dbShadow)
+
+	// Faces 业务字段一致（忽略 ClusteredAtSet 的时间，只比较业务字段；ClusteredAtSet 在
+	// 两种模式下语义相同：attach/pending 均会设置）。
+	require.Equal(t, len(snapLegacy.faces), len(snapShadow.faces), "face count must match")
+	for i := range snapLegacy.faces {
+		lf := snapLegacy.faces[i]
+		sf := snapShadow.faces[i]
+		assert.Equal(t, lf.ID, sf.ID, "face ID order must match")
+		assert.Equal(t, lf.PersonID, sf.PersonID, "person_id must match for face %d", lf.ID)
+		assert.Equal(t, lf.ClusterStatus, sf.ClusterStatus, "cluster_status must match for face %d", lf.ID)
+		assert.InDelta(t, lf.ClusterScore, sf.ClusterScore, 1e-9, "cluster_score must match for face %d", lf.ID)
+		assert.Equal(t, lf.RetryCount, sf.RetryCount, "retry_count must match for face %d", lf.ID)
+		assert.Equal(t, lf.ClusteredAtSet, sf.ClusteredAtSet, "clustered_at presence must match for face %d", lf.ID)
+		assert.Equal(t, lf.ReclusterGeneration, sf.ReclusterGeneration, "recluster_generation must match for face %d", lf.ID)
+	}
+
+	// People 业务字段一致。
+	require.Equal(t, len(snapLegacy.people), len(snapShadow.people), "person count must match")
+	for i := range snapLegacy.people {
+		lp := snapLegacy.people[i]
+		sp := snapShadow.people[i]
+		assert.Equal(t, lp.ID, sp.ID, "person ID must match")
+		assert.Equal(t, lp.FaceCount, sp.FaceCount, "face_count must match for person %d", lp.ID)
+		assert.Equal(t, lp.PhotoCount, sp.PhotoCount, "photo_count must match for person %d", lp.ID)
+		assert.Equal(t, lp.Category, sp.Category, "category must match for person %d", lp.ID)
+		assert.Equal(t, lp.RepresentativeFaceID, sp.RepresentativeFaceID, "representative_face_id must match for person %d", lp.ID)
+	}
+
+	// shadow 模式确实产生了遥测调用（至少一个组件）。
+	assert.Greater(t, rec.matchCount(), 0, "shadow mode must invoke matcher")
+	assert.Greater(t, rec.recordCount(), 0, "shadow mode must record telemetry")
+}
+
+// TestIdentityProfileShadow_MatcherRunsAfterWriteGateRelease 验证画像 matcher 在释放
+// writeGate.RLock 之后执行：foreground merge/split/move 不应被慢 matcher 阻塞。通过让
+// matcher 阻塞，断言在 matcher 阻塞期间 foreground 能获取 writeGate.Lock。
+func TestIdentityProfileShadow_MatcherRunsAfterWriteGateRelease(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	_, _, faceRepo, person, pendingPhoto := seedShadowClusterDataset(t, db)
+
+	releaseMatcher := make(chan struct{})
+	rec := &shadowHookRecorder{
+		matchFn: func(component []*model.Face) IdentityProfileMatch {
+			<-releaseMatcher
+			return IdentityProfileMatch{Available: true}
+		},
+	}
+	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeShadow, rec.match, rec.record)
+
+	bgDone := make(chan struct{})
+	go func() {
+		_ = svc.clusteringCoordinator.submitBackground()
+		close(bgDone)
+	}()
+
+	// 等待 matcher 开始（此时 legacy 写入已完成、writeGate 已释放）。
+	waitForPeopleCondition(t, 3*time.Second, func() bool {
+		return rec.matchCount() >= 1
+	})
+
+	// matcher 阻塞期间，foreground 必须能获取 writeGate.Lock —— 证明 matcher 在 RLock 释放后运行。
+	fgAcquired := make(chan struct{})
+	go func() {
+		svc.writeGate.Lock()
+		close(fgAcquired)
+		svc.writeGate.Unlock()
+	}()
+	select {
+	case <-fgAcquired:
+		// good: foreground acquired writeGate while matcher was still running.
+	case <-time.After(time.Second):
+		t.Fatal("foreground writeGate.Lock blocked while shadow matcher was running; matcher must run after writeGate release")
+	}
+
+	// legacy 结果已落库（matcher 阻塞不影响 legacy 写入）。
+	pendingFaces, err := faceRepo.ListByPhotoID(pendingPhoto.ID)
+	require.NoError(t, err)
+	require.Len(t, pendingFaces, 1)
+	require.NotNil(t, pendingFaces[0].PersonID)
+	assert.Equal(t, person.ID, *pendingFaces[0].PersonID)
+
+	close(releaseMatcher)
+	select {
+	case <-bgDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background did not complete after matcher released")
+	}
+}
+
+// TestIdentityProfileShadow_ForegroundNotBlockedBySlowMatcher 验证慢 matcher 不阻塞
+// 下一个 foreground mutation：在 matcher 阻塞期间 MergePeople（foreground）应能完成。
+func TestIdentityProfileShadow_ForegroundNotBlockedBySlowMatcher(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+	photoRepo := repository.NewPhotoRepository(db)
+
+	photo := &model.Photo{FilePath: "/photos/fg.jpg", FileName: "fg.jpg", FileSize: 1, FileHash: "fg", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(photo))
+	pa := &model.Person{Category: model.PersonCategoryFamily}
+	pb := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(pa))
+	require.NoError(t, personRepo.Create(pb))
+	require.NoError(t, faceRepo.Create(&model.Face{PhotoID: photo.ID, PersonID: &pa.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.9, QualityScore: 0.8, Embedding: encodeEmbedding(t, []float32{1, 0, 0}), ClusterStatus: model.FaceClusterStatusAssigned}))
+	require.NoError(t, faceRepo.Create(&model.Face{PhotoID: photo.ID, PersonID: &pb.ID, BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.9, QualityScore: 0.8, Embedding: encodeEmbedding(t, []float32{0.99, 0.01, 0}), ClusterStatus: model.FaceClusterStatusAssigned}))
+
+	releaseMatcher := make(chan struct{})
+	rec := &shadowHookRecorder{
+		matchFn: func(component []*model.Face) IdentityProfileMatch {
+			<-releaseMatcher
+			return IdentityProfileMatch{Available: true}
+		},
+	}
+	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeShadow, rec.match, rec.record)
+
+	// 提交一个 background 批次（无 pending → 不触发聚类，但若有 pending 会触发）。
+	// 这里直接用一个 pending 脸触发聚类 + shadow。
+	photoP := &model.Photo{FilePath: "/photos/fgp.jpg", FileName: "fgp.jpg", FileSize: 1, FileHash: "fgp", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(photoP))
+	require.NoError(t, faceRepo.Create(&model.Face{PhotoID: photoP.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.9, QualityScore: 0.8, Embedding: encodeEmbedding(t, []float32{1, 0, 0}), ClusterStatus: model.FaceClusterStatusPending}))
+
+	bgDone := make(chan struct{})
+	go func() {
+		_ = svc.clusteringCoordinator.submitBackground()
+		close(bgDone)
+	}()
+
+	waitForPeopleCondition(t, 3*time.Second, func() bool {
+		return rec.matchCount() >= 1
+	})
+
+	// matcher 阻塞期间，foreground MergePeople 应能完成（不被慢 matcher 阻塞）。
+	mergeDone := make(chan struct{})
+	go func() {
+		_, _ = svc.MergePeople(pa.ID, []uint{pb.ID})
+		close(mergeDone)
+	}()
+	select {
+	case <-mergeDone:
+		// good
+	case <-time.After(2 * time.Second):
+		t.Fatal("foreground MergePeople blocked by slow shadow matcher")
+	}
+
+	close(releaseMatcher)
+	select {
+	case <-bgDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background did not complete after matcher released")
+	}
 }

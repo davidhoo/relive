@@ -23,6 +23,12 @@ type backgroundClusterResult struct {
 	affectedPersonIDs []uint
 	affectedPhotoIDs  []uint
 	err               error
+
+	// shadowObservations 携带本批次的身份画像 shadow 观测。由 runIncrementalClustering
+	// 在持有 writeGate.RLock 期间收集，但画像 matcher 与遥测必须由 runClusterBatch 在
+	// 释放 writeGate.RLock 之后处理（见 processIdentityShadowObservations），不得长期占用
+	// writeGate。legacy 模式下为 nil。
+	shadowObservations []identityShadowObservation
 }
 
 var errCoordinatorStopped = fmt.Errorf("people clustering coordinator stopped")
@@ -223,6 +229,10 @@ func (c *peopleClusteringCoordinator) runFeedbackJob(mergedRequests int) {
 // writeGate.RLock, yielding to foreground waiters first. Called only from the
 // worker goroutine (directly for background, and via triggerRecluster for
 // feedback). protoCache is touched only here, so it stays single-goroutine.
+//
+// 身份画像 shadow 处理在释放 writeGate.RLock 之后执行：matcher 的 ANN/Repository
+// 查询与遥测写入不得长期占用 writeGate，否则会阻塞 foreground merge/split/move。
+// shadow 处理失败不影响已经成功的 legacy 结果；其耗时不混入 writeGate 持有时间。
 func (c *peopleClusteringCoordinator) runClusterBatch(source clusterSource) backgroundClusterResult {
 	waitStart := time.Now()
 	if c.waitForegroundClear() {
@@ -242,9 +252,27 @@ func (c *peopleClusteringCoordinator) runClusterBatch(source clusterSource) back
 				logger.Errorf("people clustering coordinator: source=%s clustering panic: %v", source, r)
 			}
 		}()
-		res.affectedPersonIDs, res.affectedPhotoIDs, res.err = c.svc.runIncrementalClustering()
+		res.affectedPersonIDs, res.affectedPhotoIDs, res.shadowObservations, res.err = c.svc.runIncrementalClustering()
 	}()
 	elapsed := time.Since(gateStart)
+
+	// shadow 处理在 writeGate 释放后执行：foreground merge/split/move 无需等待画像
+	// 评分。处理失败不修改已成功的 legacy 结果；其耗时单独记录。
+	if len(res.shadowObservations) > 0 {
+		shadowStart := time.Now()
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Errorf("people clustering coordinator: source=%s shadow observation panic: %v", source, r)
+				}
+			}()
+			c.svc.processIdentityShadowObservations(res.shadowObservations)
+		}()
+		// 处理完成后清空，避免结果回传时携带大 slice（调用方不再需要 observation）。
+		res.shadowObservations = nil
+		logger.Infof("people clustering coordinator: source=%s shadow observations processed elapsed=%s",
+			source, time.Since(shadowStart).Round(time.Millisecond))
+	}
 
 	if res.err != nil {
 		logger.Warnf("people clustering coordinator: source=%s clustering failed foregroundWait=%s writeGateWait=%s batchElapsed=%s yieldedForForeground=%v err=%v",
