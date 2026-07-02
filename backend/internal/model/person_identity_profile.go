@@ -81,3 +81,29 @@ type PersonIdentityCenterMember struct {
 func (PersonIdentityCenterMember) TableName() string {
 	return "person_identity_center_members"
 }
+
+// PersonIdentityProfileBuild 是一次画像构建的完整结果：profile 元数据加上该 generation
+// 下的 centers 与 members。由 builder（纯函数）产出，经 repository 原子写入并激活；
+// GetActive 读取激活 generation 时也组装为该结构。
+//
+// 中心归属约定：builder 为每个 accepted member 设置 CenterID 指向其所属 center 的
+// Ordinal（逻辑引用，非真实主键），candidate/excluded 的 CenterID 为 nil。
+// repository 在持久化 center 取得真实 ID 后，将 member.CenterID 从 Ordinal 重映射为真实主键。
+type PersonIdentityProfileBuild struct {
+	Profile *PersonIdentityProfile
+	Centers []*PersonIdentityCenter
+	Members []*PersonIdentityCenterMember
+}
+
+// MemberByFaceID 返回指定人脸在本次构建中的成员记录，未找到返回 nil。
+func (b *PersonIdentityProfileBuild) MemberByFaceID(faceID uint) *PersonIdentityCenterMember {
+	if b == nil {
+		return nil
+	}
+	for _, m := range b.Members {
+		if m.FaceID == faceID {
+			return m
+		}
+	}
+	return nil
+}
