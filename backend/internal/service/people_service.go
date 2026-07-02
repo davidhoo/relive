@@ -24,17 +24,17 @@ import (
 )
 
 const (
-	peoplePriorityScan         = 50
-	peoplePriorityManual       = 80
-	peoplePriorityPassive      = 100
-	peopleClusterThreshold     = 0.45
-	peoplePrototypeCount       = 5
-	peoplePrototypeCandidates  = 10
-	defaultLinkThreshold       = 0.62
-	defaultAttachThreshold     = 0.65
-	peopleMinClusterFaces      = 2
+	peoplePriorityScan           = 50
+	peoplePriorityManual         = 80
+	peoplePriorityPassive        = 100
+	peopleClusterThreshold       = 0.45
+	peoplePrototypeCount         = 5
+	peoplePrototypeCandidates    = 10
+	defaultLinkThreshold         = 0.62
+	defaultAttachThreshold       = 0.65
+	peopleMinClusterFaces        = 2
 	peopleFeedbackZeroResultWait = 30 * time.Second // cooldown after zero-result recluster
-	peopleStatsCacheTTL        = 30 * time.Second
+	peopleStatsCacheTTL          = 30 * time.Second
 
 	// confirmedPersonDiscount lowers the attach threshold for persons with manual-locked faces,
 	// making it easier for new faces to join user-confirmed identities (e.g., family members).
@@ -48,18 +48,18 @@ const (
 	// retry_count 0-1: full threshold (no discount)
 	// retry_count 2-4: linear decay to floor
 	// retry_count 5+: floor threshold
-	thresholdDecayStart    = 2  // retry_count at which decay begins
-	thresholdDecayEnd      = 5  // retry_count at which floor is reached
-	attachThresholdFloor   = 0.5
-	linkThresholdFloor     = 0.5
+	thresholdDecayStart  = 2 // retry_count at which decay begins
+	thresholdDecayEnd    = 5 // retry_count at which floor is reached
+	attachThresholdFloor = 0.5
+	linkThresholdFloor   = 0.5
 
 	// Fallback: after this many retries, allow single-face person creation
 	singleFaceFallbackRetries = 10
 
 	// Clustering optimization constants to prevent CPU overload on NAS
 	// See: https://github.com/davidhoo/relive/issues/XXX
-	peopleClusteringBatchSize    = 50  // Max pending faces to cluster at once
-	peopleClusteringTaskInterval = 5   // Cluster every N tasks (0 = always)
+	peopleClusteringBatchSize    = 50              // Max pending faces to cluster at once
+	peopleClusteringTaskInterval = 5               // Cluster every N tasks (0 = always)
 	clustProtoCacheTTL           = 5 * time.Minute // Prototype cache TTL; avoids reloading 220K rows per 50-face batch
 )
 
@@ -91,17 +91,17 @@ type PeopleService interface {
 }
 
 type peopleService struct {
-	db               *gorm.DB
-	photoRepo        repository.PhotoRepository
-	faceRepo         repository.FaceRepository
-	personRepo       repository.PersonRepository
-	jobRepo          repository.PeopleJobRepository
-	mergeJobRepo     repository.PeopleMergeJobRepository
-	cannotLinkRepo   repository.CannotLinkRepository
+	db                *gorm.DB
+	photoRepo         repository.PhotoRepository
+	faceRepo          repository.FaceRepository
+	personRepo        repository.PersonRepository
+	jobRepo           repository.PeopleJobRepository
+	mergeJobRepo      repository.PeopleMergeJobRepository
+	cannotLinkRepo    repository.CannotLinkRepository
 	feedbackEventRepo repository.PeopleFeedbackEventRepository
-	config           *config.Config
-	client           PeopleMLClient
-	runtimeService   AnalysisRuntimeService
+	config            *config.Config
+	client            PeopleMLClient
+	runtimeService    AnalysisRuntimeService
 
 	taskMutex        sync.RWMutex
 	task             *model.PeopleTask
@@ -115,9 +115,9 @@ type peopleService struct {
 	// clustering coordinator worker. Foreground ops take Lock (exclusive); the
 	// coordinator worker takes RLock (shared) around each clustering batch.
 	// This prevents SQLite "database is locked" when both paths write faces/people tables.
-	writeGate   sync.RWMutex
-	writeQueue  *database.WriteQueue // serializes SQLite write operations
-	idleCount   int                  // consecutive idle loops, used for polling backoff
+	writeGate  sync.RWMutex
+	writeQueue *database.WriteQueue // serializes SQLite write operations
+	idleCount  int                  // consecutive idle loops, used for polling backoff
 
 	// clusteringCoordinator is the single entry point for all incremental
 	// clustering. Its worker is the only goroutine permitted to call
@@ -140,9 +140,9 @@ type peopleService struct {
 	annCandidateFn func(probes []faceWithEmbedding, k int) map[uint]struct{}
 
 	// In-memory cache for GetStats() to avoid scanning 78K+ faces rows on every poll.
-	statsCache    *model.PeopleStatsResponse
-	statsCacheAt  time.Time
-	statsCacheMu  sync.RWMutex
+	statsCache   *model.PeopleStatsResponse
+	statsCacheAt time.Time
+	statsCacheMu sync.RWMutex
 }
 
 type clustProtoCache struct {
@@ -652,8 +652,8 @@ func (s *peopleService) executeMergeJob(jobID uint) {
 	job.StartedAt = &now
 	job.Status = model.PeopleMergeJobStatusProcessing
 	if err := s.db.Model(job).Updates(map[string]interface{}{
-		"status":      job.Status,
-		"started_at":  job.StartedAt,
+		"status":     job.Status,
+		"started_at": job.StartedAt,
 	}).Error; err != nil {
 		logger.Errorf("Failed to update merge job %d status: %v", jobID, err)
 		return
@@ -1005,8 +1005,8 @@ func (s *peopleService) enqueuePhotoModel(photo *model.Photo, source string, pri
 			updates["status"] = model.PeopleJobStatusQueued
 		}
 		return s.executeWrite(func() error {
-		return s.jobRepo.UpdateFields(activeJob.ID, updates)
-	})
+			return s.jobRepo.UpdateFields(activeJob.ID, updates)
+		})
 	}
 
 	job := &model.PeopleJob{
@@ -1280,8 +1280,8 @@ func (s *peopleService) preflightCheck(job *model.PeopleJob) (*model.Photo, bool
 	if hasManualLockedFaces(existingFaces) {
 		s.appendBackgroundLog(fmt.Sprintf("照片 #%d 已有人工确认，跳过", photo.ID))
 		if err := s.executeWrite(func() error {
-		return s.photoRepo.RecomputeTopPersonCategory([]uint{photo.ID})
-	}); err != nil {
+			return s.photoRepo.RecomputeTopPersonCategory([]uint{photo.ID})
+		}); err != nil {
 			return nil, false, err
 		}
 		return nil, true, s.jobRepo.UpdateFields(job.ID, map[string]interface{}{
@@ -2437,15 +2437,15 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, error) {
 					prevPersonIDs[*face.PersonID] = struct{}{}
 				}
 			}
-				if err := s.executeWrite(func() error {
-					return s.faceRepo.UpdateClusterFields(faceIDs(component), map[string]interface{}{
-						"person_id":      personID,
-						"cluster_status": model.FaceClusterStatusAssigned,
-						"cluster_score":  score,
-						"clustered_at":   &now,
-						"retry_count":    0,
-					})
-				}); err != nil {
+			if err := s.executeWrite(func() error {
+				return s.faceRepo.UpdateClusterFields(faceIDs(component), map[string]interface{}{
+					"person_id":      personID,
+					"cluster_status": model.FaceClusterStatusAssigned,
+					"cluster_score":  score,
+					"clustered_at":   &now,
+					"retry_count":    0,
+				})
+			}); err != nil {
 				return nil, nil, err
 			}
 			for _, face := range component {
@@ -2571,8 +2571,8 @@ func (s *peopleService) triggerRecluster() model.ReclusterResult {
 		}
 		if len(affectedPhotoIDs) > 0 {
 			_ = s.executeWrite(func() error {
-			return s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs)
-		})
+				return s.photoRepo.RecomputeTopPersonCategory(affectedPhotoIDs)
+			})
 		}
 		// Also sync persons that lost faces
 		for _, oldPID := range prevAssign {
@@ -2644,9 +2644,9 @@ func (s *peopleService) syncPersonState(personID uint) error {
 	}
 	if len(faces) == 0 {
 		return s.executeWrite(func() error {
-		_ = s.cannotLinkRepo.DeleteByPersonID(personID)
-		return s.personRepo.Delete(personID)
-	})
+			_ = s.cannotLinkRepo.DeleteByPersonID(personID)
+			return s.personRepo.Delete(personID)
+		})
 	}
 
 	if err := s.executeWrite(func() error {

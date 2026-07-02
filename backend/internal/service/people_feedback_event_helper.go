@@ -16,8 +16,8 @@ const peopleMergeSuggestionAlgorithmVersion = "suggestion-v1"
 const peopleManualAlgorithmVersion = "manual"
 
 // buildFeedbackEvent 构造一条反馈事件，ID 列表经 MarshalFeedbackIDs 规范化
-//（删除 0、去重、升序、空集合为 "[]"），快照经 MarshalFeedbackSnapshot 序列化
-//（空快照为 "{}"）。各业务方法统一通过此 helper 构造，不重复实现排序与序列化。
+// （删除 0、去重、升序、空集合为 "[]"），快照经 MarshalFeedbackSnapshot 序列化
+// （空快照为 "{}"）。各业务方法统一通过此 helper 构造，不重复实现排序与序列化。
 func buildFeedbackEvent(eventType string, targetPersonID uint, sourcePersonIDs, faceIDs []uint, algorithmVersion string, snapshot map[string]interface{}) *model.PeopleFeedbackEvent {
 	return &model.PeopleFeedbackEvent{
 		EventType:          eventType,

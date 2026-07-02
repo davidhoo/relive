@@ -32,8 +32,8 @@ type PersonMergeSuggestionService interface {
 	ListPending(page, pageSize int) ([]model.PersonMergeSuggestionResponse, int64, error)
 	GetPendingByID(id uint) (*model.PersonMergeSuggestionResponse, error)
 	CalculateSimilarity(personID1, personID2 uint) (float64, error) // 计算两个人物间的相似度
-	MergeSuggestionThreshold() float64                             // 获取合并建议阈值
-	AttachThreshold() float64                                      // 获取附加阈值
+	MergeSuggestionThreshold() float64                              // 获取合并建议阈值
+	AttachThreshold() float64                                       // 获取附加阈值
 }
 
 type personMergeSuggestionState struct {
@@ -68,10 +68,10 @@ type personMergeSuggestionService struct {
 
 	// Dedicated background DB pool (separate from the API pool) so that
 	// long-running merge-suggestion work does not starve API connections.
-	bgDB                *gorm.DB
-	bgPersonRepo        repository.PersonRepository
-	bgFaceRepo          repository.FaceRepository
-	bgCannotLinkRepo    repository.CannotLinkRepository
+	bgDB                  *gorm.DB
+	bgPersonRepo          repository.PersonRepository
+	bgFaceRepo            repository.FaceRepository
+	bgCannotLinkRepo      repository.CannotLinkRepository
 	bgMergeSuggestionRepo repository.PersonMergeSuggestionRepository
 
 	// writeGateFn acquires the write gate from peopleService and returns a release function.
