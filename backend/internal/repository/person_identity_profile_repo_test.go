@@ -188,7 +188,7 @@ func TestPersonIdentityProfileRepository_ReplaceGenerationActivatesNew(t *testin
 	}
 }
 
-func TestPersonIdentityProfileRepository_ReplaceGenerationAtomicOnHookFailure(t *testing.T) {
+func TestPersonIdentityProfileRepository_ReplaceGenerationAtomicOnDuplicateMember(t *testing.T) {
 	repo, db := newProfileRepo(t)
 	defer teardownTestDB(db)
 
@@ -199,6 +199,9 @@ func TestPersonIdentityProfileRepository_ReplaceGenerationAtomicOnHookFailure(t 
 	old := seedActiveGeneration(t, repo, person.ID)
 	require.Equal(t, 1, old.Profile.ActiveGeneration)
 
+	// A duplicate face_id within the same generation trips the
+	// (person_id, generation, face_id) unique constraint mid-write, forcing a
+	// real failure rather than a test-only production hook.
 	newBuild := &model.PersonIdentityProfileBuild{
 		Profile: &model.PersonIdentityProfile{PersonID: person.ID, AlgorithmVersion: "v1"},
 		Centers: []*model.PersonIdentityCenter{
@@ -206,19 +209,23 @@ func TestPersonIdentityProfileRepository_ReplaceGenerationAtomicOnHookFailure(t 
 		},
 		Members: []*model.PersonIdentityCenterMember{
 			{PersonID: person.ID, FaceID: 201, PhotoID: 20, Similarity: 1.0, Weight: 1.0, State: model.PersonIdentityMemberStateAccepted, CenterID: uintPtr(1)},
+			{PersonID: person.ID, FaceID: 201, PhotoID: 20, Similarity: 0.8, Weight: 0.5, State: model.PersonIdentityMemberStateAccepted, CenterID: uintPtr(1)},
 		},
 	}
-
-	// Force a failure right before activation; the old generation must stay active.
-	repo.setBeforeActivateHookForTest(func() error { return errors.New("forced") })
 	err := repo.ReplaceGeneration(person.ID, newBuild)
-	require.Error(t, err)
+	require.Error(t, err, "duplicate member must violate the unique constraint")
 
+	// Old generation must remain fully active and intact after rollback.
 	got, err := repo.GetActive(person.ID)
 	require.NoError(t, err)
 	assert.Equal(t, old.Profile.ActiveGeneration, got.Profile.ActiveGeneration, "old generation remains active")
 	assert.Len(t, got.Centers, 1, "old generation centers intact")
 	assert.Len(t, got.Members, 2, "old generation members intact")
+
+	// No half-built generation 2 rows leak past the rollback.
+	var gen2Centers []model.PersonIdentityCenter
+	require.NoError(t, db.Where("person_id = ? AND generation = ?", person.ID, 2).Find(&gen2Centers).Error)
+	assert.Empty(t, gen2Centers, "rolled-back generation leaves no center rows")
 }
 
 func TestPersonIdentityProfileRepository_ReplaceGenerationRejectsUnknownPerson(t *testing.T) {
@@ -362,13 +369,17 @@ func TestPersonIdentityProfileRepository_DeleteInactiveGenerations(t *testing.T)
 	require.NoError(t, err)
 	assert.Equal(t, 2, got.Profile.ActiveGeneration)
 
-	// keep=1: only the highest (active) generation is retained; gen 1 pruned.
+	// keep=1 retains the single most recent non-active generation (gen 1).
 	require.NoError(t, repo.DeleteInactiveGenerations(person.ID, 1))
-
 	var remainingCenters []model.PersonIdentityCenter
 	require.NoError(t, db.Where("person_id = ?", person.ID).Find(&remainingCenters).Error)
+	require.Len(t, remainingCenters, 2, "keep=1 retains the non-active generation")
+
+	// keep=0 prunes ALL non-active generations; the active generation is never deleted.
+	require.NoError(t, repo.DeleteInactiveGenerations(person.ID, 0))
+	require.NoError(t, db.Where("person_id = ?", person.ID).Find(&remainingCenters).Error)
 	require.Len(t, remainingCenters, 1)
-	assert.Equal(t, 2, remainingCenters[0].Generation)
+	assert.Equal(t, 2, remainingCenters[0].Generation, "active generation retained")
 
 	var remainingMembers []model.PersonIdentityCenterMember
 	require.NoError(t, db.Where("person_id = ?", person.ID).Find(&remainingMembers).Error)
@@ -379,4 +390,133 @@ func TestPersonIdentityProfileRepository_DeleteInactiveGenerations(t *testing.T)
 	got, err = repo.GetActive(person.ID)
 	require.NoError(t, err)
 	assert.Len(t, got.Centers, 1)
+}
+
+// TestPersonIdentityProfileRepository_MarkDirtyEdgeCases covers empty, duplicate and
+// zero IDs: the call is a no-op success and never creates a profile for id 0.
+func TestPersonIdentityProfileRepository_MarkDirtyEdgeCases(t *testing.T) {
+	repo, db := newProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	person := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(person))
+
+	// Empty input succeeds without writing anything.
+	require.NoError(t, repo.MarkDirty(nil, "empty"))
+	require.NoError(t, repo.MarkDirty([]uint{}, "empty"))
+	dirty, err := repo.ListDirty(0, 10)
+	require.NoError(t, err)
+	assert.Empty(t, dirty)
+
+	// Zero IDs are ignored; duplicates collapse to a single profile.
+	require.NoError(t, repo.MarkDirty([]uint{0, person.ID, person.ID, 0}, "dup"))
+	dirty, err = repo.ListDirty(0, 10)
+	require.NoError(t, err)
+	require.Len(t, dirty, 1)
+	assert.Equal(t, person.ID, dirty[0].PersonID)
+
+	// No profile for person_id 0 is ever created.
+	var zeroProfile model.PersonIdentityProfile
+	err = db.Where("person_id = ?", 0).First(&zeroProfile).Error
+	assert.True(t, gorm.ErrRecordNotFound == err || errors.Is(err, gorm.ErrRecordNotFound))
+}
+
+// TestPersonIdentityProfileRepository_MarkDirtyLargeBatch verifies chunked writes handle
+// more IDs than the SQLite parameter limit without error.
+func TestPersonIdentityProfileRepository_MarkDirtyLargeBatch(t *testing.T) {
+	repo, db := newProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	const n = sqliteVarLimit + 50
+	ids := make([]uint, 0, n)
+	for i := 0; i < n; i++ {
+		p := &model.Person{Category: model.PersonCategoryFriend}
+		require.NoError(t, personRepo.Create(p))
+		ids = append(ids, p.ID)
+	}
+
+	require.NoError(t, repo.MarkDirty(ids, "bulk"))
+	dirty, err := repo.ListDirty(0, n+10)
+	require.NoError(t, err)
+	require.Len(t, dirty, n, "all bulk-marked profiles are retrievable")
+}
+
+// TestPersonIdentityProfileRepository_GetActiveNilWhenNoActiveGeneration asserts a profile
+// with active_generation=0 (only MarkDirty'd) returns a nil build per the spec.
+func TestPersonIdentityProfileRepository_GetActiveNilWhenNoActiveGeneration(t *testing.T) {
+	repo, db := newProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	person := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(person))
+
+	require.NoError(t, repo.MarkDirty([]uint{person.ID}, "init"))
+	got, err := repo.GetActive(person.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got, "profile with no active generation returns nil build")
+}
+
+// TestPersonIdentityProfileRepository_GetActiveMembersOrderedByFaceID verifies members are
+// returned ordered by face_id (not by row id), and that historical generations never leak.
+func TestPersonIdentityProfileRepository_GetActiveMembersOrderedByFaceID(t *testing.T) {
+	repo, db := newProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	person := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(person))
+	require.NoError(t, repo.MarkDirty([]uint{person.ID}, "seed"))
+
+	// Insert faces with non-monotonic IDs so face_id ordering is distinguishable from id ordering.
+	emb := model.EncodeEmbedding([]float32{1, 0, 0})
+	build := &model.PersonIdentityProfileBuild{
+		Profile: &model.PersonIdentityProfile{PersonID: person.ID, AlgorithmVersion: "v1"},
+		Centers: []*model.PersonIdentityCenter{
+			{PersonID: person.ID, Ordinal: 1, CentroidEmbedding: emb, SumEmbedding: emb, SupportCount: 3},
+		},
+		Members: []*model.PersonIdentityCenterMember{
+			{PersonID: person.ID, FaceID: 300, PhotoID: 10, State: model.PersonIdentityMemberStateAccepted, CenterID: uintPtr(1)},
+			{PersonID: person.ID, FaceID: 100, PhotoID: 10, State: model.PersonIdentityMemberStateAccepted, CenterID: uintPtr(1)},
+			{PersonID: person.ID, FaceID: 200, PhotoID: 10, State: model.PersonIdentityMemberStateAccepted, CenterID: uintPtr(1)},
+		},
+	}
+	require.NoError(t, repo.ReplaceGeneration(person.ID, build))
+
+	got, err := repo.GetActive(person.ID)
+	require.NoError(t, err)
+	require.Len(t, got.Members, 3)
+	assert.Equal(t, uint(100), got.Members[0].FaceID)
+	assert.Equal(t, uint(200), got.Members[1].FaceID)
+	assert.Equal(t, uint(300), got.Members[2].FaceID)
+
+	// No historical generation rows exist for a fresh single-build profile.
+	var histCenters int64
+	require.NoError(t, db.Model(&model.PersonIdentityCenter{}).
+		Where("person_id = ? AND generation != ?", person.ID, got.Profile.ActiveGeneration).
+		Count(&histCenters).Error)
+	assert.Zero(t, histCenters)
+}
+
+// TestRepositories_IdentityProfileInitialized confirms the aggregate Repositories struct
+// wires the identity profile repository on construction.
+func TestRepositories_IdentityProfileInitialized(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	repos := NewRepositories(db)
+	assert.NotNil(t, repos.IdentityProfile, "IdentityProfile repository is wired in NewRepositories")
+
+	// A round-trip through the aggregate confirms it is usable end-to-end.
+	personRepo := repos.Person
+	person := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(person))
+
+	require.NoError(t, repos.IdentityProfile.MarkDirty([]uint{person.ID}, "via_aggregate"))
+	dirty, err := repos.IdentityProfile.ListDirty(0, 10)
+	require.NoError(t, err)
+	require.Len(t, dirty, 1)
+	assert.Equal(t, person.ID, dirty[0].PersonID)
 }
