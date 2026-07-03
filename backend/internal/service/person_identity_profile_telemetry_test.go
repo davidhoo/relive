@@ -523,3 +523,45 @@ func TestIdentityTelemetry_NilRepoSafe(t *testing.T) {
 		})
 	})
 }
+
+// TestIdentityTelemetry_RescueAppliedAlwaysRecorded 验证 RescueApplied=true 时 Decision 固定为
+// rescue_applied，全量记录不采样（即使 agree 采样会命中的 face ID）。
+func TestIdentityTelemetry_RescueAppliedAlwaysRecorded(t *testing.T) {
+	repo := &fakeIdentityDecisionRepo{}
+	tel := NewIdentityProfileTelemetry(repo)
+
+	// 选一个会被 agree 采样剔除的 face ID，证明 rescue_applied 不采样。
+	_, outID := findSampleInAndOut(t)
+	tel.Record(IdentityTelemetryInput{
+		Mode:             model.PeopleIdentityModeRescue,
+		ComponentFaceIDs: []uint{outID},
+		LegacyMatched:    false,
+		Profile:          IdentityProfileMatch{Available: true, PersonID: 9, Score: 0.92, AutoEligible: true},
+		RescueApplied:    true,
+	})
+
+	require.Equal(t, 1, repo.callCount(), "rescue_applied must always be recorded, never sampled")
+	d := repo.lastCall()
+	assert.Equal(t, identityDecisionRescueApplied, d.Decision)
+	assert.Equal(t, model.PeopleIdentityModeRescue, d.Mode)
+	assert.Empty(t, d.Reason, "rescue_applied carries no block reason")
+}
+
+// TestIdentityTelemetry_RescueAppliedOverridesClassification 验证 RescueApplied 优先级高于
+// 其他分类（即使 profile unavailable 也不掩盖 rescue_applied —— 实际 rescue 已应用即代表
+// 画像可用且 eligible，此处仅验证字段优先级语义）。
+func TestIdentityTelemetry_RescueAppliedOverridesClassification(t *testing.T) {
+	repo := &fakeIdentityDecisionRepo{}
+	tel := NewIdentityProfileTelemetry(repo)
+
+	tel.Record(IdentityTelemetryInput{
+		Mode:             model.PeopleIdentityModeRescue,
+		ComponentFaceIDs: []uint{1},
+		LegacyMatched:    false,
+		Profile:          IdentityProfileMatch{Available: true, PersonID: 9, Score: 0.92, AutoEligible: true},
+		RescueApplied:    true,
+	})
+
+	d := repo.lastCall()
+	assert.Equal(t, identityDecisionRescueApplied, d.Decision)
+}

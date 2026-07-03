@@ -35,6 +35,7 @@ const (
 	identityDecisionProfileMiss           = "profile_miss"
 	identityDecisionProfileUnavailable    = "profile_unavailable"
 	identityDecisionProfileBlocked        = "profile_blocked"
+	identityDecisionRescueApplied         = "rescue_applied"
 )
 
 // allowedIdentityDecisionReasons 列出允许写入 Reason 字段的稳定枚举。任何不在集合内的
@@ -67,6 +68,10 @@ type IdentityTelemetryInput struct {
 	Elapsed          time.Duration
 	AlgorithmVersion string
 	IndexGeneration  int
+
+	// RescueApplied 标记本次 profile 结果被 rescue 模式应用（legacy miss → 挂靠已有人物）。
+	// 为 true 时 Decision 固定为 rescue_applied，且全量记录不采样。Task 12 新增。
+	RescueApplied bool
 }
 
 // identityProfileTelemetry 以 best-effort 方式记录身份画像 shadow/rescue 决策遥测。
@@ -81,8 +86,9 @@ func NewIdentityProfileTelemetry(repo repository.PeopleIdentityDecisionRepositor
 }
 
 // Record 记录一次身份画像决策。legacy 模式完全 no-op；普通 agree 结果按组件 hash 确定性
-// 采样；其余高价值场景全量记录。Repository 写入失败只记录脱敏 warning，不向调用方返回错误，
-// 不修改输入对象，不重试，不调用人物/Face/Profile 写接口。
+// 采样；其余高价值场景（legacy miss、分歧、unavailable、rescue_applied）全量记录。Repository
+// 写入失败只记录脱敏 warning，不向调用方返回错误，不修改输入对象，不重试，不调用人物/Face/Profile
+// 写接口。
 func (t *identityProfileTelemetry) Record(input IdentityTelemetryInput) {
 	if t == nil {
 		return
@@ -100,7 +106,7 @@ func (t *identityProfileTelemetry) Record(input IdentityTelemetryInput) {
 
 	decision, reason := classifyIdentityDecision(input)
 
-	// 普通一致结果确定性采样；legacy miss、分歧、unavailable 等永不采样。
+	// 普通一致结果确定性采样；legacy miss、分歧、unavailable、rescue_applied 永不采样。
 	if decision == identityDecisionAgree && !sampleIdentityDecision(hashBytes) {
 		return
 	}
@@ -115,10 +121,16 @@ func (t *identityProfileTelemetry) Record(input IdentityTelemetryInput) {
 
 // classifyIdentityDecision 根据输入判定稳定 Decision 值与 sanitized Reason。
 //
+// RescueApplied 优先级最高：rescue 模式在 legacy miss 边界把组件挂靠到画像找到的已有
+// 人物，固定记 rescue_applied，无论 profile 是否 AutoEligible（能 rescue 即已通过全部护栏）。
+//
 // 画像不可用（Available=false）时优先记录 profile_unavailable，无论 legacy 是否匹配，
 // 以便测量不可用比例。AutoEligible=false 且画像人物与 legacy 一致时记 profile_blocked；
 // 不一致时记 disagree 并保留阻断原因。
 func classifyIdentityDecision(in IdentityTelemetryInput) (decision, reason string) {
+	if in.RescueApplied {
+		return identityDecisionRescueApplied, ""
+	}
 	if !in.Profile.Available {
 		return identityDecisionProfileUnavailable, sanitizeReason(in.Profile.BlockReason)
 	}

@@ -141,16 +141,18 @@ type peopleService struct {
 	annCandidateFn func(probes []faceWithEmbedding, k int) map[uint]struct{}
 
 	// identityProfileMode / hooks wire the身份画像 matcher into incremental
-	// clustering in Task 11. legacy 模式下三者均为零值，runIncrementalClustering
-	// 不分配 observation、不复制 embedding、不调用 matcher/telemetry。shadow/
-	// rescue/primary 模式由 service.go 注入真实 matcher.Match 与 telemetry.Record；
-	// Task 11 阶段所有非 legacy 模式均只 shadow 计算与记录，不应用画像结果。
+	// clustering in Task 11 (shadow) / Task 12 (rescue). legacy 模式下四者均为零值，
+	// runIncrementalClustering 不分配 observation、不复制 embedding、不调用 matcher/telemetry。
+	// shadow/rescue/primary 模式由 service.go 注入真实 matcher.Match 与 telemetry.Record；
+	// rescue 模式额外注入 markDirtyFn 以在 legacy miss 救回后标记目标人物画像 dirty。
+	// primary 模式仍按 shadow-only 处理（Task 12 不实现 primary 应用）。
 	//
 	// hooks 在 service 装配时一次性注入（早于任何聚类批次），读取发生在 coordinator
 	// worker goroutine 内，与 setANNCandidateFn 同样无需额外同步。
 	identityProfileMode      string
 	identityProfileMatchFn   identityProfileMatchFn
 	identityDecisionRecordFn identityDecisionRecordFn
+	identityProfileMarkDirtyFn identityProfileMarkDirtyFn
 
 	// In-memory cache for GetStats() to avoid scanning 78K+ faces rows on every poll.
 	statsCache   *model.PeopleStatsResponse
@@ -1732,6 +1734,11 @@ type identityProfileMatchFn func(component []*model.Face) IdentityProfileMatch
 // telemetry.Record，best-effort、不返回错误、不重试、不持有 writeGate。
 type identityDecisionRecordFn func(input IdentityTelemetryInput)
 
+// identityProfileMarkDirtyFn 是 Task 12 rescue 成功后标记目标人物画像 dirty 的窄接口。
+// 生产注入 identityProfileService.MarkDirty（仅非 legacy 模式）；rescue 在释放 writeGate
+// 之后 best-effort 调用，失败只记录脱敏 warning，不回滚 rescue 挂靠、不返回聚类错误。
+type identityProfileMarkDirtyFn func(personIDs []uint, reason string) error
+
 // SetIdentityProfileShadowHooks 注入身份画像 shadow 模式所需的模式与回调。生产由
 // service.go 装配时调用一次；测试可注入 fake matcher / recorder。
 //
@@ -1747,6 +1754,14 @@ func (s *peopleService) SetIdentityProfileShadowHooks(mode string, matchFn ident
 	}
 	s.identityProfileMatchFn = matchFn
 	s.identityDecisionRecordFn = recordFn
+}
+
+// SetIdentityProfileDirtyHook 注入 Task 12 rescue 成功后标记目标人物画像 dirty 的回调。
+// 仅非 legacy 模式注入（rescue 真正会应用结果；shadow/primary 注入也无害，因这两模式
+// 不产生 RescueApplied=true）。生产由 service.go 装配时调用一次；测试可注入 fake 以断言
+// 仅目标人物被标记。nil 时 rescue 挂靠仍成功，仅跳过 dirty 标记。
+func (s *peopleService) SetIdentityProfileDirtyHook(fn identityProfileMarkDirtyFn) {
+	s.identityProfileMarkDirtyFn = fn
 }
 
 // SetFeedbackEventRepo 注入反馈事件仓库。生产环境由 service.go 装配时注入；
@@ -2283,6 +2298,67 @@ func (s *peopleService) attachComponentToExistingPersonWithEmbeddings(
 	return 0, bestScore, false
 }
 
+// attachComponentToPerson 是 legacy attach 与 Task 12 rescue attach 共用的统一挂靠方法。
+// 它把整个连通组件一次性 UpdateClusterFields 到目标人物，并同步内存中的 component face
+// 状态，返回需要后续 syncPersonState 的旧人物 ID（去重，不含目标人物本身）。
+//
+// 职责边界（Task 12 第五节）：
+//   - 一次调用 UpdateClusterFields 更新整个组件（person_id / cluster_status=assigned /
+//     cluster_score=score / clustered_at=now / retry_count=0）。
+//   - 同步内存 component face 字段。
+//   - 不更新 profile、不执行 profile matcher、不调用 syncPersonState（由调用方在批次末尾
+//     统一处理 affectedPersonIDs）、不持有额外事务。
+//
+// legacy attach 传入 legacy score；rescue attach 传入 profile.Score。两者写入路径完全一致，
+// 避免复制两份数据库与内存更新逻辑。
+func (s *peopleService) attachComponentToPerson(
+	component []*model.Face,
+	personID uint,
+	score float64,
+) ([]uint, error) {
+	ids := faceIDs(component)
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	now := time.Now()
+	// 收集组件原有 Person ID，供调用方 syncPersonState。
+	prevPersonIDs := make(map[uint]struct{})
+	for _, face := range component {
+		if face == nil || face.PersonID == nil {
+			continue
+		}
+		if pid := *face.PersonID; pid != 0 && pid != personID {
+			prevPersonIDs[pid] = struct{}{}
+		}
+	}
+
+	if err := s.executeWrite(func() error {
+		return s.faceRepo.UpdateClusterFields(ids, map[string]interface{}{
+			"person_id":      personID,
+			"cluster_status": model.FaceClusterStatusAssigned,
+			"cluster_score":  score,
+			"clustered_at":   &now,
+			"retry_count":    0,
+		})
+	}); err != nil {
+		return nil, err
+	}
+
+	for _, face := range component {
+		if face == nil {
+			continue
+		}
+		face.PersonID = &personID
+		face.ClusterStatus = model.FaceClusterStatusAssigned
+		face.ClusterScore = score
+		face.ClusteredAt = &now
+		face.RetryCount = 0
+	}
+
+	return mapKeys(prevPersonIDs), nil
+}
+
 func (s *peopleService) markComponentPending(component []*model.Face, score float64) error {
 	ids := faceIDs(component)
 	if len(ids) == 0 {
@@ -2482,7 +2558,8 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, []identitySh
 		// Shadow: 在任何 legacy 写入之前深拷贝组件，并记录 legacy 决策快照。observation
 		// 不参与分支选择；只有对应 legacy 操作成功后才进入待处理列表。画像 matcher 不得
 		// 在 executeWrite 闭包中执行（见 processIdentityShadowObservations，在 writeGate
-		// 释放后运行）。
+		// 释放后运行）。rescue 模式下 legacy miss 会在持锁阶段同步计算 profile 并填入
+		// observation，post-lock 阶段复用，避免重复调用 matcher。
 		var shadowObs *identityShadowObservation
 		if shadowEnabled {
 			shadowObs = &identityShadowObservation{
@@ -2496,47 +2573,41 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, []identitySh
 		}
 
 		if attached {
-			now := time.Now()
-			// Track previous person IDs to sync their state after face move
-			prevPersonIDs := make(map[uint]struct{})
-			for _, face := range component {
-				if face != nil && face.PersonID != nil && *face.PersonID != 0 {
-					prevPersonIDs[*face.PersonID] = struct{}{}
-				}
-			}
-			if err := s.executeWrite(func() error {
-				return s.faceRepo.UpdateClusterFields(faceIDs(component), map[string]interface{}{
-					"person_id":      personID,
-					"cluster_status": model.FaceClusterStatusAssigned,
-					"cluster_score":  score,
-					"clustered_at":   &now,
-					"retry_count":    0,
-				})
-			}); err != nil {
+			// legacy 成功永远优先：绝不调用 rescue 决策，即使 profile 更喜欢另一个人物。
+			prevIDs, err := s.attachComponentToPerson(component, personID, componentScore)
+			if err != nil {
 				return nil, nil, nil, err
 			}
-			for _, face := range component {
-				if face == nil {
-					continue
-				}
-				face.PersonID = &personID
-				face.ClusterStatus = model.FaceClusterStatusAssigned
-				face.ClusterScore = componentScore
-				face.ClusteredAt = &now
-				face.RetryCount = 0
-			}
 			affectedPersonIDs[personID] = struct{}{}
-			// Also sync previous persons that lost faces
-			for pid := range prevPersonIDs {
+			for _, pid := range prevIDs {
 				affectedPersonIDs[pid] = struct{}{}
 			}
 			for _, photoID := range facePhotoIDs(component) {
 				affectedPhotoIDs[photoID] = struct{}{}
 			}
+			// legacy attach 仍可在 post-lock 阶段做 Task 11 shadow 比对（释放 writeGate 后），
+			// 但绝不应用 profile 结果。matcher 在 post-lock 调用，不在持锁阶段。
 			if shadowObs != nil {
 				shadowObservations = append(shadowObservations, *shadowObs)
 			}
 			continue
+		}
+
+		// legacy miss：rescue 模式在此边界（fallback 写入之前）尝试 profile 救回。
+		// 仅 rescue 模式调用 matcher；shadow/primary 仍只在 post-lock 做 shadow 计算与记录。
+		// matcher 在 writeGate.RLock 保护范围内执行，但不在 executeWrite 闭包中（不持有
+		// SQLite 写事务），且每个 legacy miss 最多调用一次。
+		if shadowObs != nil && s.identityRescueEnabled() {
+			rescued, rescueErr := s.attemptIdentityRescue(component, shadowObs, affectedPersonIDs, affectedPhotoIDs)
+			if rescueErr != nil {
+				return nil, nil, nil, rescueErr
+			}
+			if rescued {
+				// rescue 已挂靠并记录 observation（含 ProfileComputed=true、RescueApplied=true）。
+				shadowObservations = append(shadowObservations, *shadowObs)
+				continue
+			}
+			// rescue 拒绝/不可用 → profile 已填入 observation，继续 legacy fallback。
 		}
 
 		if len(component) >= peopleMinClusterFaces && componentPhotoCount(component) >= 2 {
@@ -2830,13 +2901,24 @@ type legacyIdentityResult struct {
 	Score    float64
 }
 
-// identityShadowObservation 是一个组件在 legacy 决策完成、写入成功后待 shadow 计算的
-// 最小快照。Component 为深拷贝，仅保留 shadow 所需字段，不包含图片/缩略图路径、人名
+// identityShadowObservation 是一个组件在 legacy 决策完成、写入成功后待 shadow/rescue
+// 处理的最小快照。Component 为深拷贝，仅保留 shadow 所需字段，不包含图片/缩略图路径、人名
 // 等无关字段；observation 必须保存 legacy 写入前的组件状态（PersonID 等可能被 legacy
 // 修改，shadow matcher 看到的是 legacy attach 前的来源人物）。
+//
+// Task 12 扩展：rescue miss 边界会在持锁阶段同步计算 profile 并填入 ProfileComputed/
+// Profile/ProfileElapsed；post-lock 处理看到 ProfileComputed=true 时直接复用，不再重复
+// 调用 matcher（每个 legacy miss 最多调用一次 matcher）。RescueApplied=true 表示 rescue
+// 已把组件挂靠到 Profile.PersonID；DirtyPersonID 记录待标记 dirty 的目标人物。
 type identityShadowObservation struct {
 	Component []*model.Face
 	Legacy    legacyIdentityResult
+
+	ProfileComputed bool
+	Profile         IdentityProfileMatch
+	ProfileElapsed  time.Duration
+	RescueApplied   bool
+	DirtyPersonID   uint
 }
 
 // cloneComponentForShadow 深拷贝组件中 shadow matcher 实际读取的字段：ID、PhotoID、
@@ -2881,48 +2963,61 @@ func (s *peopleService) identityShadowEnabled() bool {
 	return s.identityProfileMatchFn != nil && s.identityProfileMode != "" && s.identityProfileMode != model.PeopleIdentityModeLegacy
 }
 
+// identityRescueEnabled 报告当前是否启用 rescue（保守救回 legacy miss）。仅 rescue 模式
+// 且注入了 match hook 时为 true。禁止用 mode != legacy 作为 rescue 判断，否则 shadow /
+// primary 会提前改变人物归属。Task 12 新增。
+func (s *peopleService) identityRescueEnabled() bool {
+	return s.identityProfileMode == model.PeopleIdentityModeRescue && s.identityProfileMatchFn != nil
+}
+
 // processIdentityShadowObservations 在释放 writeGate.RLock 后对每个 legacy 决策计算画像
 // 结果并记录遥测。画像结果永远不被应用：legacy miss/profile hit、legacy/profile 分歧均只
 // 记录。matcher / ANN / Repository / telemetry 的任何失败或 panic 都不影响聚类，仅构造
 // 不可用结果供遥测。
 //
+// Task 12：observation 若已 ProfileComputed=true（rescue 模式在持锁阶段计算过），则直接
+// 复用其 Profile / ProfileElapsed，不再调用 matcher（每个 legacy miss 最多一次 matcher）。
+// rescue 成功的 observation（RescueApplied=true）以 rescue_applied 全量记录遥测；rescue
+// 拒绝的 observation 复用 profile 结果按现有 classify 规则记录（profile_blocked /
+// legacy_miss_profile_miss 等），不重复匹配。
+//
 // legacy 模式直接返回（不遍历 observations、不调用 matcher/recorder、不访问画像
-// Repository）。rescue/primary 模式在 Task 12 前同样按 shadow-only 处理：计算并记录，
-// 不应用结果，Mode 保留实际配置值。
+// Repository）。primary 模式仍按 shadow-only 处理：计算并记录，不应用结果。
 func (s *peopleService) processIdentityShadowObservations(observations []identityShadowObservation) {
 	if s.identityProfileMode == "" || s.identityProfileMode == model.PeopleIdentityModeLegacy {
 		return
 	}
 	matchFn := s.identityProfileMatchFn
-	if matchFn == nil {
-		return
-	}
 	recordFn := s.identityDecisionRecordFn
 
 	for _, obs := range observations {
 		faceIDs := faceIDs(obs.Component)
-		start := time.Now()
 
-		// matcher 失败/panic/非法结果一律 fail closed：构造不可用结果供遥测，保留 legacy。
-		profile := IdentityProfileMatch{Available: false, BlockReason: blockProfileUnavailable}
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					// 仅记录脱敏字段，不输出 Face ID / Person ID / embedding / 路径。
-					logger.Warnf("identity profile shadow matcher panic: mode=%s err_category=%T elapsed=%s",
-						s.identityProfileMode, r, time.Since(start).Round(time.Millisecond))
+		// rescue 已在持锁阶段计算 profile；shadow/primary 在 post-lock 计算。
+		profile := obs.Profile
+		elapsed := obs.ProfileElapsed
+		if !obs.ProfileComputed {
+			start := time.Now()
+			// matcher 失败/panic/非法结果一律 fail closed：构造不可用结果供遥测，保留 legacy。
+			profile = IdentityProfileMatch{Available: false, BlockReason: blockProfileUnavailable}
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						// 仅记录脱敏字段，不输出 Face ID / Person ID / embedding / 路径。
+						logger.Warnf("identity profile shadow matcher panic: mode=%s err_category=%T elapsed=%s",
+							s.identityProfileMode, r, time.Since(start).Round(time.Millisecond))
+					}
+				}()
+				res := matchFn(obs.Component)
+				// 非法分数（NaN/Inf）视为不可用，避免污染遥测。
+				if mathIsNaNOrInf(res.Score) || mathIsNaNOrInf(res.SecondScore) || mathIsNaNOrInf(res.Margin) {
+					profile = IdentityProfileMatch{Available: false, BlockReason: blockProfileUnavailable}
+					return
 				}
+				profile = res
 			}()
-			res := matchFn(obs.Component)
-			// 非法分数（NaN/Inf）视为不可用，避免污染遥测。
-			if mathIsNaNOrInf(res.Score) || mathIsNaNOrInf(res.SecondScore) || mathIsNaNOrInf(res.Margin) {
-				profile = IdentityProfileMatch{Available: false, BlockReason: blockProfileUnavailable}
-				return
-			}
-			profile = res
-		}()
-
-		elapsed := time.Since(start)
+			elapsed = time.Since(start)
+		}
 
 		if recordFn != nil {
 			func() {
@@ -2944,10 +3039,124 @@ func (s *peopleService) processIdentityShadowObservations(observations []identit
 					// IndexGeneration 暂为 0：Task 14 接入真实 ANN snapshot generation；
 					// 不在本任务临时发明第二套 generation。
 					IndexGeneration: 0,
+					RescueApplied:    obs.RescueApplied,
 				})
 			}()
 		}
+
+		// rescue 成功：在释放 writeGate 之后 best-effort 标记目标人物画像 dirty。
+		// MarkDirty 失败只记录脱敏 warning，不回滚 rescue assignment、不返回错误。
+		if obs.RescueApplied && obs.DirtyPersonID != 0 {
+			s.markRescuedPersonDirty(obs.DirtyPersonID)
+		}
 	}
+}
+
+// attemptIdentityRescue 在 legacy miss 边界尝试用 profile matcher 保守救回。仅 rescue 模式
+// 调用（调用方已校验 identityRescueEnabled）。在 writeGate.RLock 保护范围内但不在
+// executeWrite 闭包中执行 matcher（不持有 SQLite 写事务）。每个 legacy miss 最多调用一次。
+//
+// 接受条件（Task 8 matcher 已负责全部精度护栏，本方法只做最外层守卫）：
+//
+//	profile.Available && profile.PersonID != 0 && profile.AutoEligible &&
+//	profile.BlockReason == "" && isFinite(profile.Score) && profile.Score >= 0
+//
+// 成功：把整个组件一次性挂靠到 profile.PersonID（复用 attachComponentToPerson），更新
+// affectedPersonIDs / affectedPhotoIDs，在 observation 上标记 RescueApplied=true 并填入
+// ProfileComputed=true + Profile + ProfileElapsed + DirtyPersonID，返回 rescued=true。
+// rescue 写入失败：返回 rescueErr，调用方将其作为聚类错误返回，不继续创建新人物。
+// matcher/画像不可用或护栏拒绝：填入 observation（ProfileComputed=true）后返回 rescued=false，
+// 调用方继续 legacy fallback。
+func (s *peopleService) attemptIdentityRescue(
+	component []*model.Face,
+	obs *identityShadowObservation,
+	affectedPersonIDs map[uint]struct{},
+	affectedPhotoIDs map[uint]struct{},
+) (rescued bool, rescueErr error) {
+	matchFn := s.identityProfileMatchFn
+	if matchFn == nil {
+		return false, nil
+	}
+
+	start := time.Now()
+	profile := IdentityProfileMatch{Available: false, BlockReason: blockProfileUnavailable}
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Warnf("identity profile rescue matcher panic: mode=%s err_category=%T elapsed=%s",
+					s.identityProfileMode, r, time.Since(start).Round(time.Millisecond))
+			}
+		}()
+		res := matchFn(component)
+		if mathIsNaNOrInf(res.Score) || mathIsNaNOrInf(res.SecondScore) || mathIsNaNOrInf(res.Margin) {
+			profile = IdentityProfileMatch{Available: false, BlockReason: blockProfileUnavailable}
+			return
+		}
+		profile = res
+	}()
+	elapsed := time.Since(start)
+
+	// 无论是否救回，profile 都已计算，post-lock 阶段复用，不重复调用 matcher。
+	obs.ProfileComputed = true
+	obs.Profile = profile
+	obs.ProfileElapsed = elapsed
+
+	// 最外层接受守卫（精度护栏由 Task 8 matcher 的 AutoEligible 判定完成）。
+	if !profile.Available || profile.PersonID == 0 || !profile.AutoEligible ||
+		profile.BlockReason != "" || mathIsNaNOrInf(profile.Score) || profile.Score < 0 {
+		return false, nil
+	}
+
+	// 防御：目标人物在写入前已消失 → 不救回，回退 legacy fallback。
+	target, err := s.personRepo.GetByID(profile.PersonID)
+	if err != nil {
+		logger.Warnf("identity profile rescue: lookup target person failed: err_category=%T", err)
+		return false, nil
+	}
+	if target == nil {
+		return false, nil
+	}
+
+	// 整个组件一次性挂靠到目标人物，复用 legacy attach 的写入路径。
+	prevIDs, err := s.attachComponentToPerson(component, profile.PersonID, profile.Score)
+	if err != nil {
+		// rescue 数据库挂靠写入失败：返回聚类错误，不允许随后创建新人物，否则可能产生
+		// 部分写入或重复归属。
+		return false, err
+	}
+
+	affectedPersonIDs[profile.PersonID] = struct{}{}
+	for _, pid := range prevIDs {
+		affectedPersonIDs[pid] = struct{}{}
+	}
+	for _, photoID := range facePhotoIDs(component) {
+		affectedPhotoIDs[photoID] = struct{}{}
+	}
+
+	obs.RescueApplied = true
+	obs.DirtyPersonID = profile.PersonID
+	return true, nil
+}
+
+// markRescuedPersonDirty 在 rescue 成功后（释放 writeGate 之后）best-effort 标记目标人物
+// 画像 dirty。Person ID 去重并过滤 0；不在聚类写事务内调用；不同步调用 builder；不等待中心
+// 重建；MarkDirty 失败只记录脱敏 warning，不回滚 rescue assignment。Task 12 第九节。
+func (s *peopleService) markRescuedPersonDirty(personID uint) {
+	markDirtyFn := s.identityProfileMarkDirtyFn
+	if markDirtyFn == nil || personID == 0 {
+		return
+	}
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Warnf("identity profile rescue mark dirty panic: err_category=%T", r)
+			}
+		}()
+		if err := markDirtyFn([]uint{personID}, "rescue_attach"); err != nil {
+			// 仅记录脱敏字段，不输出 Person ID 或错误堆栈；不回滚 rescue。
+			logger.Warnf("identity profile rescue mark dirty failed: err_category=%T", err)
+		}
+	}()
 }
 
 // mathIsNaNOrInf 报告分数是否为 NaN 或 Inf（matcher / 遥测非法结果守卫）。

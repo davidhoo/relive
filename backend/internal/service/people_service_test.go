@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"image/color"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -3107,6 +3108,15 @@ type shadowHookRecorder struct {
 	lastInput  *IdentityTelemetryInput
 	inputs     []IdentityTelemetryInput
 	matchFn    func(component []*model.Face) IdentityProfileMatch
+
+	// markDirtyCalls 捕获 rescue 注入的 markDirtyFn 调用，用于断言只标记目标人物。
+	markDirtyMu    sync.Mutex
+	markDirtyCalls []markDirtyCall
+}
+
+type markDirtyCall struct {
+	personIDs []uint
+	reason    string
 }
 
 func (r *shadowHookRecorder) match(component []*model.Face) IdentityProfileMatch {
@@ -3137,6 +3147,22 @@ func (r *shadowHookRecorder) matchCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.matchCalls
+}
+
+// markDirty 作为 SetIdentityProfileDirtyHook 注入的回调，记录调用参数供断言。
+func (r *shadowHookRecorder) markDirty(personIDs []uint, reason string) error {
+	r.markDirtyMu.Lock()
+	defer r.markDirtyMu.Unlock()
+	cp := make([]uint, len(personIDs))
+	copy(cp, personIDs)
+	r.markDirtyCalls = append(r.markDirtyCalls, markDirtyCall{personIDs: cp, reason: reason})
+	return nil
+}
+
+func (r *shadowHookRecorder) markDirtyCount() int {
+	r.markDirtyMu.Lock()
+	defer r.markDirtyMu.Unlock()
+	return len(r.markDirtyCalls)
 }
 
 // seedShadowClusterDataset 在测试 DB 中植入一个已分配人物（原型脸）与一张待聚类脸，
@@ -3362,34 +3388,561 @@ func TestPeopleService_IdentityProfileShadow_RetryCountIsolated(t *testing.T) {
 	assert.Equal(t, results[0], results[1], "profile result must be identical regardless of RetryCount")
 }
 
-// TestPeopleService_IdentityProfileShadow_RescueModeShadowOnly 验证 Task 11 阶段配置为
-// rescue 仍只 shadow 记录，不改变 legacy 归属。
-func TestPeopleService_IdentityProfileShadow_RescueModeShadowOnly(t *testing.T) {
-	for _, mode := range []string{model.PeopleIdentityModeRescue, model.PeopleIdentityModePrimary} {
-		t.Run(mode, func(t *testing.T) {
-			svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
-			_, _, faceRepo, person, pendingPhoto := seedShadowClusterDataset(t, db)
+// TestPeopleService_IdentityProfileShadow_PrimaryModeShadowOnly 验证 Task 12 阶段配置为
+// primary 仍只 shadow 记录，不改变 legacy 归属（primary 尚未实现应用）。
+func TestPeopleService_IdentityProfileShadow_PrimaryModeShadowOnly(t *testing.T) {
+	mode := model.PeopleIdentityModePrimary
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	_, _, faceRepo, person, pendingPhoto := seedShadowClusterDataset(t, db)
+
+	rec := &shadowHookRecorder{
+		matchFn: func(component []*model.Face) IdentityProfileMatch {
+			return IdentityProfileMatch{Available: true, PersonID: 999, Score: 0.99, AutoEligible: true}
+		},
+	}
+	svc.SetIdentityProfileShadowHooks(mode, rec.match, rec.record)
+
+	res := svc.clusteringCoordinator.submitBackground()
+	require.NoError(t, res.err)
+
+	pendingFaces, err := faceRepo.ListByPhotoID(pendingPhoto.ID)
+	require.NoError(t, err)
+	require.Len(t, pendingFaces, 1)
+	require.NotNil(t, pendingFaces[0].PersonID)
+	assert.Equal(t, person.ID, *pendingFaces[0].PersonID, "%s mode must not apply profile before its task", mode)
+
+	require.Equal(t, 1, rec.recordCount())
+	in := rec.lastInput
+	require.NotNil(t, in)
+	assert.Equal(t, mode, in.Mode, "Mode must preserve actual config value")
+}
+
+// ---- Task 12: 身份画像 rescue 模式 ----
+
+// seedRescueDataset 在测试 DB 中植入一个已分配人物（原型脸，embedding=A）与一张待聚类脸
+// （embedding=B，正交），使 legacy 不会 attach → 进入 legacy miss 边界。再额外植入一个
+// 已分配的 rescue 目标人物（embedding=A，与待聚类脸不同），用于 rescue matcher 命中。
+// 实际 rescue 命中通过注入 fake matchFn 返回目标人物 ID 实现，无需真实 ANN。
+func seedRescueDataset(t *testing.T, db *gorm.DB) (repository.PhotoRepository, repository.PersonRepository, repository.FaceRepository, *model.Person, *model.Photo) {
+	t.Helper()
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+
+	// 已分配的原型人物（legacy 原型池）。
+	protoPhoto := &model.Photo{FilePath: "/photos/rescue-proto.jpg", FileName: "rescue-proto.jpg", FileSize: 1, FileHash: "rescue-proto", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	pendingPhoto := &model.Photo{FilePath: "/photos/rescue-pending.jpg", FileName: "rescue-pending.jpg", FileSize: 1, FileHash: "rescue-pending", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(protoPhoto))
+	require.NoError(t, photoRepo.Create(pendingPhoto))
+
+	person := &model.Person{Category: model.PersonCategoryFamily}
+	require.NoError(t, personRepo.Create(person))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID:  protoPhoto.ID,
+		PersonID: &person.ID,
+		BBoxX:    0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence:    0.95,
+		QualityScore:  0.80,
+		Embedding:     encodeEmbedding(t, []float32{1, 0, 0}),
+		ClusterStatus: model.FaceClusterStatusAssigned,
+		ClusterScore:  0.95,
+	}))
+	require.NoError(t, personRepo.RefreshStats(person.ID))
+
+	// 待聚类脸：embedding 与原型正交 → legacy 不 attach（score≈0 < threshold）。
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID: pendingPhoto.ID,
+		BBoxX:   0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence:    0.99,
+		QualityScore:  0.80,
+		Embedding:     encodeEmbedding(t, []float32{0, 1, 0}),
+		ClusterStatus: model.FaceClusterStatusPending,
+	}))
+	return photoRepo, personRepo, faceRepo, person, pendingPhoto
+}
+
+// newRescueSvc 为 rescue 测试构造一个独立内存 DB 上的 peopleService，避免共享内存 DB
+// 让多个 rescue 测试互相看到对方的 photos/faces（file_path 唯一约束冲突 / 旧 pending 脸
+// 被新一轮聚类消费）。复用 openIsolatedPeopleTestDB + newPeopleServiceOnDB。
+func newRescueSvc(t *testing.T) (*peopleService, *gorm.DB) {
+	t.Helper()
+	db := openIsolatedPeopleTestDB(t)
+	svc := newPeopleServiceOnDB(t, db)
+	return svc, db
+}
+
+// TestPeopleService_IdentityProfileRescue_LegacyMissProfileEligibleAttaches 验证 rescue 模式
+// 下 legacy miss + profile eligible 时组件被挂靠到画像找到的已有人物，retry_count 归零，
+// cluster_score 使用 profile.Score，affected 与正常 attach 一致，不创建新人物，目标人物被
+// 标记 dirty，写入 rescue_applied 遥测。
+func TestPeopleService_IdentityProfileRescue_LegacyMissProfileEligibleAttaches(t *testing.T) {
+	svc, db := newRescueSvc(t)
+	photoRepo, personRepo, faceRepo, _, pendingPhoto := seedRescueDataset(t, db)
+
+	// 额外植入 rescue 目标人物。
+	targetPhoto := &model.Photo{FilePath: "/photos/rescue-target.jpg", FileName: "rescue-target.jpg", FileSize: 1, FileHash: "rescue-target", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(targetPhoto))
+	target := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(target))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID:  targetPhoto.ID,
+		PersonID: &target.ID,
+		BBoxX:    0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence:    0.95,
+		QualityScore:  0.80,
+		Embedding:     encodeEmbedding(t, []float32{1, 0, 0}),
+		ClusterStatus: model.FaceClusterStatusAssigned,
+		ClusterScore:  0.95,
+	}))
+	require.NoError(t, personRepo.RefreshStats(target.ID))
+
+	rec := &shadowHookRecorder{
+		matchFn: func(component []*model.Face) IdentityProfileMatch {
+			return IdentityProfileMatch{Available: true, PersonID: target.ID, Score: 0.92, AutoEligible: true}
+		},
+	}
+	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeRescue, rec.match, rec.record)
+	svc.SetIdentityProfileDirtyHook(rec.markDirty)
+
+	res := svc.clusteringCoordinator.submitBackground()
+	require.NoError(t, res.err)
+
+	// 待聚类脸应被 rescue 挂靠到 target，retry_count=0，cluster_score=profile.Score。
+	faces, err := faceRepo.ListByPhotoID(pendingPhoto.ID)
+	require.NoError(t, err)
+	require.Len(t, faces, 1)
+	require.NotNil(t, faces[0].PersonID)
+	assert.Equal(t, target.ID, *faces[0].PersonID, "rescue must attach to profile target person")
+	assert.Equal(t, model.FaceClusterStatusAssigned, faces[0].ClusterStatus)
+	assert.InDelta(t, 0.92, faces[0].ClusterScore, 1e-9, "rescue must use profile.Score")
+	assert.Equal(t, 0, faces[0].RetryCount, "rescue must reset retry_count")
+
+	// matcher 在持锁阶段调用一次（post-lock 复用，不重复）。
+	assert.Equal(t, 1, rec.matchCount(), "rescue must call matcher exactly once per legacy miss")
+	require.Equal(t, 1, rec.recordCount(), "rescue must record telemetry once")
+	in := rec.lastInput
+	require.NotNil(t, in)
+	assert.Equal(t, model.PeopleIdentityModeRescue, in.Mode)
+	assert.True(t, in.RescueApplied, "telemetry must mark rescue_applied")
+	assert.False(t, in.LegacyMatched, "rescue only triggers on legacy miss")
+	assert.Equal(t, uint(0), in.LegacyTargetPersonID)
+	assert.Equal(t, target.ID, in.Profile.PersonID)
+
+	// 目标人物被标记 dirty，仅一次，仅目标。
+	require.Equal(t, 1, rec.markDirtyCount())
+	md := rec.markDirtyCalls[0]
+	assert.Equal(t, []uint{target.ID}, md.personIDs)
+	assert.Equal(t, "rescue_attach", md.reason)
+
+	// 未创建新人物（只有 seed 的 person + target 两人）。
+	persons, err := personRepo.ListAll()
+	require.NoError(t, err)
+	assert.Len(t, persons, 2, "rescue must not create a new person")
+}
+
+// TestPeopleService_IdentityProfileRescue_LegacyHitNotOverridden 验证 legacy 成功结果永远不会
+// 被 profile 覆盖：legacy target=A、profile target=B 且 AutoEligible=true 时仍保留 A，不移动
+// 到 B，不标记 B dirty，不记录 rescue_applied，记录 disagree 遥测。
+func TestPeopleService_IdentityProfileRescue_LegacyHitNotOverridden(t *testing.T) {
+	svc, db := newRescueSvc(t)
+	_, personRepo, faceRepo, person, pendingPhoto := seedShadowClusterDataset(t, db)
+
+	// 另一个人物 B，profile 偏好它。
+	otherPhoto := &model.Photo{FilePath: "/photos/rescue-other.jpg", FileName: "rescue-other.jpg", FileSize: 1, FileHash: "rescue-other", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	photoRepo := repository.NewPhotoRepository(db)
+	require.NoError(t, photoRepo.Create(otherPhoto))
+	other := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(other))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID: otherPhoto.ID, PersonID: &other.ID,
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence: 0.95, QualityScore: 0.8,
+		Embedding:     encodeEmbedding(t, []float32{1, 0, 0}),
+		ClusterStatus: model.FaceClusterStatusAssigned, ClusterScore: 0.95,
+	}))
+	require.NoError(t, personRepo.RefreshStats(other.ID))
+
+	rec := &shadowHookRecorder{
+		matchFn: func(component []*model.Face) IdentityProfileMatch {
+			return IdentityProfileMatch{Available: true, PersonID: other.ID, Score: 0.99, AutoEligible: true}
+		},
+	}
+	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeRescue, rec.match, rec.record)
+	svc.SetIdentityProfileDirtyHook(rec.markDirty)
+
+	res := svc.clusteringCoordinator.submitBackground()
+	require.NoError(t, res.err)
+
+	// legacy attach 仍照常指向 person（A），profile（B）被忽略。
+	faces, err := faceRepo.ListByPhotoID(pendingPhoto.ID)
+	require.NoError(t, err)
+	require.Len(t, faces, 1)
+	require.NotNil(t, faces[0].PersonID)
+	assert.Equal(t, person.ID, *faces[0].PersonID, "legacy attach must never be overridden by profile")
+
+	// legacy 命中 → 不调用 rescue 决策；matcher 只在 post-lock shadow 调用一次。
+	assert.Equal(t, 1, rec.matchCount())
+	require.Equal(t, 1, rec.recordCount())
+	in := rec.lastInput
+	require.NotNil(t, in)
+	assert.False(t, in.RescueApplied, "legacy hit must not produce rescue_applied")
+	assert.True(t, in.LegacyMatched)
+
+	// 不标记任何 dirty（rescue 未应用）。
+	assert.Equal(t, 0, rec.markDirtyCount(), "must not mark dirty when legacy hit wins")
+}
+
+// TestPeopleService_IdentityProfileRescue_GuardRejectionFallsBack 验证 profile 各护栏拒绝时
+// rescue 不应用，继续 legacy fallback。覆盖低于阈值/margin/中心/P10/unstable/cannot-link/
+// 共现/unavailable/PersonID=0/NaN/Inf 等场景。
+func TestPeopleService_IdentityProfileRescue_GuardRejectionFallsBack(t *testing.T) {
+	cases := []struct {
+		name    string
+		profile IdentityProfileMatch
+	}{
+		{"score_below_threshold", IdentityProfileMatch{Available: true, PersonID: 1, Score: 0.3, AutoEligible: false, BlockReason: blockScoreBelowThreshold}},
+		{"margin_too_small", IdentityProfileMatch{Available: true, PersonID: 1, Score: 0.9, AutoEligible: false, BlockReason: blockMarginTooSmall}},
+		{"below_center_boundary", IdentityProfileMatch{Available: true, PersonID: 1, Score: 0.9, AutoEligible: false, BlockReason: blockBelowCenterBoundary}},
+		{"unstable_center", IdentityProfileMatch{Available: true, PersonID: 1, Score: 0.9, AutoEligible: false, BlockReason: blockUnstableCenter}},
+		{"cannot_link", IdentityProfileMatch{Available: true, PersonID: 1, Score: 0.9, AutoEligible: false, BlockReason: blockCannotLink}},
+		{"same_photo_cooccurrence", IdentityProfileMatch{Available: true, PersonID: 1, Score: 0.9, AutoEligible: false, BlockReason: blockSamePhotoCooccurrence}},
+		{"negative_evidence_unavailable", IdentityProfileMatch{Available: true, PersonID: 1, Score: 0.9, AutoEligible: false, BlockReason: blockNegativeEvidenceUnavail}},
+		{"index_unavailable", IdentityProfileMatch{Available: false, BlockReason: blockIndexUnavailable}},
+		{"profile_unavailable", IdentityProfileMatch{Available: false, BlockReason: blockProfileUnavailable}},
+		{"invalid_query", IdentityProfileMatch{Available: false, BlockReason: blockInvalidQuery}},
+		{"person_id_zero", IdentityProfileMatch{Available: true, PersonID: 0, AutoEligible: true}},
+		{"auto_eligible_false", IdentityProfileMatch{Available: true, PersonID: 1, Score: 0.9, AutoEligible: false, BlockReason: blockScoreBelowThreshold}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, db := newRescueSvc(t)
+			_, _, faceRepo, _, pendingPhoto := seedRescueDataset(t, db)
 
 			rec := &shadowHookRecorder{
 				matchFn: func(component []*model.Face) IdentityProfileMatch {
-					return IdentityProfileMatch{Available: true, PersonID: 999, Score: 0.99, AutoEligible: true}
+					return tc.profile
 				},
 			}
-			svc.SetIdentityProfileShadowHooks(mode, rec.match, rec.record)
+			svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeRescue, rec.match, rec.record)
+			svc.SetIdentityProfileDirtyHook(rec.markDirty)
 
 			res := svc.clusteringCoordinator.submitBackground()
-			require.NoError(t, res.err)
+			require.NoError(t, res.err, "guard rejection must fall back to legacy, not error")
 
-			pendingFaces, err := faceRepo.ListByPhotoID(pendingPhoto.ID)
+			// rescue 未应用 → 脸仍为 pending（单脸不达建人物条件，未到 singleFaceFallbackRetries）。
+			faces, err := faceRepo.ListByPhotoID(pendingPhoto.ID)
 			require.NoError(t, err)
-			require.Len(t, pendingFaces, 1)
-			require.NotNil(t, pendingFaces[0].PersonID)
-			assert.Equal(t, person.ID, *pendingFaces[0].PersonID, "%s mode must not apply profile before Task 12", mode)
+			require.Len(t, faces, 1)
+			assert.Equal(t, model.FaceClusterStatusPending, faces[0].ClusterStatus,
+				"guard rejection must fall back to legacy pending")
+			assert.Nil(t, faces[0].PersonID, "rescue guard rejection must not attach")
 
+			// 未标记 dirty。
+			assert.Equal(t, 0, rec.markDirtyCount(), "guard rejection must not mark dirty")
+			// 遥测仍记录一次（不 rescue_applied）。
 			require.Equal(t, 1, rec.recordCount())
 			in := rec.lastInput
 			require.NotNil(t, in)
-			assert.Equal(t, mode, in.Mode, "Mode must preserve actual config value")
+			assert.False(t, in.RescueApplied)
+			// matcher 只调用一次（持锁阶段），post-lock 复用。
+			assert.Equal(t, 1, rec.matchCount())
 		})
 	}
+}
+
+// TestPeopleService_IdentityProfileRescue_NaNInfScoreRejected 验证 profile 返回 NaN/Inf 分数
+// 时 rescue 拒绝，回退 legacy。
+func TestPeopleService_IdentityProfileRescue_NaNInfScoreRejected(t *testing.T) {
+	for i, score := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		svc, db := newRescueSvc(t)
+		photoRepo := repository.NewPhotoRepository(db)
+		faceRepo := repository.NewFaceRepository(db)
+		// 每轮独立数据集（共享内存 DB，file_path 需唯一）。
+		tag := fmt.Sprintf("naninf-%d", i)
+		pendingPhoto := &model.Photo{FilePath: "/photos/" + tag + ".jpg", FileName: tag + ".jpg", FileSize: 1, FileHash: tag, Width: 100, Height: 100, Status: model.PhotoStatusActive}
+		require.NoError(t, photoRepo.Create(pendingPhoto))
+		require.NoError(t, faceRepo.Create(&model.Face{
+			PhotoID: pendingPhoto.ID,
+			BBoxX:   0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+			Confidence:    0.99,
+			QualityScore:  0.80,
+			Embedding:     encodeEmbedding(t, []float32{0, 1, 0}),
+			ClusterStatus: model.FaceClusterStatusPending,
+		}))
+
+		rec := &shadowHookRecorder{
+			matchFn: func(component []*model.Face) IdentityProfileMatch {
+				return IdentityProfileMatch{Available: true, PersonID: 1, Score: score, AutoEligible: true}
+			},
+		}
+		svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeRescue, rec.match, rec.record)
+		svc.SetIdentityProfileDirtyHook(rec.markDirty)
+
+		res := svc.clusteringCoordinator.submitBackground()
+		require.NoError(t, res.err)
+
+		faces, err := faceRepo.ListByPhotoID(pendingPhoto.ID)
+		require.NoError(t, err)
+		require.Len(t, faces, 1)
+		assert.Equal(t, model.FaceClusterStatusPending, faces[0].ClusterStatus, "NaN/Inf score must not rescue")
+		assert.Equal(t, 0, rec.markDirtyCount())
+	}
+}
+
+// TestPeopleService_IdentityProfileRescue_MatcherPanicFallsBack 验证 matcher panic 时 rescue
+// 安全回退 legacy，不中止聚类，记录 unavailable 遥测。
+func TestPeopleService_IdentityProfileRescue_MatcherPanicFallsBack(t *testing.T) {
+	svc, db := newRescueSvc(t)
+	_, _, faceRepo, _, pendingPhoto := seedRescueDataset(t, db)
+
+	rec := &shadowHookRecorder{
+		matchFn: func(component []*model.Face) IdentityProfileMatch {
+			panic("simulated rescue matcher panic")
+		},
+	}
+	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeRescue, rec.match, rec.record)
+	svc.SetIdentityProfileDirtyHook(rec.markDirty)
+
+	res := svc.clusteringCoordinator.submitBackground()
+	require.NoError(t, res.err, "matcher panic must not abort clustering")
+
+	faces, err := faceRepo.ListByPhotoID(pendingPhoto.ID)
+	require.NoError(t, err)
+	require.Len(t, faces, 1)
+	assert.Equal(t, model.FaceClusterStatusPending, faces[0].ClusterStatus, "panic must fall back to legacy")
+	assert.Equal(t, 0, rec.markDirtyCount())
+	require.Equal(t, 1, rec.recordCount())
+	in := rec.lastInput
+	require.NotNil(t, in)
+	assert.False(t, in.RescueApplied)
+	assert.False(t, in.Profile.Available, "panic must yield unavailable profile")
+}
+
+// TestPeopleService_IdentityProfileRescue_TargetPersonVanishedFallsBack 验证 profile 命中的
+// 目标人物在写入前消失时 rescue 不应用，回退 legacy。
+func TestPeopleService_IdentityProfileRescue_TargetPersonVanishedFallsBack(t *testing.T) {
+	svc, db := newRescueSvc(t)
+	_, _, faceRepo, _, pendingPhoto := seedRescueDataset(t, db)
+
+	rec := &shadowHookRecorder{
+		matchFn: func(component []*model.Face) IdentityProfileMatch {
+			// 指向一个不存在的人物 ID。
+			return IdentityProfileMatch{Available: true, PersonID: 999999, Score: 0.92, AutoEligible: true}
+		},
+	}
+	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeRescue, rec.match, rec.record)
+	svc.SetIdentityProfileDirtyHook(rec.markDirty)
+
+	res := svc.clusteringCoordinator.submitBackground()
+	require.NoError(t, res.err)
+
+	faces, err := faceRepo.ListByPhotoID(pendingPhoto.ID)
+	require.NoError(t, err)
+	require.Len(t, faces, 1)
+	assert.Equal(t, model.FaceClusterStatusPending, faces[0].ClusterStatus, "vanished target must fall back to legacy")
+	assert.Equal(t, 0, rec.markDirtyCount())
+}
+
+// TestPeopleService_IdentityProfileRescue_MarkDirtyFailureDoesNotRollback 验证 MarkDirty 失败
+// 不回滚 rescue assignment：脸仍挂靠到目标人物，聚类不返回错误。
+func TestPeopleService_IdentityProfileRescue_MarkDirtyFailureDoesNotRollback(t *testing.T) {
+	svc, db := newRescueSvc(t)
+	photoRepo, personRepo, faceRepo, _, pendingPhoto := seedRescueDataset(t, db)
+
+	targetPhoto := &model.Photo{FilePath: "/photos/rescue-md-target.jpg", FileName: "rescue-md-target.jpg", FileSize: 1, FileHash: "rescue-md-target", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(targetPhoto))
+	target := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(target))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID: targetPhoto.ID, PersonID: &target.ID,
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence: 0.95, QualityScore: 0.8,
+		Embedding:     encodeEmbedding(t, []float32{1, 0, 0}),
+		ClusterStatus: model.FaceClusterStatusAssigned, ClusterScore: 0.95,
+	}))
+	require.NoError(t, personRepo.RefreshStats(target.ID))
+
+	rec := &shadowHookRecorder{
+		matchFn: func(component []*model.Face) IdentityProfileMatch {
+			return IdentityProfileMatch{Available: true, PersonID: target.ID, Score: 0.92, AutoEligible: true}
+		},
+	}
+	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeRescue, rec.match, rec.record)
+	// MarkDirty 注入总是失败的 hook。
+	svc.SetIdentityProfileDirtyHook(func(ids []uint, reason string) error {
+		return fmt.Errorf("simulated mark dirty failure")
+	})
+
+	res := svc.clusteringCoordinator.submitBackground()
+	require.NoError(t, res.err, "MarkDirty failure must not return clustering error")
+
+	faces, err := faceRepo.ListByPhotoID(pendingPhoto.ID)
+	require.NoError(t, err)
+	require.Len(t, faces, 1)
+	require.NotNil(t, faces[0].PersonID)
+	assert.Equal(t, target.ID, *faces[0].PersonID, "rescue assignment must survive MarkDirty failure")
+	assert.Equal(t, model.FaceClusterStatusAssigned, faces[0].ClusterStatus)
+}
+
+// TestPeopleService_IdentityProfileRescue_ShadowModeDoesNotRescue 验证 shadow 模式即使 profile
+// eligible 也不应用 rescue（rescue 仅 rescue 模式触发）。
+func TestPeopleService_IdentityProfileRescue_ShadowModeDoesNotRescue(t *testing.T) {
+	svc, db := newRescueSvc(t)
+	_, _, faceRepo, _, pendingPhoto := seedRescueDataset(t, db)
+
+	rec := &shadowHookRecorder{
+		matchFn: func(component []*model.Face) IdentityProfileMatch {
+			// shadow 模式下即使 eligible 也不应 rescue。
+			return IdentityProfileMatch{Available: true, PersonID: 1, Score: 0.99, AutoEligible: true}
+		},
+	}
+	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeShadow, rec.match, rec.record)
+	svc.SetIdentityProfileDirtyHook(rec.markDirty)
+
+	res := svc.clusteringCoordinator.submitBackground()
+	require.NoError(t, res.err)
+
+	faces, err := faceRepo.ListByPhotoID(pendingPhoto.ID)
+	require.NoError(t, err)
+	require.Len(t, faces, 1)
+	assert.Equal(t, model.FaceClusterStatusPending, faces[0].ClusterStatus, "shadow mode must not rescue")
+	assert.Equal(t, 0, rec.markDirtyCount())
+	require.Equal(t, 1, rec.recordCount())
+	in := rec.lastInput
+	require.NotNil(t, in)
+	assert.False(t, in.RescueApplied, "shadow mode must not mark rescue_applied")
+}
+
+// TestPeopleService_IdentityProfileRescue_LegacyModeDoesNotRescue 验证 legacy 模式不调用
+// matcher、不 rescue、不记录遥测。
+func TestPeopleService_IdentityProfileRescue_LegacyModeDoesNotRescue(t *testing.T) {
+	svc, db := newRescueSvc(t)
+	_, _, faceRepo, _, pendingPhoto := seedRescueDataset(t, db)
+
+	rec := &shadowHookRecorder{
+		matchFn: func(component []*model.Face) IdentityProfileMatch {
+			return IdentityProfileMatch{Available: true, PersonID: 1, Score: 0.99, AutoEligible: true}
+		},
+	}
+	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeLegacy, rec.match, rec.record)
+	svc.SetIdentityProfileDirtyHook(rec.markDirty)
+
+	res := svc.clusteringCoordinator.submitBackground()
+	require.NoError(t, res.err)
+
+	faces, err := faceRepo.ListByPhotoID(pendingPhoto.ID)
+	require.NoError(t, err)
+	require.Len(t, faces, 1)
+	assert.Equal(t, model.FaceClusterStatusPending, faces[0].ClusterStatus, "legacy mode must not rescue")
+	assert.Equal(t, 0, rec.matchCount(), "legacy mode must not call matcher")
+	assert.Equal(t, 0, rec.recordCount(), "legacy mode must not record telemetry")
+	assert.Equal(t, 0, rec.markDirtyCount(), "legacy mode must not mark dirty")
+}
+
+// TestPeopleService_IdentityProfileRescue_MatcherCalledOncePerMiss 验证每个 legacy miss 最多
+// 调用一次 matcher：rescue 在持锁阶段计算 profile 后填入 observation，post-lock 阶段复用，
+// 不重复调用。
+func TestPeopleService_IdentityProfileRescue_MatcherCalledOncePerMiss(t *testing.T) {
+	svc, db := newRescueSvc(t)
+	photoRepo, personRepo, faceRepo, _, _ := seedRescueDataset(t, db)
+
+	// 再植入一个 rescue 目标人物 + 第二张 pending 正交脸，使本批次有两个 legacy miss 组件。
+	targetPhoto := &model.Photo{FilePath: "/photos/rescue-once-target.jpg", FileName: "rescue-once-target.jpg", FileSize: 1, FileHash: "rescue-once-target", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(targetPhoto))
+	target := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(target))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID: targetPhoto.ID, PersonID: &target.ID,
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence: 0.95, QualityScore: 0.8,
+		Embedding:     encodeEmbedding(t, []float32{1, 0, 0}),
+		ClusterStatus: model.FaceClusterStatusAssigned, ClusterScore: 0.95,
+	}))
+	require.NoError(t, personRepo.RefreshStats(target.ID))
+
+	secondPendingPhoto := &model.Photo{FilePath: "/photos/rescue-once-pending2.jpg", FileName: "rescue-once-pending2.jpg", FileSize: 1, FileHash: "rescue-once-pending2", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(secondPendingPhoto))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID: secondPendingPhoto.ID,
+		BBoxX:   0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence:    0.99,
+		QualityScore:  0.80,
+		Embedding:     encodeEmbedding(t, []float32{0, 0, 1}),
+		ClusterStatus: model.FaceClusterStatusPending,
+	}))
+
+	rec := &shadowHookRecorder{
+		matchFn: func(component []*model.Face) IdentityProfileMatch {
+			// 两个 miss 组件都返回 eligible，挂靠到同一 target。
+			return IdentityProfileMatch{Available: true, PersonID: target.ID, Score: 0.92, AutoEligible: true}
+		},
+	}
+	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeRescue, rec.match, rec.record)
+	svc.SetIdentityProfileDirtyHook(rec.markDirty)
+
+	res := svc.clusteringCoordinator.submitBackground()
+	require.NoError(t, res.err)
+
+	// 两个组件各调用一次 matcher（持锁阶段），post-lock 复用不重复。
+	assert.Equal(t, 2, rec.matchCount(), "matcher must be called once per legacy miss")
+	// 两条遥测记录。
+	assert.Equal(t, 2, rec.recordCount())
+	// 所有 rescue 都标记 target dirty（可能多次，但只针对 target）。
+	for _, md := range rec.markDirtyCalls {
+		assert.Equal(t, []uint{target.ID}, md.personIDs)
+		assert.Equal(t, "rescue_attach", md.reason)
+	}
+}
+
+// TestPeopleService_IdentityProfileRescue_TelemetryFields 验证 rescue_applied 遥测包含正确
+// 字段（Mode/LegacyMatched=false/LegacyTarget=0/ProfileBest=target/Score/Margin/CenterIDs），
+// 不含 embedding/路径/人名。
+func TestPeopleService_IdentityProfileRescue_TelemetryFields(t *testing.T) {
+	svc, db := newRescueSvc(t)
+	photoRepo, personRepo, faceRepo, _, pendingPhoto := seedRescueDataset(t, db)
+
+	targetPhoto := &model.Photo{FilePath: "/photos/rescue-tel-target.jpg", FileName: "rescue-tel-target.jpg", FileSize: 1, FileHash: "rescue-tel-target", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(targetPhoto))
+	target := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(target))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID: targetPhoto.ID, PersonID: &target.ID,
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence: 0.95, QualityScore: 0.8,
+		Embedding:     encodeEmbedding(t, []float32{1, 0, 0}),
+		ClusterStatus: model.FaceClusterStatusAssigned, ClusterScore: 0.95,
+	}))
+	require.NoError(t, personRepo.RefreshStats(target.ID))
+
+	rec := &shadowHookRecorder{
+		matchFn: func(component []*model.Face) IdentityProfileMatch {
+			return IdentityProfileMatch{
+				Available: true, PersonID: target.ID, Score: 0.92,
+				SecondPersonID: 5, SecondScore: 0.80, Margin: 0.12,
+				CenterIDs: []uint{7, 3}, AutoEligible: true,
+			}
+		},
+	}
+	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeRescue, rec.match, rec.record)
+	svc.SetIdentityProfileDirtyHook(rec.markDirty)
+
+	res := svc.clusteringCoordinator.submitBackground()
+	require.NoError(t, res.err)
+
+	require.Equal(t, 1, rec.recordCount())
+	in := rec.lastInput
+	require.NotNil(t, in)
+	assert.Equal(t, model.PeopleIdentityModeRescue, in.Mode)
+	assert.False(t, in.LegacyMatched)
+	assert.Equal(t, uint(0), in.LegacyTargetPersonID)
+	assert.Equal(t, target.ID, in.Profile.PersonID)
+	assert.InDelta(t, 0.92, in.Profile.Score, 1e-9)
+	assert.InDelta(t, 0.12, in.Profile.Margin, 1e-9)
+	assert.Equal(t, identityProfileAlgorithmVersion, in.AlgorithmVersion)
+
+	// 确保脸已 rescue。
+	faces, err := faceRepo.ListByPhotoID(pendingPhoto.ID)
+	require.NoError(t, err)
+	require.Len(t, faces, 1)
+	assert.Equal(t, target.ID, *faces[0].PersonID)
 }

@@ -152,6 +152,11 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 				matcher.Match,
 				telemetry.Record,
 			)
+			// Task 12：rescue 成功后标记目标人物画像 dirty（仅非 legacy 模式注入；
+			// shadow/primary 不会产生 RescueApplied=true，注入也无害）。
+			peopleSvc.(*peopleService).SetIdentityProfileDirtyHook(
+				identityProfileService.MarkDirty,
+			)
 		}
 	}
 
