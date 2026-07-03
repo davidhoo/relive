@@ -104,6 +104,9 @@ type identityProfileServiceStub struct {
 }
 
 func (s *identityProfileServiceStub) MarkDirty([]uint, string) error { return nil }
+func (s *identityProfileServiceStub) Invalidate(IdentityProfileInvalidation) error {
+	return nil
+}
 func (s *identityProfileServiceStub) RunBackgroundSlice() error {
 	s.runCalls.Add(1)
 	return nil

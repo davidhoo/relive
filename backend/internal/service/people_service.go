@@ -149,10 +149,17 @@ type peopleService struct {
 	//
 	// hooks 在 service 装配时一次性注入（早于任何聚类批次），读取发生在 coordinator
 	// worker goroutine 内，与 setANNCandidateFn 同样无需额外同步。
-	identityProfileMode      string
-	identityProfileMatchFn   identityProfileMatchFn
-	identityDecisionRecordFn identityDecisionRecordFn
+	identityProfileMode        string
+	identityProfileMatchFn     identityProfileMatchFn
+	identityDecisionRecordFn   identityDecisionRecordFn
 	identityProfileMarkDirtyFn identityProfileMarkDirtyFn
+
+	// identityProfileInvalidateFn 是 Task 13 统一身份画像失效 hook。所有改变 faces.person_id、
+	// 人物成员组成或人物存续状态的业务路径都通过 invalidateIdentityProfiles 触发该 hook，
+	// 禁止直接、零散地操作画像 Repository。生产由 service.go 注入
+	// identityProfileService.Invalidate（仅非 legacy 模式）；legacy 模式下 hook 为 nil，
+	// invalidateIdentityProfiles 直接返回不产生任何开销。
+	identityProfileInvalidateFn identityProfileInvalidateFn
 
 	// In-memory cache for GetStats() to avoid scanning 78K+ faces rows on every poll.
 	statsCache   *model.PeopleStatsResponse
@@ -486,6 +493,9 @@ func (s *peopleService) ResetAllPeople() (int, error) {
 	defer s.endForegroundMutation()
 
 	var count int
+	// coreCommitted 标记 ResetAll 核心事务是否已提交。一旦为 true，即便后续重新入队失败，
+	// 也必须触发画像全量失效——所有人物身份成员已清空。Reset 事务失败则不失效。
+	coreCommitted := false
 	err := s.executeWrite(func() error {
 		return s.db.Transaction(func(tx *gorm.DB) error {
 			if err := tx.Exec("DELETE FROM faces").Error; err != nil {
@@ -518,6 +528,14 @@ func (s *peopleService) ResetAllPeople() (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	coreCommitted = true
+
+	// 核心事务已提交：清空全部身份画像派生数据 + ANN 不可用。不全量加载人物 ID。
+	// 后续重新入队失败不恢复旧画像，也不影响此失效。
+	s.invalidateIdentityProfiles(IdentityProfileInvalidation{
+		ResetAll: true,
+		Reason:   "reset_all_people",
+	})
 
 	enqueued := 0
 	err = s.photoRepo.IterateActivePhotos([]string{"id", "status"}, 500, func(photos []*model.Photo) error {
@@ -534,6 +552,7 @@ func (s *peopleService) ResetAllPeople() (int, error) {
 		return count, fmt.Errorf("iterate photos for re-enqueue: %w", err)
 	}
 	logger.Infof("people reset complete: %d photos reset, %d jobs enqueued", count, enqueued)
+	_ = coreCommitted
 	return enqueued, nil
 }
 
@@ -556,7 +575,7 @@ func (s *peopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint)
 
 	var affectedPhotoIDs []uint
 	// coreCommitted 标记核心人物合并是否已落库。一旦为 true，即便后续缓存同步或
-	// 照片分类刷新失败，也必须记录反馈事件——身份事实已经发生。
+	// 照片分类刷新失败，也必须记录反馈事件与触发画像失效——身份事实已经发生。
 	coreCommitted := false
 	defer func() {
 		if coreCommitted {
@@ -569,6 +588,13 @@ func (s *peopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint)
 				peopleManualAlgorithmVersion,
 				nil, // 手工合并不现场计算相似度，无可用快照
 			))
+			// 统一画像失效：target dirty、sources deleted。source 去重并过滤 target/0。
+			// 异步 MergePeople 复用同一路径（executeMergeJob 调用本方法）。
+			s.invalidateIdentityProfiles(IdentityProfileInvalidation{
+				DirtyPersonIDs:   []uint{targetPersonID},
+				DeletedPersonIDs: sourcePersonIDs,
+				Reason:           "people_merged",
+			})
 		}
 	}()
 	if err = s.executeWrite(func() error {
@@ -747,7 +773,7 @@ func (s *peopleService) SplitPerson(faceIDs []uint) (*model.Person, *model.Reclu
 
 	newPerson := &model.Person{Category: sourcePerson.Category}
 	// coreCommitted 标记新人物创建与人脸重指派已落库；后续 syncPersonState/分类刷新
-	// 失败仍需记录 person_split 事件，因为身份事实已发生。
+	// 失败仍需记录 person_split 事件与触发画像失效，因为身份事实已发生。
 	coreCommitted := false
 	defer func() {
 		if coreCommitted {
@@ -759,6 +785,12 @@ func (s *peopleService) SplitPerson(faceIDs []uint) (*model.Person, *model.Reclu
 				peopleManualAlgorithmVersion,
 				nil,
 			))
+			// 统一画像失效：原人物失去成员后重建，新人物获得成员后构建画像。
+			// 新旧人物 ID 去重（若 newPerson.ID 未分配则为 0，由清洗过滤）。
+			s.invalidateIdentityProfiles(IdentityProfileInvalidation{
+				DirtyPersonIDs: []uint{sourcePersonID, newPerson.ID},
+				Reason:         "person_split",
+			})
 		}
 	}()
 	if err := s.executeWrite(func() error {
@@ -818,7 +850,7 @@ func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) (*model.R
 
 	// 若所有人脸本来就属于目标人物，没有实际变化，则不产生事件。
 	willEmitEvent := len(movedFaceIDs) > 0
-	// coreCommitted 标记人脸重指派已落库；后续 syncPersonState/分类刷新失败仍记录。
+	// coreCommitted 标记人脸重指派已落库；后续 syncPersonState/分类刷新失败仍记录事件与失效。
 	coreCommitted := false
 	defer func() {
 		if coreCommitted && willEmitEvent {
@@ -830,6 +862,12 @@ func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) (*model.R
 				peopleManualAlgorithmVersion,
 				nil,
 			))
+			// 统一画像失效：实际失去人脸的 source 与获得人脸的 target。
+			// source 与 target 去重（target 不在 sourcePersonIDs 中，因 willEmitEvent 已过滤）。
+			s.invalidateIdentityProfiles(IdentityProfileInvalidation{
+				DirtyPersonIDs: append(mapKeys(sourcePersonIDs), targetPersonID),
+				Reason:         "faces_moved",
+			})
 		}
 	}()
 	if err := s.executeWrite(func() error {
@@ -921,6 +959,9 @@ func (s *peopleService) DissolvePerson(personID uint) (int, error) {
 	// 事件保留原 personID——反馈表中的人物 ID 不依赖强外键存活，人物随后删除也不影响。
 	var releasedFaceIDs []uint
 	coreCommitted := false
+	// personDeleted 标记人物记录是否已被删除，决定画像失效用 deleted 还是 dirty。
+	// 若 Face 已释放但 Person 删除失败：人物仍存在但成员已变化，应标记 dirty。
+	personDeleted := false
 	defer func() {
 		if coreCommitted {
 			s.recordFeedbackEvent(buildFeedbackEvent(
@@ -931,6 +972,18 @@ func (s *peopleService) DissolvePerson(personID uint) (int, error) {
 				peopleManualAlgorithmVersion,
 				nil,
 			))
+			// 统一画像失效：人物删除成功 → deleted；Face 已释放但 Person 删除失败 → dirty。
+			if personDeleted {
+				s.invalidateIdentityProfiles(IdentityProfileInvalidation{
+					DeletedPersonIDs: []uint{personID},
+					Reason:           "person_dissolved",
+				})
+			} else {
+				s.invalidateIdentityProfiles(IdentityProfileInvalidation{
+					DirtyPersonIDs: []uint{personID},
+					Reason:         "person_dissolved",
+				})
+			}
 		}
 	}()
 
@@ -978,6 +1031,7 @@ func (s *peopleService) DissolvePerson(personID uint) (int, error) {
 	if err := s.personRepo.Delete(personID); err != nil {
 		return 0, fmt.Errorf("delete person %d: %w", personID, err)
 	}
+	personDeleted = true
 
 	// 异步触发重聚类，让 pending 人脸被重新分配
 	s.scheduleFeedbackRecluster()
@@ -1376,6 +1430,20 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 		return err
 	}
 	previousPersonIDs := personIDsFromFaces(existingFaces)
+	// detectionReplaced 标记检测结果替换事务是否已提交。一旦为 true，即便后续 syncPersonState
+	// 失败也必须触发画像失效——旧 Face 已被删除，曾归属人物的中心可能已过期。
+	// 包括 0 张人脸的路径：删除旧 Face 仍使原人物失去成员。
+	detectionReplaced := false
+	defer func() {
+		if detectionReplaced && len(previousPersonIDs) > 0 {
+			// 只标记旧 Face 曾归属的人物；新 Face 尚未归属人物，不标记目标。
+			// 同一人物在照片中有多张脸只标记一次（personIDsFromFaces 已去重）。
+			s.invalidateIdentityProfiles(IdentityProfileInvalidation{
+				DirtyPersonIDs: previousPersonIDs,
+				Reason:         "detection_replaced_faces",
+			})
+		}
+	}()
 
 	if len(result.Faces) == 0 {
 		s.appendBackgroundLog(fmt.Sprintf("照片 #%d 无人脸", photo.ID))
@@ -1403,6 +1471,7 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 			return err
 		}
 		s.writeGate.RUnlock()
+		detectionReplaced = true
 		for _, pid := range previousPersonIDs {
 			if err := s.syncPersonState(pid); err != nil {
 				logger.Warnf("sync person %d state after zero-faces detection: %v", pid, err)
@@ -1486,6 +1555,7 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 		return err
 	}
 	s.writeGate.RUnlock()
+	detectionReplaced = true
 
 	// Rate limiting: only cluster every N tasks to prevent CPU overload
 	// This is especially important for NAS devices with limited CPU resources
@@ -1712,6 +1782,16 @@ func (s *peopleService) PostMergeCleanup(targetPersonID uint, sourcePersonIDs []
 		}
 	}
 	s.scheduleFeedbackRecluster()
+
+	// Task 13：合并建议 Apply 通过与手工合并相同的统一失效路径触发画像失效，
+	// 避免 merge suggestion service 直接操作画像 Repository，且只产生一次失效。
+	// 核心合并已由 ApplySuggestion 提交（调用本方法时 coreCommitted=true），
+	// 后续建议状态/分类刷新失败仍执行失效。target dirty、candidates deleted。
+	s.invalidateIdentityProfiles(IdentityProfileInvalidation{
+		DirtyPersonIDs:   []uint{targetPersonID},
+		DeletedPersonIDs: sourcePersonIDs,
+		Reason:           "people_merged",
+	})
 }
 
 func (s *peopleService) setMergeSuggestionDirtyHook(hook func(string) error) {
@@ -1762,6 +1842,46 @@ func (s *peopleService) SetIdentityProfileShadowHooks(mode string, matchFn ident
 // 仅目标人物被标记。nil 时 rescue 挂靠仍成功，仅跳过 dirty 标记。
 func (s *peopleService) SetIdentityProfileDirtyHook(fn identityProfileMarkDirtyFn) {
 	s.identityProfileMarkDirtyFn = fn
+}
+
+// identityProfileInvalidateFn 是 Task 13 统一身份画像失效 hook 的可注入抽象。生产由
+// service.go 注入 identityProfileService.Invalidate（仅非 legacy 模式）；测试可注入 fake
+// 断言调用次数与输入。hook 必须 fail-closed：失败返回错误但不得回滚已提交的业务身份变更。
+type identityProfileInvalidateFn func(invalidation IdentityProfileInvalidation) error
+
+// SetIdentityProfileInvalidationHook 注入 Task 13 统一身份画像失效 hook。生产由 service.go
+// 装配时调用一次（仅非 legacy 模式）；测试可注入 fake 断言调用次数。nil 时
+// invalidateIdentityProfiles 直接返回不产生任何开销。
+func (s *peopleService) SetIdentityProfileInvalidationHook(fn identityProfileInvalidateFn) {
+	s.identityProfileInvalidateFn = fn
+}
+
+// invalidateIdentityProfiles 是所有业务路径触发身份画像失效的统一入口。
+//
+// 行为约定（Task 13 第四节）：
+//   - nil hook 安全返回（legacy 模式或未注入）。
+//   - legacy 模式不调用（hook 在 legacy 模式下应为 nil，但即便非 nil 也由 hook 自身 no-op）。
+//   - recover hook panic，当前业务操作不崩溃，ANN 已完成的同步失效保持。
+//   - 失败只记录脱敏 warning（reason、ID 数量、错误类别，不含具体 ID/路径/人名），不重试。
+//   - 不在现有人物事务内调用（调用方必须在 executeWrite 回调之外、核心写入提交之后调用）。
+//   - 不因失效失败伪装业务回滚：已提交的身份事实保持不变。
+func (s *peopleService) invalidateIdentityProfiles(invalidation IdentityProfileInvalidation) {
+	fn := s.identityProfileInvalidateFn
+	if fn == nil {
+		return
+	}
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Warnf("identity profile invalidate panic: reason=%s dirty=%d deleted=%d reset=%v err_category=%T",
+					invalidation.Reason, len(invalidation.DirtyPersonIDs), len(invalidation.DeletedPersonIDs), invalidation.ResetAll, r)
+			}
+		}()
+		if err := fn(invalidation); err != nil {
+			logger.Warnf("identity profile invalidate failed: reason=%s dirty=%d deleted=%d reset=%v err_category=%T",
+				invalidation.Reason, len(invalidation.DirtyPersonIDs), len(invalidation.DeletedPersonIDs), invalidation.ResetAll, err)
+		}
+	}()
 }
 
 // SetFeedbackEventRepo 注入反馈事件仓库。生产环境由 service.go 装配时注入；
@@ -2604,6 +2724,9 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, []identitySh
 			}
 			if rescued {
 				// rescue 已挂靠并记录 observation（含 ProfileComputed=true、RescueApplied=true）。
+				// Task 13：rescue 目标人物的画像 dirty 由统一批次路径（runClusterBatch 末尾的
+				// clustering_assignment 失效）完成，rescue 不再通过独立 hook 重复 MarkDirty。
+				// rescue_attach reason 仅保留为 observation/遥测原因。
 				shadowObservations = append(shadowObservations, *shadowObs)
 				continue
 			}
@@ -2674,6 +2797,9 @@ func (s *peopleService) triggerRecluster() model.ReclusterResult {
 	}
 
 	result := model.ReclusterResult{}
+	// reclusterChangedPersons 收集所有轮次中实际发生 PersonID 变化的来源与目标人物，
+	// 多轮合并去重后在末尾批量触发一次统一画像失效（recluster_assignment）。
+	reclusterChangedPersons := make(map[uint]struct{})
 
 	for iter := 0; iter < maxIter; iter++ {
 		candidates, err := s.faceRepo.ListLowConfidence(threshold, maxIter)
@@ -2730,7 +2856,8 @@ func (s *peopleService) triggerRecluster() model.ReclusterResult {
 			_ = s.syncPersonState(oldPID)
 		}
 
-		// Count actual reassignments
+		// Count actual reassignments and collect changed persons (source + target).
+		// 仅修改 score/retry/状态但 PersonID 未变化时不纳入失效（不重建身份中心）。
 		reassigned := 0
 		for _, fid := range candidateIDs {
 			updated, err := s.faceRepo.GetByID(fid)
@@ -2744,6 +2871,12 @@ func (s *peopleService) triggerRecluster() model.ReclusterResult {
 			}
 			if oldPID != newPID {
 				reassigned++
+				if oldPID != 0 {
+					reclusterChangedPersons[oldPID] = struct{}{}
+				}
+				if newPID != 0 {
+					reclusterChangedPersons[newPID] = struct{}{}
+				}
 			}
 		}
 		result.Reassigned += reassigned
@@ -2775,6 +2908,18 @@ func (s *peopleService) triggerRecluster() model.ReclusterResult {
 
 	if result.Reassigned > 0 || len(extraPersonIDs) > 0 || len(extraPhotoIDs) > 0 {
 		s.markMergeSuggestionsDirty("trigger_recluster")
+	}
+
+	// Task 13：若 recluster 实际改变了 Face 的 PersonID，对实际发生归属变化的人物批量
+	// 触发统一画像失效（recluster_assignment）。extra 聚类批次若也改变了人物成员，
+	// 其 affectedPersonIDs 已由 runClusterBatch 末尾的 clustering_assignment 失效处理，
+	// 这里只补充 recluster 本轮直接重指派的人物（不在 extra 聚类批次内）。
+	// 多轮去重合并后一次失效；失败迭代不会把未发生的 PersonID 纳入（仅 reassigned>0 时收集）。
+	if len(reclusterChangedPersons) > 0 {
+		s.invalidateIdentityProfiles(IdentityProfileInvalidation{
+			DirtyPersonIDs: mapKeys(reclusterChangedPersons),
+			Reason:         "recluster_assignment",
+		})
 	}
 
 	return result
@@ -3039,16 +3184,14 @@ func (s *peopleService) processIdentityShadowObservations(observations []identit
 					// IndexGeneration 暂为 0：Task 14 接入真实 ANN snapshot generation；
 					// 不在本任务临时发明第二套 generation。
 					IndexGeneration: 0,
-					RescueApplied:    obs.RescueApplied,
+					RescueApplied:   obs.RescueApplied,
 				})
 			}()
 		}
 
-		// rescue 成功：在释放 writeGate 之后 best-effort 标记目标人物画像 dirty。
-		// MarkDirty 失败只记录脱敏 warning，不回滚 rescue assignment、不返回错误。
-		if obs.RescueApplied && obs.DirtyPersonID != 0 {
-			s.markRescuedPersonDirty(obs.DirtyPersonID)
-		}
+		// Task 13：rescue 目标人物的画像持久化失效已由统一批次路径（runClusterBatch 末尾的
+		// clustering_assignment 失效）完成，rescue 不再通过独立 hook 重复 MarkDirty，
+		// 避免重复写入。rescue_attach 仅保留为 observation/遥测原因。
 	}
 }
 
@@ -3136,27 +3279,6 @@ func (s *peopleService) attemptIdentityRescue(
 	obs.RescueApplied = true
 	obs.DirtyPersonID = profile.PersonID
 	return true, nil
-}
-
-// markRescuedPersonDirty 在 rescue 成功后（释放 writeGate 之后）best-effort 标记目标人物
-// 画像 dirty。Person ID 去重并过滤 0；不在聚类写事务内调用；不同步调用 builder；不等待中心
-// 重建；MarkDirty 失败只记录脱敏 warning，不回滚 rescue assignment。Task 12 第九节。
-func (s *peopleService) markRescuedPersonDirty(personID uint) {
-	markDirtyFn := s.identityProfileMarkDirtyFn
-	if markDirtyFn == nil || personID == 0 {
-		return
-	}
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Warnf("identity profile rescue mark dirty panic: err_category=%T", r)
-			}
-		}()
-		if err := markDirtyFn([]uint{personID}, "rescue_attach"); err != nil {
-			// 仅记录脱敏字段，不输出 Person ID 或错误堆栈；不回滚 rescue。
-			logger.Warnf("identity profile rescue mark dirty failed: err_category=%T", err)
-		}
-	}()
 }
 
 // mathIsNaNOrInf 报告分数是否为 NaN 或 Inf（matcher / 遥测非法结果守卫）。

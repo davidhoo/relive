@@ -30,6 +30,94 @@ const (
 // identityProfileErrMsgMax 限制写入数据库的错误信息长度，避免异常大内容落库。
 const identityProfileErrMsgMax = 500
 
+// IdentityProfileInvalidation 是一次身份画像统一失效请求。所有改变 faces.person_id、
+// 人物成员组成或人物存续状态的业务路径都应构造该请求并通过 PeopleService 统一 hook 触发，
+// 禁止直接、零散地操作画像 Repository。
+//
+// dirty 与 deleted 同时存在某人物时以 deleted 为准；ResetAll=true 时忽略 ID 列表，
+// 清空全部派生画像。Reason 必须取自稳定白名单，不接受任意业务文本。
+type IdentityProfileInvalidation struct {
+	DirtyPersonIDs   []uint
+	DeletedPersonIDs []uint
+	ResetAll         bool
+	Reason           string
+}
+
+// Invalidate 在非 legacy 模式下原子应用一次身份画像失效：
+//
+//  1. 清洗请求（去重/过滤 0/升序，deleted 优先，reason 白名单校验）。
+//  2. dirty/deleted 人物立即调用 ANN InvalidatePerson；ResetAll 时调用 ANN InvalidateAll。
+//  3. 通过 WriteQueue 调用 Repository 原子失效。
+//  4. 成功后请求 ANN 后台重建。
+//
+// ANN 先失效实现 fail closed：即使 SQLite 写入暂时失败，当前进程也不能继续返回陈旧人物中心。
+// 持久化失败时 ANN 保持不可用或对应人物失效，不恢复旧中心，不回滚已成功的业务身份变更。
+// 返回持久化错误供调用方记录脱敏日志（不重试、不伪装业务回滚）。
+//
+// legacy 模式直接返回 nil：不访问 Repository、不操作 ANN、不分配大型 map、不请求重建、不产生日志。
+func (s *personIdentityProfileService) Invalidate(invalidation IdentityProfileInvalidation) error {
+	if s.mode == identityProfileModeLegacy {
+		return nil
+	}
+	reason := identityProfileInvalidationReason(invalidation.Reason)
+	req := repository.IdentityProfileInvalidationRequest{
+		DirtyPersonIDs:   invalidation.DirtyPersonIDs,
+		DeletedPersonIDs: invalidation.DeletedPersonIDs,
+		ResetAll:         invalidation.ResetAll,
+		Reason:           reason,
+	}
+	normalized, needApply := normalizeInvalidationRequestForService(req)
+	if !needApply {
+		return nil
+	}
+
+	// 1. ANN 先失效（fail closed）。
+	if s.ann != nil {
+		if normalized.ResetAll {
+			s.ann.InvalidateAll()
+		} else {
+			for _, pid := range normalized.DeletedPersonIDs {
+				s.ann.InvalidatePerson(pid)
+			}
+			for _, pid := range normalized.DirtyPersonIDs {
+				s.ann.InvalidatePerson(pid)
+			}
+		}
+	}
+
+	// 2. 通过 WriteQueue 串行化 Repository 原子失效。
+	writeErr := s.executeWrite(func() error {
+		return s.repo.ApplyInvalidation(normalized)
+	})
+	if writeErr != nil {
+		// 持久化失败：ANN 保持失效/不可用，不恢复旧中心，记录脱敏错误类别（不含 ID）。
+		logger.Warnf("identity profile invalidate failed: reason=%s dirty=%d deleted=%d reset=%v err_category=%T",
+			normalized.Reason, len(normalized.DirtyPersonIDs), len(normalized.DeletedPersonIDs), normalized.ResetAll, writeErr)
+		return writeErr
+	}
+
+	// 3. 成功后请求 ANN 后台重建（下一个后台切片从数据库活动中心重建）。
+	if s.ann != nil {
+		s.ann.RequestRebuild()
+	}
+	return nil
+}
+
+// identityProfileInvalidationReason 将任意 reason 字符串映射为 repository 稳定枚举。
+// 未知/空 reason 返回空枚举（不落库 dirty_reason，但仍执行失效）。
+func identityProfileInvalidationReason(reason string) repository.IdentityProfileInvalidationReason {
+	r := repository.IdentityProfileInvalidationReason(reason)
+	return r
+}
+
+// normalizeInvalidationRequestForService 复用 repository 的清洗逻辑，使 service 与
+// repository 看到一致的请求语义。返回清洗后的请求与是否需要执行。
+func normalizeInvalidationRequestForService(req repository.IdentityProfileInvalidationRequest) (repository.IdentityProfileInvalidationRequest, bool) {
+	// 复用 repository 包的清洗（去重/过滤 0/升序/deleted 优先/reason 白名单/截断）。
+	// 通过构造等价请求调用同一函数，避免逻辑重复。
+	return repository.NormalizeInvalidationRequest(req)
+}
+
 // identityProfileDefaultEmbeddingModel 是未配置 ML 端点时使用的占位 embedding 标识。
 // embedding model 标识用于检测 embedding 来源变化并触发 backfill 重置。
 const identityProfileDefaultEmbeddingModel = "default"
@@ -50,6 +138,9 @@ type PersonIdentityProfileService interface {
 	// MarkDirty 标记人物画像待重建。legacy 直接返回不写库；其他模式去重后调用 Repository。
 	// 本任务只实现服务能力，暂不接入人物操作。
 	MarkDirty(personIDs []uint, reason string) error
+	// Invalidate 统一应用一次身份画像失效。legacy 直接返回不写库不操作 ANN。
+	// 非 legacy 模式按 fail-closed 顺序执行（ANN 先失效 → Repository 原子失效 → 请求重建）。
+	Invalidate(invalidation IdentityProfileInvalidation) error
 	// RunBackgroundSlice 执行一次有界后台工作：推进一小批 backfill 游标 + 构建最多一个
 	// dirty 人物画像 + 清理其过期 generation。受 cooldown 约束，禁止内部 time.Sleep。
 	RunBackgroundSlice() error

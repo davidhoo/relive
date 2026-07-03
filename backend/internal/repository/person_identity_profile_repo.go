@@ -3,6 +3,7 @@ package repository
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
@@ -13,6 +14,50 @@ import (
 // ErrPersonNotFound 由 ReplaceGeneration 在目标人物不存在时返回，
 // 供上层服务区分"人物中途被删除"（应清理派生画像、不计为系统失败）与其他写入错误。
 var ErrPersonNotFound = errors.New("person not found")
+
+// IdentityProfileInvalidationReason 是身份画像失效的稳定原因标识。
+// 不接受任意业务文本作为 reason，避免脏数据落库与隐私泄漏。
+type IdentityProfileInvalidationReason string
+
+const (
+	InvalidationReasonDetectionReplaced IdentityProfileInvalidationReason = "detection_replaced_faces"
+	InvalidationReasonPeopleMerged      IdentityProfileInvalidationReason = "people_merged"
+	InvalidationReasonPersonSplit       IdentityProfileInvalidationReason = "person_split"
+	InvalidationReasonFacesMoved        IdentityProfileInvalidationReason = "faces_moved"
+	InvalidationReasonPersonDissolved   IdentityProfileInvalidationReason = "person_dissolved"
+	InvalidationReasonClusteringAssign  IdentityProfileInvalidationReason = "clustering_assignment"
+	InvalidationReasonReclusterAssign   IdentityProfileInvalidationReason = "recluster_assignment"
+	InvalidationReasonRescueAttach      IdentityProfileInvalidationReason = "rescue_attach"
+	InvalidationReasonResetAllPeople    IdentityProfileInvalidationReason = "reset_all_people"
+)
+
+// invalidationReasons 是允许落库 dirty_reason 的稳定原因白名单。
+var invalidationReasons = map[IdentityProfileInvalidationReason]struct{}{
+	InvalidationReasonDetectionReplaced: {},
+	InvalidationReasonPeopleMerged:      {},
+	InvalidationReasonPersonSplit:       {},
+	InvalidationReasonFacesMoved:        {},
+	InvalidationReasonPersonDissolved:   {},
+	InvalidationReasonClusteringAssign:  {},
+	InvalidationReasonReclusterAssign:   {},
+	InvalidationReasonRescueAttach:      {},
+	InvalidationReasonResetAllPeople:    {},
+}
+
+// dirtyReasonMaxLen 限制写入 dirty_reason 列的长度，与 model 中 varchar(50) 对齐留余量。
+const dirtyReasonMaxLen = 50
+
+// IdentityProfileInvalidationRequest 描述一次身份画像统一失效请求。
+//
+// 与 service 层的 IdentityProfileInvalidation 一一对应，但定义在 repository 包以避免
+// service → repository 的类型依赖倒置。dirty 与 deleted 同时存在某人物时以 deleted 为准；
+// ResetAll=true 时忽略 ID 列表，清空全部派生画像。
+type IdentityProfileInvalidationRequest struct {
+	DirtyPersonIDs   []uint
+	DeletedPersonIDs []uint
+	ResetAll         bool
+	Reason           IdentityProfileInvalidationReason
+}
 
 // PersonIdentityProfileRepository 持久化人物身份画像的派生数据：profile 元数据、
 // 各 generation 的 centers 与 members。所有写操作以 SQLite 事务保证原子性；
@@ -54,6 +99,13 @@ type PersonIdentityProfileRepository interface {
 	// DeleteByPersonIDs 按人物 ID 删除画像派生数据（members → centers → profiles），
 	// 不触碰 faces / people。
 	DeleteByPersonIDs(personIDs []uint) error
+	// ApplyInvalidation 在单个短事务内原子应用一次身份画像失效：
+	// 先删除 DeletedPersonIDs 的 member/center/profile，再把剩余 DirtyPersonIDs 标记 dirty
+	// （保留其 active generation 数据供诊断）；ResetAll=true 时忽略 ID 列表，按
+	// members → centers → profiles 顺序清空全部派生画像。空请求零 SQL。
+	// dirty/deleted ID 去重、过滤 0、升序，且 dirty 与 deleted 同时存在时以 deleted 为准。
+	// 不修改 legacy faces.person_id。
+	ApplyInvalidation(req IdentityProfileInvalidationRequest) error
 	// InvalidateDeletedPeople 清理 people 表中已不存在人物的画像派生数据，
 	// 使用子查询定位，不做全量内存扫描。
 	InvalidateDeletedPeople() error
@@ -361,6 +413,156 @@ func (r *personIdentityProfileRepository) InvalidateDeletedPeople() error {
 			return err
 		}
 		return tx.Where(orphan).Delete(&model.PersonIdentityProfile{}).Error
+	})
+}
+
+// NormalizeInvalidationRequest 清洗失效请求：去重、过滤 0、升序；deleted 优先于 dirty；
+// 校验 reason 白名单并截断长度；ResetAll 时清空 ID 列表。返回清洗后的请求与是否需要执行。
+// 任何空请求（无 dirty/deleted 且非 ResetAll）返回 needApply=false，调用方据此零 SQL。
+// 导出供 service 层复用同一清洗语义，避免逻辑重复。
+func NormalizeInvalidationRequest(req IdentityProfileInvalidationRequest) (IdentityProfileInvalidationRequest, bool) {
+	return normalizeInvalidationReq(req)
+}
+
+// normalizeInvalidationReq 清洗失效请求：去重、过滤 0、升序；deleted 优先于 dirty；
+// 校验 reason 白名单并截断长度；ResetAll 时清空 ID 列表。返回清洗后的请求与是否需要执行。
+// 任何空请求（无 dirty/deleted 且非 ResetAll）返回 needApply=false，调用方据此零 SQL。
+func normalizeInvalidationReq(req IdentityProfileInvalidationRequest) (IdentityProfileInvalidationRequest, bool) {
+	if req.ResetAll {
+		// ResetAll 忽略 ID 列表；reason 取白名单兜底（reset_all_people）。
+		reason := req.Reason
+		if _, ok := invalidationReasons[reason]; !ok {
+			reason = InvalidationReasonResetAllPeople
+		}
+		return IdentityProfileInvalidationRequest{ResetAll: true, Reason: reason}, true
+	}
+
+	deletedSet := make(map[uint]struct{}, len(req.DeletedPersonIDs))
+	for _, id := range req.DeletedPersonIDs {
+		if id == 0 {
+			continue
+		}
+		deletedSet[id] = struct{}{}
+	}
+
+	dirtySet := make(map[uint]struct{}, len(req.DirtyPersonIDs))
+	for _, id := range req.DirtyPersonIDs {
+		if id == 0 {
+			continue
+		}
+		if _, deleted := deletedSet[id]; deleted {
+			continue // deleted 优先
+		}
+		dirtySet[id] = struct{}{}
+	}
+
+	dirty := make([]uint, 0, len(dirtySet))
+	for id := range dirtySet {
+		dirty = append(dirty, id)
+	}
+	deleted := make([]uint, 0, len(deletedSet))
+	for id := range deletedSet {
+		deleted = append(deleted, id)
+	}
+	sortUintSlice(dirty)
+	sortUintSlice(deleted)
+
+	if len(dirty) == 0 && len(deleted) == 0 {
+		return IdentityProfileInvalidationRequest{}, false
+	}
+
+	reason := req.Reason
+	if _, ok := invalidationReasons[reason]; !ok {
+		reason = ""
+	}
+	if len(reason) > dirtyReasonMaxLen {
+		reason = reason[:dirtyReasonMaxLen]
+	}
+
+	return IdentityProfileInvalidationRequest{
+		DirtyPersonIDs:   dirty,
+		DeletedPersonIDs: deleted,
+		Reason:           reason,
+	}, true
+}
+
+// sortUintSlice 升序排序 uint 切片。
+func sortUintSlice(ids []uint) {
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+}
+
+// ApplyInvalidation 在单个短事务内原子应用一次身份画像失效。
+//
+// 删除顺序满足外键/语义约束：members → centers → profiles（deleted 人物）；
+// dirty 人物仅更新 status/dirty_reason/updated_at，绝不触碰 active/next generation，
+// 保留旧 generation 数据供回滚与诊断。ResetAll=true 时按相同顺序清空全部派生画像，
+// 不将全部 Person ID 加载进内存，也不逐人物开启事务。
+//
+// 大 ID 集合按 SQLite 参数上限分块，分块在同一个事务内执行以保持原子性：任一步失败整体回滚。
+// 空请求直接返回，零 SQL。
+func (r *personIdentityProfileRepository) ApplyInvalidation(req IdentityProfileInvalidationRequest) error {
+	normalized, needApply := normalizeInvalidationReq(req)
+	if !needApply {
+		return nil
+	}
+
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if normalized.ResetAll {
+			// 清空全部派生画像，顺序：members → centers → profiles。
+			if err := tx.Where("1 = 1").Delete(&model.PersonIdentityCenterMember{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("1 = 1").Delete(&model.PersonIdentityCenter{}).Error; err != nil {
+				return err
+			}
+			return tx.Where("1 = 1").Delete(&model.PersonIdentityProfile{}).Error
+		}
+
+		// 1. 删除 deleted 人物的 member。
+		for _, chunk := range chunkIDs(normalized.DeletedPersonIDs) {
+			if err := tx.Where("person_id IN ?", chunk).Delete(&model.PersonIdentityCenterMember{}).Error; err != nil {
+				return err
+			}
+		}
+		// 2. 删除对应 center。
+		for _, chunk := range chunkIDs(normalized.DeletedPersonIDs) {
+			if err := tx.Where("person_id IN ?", chunk).Delete(&model.PersonIdentityCenter{}).Error; err != nil {
+				return err
+			}
+		}
+		// 3. 删除对应 profile。
+		for _, chunk := range chunkIDs(normalized.DeletedPersonIDs) {
+			if err := tx.Where("person_id IN ?", chunk).Delete(&model.PersonIdentityProfile{}).Error; err != nil {
+				return err
+			}
+		}
+		// 4. 将剩余 dirty 人物标记 dirty，保留 active generation 数据。
+		if len(normalized.DirtyPersonIDs) > 0 {
+			now := time.Now().UTC()
+			reason := string(normalized.Reason)
+			for _, chunk := range chunkIDs(normalized.DirtyPersonIDs) {
+				rows := make([]*model.PersonIdentityProfile, 0, len(chunk))
+				for _, pid := range chunk {
+					rows = append(rows, &model.PersonIdentityProfile{
+						PersonID:    pid,
+						Status:      model.PersonIdentityProfileStatusDirty,
+						DirtyReason: reason,
+						UpdatedAt:   now,
+					})
+				}
+				if err := tx.Clauses(clause.OnConflict{
+					Columns: []clause.Column{{Name: "person_id"}},
+					DoUpdates: clause.Assignments(map[string]interface{}{
+						"status":       model.PersonIdentityProfileStatusDirty,
+						"dirty_reason": reason,
+						"updated_at":   now,
+					}),
+				}).Create(rows).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	})
 }
 

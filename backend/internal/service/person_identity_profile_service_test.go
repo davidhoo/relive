@@ -32,9 +32,19 @@ type countingIdentityProfileRepo struct {
 	deleteInactiveGenerations int
 	invalidateDeletedPeople   int
 	listAllActiveCenters      int
+	applyInvalidation         int
 	markDirtyPersonIDs        []uint
 	listBackfillCursor        []uint
 	listBackfillLimit         []int
+	applyInvalidationCalls    []invalidationCall
+}
+
+// invalidationCall 记录一次 ApplyInvalidation 的清洗前入参，供断言。
+type invalidationCall struct {
+	dirty   []uint
+	deleted []uint
+	reset   bool
+	reason  string
 }
 
 func (c *countingIdentityProfileRepo) MarkDirty(personIDs []uint, reason string) error {
@@ -108,6 +118,18 @@ func (c *countingIdentityProfileRepo) DeleteInactiveGenerations(personID uint, k
 	c.deleteInactiveGenerations++
 	c.mu.Unlock()
 	return c.inner.DeleteInactiveGenerations(personID, keep)
+}
+func (c *countingIdentityProfileRepo) ApplyInvalidation(req repository.IdentityProfileInvalidationRequest) error {
+	c.mu.Lock()
+	c.applyInvalidation++
+	c.applyInvalidationCalls = append(c.applyInvalidationCalls, invalidationCall{
+		dirty:   append([]uint(nil), req.DirtyPersonIDs...),
+		deleted: append([]uint(nil), req.DeletedPersonIDs...),
+		reset:   req.ResetAll,
+		reason:  string(req.Reason),
+	})
+	c.mu.Unlock()
+	return c.inner.ApplyInvalidation(req)
 }
 
 // setupIdentityProfileDB 创建隔离的临时文件库并迁移画像相关表。
@@ -243,6 +265,15 @@ func TestPersonIdentityProfileService_LegacyNoRepoAccess(t *testing.T) {
 	assert.Equal(t, 0, c.getActive, "legacy must not call repo.GetActive")
 	assert.Equal(t, 0, c.getStats, "legacy must not call repo.GetStats")
 	assert.Equal(t, 0, c.listAllActiveCenters, "legacy must not call repo.ListAllActiveCenters")
+
+	// legacy Invalidate 完全 no-op：不访问 Repository、不操作 ANN。
+	require.NoError(t, svc.Invalidate(IdentityProfileInvalidation{
+		DirtyPersonIDs:   []uint{1, 2},
+		DeletedPersonIDs: []uint{3},
+		Reason:           "people_merged",
+	}))
+	assert.Equal(t, 0, c.applyInvalidation, "legacy Invalidate must not call repo.ApplyInvalidation")
+	assert.Nil(t, svc.ann, "legacy must still not initialize ANN after Invalidate")
 	assert.NotNil(t, stats)
 	assert.Equal(t, int64(0), stats.Total)
 }
@@ -577,6 +608,9 @@ func (r *failingReplaceRepo) InvalidateDeletedPeople() error {
 func (r *failingReplaceRepo) DeleteInactiveGenerations(personID uint, keep int) error {
 	return r.inner.DeleteInactiveGenerations(personID, keep)
 }
+func (r *failingReplaceRepo) ApplyInvalidation(req repository.IdentityProfileInvalidationRequest) error {
+	return r.inner.ApplyInvalidation(req)
+}
 
 func TestPersonIdentityProfileService_PersonDeletedMidBuildCleanedUp(t *testing.T) {
 	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
@@ -829,4 +863,202 @@ func (r *failingListCentersRepo) InvalidateDeletedPeople() error {
 }
 func (r *failingListCentersRepo) DeleteInactiveGenerations(personID uint, keep int) error {
 	return r.inner.DeleteInactiveGenerations(personID, keep)
+}
+func (r *failingListCentersRepo) ApplyInvalidation(req repository.IdentityProfileInvalidationRequest) error {
+	return r.inner.ApplyInvalidation(req)
+}
+
+// ---- Task 13: Invalidate 统一入口 ----
+
+func TestPersonIdentityProfileService_Invalidate_LegacyNoop(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "legacy", "emb", 25, 500)
+	c := deps.countingRepo
+
+	require.NoError(t, svc.Invalidate(IdentityProfileInvalidation{
+		DirtyPersonIDs: []uint{1, 2},
+		Reason:         "people_merged",
+	}))
+	assert.Equal(t, 0, c.applyInvalidation, "legacy Invalidate must not call repo.ApplyInvalidation")
+}
+
+func TestPersonIdentityProfileService_Invalidate_EmptyRequestNoop(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+	c := deps.countingRepo
+
+	require.NoError(t, svc.Invalidate(IdentityProfileInvalidation{}))
+	assert.Equal(t, 0, c.applyInvalidation, "empty request must not call repo.ApplyInvalidation")
+
+	require.NoError(t, svc.Invalidate(IdentityProfileInvalidation{
+		DirtyPersonIDs: []uint{0, 0},
+		Reason:         "faces_moved",
+	}))
+	assert.Equal(t, 0, c.applyInvalidation, "all-zero dirty must not call repo.ApplyInvalidation")
+}
+
+func TestPersonIdentityProfileService_Invalidate_DirtyMarksAndAnnInvalidates(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+	person := createPersonWithFaces(t, deps.repos, 100, vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+
+	require.NoError(t, svc.MarkDirty([]uint{person.ID}, "manual"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	got, ready := svc.ann.Search(vec3(1, 0, 0), 5, "emb")
+	require.True(t, ready)
+	require.Contains(t, got, person.ID)
+
+	// Invalidate 标记 dirty → ANN 立即失效该人物 + Repository 标记 dirty。
+	require.NoError(t, svc.Invalidate(IdentityProfileInvalidation{
+		DirtyPersonIDs: []uint{person.ID},
+		Reason:         "detection_replaced_faces",
+	}))
+	c := deps.countingRepo
+	require.Equal(t, 1, c.applyInvalidation)
+	assert.Equal(t, "detection_replaced_faces", c.applyInvalidationCalls[0].reason)
+
+	// dirty 人物立即从 ANN 召回中屏蔽。
+	got, ready = svc.ann.Search(vec3(1, 0, 0), 5, "emb")
+	if ready {
+		assert.NotContains(t, got, person.ID, "dirty person must be invalidated from ANN")
+	}
+	// profile 标记 dirty。
+	active, err := svc.GetActive(person.ID)
+	require.NoError(t, err)
+	require.NotNil(t, active.Profile)
+	assert.Equal(t, model.PersonIdentityProfileStatusDirty, active.Profile.Status)
+}
+
+func TestPersonIdentityProfileService_Invalidate_DeletedRemovesAndAnnInvalidates(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+	person := createPersonWithFaces(t, deps.repos, 100, vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+
+	require.NoError(t, svc.MarkDirty([]uint{person.ID}, "manual"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	require.NoError(t, svc.Invalidate(IdentityProfileInvalidation{
+		DeletedPersonIDs: []uint{person.ID},
+		Reason:           "person_dissolved",
+	}))
+
+	// deleted 完全删除 profile/center/member。
+	active, err := svc.GetActive(person.ID)
+	require.NoError(t, err)
+	assert.Nil(t, active, "deleted person profile removed")
+
+	// ANN 失效该人物。
+	got, ready := svc.ann.Search(vec3(1, 0, 0), 5, "emb")
+	if ready {
+		assert.NotContains(t, got, person.ID)
+	}
+}
+
+func TestPersonIdentityProfileService_Invalidate_DeletedPriorityOverDirty(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+	person := createPersonWithFaces(t, deps.repos, 100, vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+	require.NoError(t, svc.MarkDirty([]uint{person.ID}, "manual"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	require.NoError(t, svc.Invalidate(IdentityProfileInvalidation{
+		DirtyPersonIDs:   []uint{person.ID},
+		DeletedPersonIDs: []uint{person.ID},
+		Reason:           "people_merged",
+	}))
+	active, err := svc.GetActive(person.ID)
+	require.NoError(t, err)
+	assert.Nil(t, active, "deleted priority: profile removed not dirty-marked")
+}
+
+func TestPersonIdentityProfileService_Invalidate_ResetAllClearsAnnAndRepo(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+	p1 := createPersonWithFaces(t, deps.repos, 100, vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+	p2 := createPersonWithFaces(t, deps.repos, 200, vec3(0, 1, 0), vec3(0.01, 0.98, 0), vec3(0, 0.99, 0.01))
+	require.NoError(t, svc.MarkDirty([]uint{p1.ID, p2.ID}, "manual"))
+	require.NoError(t, svc.RunBackgroundSlice())
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	require.True(t, svc.ann.Ready("emb"))
+
+	require.NoError(t, svc.Invalidate(IdentityProfileInvalidation{
+		ResetAll: true,
+		Reason:   "reset_all_people",
+	}))
+
+	assert.False(t, svc.ann.Ready("emb"), "ANN must be unavailable after ResetAll")
+	assert.True(t, svc.ann.RebuildRequested())
+
+	// 全部派生画像清空。
+	var profileCount int64
+	require.NoError(t, deps.db.Model(&model.PersonIdentityProfile{}).Count(&profileCount).Error)
+	assert.Zero(t, profileCount)
+}
+
+// failingApplyInvalidationRepo 包装仓库，使 ApplyInvalidation 失败，验证 fail-closed。
+type failingApplyInvalidationRepo struct {
+	inner repository.PersonIdentityProfileRepository
+}
+
+func (r *failingApplyInvalidationRepo) MarkDirty(p []uint, reason string) error {
+	return r.inner.MarkDirty(p, reason)
+}
+func (r *failingApplyInvalidationRepo) ListDirty(cursor uint, limit int) ([]*model.PersonIdentityProfile, error) {
+	return r.inner.ListDirty(cursor, limit)
+}
+func (r *failingApplyInvalidationRepo) ListBackfillPersonIDs(cursor uint, limit int) ([]uint, error) {
+	return r.inner.ListBackfillPersonIDs(cursor, limit)
+}
+func (r *failingApplyInvalidationRepo) GetActive(personID uint) (*model.PersonIdentityProfileBuild, error) {
+	return r.inner.GetActive(personID)
+}
+func (r *failingApplyInvalidationRepo) GetStats() (*model.PersonIdentityProfileStats, error) {
+	return r.inner.GetStats()
+}
+func (r *failingApplyInvalidationRepo) ListAllActiveCenters(embeddingModel string) ([]*model.PersonIdentityCenter, error) {
+	return r.inner.ListAllActiveCenters(embeddingModel)
+}
+func (r *failingApplyInvalidationRepo) ListActiveCentersByPersonIDs(personIDs []uint, embeddingModel string) (map[uint][]*model.PersonIdentityCenter, error) {
+	return r.inner.ListActiveCentersByPersonIDs(personIDs, embeddingModel)
+}
+func (r *failingApplyInvalidationRepo) ReplaceGeneration(personID uint, build *model.PersonIdentityProfileBuild) error {
+	return r.inner.ReplaceGeneration(personID, build)
+}
+func (r *failingApplyInvalidationRepo) MarkFailed(personID uint, message string) error {
+	return r.inner.MarkFailed(personID, message)
+}
+func (r *failingApplyInvalidationRepo) DeleteByPersonIDs(personIDs []uint) error {
+	return r.inner.DeleteByPersonIDs(personIDs)
+}
+func (r *failingApplyInvalidationRepo) InvalidateDeletedPeople() error {
+	return r.inner.InvalidateDeletedPeople()
+}
+func (r *failingApplyInvalidationRepo) DeleteInactiveGenerations(personID uint, keep int) error {
+	return r.inner.DeleteInactiveGenerations(personID, keep)
+}
+func (r *failingApplyInvalidationRepo) ApplyInvalidation(req repository.IdentityProfileInvalidationRequest) error {
+	return errBoom
+}
+
+// TestPersonIdentityProfileService_Invalidate_PersistFailureFailsClosed 验证持久化失败时
+// 返回错误且 ANN 保持失效（fail closed）。
+func TestPersonIdentityProfileService_Invalidate_PersistFailureFailsClosed(t *testing.T) {
+	db, dsn := setupIdentityProfileDB(t)
+	repos := repository.NewRepositories(db)
+	configService := NewConfigService(repos.Config)
+	bgDB := openBgDB(t, dsn)
+	cfg := &config.Config{People: config.PeopleConfig{IdentityProfileMode: "shadow", MLEndpoint: "emb"}}
+	failing := &failingApplyInvalidationRepo{inner: repos.IdentityProfile}
+	svc := NewPersonIdentityProfileService(failing, configService, cfg, bgDB, nil).(*personIdentityProfileService)
+
+	person := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, repos.Person.Create(person))
+
+	err := svc.Invalidate(IdentityProfileInvalidation{
+		DirtyPersonIDs: []uint{person.ID},
+		Reason:         "detection_replaced_faces",
+	})
+	require.Error(t, err, "persist failure must return error")
+
+	// ANN fail closed：dirty 人物已 InvalidatePerson，且 unavailable/rebuildRequested。
+	got, ready := svc.ann.Search(vec3(1, 0, 0), 5, "emb")
+	if ready {
+		assert.NotContains(t, got, person.ID, "dirty person must remain invalidated after persist failure")
+	}
 }

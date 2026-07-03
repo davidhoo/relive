@@ -772,3 +772,247 @@ func TestPersonIdentityProfileRepository_ListActiveCentersByPersonIDs_Chunking(t
 	// 600 个 ID 超过 sqliteVarLimit(500)，应分 2 次批量查询。
 	assert.Equal(t, int32(2), atomic.LoadInt32(qcount), "query count follows chunk count, not person count")
 }
+
+// ---- Task 13: ApplyInvalidation ----
+
+func TestPersonIdentityProfileRepository_ApplyInvalidation_EmptyRequestIsNoop(t *testing.T) {
+	repo, db := newProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	p := createPerson(t, personRepo)
+	seedActiveGeneration(t, repo, p.ID)
+
+	// 空请求：不写库，profile/center/member 不变。
+	require.NoError(t, repo.ApplyInvalidation(IdentityProfileInvalidationRequest{}))
+	got, err := repo.GetActive(p.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Profile)
+	assert.Equal(t, model.PersonIdentityProfileStatusReady, got.Profile.Status)
+	assert.Len(t, got.Centers, 1)
+	assert.Len(t, got.Members, 2)
+
+	// 全部为 0 的 ID 也视为空请求。
+	require.NoError(t, repo.ApplyInvalidation(IdentityProfileInvalidationRequest{
+		DirtyPersonIDs:   []uint{0, 0},
+		DeletedPersonIDs: []uint{0},
+		Reason:           InvalidationReasonPeopleMerged,
+	}))
+	got, err = repo.GetActive(p.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.PersonIdentityProfileStatusReady, got.Profile.Status)
+}
+
+func TestPersonIdentityProfileRepository_ApplyInvalidation_DirtyDedupAndFilterZero(t *testing.T) {
+	repo, db := newProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	p := createPerson(t, personRepo)
+	seedActiveGeneration(t, repo, p.ID)
+
+	require.NoError(t, repo.ApplyInvalidation(IdentityProfileInvalidationRequest{
+		DirtyPersonIDs: []uint{0, p.ID, p.ID, 0, p.ID},
+		Reason:         InvalidationReasonFacesMoved,
+	}))
+
+	got, err := repo.GetActive(p.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.PersonIdentityProfileStatusDirty, got.Profile.Status)
+	assert.Equal(t, "faces_moved", got.Profile.DirtyReason)
+	// dirty 保留旧 generation 数据。
+	assert.Equal(t, 1, got.Profile.ActiveGeneration)
+	assert.Len(t, got.Centers, 1)
+	assert.Len(t, got.Members, 2)
+}
+
+func TestPersonIdentityProfileRepository_ApplyInvalidation_DeletedPriorityOverDirty(t *testing.T) {
+	repo, db := newProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	p := createPerson(t, personRepo)
+	seedActiveGeneration(t, repo, p.ID)
+
+	// p 同时在 dirty 与 deleted → 以 deleted 为准，profile/center/member 全删。
+	require.NoError(t, repo.ApplyInvalidation(IdentityProfileInvalidationRequest{
+		DirtyPersonIDs:   []uint{p.ID},
+		DeletedPersonIDs: []uint{p.ID},
+		Reason:           InvalidationReasonPeopleMerged,
+	}))
+
+	got, err := repo.GetActive(p.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got, "deleted person has no profile")
+	var centerCount int64
+	require.NoError(t, db.Model(&model.PersonIdentityCenter{}).Where("person_id = ?", p.ID).Count(&centerCount).Error)
+	assert.Zero(t, centerCount, "deleted person centers removed")
+	var memberCount int64
+	require.NoError(t, db.Model(&model.PersonIdentityCenterMember{}).Where("person_id = ?", p.ID).Count(&memberCount).Error)
+	assert.Zero(t, memberCount, "deleted person members removed")
+}
+
+func TestPersonIdentityProfileRepository_ApplyInvalidation_DeletedRemovesAll(t *testing.T) {
+	repo, db := newProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	p1 := createPerson(t, personRepo)
+	p2 := createPerson(t, personRepo)
+	seedActiveGeneration(t, repo, p1.ID)
+	seedActiveGeneration(t, repo, p2.ID)
+
+	require.NoError(t, repo.ApplyInvalidation(IdentityProfileInvalidationRequest{
+		DeletedPersonIDs: []uint{p1.ID},
+		Reason:           InvalidationReasonPersonDissolved,
+	}))
+
+	got1, err := repo.GetActive(p1.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got1, "deleted p1 profile removed")
+
+	got2, err := repo.GetActive(p2.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got2.Profile)
+	assert.Equal(t, model.PersonIdentityProfileStatusReady, got2.Profile.Status, "p2 untouched")
+}
+
+func TestPersonIdentityProfileRepository_ApplyInvalidation_DeletionOrderMembersFirst(t *testing.T) {
+	repo, db := newProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	p := createPerson(t, personRepo)
+	seedActiveGeneration(t, repo, p.ID)
+
+	require.NoError(t, repo.ApplyInvalidation(IdentityProfileInvalidationRequest{
+		DeletedPersonIDs: []uint{p.ID},
+		Reason:           InvalidationReasonPersonDissolved,
+	}))
+
+	// 删除顺序满足约束：members → centers → profiles 全部清除。
+	var memberCount, centerCount, profileCount int64
+	require.NoError(t, db.Model(&model.PersonIdentityCenterMember{}).Where("person_id = ?", p.ID).Count(&memberCount).Error)
+	require.NoError(t, db.Model(&model.PersonIdentityCenter{}).Where("person_id = ?", p.ID).Count(&centerCount).Error)
+	require.NoError(t, db.Model(&model.PersonIdentityProfile{}).Where("person_id = ?", p.ID).Count(&profileCount).Error)
+	assert.Zero(t, memberCount)
+	assert.Zero(t, centerCount)
+	assert.Zero(t, profileCount)
+}
+
+func TestPersonIdentityProfileRepository_ApplyInvalidation_DirtyPreservesActiveGeneration(t *testing.T) {
+	repo, db := newProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	p := createPerson(t, personRepo)
+	build := seedActiveGeneration(t, repo, p.ID)
+	activeGen := build.Profile.ActiveGeneration
+
+	require.NoError(t, repo.ApplyInvalidation(IdentityProfileInvalidationRequest{
+		DirtyPersonIDs: []uint{p.ID},
+		Reason:         InvalidationReasonDetectionReplaced,
+	}))
+
+	got, err := repo.GetActive(p.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Profile)
+	assert.Equal(t, activeGen, got.Profile.ActiveGeneration, "dirty keeps old active generation")
+	assert.Equal(t, model.PersonIdentityProfileStatusDirty, got.Profile.Status)
+	assert.Len(t, got.Centers, 1, "old generation centers retained")
+	assert.Len(t, got.Members, 2, "old generation members retained")
+}
+
+func TestPersonIdentityProfileRepository_ApplyInvalidation_ResetAllClearsEverything(t *testing.T) {
+	repo, db := newProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	p1 := createPerson(t, personRepo)
+	p2 := createPerson(t, personRepo)
+	seedActiveGeneration(t, repo, p1.ID)
+	seedActiveGeneration(t, repo, p2.ID)
+
+	// ResetAll 忽略 ID 列表，清空全部派生画像，不全量加载人物。
+	require.NoError(t, repo.ApplyInvalidation(IdentityProfileInvalidationRequest{
+		ResetAll:         true,
+		DirtyPersonIDs:   []uint{p1.ID}, // 应被忽略
+		DeletedPersonIDs: []uint{p2.ID}, // 应被忽略
+		Reason:           InvalidationReasonResetAllPeople,
+	}))
+
+	var profileCount, centerCount, memberCount int64
+	require.NoError(t, db.Model(&model.PersonIdentityProfile{}).Count(&profileCount).Error)
+	require.NoError(t, db.Model(&model.PersonIdentityCenter{}).Count(&centerCount).Error)
+	require.NoError(t, db.Model(&model.PersonIdentityCenterMember{}).Count(&memberCount).Error)
+	assert.Zero(t, profileCount)
+	assert.Zero(t, centerCount)
+	assert.Zero(t, memberCount)
+
+	// people 表不受影响。
+	var peopleCount int64
+	require.NoError(t, db.Model(&model.Person{}).Count(&peopleCount).Error)
+	assert.Equal(t, int64(2), peopleCount)
+}
+
+func TestPersonIdentityProfileRepository_ApplyInvalidation_LargeBatchChunkedAtomic(t *testing.T) {
+	repo, db := newProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	const n = sqliteVarLimit + 50
+	ids := make([]uint, 0, n)
+	for i := 0; i < n; i++ {
+		p := createPerson(t, personRepo)
+		seedActiveGeneration(t, repo, p.ID)
+		ids = append(ids, p.ID)
+	}
+
+	require.NoError(t, repo.ApplyInvalidation(IdentityProfileInvalidationRequest{
+		DirtyPersonIDs: ids,
+		Reason:         InvalidationReasonClusteringAssign,
+	}))
+
+	// 全部标记 dirty。
+	dirty, err := repo.ListDirty(0, n+10)
+	require.NoError(t, err)
+	require.Len(t, dirty, n, "all dirty-marked profiles retrievable despite chunking")
+}
+
+func TestPersonIdentityProfileRepository_ApplyInvalidation_UnknownReasonReplaced(t *testing.T) {
+	repo, db := newProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	p := createPerson(t, personRepo)
+	seedActiveGeneration(t, repo, p.ID)
+
+	// 未知 reason 被清洗为空字符串（不落库任意业务文本），但仍执行失效。
+	require.NoError(t, repo.ApplyInvalidation(IdentityProfileInvalidationRequest{
+		DirtyPersonIDs: []uint{p.ID},
+		Reason:         "totally_arbitrary_business_text",
+	}))
+	got, err := repo.GetActive(p.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.PersonIdentityProfileStatusDirty, got.Profile.Status)
+	assert.Empty(t, got.Profile.DirtyReason, "unknown reason must not be persisted")
+}
+
+// TestPersonIdentityProfileRepository_ApplyInvalidation_ResetAllDefaultReason 验证
+// ResetAll=true 但 reason 为空/非法时，落库前不应 panic（reason 仅用于脱敏日志，不落库 dirty_reason）。
+func TestPersonIdentityProfileRepository_ApplyInvalidation_ResetAllUnknownReason(t *testing.T) {
+	repo, db := newProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	p := createPerson(t, personRepo)
+	seedActiveGeneration(t, repo, p.ID)
+
+	require.NoError(t, repo.ApplyInvalidation(IdentityProfileInvalidationRequest{
+		ResetAll: true,
+		Reason:   "bogus",
+	}))
+	var profileCount int64
+	require.NoError(t, db.Model(&model.PersonIdentityProfile{}).Count(&profileCount).Error)
+	assert.Zero(t, profileCount, "ResetAll clears all regardless of reason")
+}

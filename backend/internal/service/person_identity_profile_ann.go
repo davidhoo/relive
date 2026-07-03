@@ -348,6 +348,29 @@ func (a *identityProfileANN) InvalidatePerson(personID uint) {
 	delete(a.activeGeneration, personID)
 }
 
+// InvalidateAll 使整个 ANN snapshot 不可查询，用于 ResetAllPeople 等清空全部派生画像的操作。
+//
+// 行为：
+//   - snapshot 不再 ready：先标记 unavailable，再清空 delta/invalid/activeGeneration，
+//     并请求未来完整重建。
+//   - 并发 Search 只能看到旧完整 snapshot（ready=true）或 unavailable（ready=false），
+//     不能看到半清空状态：清空在 deltaMu.Lock 下完成；Search 在 RLock 下读取元数据后
+//     释放锁，若期间 unavailable 被置位则 Search 在持锁检查时直接返回 false。
+//   - 不删除 snapshot 指针本身（保留供诊断/旧 generation 查询），但通过 unavailable 标志
+//     使其对外声称不可用。
+func (a *identityProfileANN) InvalidateAll() {
+	// 先标记 unavailable，使后续/并发 Search 在 RLock 下读到 unavailable=true 时直接 fail closed。
+	a.unavailable.Store(true)
+	a.rebuildRequested.Store(true)
+
+	a.deltaMu.Lock()
+	a.delta = make(map[uint]profileCenterVector)
+	a.invalid = make(map[uint]struct{})
+	a.activeGeneration = make(map[uint]int)
+	a.revision++
+	a.deltaMu.Unlock()
+}
+
 // RequestRebuild 标记需要完整重建。
 func (a *identityProfileANN) RequestRebuild() {
 	a.rebuildRequested.Store(true)

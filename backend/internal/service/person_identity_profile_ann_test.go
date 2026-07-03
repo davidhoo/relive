@@ -476,6 +476,99 @@ func TestIdentityProfileANN_StableSortTiebreakByPersonID(t *testing.T) {
 	assert.Equal(t, []uint{10, 20, 30}, got)
 }
 
+// ---- Task 13: InvalidateAll ----
+
+func TestIdentityProfileANN_InvalidateAllMakesNotReady(t *testing.T) {
+	ann := newIdentityProfileANN("emb-v1")
+	require.NoError(t, ann.Rebuild([]*model.PersonIdentityCenter{
+		annCenter(1, 10, 1, 1, emb3(1, 0, 0)),
+		annCenter(2, 20, 1, 1, emb3(0, 1, 0)),
+	}, "emb-v1"))
+	assert.True(t, ann.Ready("emb-v1"))
+
+	// 激活一些 delta。
+	require.NoError(t, ann.Activate(30, 1, []*model.PersonIdentityCenter{
+		annCenter(3, 30, 1, 1, emb3(0, 0, 1)),
+	}))
+
+	ann.InvalidateAll()
+
+	assert.False(t, ann.Ready("emb-v1"), "snapshot must not be ready after InvalidateAll")
+	assert.True(t, ann.RebuildRequested(), "must request full rebuild")
+	got, ready := ann.Search(emb3(1, 0, 0), 5, "emb-v1")
+	assert.False(t, ready, "Search must fail closed after InvalidateAll")
+	assert.Empty(t, got)
+
+	// delta/invalid/activeGeneration 清空。
+	ann.deltaMu.RLock()
+	assert.Empty(t, ann.delta)
+	assert.Empty(t, ann.invalid)
+	assert.Empty(t, ann.activeGeneration)
+	ann.deltaMu.RUnlock()
+}
+
+func TestIdentityProfileANN_InvalidateAllThenRebuildRestores(t *testing.T) {
+	ann := newIdentityProfileANN("emb-v1")
+	require.NoError(t, ann.Rebuild([]*model.PersonIdentityCenter{
+		annCenter(1, 10, 1, 1, emb3(1, 0, 0)),
+	}, "emb-v1"))
+
+	ann.InvalidateAll()
+
+	// 重新构建后恢复 ready。
+	require.NoError(t, ann.Rebuild([]*model.PersonIdentityCenter{
+		annCenter(1, 10, 1, 1, emb3(1, 0, 0)),
+		annCenter(2, 20, 1, 1, emb3(0, 1, 0)),
+	}, "emb-v1"))
+	assert.True(t, ann.Ready("emb-v1"))
+	got, ready := ann.Search(emb3(1, 0, 0), 5, "emb-v1")
+	require.True(t, ready)
+	assert.Contains(t, got, uint(10))
+}
+
+// TestIdentityProfileANN_InvalidateAllConcurrentSearch 在 -race 下验证并发 InvalidateAll
+// 与 Search 不产生 data race、不 panic、Search 永远不会看到半清空状态（要么 ready 旧 snapshot，
+// 要么 unavailable）。
+func TestIdentityProfileANN_InvalidateAllConcurrentSearch(t *testing.T) {
+	ann := newIdentityProfileANN("emb-v1")
+	require.NoError(t, ann.Rebuild([]*model.PersonIdentityCenter{
+		annCenter(1, 10, 1, 1, emb3(1, 0, 0)),
+		annCenter(2, 20, 1, 1, emb3(0, 1, 0)),
+	}, "emb-v1"))
+
+	var stop atomic.Bool
+	var wg sync.WaitGroup
+
+	// 持续查询：必须 fail closed 或返回完整旧结果，绝不 panic。
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for !stop.Load() {
+			_, _ = ann.Search(emb3(1, 0, 0), 5, "emb-v1")
+		}
+	}()
+
+	// 持续 InvalidateAll + Rebuild 交替。
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; !stop.Load(); i++ {
+			ann.InvalidateAll()
+			if i%2 == 0 {
+				_ = ann.Rebuild([]*model.PersonIdentityCenter{
+					annCenter(1, 10, 1, 1, emb3(1, 0, 0)),
+				}, "emb-v1")
+			}
+		}
+	}()
+
+	for i := 0; i < 300; i++ {
+		_, _ = ann.Search(emb3(0.5, 0.5, 0), 5, "emb-v1")
+	}
+	stop.Store(true)
+	wg.Wait()
+}
+
 // ---- Step 7: benchmark（烟雾验证） ----
 
 func BenchmarkIdentityProfileANN_SnapshotBuild(b *testing.B) {

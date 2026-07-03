@@ -274,6 +274,18 @@ func (c *peopleClusteringCoordinator) runClusterBatch(source clusterSource) back
 			source, time.Since(shadowStart).Round(time.Millisecond))
 	}
 
+	// Task 13：聚类批次成功后，对实际发生身份成员变化的人物批量触发统一画像失效。
+	// affectedPersonIDs 已包含 legacy attach 目标、失去 Face 的来源人物、rescue attach 目标
+	// 与新创建人物；pending-only 组件不会把人物加入 affected（markComponentPending 不写入
+	// affectedPersonIDs）。批次失败（res.err != nil）不提交本批失效：仅在成功路径执行。
+	// 一个批次最多调用一次；Person ID 由 hook 端去重。不在持有 writeGate 时写 profile 表。
+	if res.err == nil && len(res.affectedPersonIDs) > 0 {
+		c.svc.invalidateIdentityProfiles(IdentityProfileInvalidation{
+			DirtyPersonIDs: res.affectedPersonIDs,
+			Reason:         "clustering_assignment",
+		})
+	}
+
 	if res.err != nil {
 		logger.Warnf("people clustering coordinator: source=%s clustering failed foregroundWait=%s writeGateWait=%s batchElapsed=%s yieldedForForeground=%v err=%v",
 			source, foregroundWait.Round(time.Millisecond), time.Since(gateStart).Round(time.Millisecond), elapsed.Round(time.Millisecond), foregroundWait > 0, res.err)

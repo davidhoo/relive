@@ -152,10 +152,12 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 				matcher.Match,
 				telemetry.Record,
 			)
-			// Task 12：rescue 成功后标记目标人物画像 dirty（仅非 legacy 模式注入；
-			// shadow/primary 不会产生 RescueApplied=true，注入也无害）。
-			peopleSvc.(*peopleService).SetIdentityProfileDirtyHook(
-				identityProfileService.MarkDirty,
+			// Task 13：注入统一身份画像失效 hook（仅非 legacy 模式）。所有人物变更路径
+			// （detection/merge/split/move/dissolve/reset/聚类/recluster）通过该 hook 统一
+			// 失效画像，替代 Task 12 仅用于 rescue 的 dirty hook。rescue 的画像持久化失效
+			// 由聚类批次末尾的 clustering_assignment 失效完成，rescue_attach 仅作遥测原因。
+			peopleSvc.(*peopleService).SetIdentityProfileInvalidationHook(
+				identityProfileService.Invalidate,
 			)
 		}
 	}

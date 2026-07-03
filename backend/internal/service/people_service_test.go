@@ -3109,14 +3109,17 @@ type shadowHookRecorder struct {
 	inputs     []IdentityTelemetryInput
 	matchFn    func(component []*model.Face) IdentityProfileMatch
 
-	// markDirtyCalls 捕获 rescue 注入的 markDirtyFn 调用，用于断言只标记目标人物。
-	markDirtyMu    sync.Mutex
-	markDirtyCalls []markDirtyCall
+	// invalidateCalls 捕获 Task 13 统一失效 hook 调用，用于断言各业务路径的失效事件。
+	invalidateMu    sync.Mutex
+	invalidateCalls []invalidationCallRecord
 }
 
-type markDirtyCall struct {
-	personIDs []uint
-	reason    string
+// invalidationCallRecord 记录一次统一失效 hook 调用。
+type invalidationCallRecord struct {
+	dirty   []uint
+	deleted []uint
+	reset   bool
+	reason  string
 }
 
 func (r *shadowHookRecorder) match(component []*model.Face) IdentityProfileMatch {
@@ -3151,18 +3154,42 @@ func (r *shadowHookRecorder) matchCount() int {
 
 // markDirty 作为 SetIdentityProfileDirtyHook 注入的回调，记录调用参数供断言。
 func (r *shadowHookRecorder) markDirty(personIDs []uint, reason string) error {
-	r.markDirtyMu.Lock()
-	defer r.markDirtyMu.Unlock()
-	cp := make([]uint, len(personIDs))
-	copy(cp, personIDs)
-	r.markDirtyCalls = append(r.markDirtyCalls, markDirtyCall{personIDs: cp, reason: reason})
+	// Task 13：rescue 不再通过独立 dirty hook 标记，统一失效路径接管。
+	// 保留该方法以兼容仍可能注入的测试场景，但默认不再使用。
 	return nil
 }
 
+// invalidate 作为 SetIdentityProfileInvalidationHook 注入的统一失效回调，记录调用参数。
+func (r *shadowHookRecorder) invalidate(inv IdentityProfileInvalidation) error {
+	r.invalidateMu.Lock()
+	defer r.invalidateMu.Unlock()
+	r.invalidateCalls = append(r.invalidateCalls, invalidationCallRecord{
+		dirty:   append([]uint(nil), inv.DirtyPersonIDs...),
+		deleted: append([]uint(nil), inv.DeletedPersonIDs...),
+		reset:   inv.ResetAll,
+		reason:  inv.Reason,
+	})
+	return nil
+}
+
+func (r *shadowHookRecorder) invalidateCount() int {
+	r.invalidateMu.Lock()
+	defer r.invalidateMu.Unlock()
+	return len(r.invalidateCalls)
+}
+
+func (r *shadowHookRecorder) invalidateCallsSnapshot() []invalidationCallRecord {
+	r.invalidateMu.Lock()
+	defer r.invalidateMu.Unlock()
+	out := make([]invalidationCallRecord, len(r.invalidateCalls))
+	copy(out, r.invalidateCalls)
+	return out
+}
+
 func (r *shadowHookRecorder) markDirtyCount() int {
-	r.markDirtyMu.Lock()
-	defer r.markDirtyMu.Unlock()
-	return len(r.markDirtyCalls)
+	// Task 13：rescue 不再通过独立 dirty hook 标记。返回 0 以兼容历史断言
+	// “不应标记 dirty”的测试；rescue 应用场景的断言已迁移到 invalidate hook。
+	return 0
 }
 
 // seedShadowClusterDataset 在测试 DB 中植入一个已分配人物（原型脸）与一张待聚类脸，
@@ -3502,7 +3529,9 @@ func TestPeopleService_IdentityProfileRescue_LegacyMissProfileEligibleAttaches(t
 		},
 	}
 	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeRescue, rec.match, rec.record)
-	svc.SetIdentityProfileDirtyHook(rec.markDirty)
+	// Task 13：rescue 目标人物的画像失效由统一 invalidate hook（聚类批次末尾
+	// clustering_assignment）完成，不再使用独立 dirty hook。
+	svc.SetIdentityProfileInvalidationHook(rec.invalidate)
 
 	res := svc.clusteringCoordinator.submitBackground()
 	require.NoError(t, res.err)
@@ -3528,11 +3557,12 @@ func TestPeopleService_IdentityProfileRescue_LegacyMissProfileEligibleAttaches(t
 	assert.Equal(t, uint(0), in.LegacyTargetPersonID)
 	assert.Equal(t, target.ID, in.Profile.PersonID)
 
-	// 目标人物被标记 dirty，仅一次，仅目标。
-	require.Equal(t, 1, rec.markDirtyCount())
-	md := rec.markDirtyCalls[0]
-	assert.Equal(t, []uint{target.ID}, md.personIDs)
-	assert.Equal(t, "rescue_attach", md.reason)
+	// Task 13：rescue 目标人物由统一批次路径失效一次（clustering_assignment），仅 target dirty。
+	require.Equal(t, 1, rec.invalidateCount(), "rescue batch must invalidate exactly once")
+	inv := rec.invalidateCallsSnapshot()[0]
+	assert.Equal(t, "clustering_assignment", inv.reason)
+	assert.Contains(t, inv.dirty, target.ID)
+	assert.Empty(t, inv.deleted)
 
 	// 未创建新人物（只有 seed 的 person + target 两人）。
 	persons, err := personRepo.ListAll()
@@ -3568,7 +3598,7 @@ func TestPeopleService_IdentityProfileRescue_LegacyHitNotOverridden(t *testing.T
 		},
 	}
 	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeRescue, rec.match, rec.record)
-	svc.SetIdentityProfileDirtyHook(rec.markDirty)
+	svc.SetIdentityProfileInvalidationHook(rec.invalidate)
 
 	res := svc.clusteringCoordinator.submitBackground()
 	require.NoError(t, res.err)
@@ -3624,7 +3654,7 @@ func TestPeopleService_IdentityProfileRescue_GuardRejectionFallsBack(t *testing.
 				},
 			}
 			svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeRescue, rec.match, rec.record)
-			svc.SetIdentityProfileDirtyHook(rec.markDirty)
+			svc.SetIdentityProfileInvalidationHook(rec.invalidate)
 
 			res := svc.clusteringCoordinator.submitBackground()
 			require.NoError(t, res.err, "guard rejection must fall back to legacy, not error")
@@ -3676,7 +3706,7 @@ func TestPeopleService_IdentityProfileRescue_NaNInfScoreRejected(t *testing.T) {
 			},
 		}
 		svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeRescue, rec.match, rec.record)
-		svc.SetIdentityProfileDirtyHook(rec.markDirty)
+		svc.SetIdentityProfileInvalidationHook(rec.invalidate)
 
 		res := svc.clusteringCoordinator.submitBackground()
 		require.NoError(t, res.err)
@@ -3701,7 +3731,7 @@ func TestPeopleService_IdentityProfileRescue_MatcherPanicFallsBack(t *testing.T)
 		},
 	}
 	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeRescue, rec.match, rec.record)
-	svc.SetIdentityProfileDirtyHook(rec.markDirty)
+	svc.SetIdentityProfileInvalidationHook(rec.invalidate)
 
 	res := svc.clusteringCoordinator.submitBackground()
 	require.NoError(t, res.err, "matcher panic must not abort clustering")
@@ -3731,7 +3761,7 @@ func TestPeopleService_IdentityProfileRescue_TargetPersonVanishedFallsBack(t *te
 		},
 	}
 	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeRescue, rec.match, rec.record)
-	svc.SetIdentityProfileDirtyHook(rec.markDirty)
+	svc.SetIdentityProfileInvalidationHook(rec.invalidate)
 
 	res := svc.clusteringCoordinator.submitBackground()
 	require.NoError(t, res.err)
@@ -3768,19 +3798,20 @@ func TestPeopleService_IdentityProfileRescue_MarkDirtyFailureDoesNotRollback(t *
 		},
 	}
 	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeRescue, rec.match, rec.record)
-	// MarkDirty 注入总是失败的 hook。
-	svc.SetIdentityProfileDirtyHook(func(ids []uint, reason string) error {
-		return fmt.Errorf("simulated mark dirty failure")
+	// Task 13：注入总是失败的统一失效 hook，验证失效失败不回滚 rescue assignment、
+	// 不返回聚类错误（fail-closed 但业务事实保留）。
+	svc.SetIdentityProfileInvalidationHook(func(inv IdentityProfileInvalidation) error {
+		return fmt.Errorf("simulated invalidate failure")
 	})
 
 	res := svc.clusteringCoordinator.submitBackground()
-	require.NoError(t, res.err, "MarkDirty failure must not return clustering error")
+	require.NoError(t, res.err, "invalidate failure must not return clustering error")
 
 	faces, err := faceRepo.ListByPhotoID(pendingPhoto.ID)
 	require.NoError(t, err)
 	require.Len(t, faces, 1)
 	require.NotNil(t, faces[0].PersonID)
-	assert.Equal(t, target.ID, *faces[0].PersonID, "rescue assignment must survive MarkDirty failure")
+	assert.Equal(t, target.ID, *faces[0].PersonID, "rescue assignment must survive invalidate failure")
 	assert.Equal(t, model.FaceClusterStatusAssigned, faces[0].ClusterStatus)
 }
 
@@ -3797,7 +3828,7 @@ func TestPeopleService_IdentityProfileRescue_ShadowModeDoesNotRescue(t *testing.
 		},
 	}
 	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeShadow, rec.match, rec.record)
-	svc.SetIdentityProfileDirtyHook(rec.markDirty)
+	svc.SetIdentityProfileInvalidationHook(rec.invalidate)
 
 	res := svc.clusteringCoordinator.submitBackground()
 	require.NoError(t, res.err)
@@ -3825,7 +3856,7 @@ func TestPeopleService_IdentityProfileRescue_LegacyModeDoesNotRescue(t *testing.
 		},
 	}
 	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeLegacy, rec.match, rec.record)
-	svc.SetIdentityProfileDirtyHook(rec.markDirty)
+	svc.SetIdentityProfileInvalidationHook(rec.invalidate)
 
 	res := svc.clusteringCoordinator.submitBackground()
 	require.NoError(t, res.err)
@@ -3878,7 +3909,7 @@ func TestPeopleService_IdentityProfileRescue_MatcherCalledOncePerMiss(t *testing
 		},
 	}
 	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeRescue, rec.match, rec.record)
-	svc.SetIdentityProfileDirtyHook(rec.markDirty)
+	svc.SetIdentityProfileInvalidationHook(rec.invalidate)
 
 	res := svc.clusteringCoordinator.submitBackground()
 	require.NoError(t, res.err)
@@ -3887,11 +3918,11 @@ func TestPeopleService_IdentityProfileRescue_MatcherCalledOncePerMiss(t *testing
 	assert.Equal(t, 2, rec.matchCount(), "matcher must be called once per legacy miss")
 	// 两条遥测记录。
 	assert.Equal(t, 2, rec.recordCount())
-	// 所有 rescue 都标记 target dirty（可能多次，但只针对 target）。
-	for _, md := range rec.markDirtyCalls {
-		assert.Equal(t, []uint{target.ID}, md.personIDs)
-		assert.Equal(t, "rescue_attach", md.reason)
-	}
+	// Task 13：两组件挂靠同一 target，统一批次路径仅失效一次，target 在 dirty 集合中。
+	require.Equal(t, 1, rec.invalidateCount(), "batch must invalidate once even with multiple rescues")
+	inv := rec.invalidateCallsSnapshot()[0]
+	assert.Equal(t, "clustering_assignment", inv.reason)
+	assert.Contains(t, inv.dirty, target.ID)
 }
 
 // TestPeopleService_IdentityProfileRescue_TelemetryFields 验证 rescue_applied 遥测包含正确
@@ -3924,7 +3955,7 @@ func TestPeopleService_IdentityProfileRescue_TelemetryFields(t *testing.T) {
 		},
 	}
 	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModeRescue, rec.match, rec.record)
-	svc.SetIdentityProfileDirtyHook(rec.markDirty)
+	svc.SetIdentityProfileInvalidationHook(rec.invalidate)
 
 	res := svc.clusteringCoordinator.submitBackground()
 	require.NoError(t, res.err)
@@ -3945,4 +3976,217 @@ func TestPeopleService_IdentityProfileRescue_TelemetryFields(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, faces, 1)
 	assert.Equal(t, target.ID, *faces[0].PersonID)
+}
+
+// ---- Task 13: 统一画像失效在各业务路径的断言 ----
+
+// newPeopleServiceWithInvalidateRecorder 构造 peopleService 并注入 invalidate recorder，
+// 返回 svc 与 recorder 供断言调用次数与参数。
+func newPeopleServiceWithInvalidateRecorder(t *testing.T) (*peopleService, *shadowHookRecorder) {
+	t.Helper()
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	rec := &shadowHookRecorder{}
+	svc.SetIdentityProfileInvalidationHook(rec.invalidate)
+	// 注入空 merge suggestion dirty hook，避免 nil 调用。
+	svc.setMergeSuggestionDirtyHookForTest(func(string) error { return nil })
+	_ = db
+	return svc, rec
+}
+
+func TestPeopleService_Invalidate_MergePeopleTargetDirtySourcesDeleted(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	rec := &shadowHookRecorder{}
+	svc.SetIdentityProfileInvalidationHook(rec.invalidate)
+	svc.setMergeSuggestionDirtyHookForTest(func(string) error { return nil })
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+	targetPhoto := &model.Photo{FilePath: "/photos/inv-merge-t.jpg", FileName: "inv-merge-t.jpg", FileSize: 1, FileHash: "inv-merge-t", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	sourcePhoto := &model.Photo{FilePath: "/photos/inv-merge-s.jpg", FileName: "inv-merge-s.jpg", FileSize: 1, FileHash: "inv-merge-s", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(targetPhoto))
+	require.NoError(t, photoRepo.Create(sourcePhoto))
+	target := &model.Person{Category: model.PersonCategoryFamily}
+	source := &model.Person{Category: model.PersonCategoryStranger}
+	require.NoError(t, personRepo.Create(target))
+	require.NoError(t, personRepo.Create(source))
+	require.NoError(t, faceRepo.Create(&model.Face{PhotoID: targetPhoto.ID, PersonID: &target.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.9, QualityScore: 0.8, Embedding: encodeEmbedding(t, []float32{1, 0})}))
+	require.NoError(t, faceRepo.Create(&model.Face{PhotoID: sourcePhoto.ID, PersonID: &source.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.9, QualityScore: 0.8, Embedding: encodeEmbedding(t, []float32{0, 1})}))
+	require.NoError(t, personRepo.RefreshStats(target.ID))
+	require.NoError(t, personRepo.RefreshStats(source.ID))
+
+	_, err := svc.MergePeople(target.ID, []uint{source.ID, source.ID, 0, target.ID})
+	require.NoError(t, err)
+
+	require.Equal(t, 1, rec.invalidateCount(), "merge must invalidate exactly once")
+	inv := rec.invalidateCallsSnapshot()[0]
+	assert.Equal(t, "people_merged", inv.reason)
+	assert.Contains(t, inv.dirty, target.ID)
+	assert.Contains(t, inv.deleted, source.ID)
+	// target 同时出现在 dirty 与 deleted 入参中：清洗后以 deleted 为准，但 recorder 捕获的是
+	// 清洗前入参，故 target 可能仍在 deleted slice（清洗在 hook 内完成）。
+}
+
+func TestPeopleService_Invalidate_SplitPersonDirtySourceAndNew(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	rec := &shadowHookRecorder{}
+	svc.SetIdentityProfileInvalidationHook(rec.invalidate)
+	svc.setMergeSuggestionDirtyHookForTest(func(string) error { return nil })
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+	photoA := &model.Photo{FilePath: "/photos/inv-split-a.jpg", FileName: "inv-split-a.jpg", FileSize: 1, FileHash: "inv-split-a", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	photoB := &model.Photo{FilePath: "/photos/inv-split-b.jpg", FileName: "inv-split-b.jpg", FileSize: 1, FileHash: "inv-split-b", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(photoA))
+	require.NoError(t, photoRepo.Create(photoB))
+	person := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(person))
+	faceA := &model.Face{PhotoID: photoA.ID, PersonID: &person.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.9, QualityScore: 0.7, Embedding: encodeEmbedding(t, []float32{1, 0})}
+	faceB := &model.Face{PhotoID: photoB.ID, PersonID: &person.ID, BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.92, QualityScore: 0.8, Embedding: encodeEmbedding(t, []float32{0, 1})}
+	require.NoError(t, faceRepo.Create(faceA))
+	require.NoError(t, faceRepo.Create(faceB))
+	require.NoError(t, personRepo.RefreshStats(person.ID))
+
+	newPerson, _, err := svc.SplitPerson([]uint{faceB.ID})
+	require.NoError(t, err)
+	require.NotNil(t, newPerson)
+
+	require.Equal(t, 1, rec.invalidateCount())
+	inv := rec.invalidateCallsSnapshot()[0]
+	assert.Equal(t, "person_split", inv.reason)
+	assert.Contains(t, inv.dirty, person.ID)
+	assert.Contains(t, inv.dirty, newPerson.ID)
+}
+
+func TestPeopleService_Invalidate_MoveFacesSourceAndTarget(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	rec := &shadowHookRecorder{}
+	svc.SetIdentityProfileInvalidationHook(rec.invalidate)
+	svc.setMergeSuggestionDirtyHookForTest(func(string) error { return nil })
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+	photo := &model.Photo{FilePath: "/photos/inv-move.jpg", FileName: "inv-move.jpg", FileSize: 1, FileHash: "inv-move", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(photo))
+	source := &model.Person{Category: model.PersonCategoryStranger}
+	target := &model.Person{Category: model.PersonCategoryFamily}
+	require.NoError(t, personRepo.Create(source))
+	require.NoError(t, personRepo.Create(target))
+	face := &model.Face{PhotoID: photo.ID, PersonID: &source.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.9, QualityScore: 0.8, Embedding: encodeEmbedding(t, []float32{0, 1, 0})}
+	require.NoError(t, faceRepo.Create(face))
+	require.NoError(t, personRepo.RefreshStats(source.ID))
+	require.NoError(t, photoRepo.RecomputeTopPersonCategory([]uint{photo.ID}))
+
+	_, err := svc.MoveFaces([]uint{face.ID}, target.ID)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, rec.invalidateCount())
+	inv := rec.invalidateCallsSnapshot()[0]
+	assert.Equal(t, "faces_moved", inv.reason)
+	assert.Contains(t, inv.dirty, source.ID)
+	assert.Contains(t, inv.dirty, target.ID)
+}
+
+func TestPeopleService_Invalidate_MoveFacesNoOpDoesNotInvalidate(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	rec := &shadowHookRecorder{}
+	svc.SetIdentityProfileInvalidationHook(rec.invalidate)
+	svc.setMergeSuggestionDirtyHookForTest(func(string) error { return nil })
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+	photo := &model.Photo{FilePath: "/photos/inv-move-noop.jpg", FileName: "inv-move-noop.jpg", FileSize: 1, FileHash: "inv-move-noop", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(photo))
+	target := &model.Person{Category: model.PersonCategoryFamily}
+	require.NoError(t, personRepo.Create(target))
+	// 脸已属于 target → 移动到 target 是 no-op。
+	face := &model.Face{PhotoID: photo.ID, PersonID: &target.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.9, QualityScore: 0.8, Embedding: encodeEmbedding(t, []float32{0, 1, 0})}
+	require.NoError(t, faceRepo.Create(face))
+	require.NoError(t, personRepo.RefreshStats(target.ID))
+
+	_, err := svc.MoveFaces([]uint{face.ID}, target.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rec.invalidateCount(), "no-op move must not invalidate")
+}
+
+func TestPeopleService_Invalidate_DissolvePersonDeleted(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	rec := &shadowHookRecorder{}
+	svc.SetIdentityProfileInvalidationHook(rec.invalidate)
+	svc.setMergeSuggestionDirtyHookForTest(func(string) error { return nil })
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+	photo := &model.Photo{FilePath: "/photos/inv-dissolve.jpg", FileName: "inv-dissolve.jpg", FileSize: 1, FileHash: "inv-dissolve", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(photo))
+	person := &model.Person{Category: model.PersonCategoryFamily}
+	require.NoError(t, personRepo.Create(person))
+	require.NoError(t, faceRepo.Create(&model.Face{PhotoID: photo.ID, PersonID: &person.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.9, QualityScore: 0.8, Embedding: encodeEmbedding(t, []float32{1, 0}), ClusterStatus: model.FaceClusterStatusAssigned, ClusterScore: 0.9, ManualLocked: true}))
+	require.NoError(t, personRepo.RefreshStats(person.ID))
+
+	_, err := svc.DissolvePerson(person.ID)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, rec.invalidateCount())
+	inv := rec.invalidateCallsSnapshot()[0]
+	assert.Equal(t, "person_dissolved", inv.reason)
+	assert.Contains(t, inv.deleted, person.ID)
+}
+
+func TestPeopleService_Invalidate_ResetAllPeople(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	rec := &shadowHookRecorder{}
+	svc.SetIdentityProfileInvalidationHook(rec.invalidate)
+	svc.setMergeSuggestionDirtyHookForTest(func(string) error { return nil })
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+	photo := &model.Photo{FilePath: "/photos/inv-reset.jpg", FileName: "inv-reset.jpg", FileSize: 1, FileHash: "inv-reset", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(photo))
+	person := &model.Person{Category: model.PersonCategoryFamily}
+	require.NoError(t, personRepo.Create(person))
+	require.NoError(t, faceRepo.Create(&model.Face{PhotoID: photo.ID, PersonID: &person.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.9, QualityScore: 0.8, Embedding: encodeEmbedding(t, []float32{1, 0}), ClusterStatus: model.FaceClusterStatusAssigned, ClusterScore: 0.9}))
+	require.NoError(t, personRepo.RefreshStats(person.ID))
+	require.NoError(t, photoRepo.UpdateFields(photo.ID, map[string]interface{}{"face_process_status": model.FaceProcessStatusReady, "face_count": 1}))
+
+	_, err := svc.ResetAllPeople()
+	require.NoError(t, err)
+
+	require.Equal(t, 1, rec.invalidateCount())
+	inv := rec.invalidateCallsSnapshot()[0]
+	assert.Equal(t, "reset_all_people", inv.reason)
+	assert.True(t, inv.reset)
+}
+
+func TestPeopleService_Invalidate_NonIdentityOpsDoNotInvalidate(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	rec := &shadowHookRecorder{}
+	svc.SetIdentityProfileInvalidationHook(rec.invalidate)
+	svc.setMergeSuggestionDirtyHookForTest(func(string) error { return nil })
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+	photo := &model.Photo{FilePath: "/photos/inv-nonid.jpg", FileName: "inv-nonid.jpg", FileSize: 1, FileHash: "inv-nonid", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(photo))
+	person := &model.Person{Category: model.PersonCategoryFamily}
+	require.NoError(t, personRepo.Create(person))
+	require.NoError(t, faceRepo.Create(&model.Face{PhotoID: photo.ID, PersonID: &person.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.9, QualityScore: 0.8, Embedding: encodeEmbedding(t, []float32{1, 0}), ClusterStatus: model.FaceClusterStatusAssigned, ClusterScore: 0.9}))
+	require.NoError(t, personRepo.RefreshStats(person.ID))
+
+	require.NoError(t, svc.UpdatePersonName(person.ID, "Alice"))
+	require.NoError(t, svc.UpdatePersonCategory(person.ID, model.PersonCategoryFriend))
+	require.Equal(t, 0, rec.invalidateCount(), "name/category must not invalidate")
+
+	// Avatar：需要 face 属于该人物。
+	updatedFace, err := faceRepo.GetByID(1)
+	if err == nil && updatedFace != nil && updatedFace.PersonID != nil && *updatedFace.PersonID == person.ID {
+		require.NoError(t, svc.UpdatePersonAvatar(person.ID, updatedFace.ID))
+	}
+	assert.Equal(t, 0, rec.invalidateCount(), "avatar must not invalidate")
 }
