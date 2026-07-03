@@ -27,6 +27,9 @@ make build
 make deploy-image
 make deploy
 
+# 备份 NAS（已校验的 SQLite 在线备份，不重启服务；配置见 .nas-backup.env）
+make backup-nas
+
 # 查看日志
 make logs
 

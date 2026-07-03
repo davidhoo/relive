@@ -155,6 +155,17 @@ make deploy-image
 - `QUICKSTART.md`：快速启动与部署
 - `docs/CONFIGURATION.md`（配置职责与优先级）
 
+### 备份 NAS 上的数据库
+
+部署后可用 `make backup-nas` 通过 SSH 在 NAS 上创建已校验的 SQLite 在线备份（不重启服务）：
+
+```bash
+cp .nas-backup.env.example .nas-backup.env   # 编辑填入 NAS 地址等
+make backup-nas
+```
+
+详见 `docs/NAS_BACKUP.md`（变量、保留策略、手动恢复步骤）。
+
 ---
 
 ## 使用方式
