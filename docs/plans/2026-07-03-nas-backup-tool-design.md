@@ -29,8 +29,8 @@ The command connects to the Relive NAS over SSH and creates a verified SQLite on
 Use a dedicated local configuration file instead of the application `.env`:
 
 ```text
-.env.backup          # real local values; ignored by Git
-.env.backup.example  # documented placeholders; tracked by Git
+.nas-backup.env          # real local values; ignored by Git
+.nas-backup.env.example  # documented placeholders; tracked by Git
 ```
 
 The real file may contain:
@@ -46,10 +46,10 @@ RELIVE_BACKUP_KEEP=0
 Precedence, highest first:
 
 1. Process environment variables supplied with the command.
-2. Values from `.env.backup`.
+2. Values from `.nas-backup.env`.
 3. Safe script defaults for paths and retention.
 
-`RELIVE_NAS_HOST` has no personal tracked default. It must be supplied by the environment or `.env.backup`. SSH authentication continues to use the developer machine's normal SSH configuration and keys; passwords and private keys are never stored in the repository.
+`RELIVE_NAS_HOST` has no personal tracked default. It must be supplied by the environment or `.nas-backup.env`. SSH authentication continues to use the developer machine's normal SSH configuration and keys; passwords and private keys are never stored in the repository.
 
 The loader accepts only documented `RELIVE_*` keys and simple `KEY=value` syntax. It must not blindly `source` arbitrary shell code from the file.
 
@@ -75,7 +75,7 @@ scripts/backup-nas-remote.sh
 `scripts/backup-nas.sh`:
 
 1. Locates the repository root.
-2. Loads the allowlisted `.env.backup` values.
+2. Loads the allowlisted `.nas-backup.env` values.
 3. Applies explicit environment overrides.
 4. Validates host, paths, label, retention, and required local `ssh` command.
 5. Verifies non-interactive SSH connectivity.
@@ -148,7 +148,7 @@ docker-compose.prod.yml
 VERSION
 ```
 
-The archive contains secrets and therefore inherits file mode `0600`. `.env.backup` is deliberately excluded because it is a development-machine transport configuration, not Relive runtime state.
+The archive contains secrets and therefore inherits file mode `0600`. `.nas-backup.env` is deliberately excluded because it is a development-machine transport configuration, not Relive runtime state.
 
 ### `repository.bundle`
 
@@ -210,8 +210,8 @@ Retention failure reports an error but does not invalidate or remove the newly c
 
 ## Security
 
-- `.env.backup` is ignored by Git.
-- `.env.backup.example` contains placeholders only.
+- `.nas-backup.env` is ignored by Git.
+- `.nas-backup.env.example` contains placeholders only.
 - SSH uses existing keys/configuration and non-interactive mode.
 - All paths and labels are validated and shell-quoted.
 - Runtime capture uses explicit Docker format strings instead of full inspect output.
@@ -230,7 +230,7 @@ tests/scripts/test_backup_nas.sh
 Tests use temporary directories and fake `ssh`, `sqlite3`, `docker`, and `git` executables. They cover:
 
 - configuration precedence;
-- missing `.env.backup`/host errors;
+- missing `.nas-backup.env`/host errors;
 - rejection of unknown or executable config syntax;
 - label and path validation;
 - exact remote argument forwarding;
