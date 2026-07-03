@@ -9,7 +9,7 @@ IMAGE_COMPOSE_FILE := docker-compose.prod.yml
 RUNTIME_COMPOSE_FILE := $(firstword $(wildcard $(SOURCE_COMPOSE_FILE) $(IMAGE_COMPOSE_FILE)))
 RUNTIME_COMPOSE_ARGS := $(if $(RUNTIME_COMPOSE_FILE),-f $(RUNTIME_COMPOSE_FILE),)
 
-.PHONY: help dev build deploy deploy-image prod stop restart logs clean test deps sync-version build-analyzer analyzer dev-backend dev-frontend check-compose check-runtime-compose
+.PHONY: help dev build deploy deploy-image prod stop restart logs clean test deps sync-version build-analyzer analyzer dev-backend dev-frontend check-compose check-runtime-compose backup-nas
 
 # 版本管理
 VERSION_FILE := VERSION
@@ -42,6 +42,9 @@ help:
 	@echo "工具:"
 	@echo "  make build-analyzer       - 构建离线分析工具"
 	@echo "  make build-people-worker  - 构建人物检测 Worker（Mac M4）"
+	@echo ""
+	@echo "备份:"
+	@echo "  make backup-nas           - 通过 SSH 在 NAS 上创建已校验的 SQLite 在线备份"
 	@echo ""
 
 # 开发环境
@@ -125,3 +128,7 @@ build-people-worker: sync-version
 	@echo "构建人物检测 Worker..."
 	cd backend && make build-people-worker
 	@echo "构建完成: backend/bin/relive-people-worker"
+
+# 在 NAS 上创建已校验的 SQLite 在线备份（不重启服务）。配置见 .nas-backup.env
+backup-nas:
+	./scripts/backup-nas.sh

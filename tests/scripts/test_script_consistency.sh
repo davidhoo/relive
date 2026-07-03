@@ -68,7 +68,8 @@ for target in \
   "make restart" \
   "make test" \
   "make clean" \
-  "make build-analyzer"
+  "make build-analyzer" \
+  "make backup-nas"
 do
   assert_contains "$MAKE_HELP" "$target" "make help does not include approved target: $target"
 done
@@ -94,7 +95,7 @@ assert_not_contains "$DEV_SCRIPT" "请选择启动模式" "dev.sh still contains
 assert_not_contains "$DEV_SCRIPT" "read -p" "dev.sh still uses read -p"
 assert_contains "$DEV_SCRIPT" "ML_PID" "dev.sh does not manage an ml-service child process"
 assert_contains "$DEV_SCRIPT" "python -m uvicorn app.main:app --host 127.0.0.1 --port 5050" "dev.sh does not start the local ml-service"
-assert_contains "$DEV_SCRIPT" "go run cmd/relive/main.go --config config.dev.yaml" "dev.sh no longer starts the backend locally"
+assert_contains "$DEV_SCRIPT" "go run ./cmd/relive --config config.dev.yaml" "dev.sh no longer starts the backend locally"
 assert_contains "$DEV_SCRIPT" "npm run dev" "dev.sh no longer starts the frontend locally"
 assert_contains "$DEV_SCRIPT" "trap" "dev.sh no longer installs cleanup handling for child processes"
 assert_contains "$DEV_SCRIPT" "kill -0 \"\${BACKEND_PID}\"" "dev.sh does not verify that the backend process is still alive before starting the frontend"
@@ -151,5 +152,10 @@ assert_contains "$IMAGE_ONLY_RESTART" "-f docker-compose.prod.yml restart" "make
 assert_not_contains "$IMAGE_ONLY_LOGS" "docker-compose.yml 不存在" "make -n logs still requires docker-compose.yml for image-only installs"
 assert_not_contains "$IMAGE_ONLY_STOP" "docker-compose.yml 不存在" "make -n stop still requires docker-compose.yml for image-only installs"
 assert_not_contains "$IMAGE_ONLY_RESTART" "docker-compose.yml 不存在" "make -n restart still requires docker-compose.yml for image-only installs"
+
+# 12) NAS backup tool wiring
+assert_contains "$(make -C "$ROOT" -n backup-nas)" "scripts/backup-nas.sh" "make -n backup-nas does not invoke scripts/backup-nas.sh"
+assert_not_contains "$DEPLOY_SCRIPT" "backup-nas" "deploy.sh invokes the backup tool automatically"
+assert_not_contains "$DEPLOY_IMAGE_SCRIPT" "backup-nas" "deploy-image.sh invokes the backup tool automatically"
 
 echo "OK: script consistency checks passed"
