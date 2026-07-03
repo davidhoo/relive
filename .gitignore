@@ -34,6 +34,10 @@ ENV/
 .env
 .env.local
 
+# NAS backup tool local transport config (real values; placeholders tracked)
+.nas-backup.env
+!.nas-backup.env.example
+
 # Database
 *.db
 *.db-shm
