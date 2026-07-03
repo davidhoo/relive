@@ -854,6 +854,16 @@ test_transport() {
   local tmp
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
+
+  # The production driver streams the worker to `bash -s`. In that mode Bash
+  # does not populate BASH_SOURCE, so verify the worker still enters main and
+  # reaches its normal argument validation.
+  local streamed_out
+  streamed_out=$(bash -s -- relative-root /tmp/relive.db /tmp/backup manual 0 \
+    < "$SCRIPTS/backup-nas-remote.sh" 2>&1) || true
+  assert_contains "$streamed_out" "NAS root must be an absolute path" \
+    "stdin-streamed worker enters main"
+
   local fake_ssh="$tmp/bin"
   mkdir -p "$fake_ssh"
   local capture="$tmp/ssh-args.txt"
