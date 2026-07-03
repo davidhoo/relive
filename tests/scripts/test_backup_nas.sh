@@ -121,9 +121,20 @@ setup_fake_nas() {
 fake_cmd() {
   local bin=$1 name=$2
   mkdir -p "$bin"
+  local script=$3
+  printf '%s\n' "$script" > "$bin/$name"
+  chmod +x "$bin/$name"
+}
+
+# Write a wrapper script that execs a real binary with all passed arguments.
+# Uses printf with a single argument and a here-doc fallback so escaping is
+# robust under set -u.
+make_wrapper() {
+  local bin=$1 name=$2 real=$3
+  mkdir -p "$bin"
   cat > "$bin/$name" <<EOF
 #!/usr/bin/env bash
-$3
+exec "$real" "\$@"
 EOF
   chmod +x "$bin/$name"
 }
@@ -362,7 +373,7 @@ test_remote_preflight() {
   mkdir -p "$workdir/backup/.relive-backup.lock"
   expect_fail "pre-existing lock fails" \
     remote "$workdir/nas-root" "$workdir/nas-root/data/backend/relive.db" "$workdir/backup" manual 0
-  rmdir "$workdir/backup/.relive-backup.lock"
+  rm -rf "$workdir/backup/.relive-backup.lock"
 
   # 5) trap removes only its own lock.
   # 6) .partial directory used; 7) failed run removes its own partial.
@@ -407,13 +418,16 @@ exit 1'
   install_real_fakes "$fake_bin" "$workdir"
 
   # 10) directories start with mode 0700.
+  install_real_fakes "$fake_bin" "$workdir"
+  # Provide an .env so the config-archive usefulness check passes.
+  [[ -f "$workdir/nas-root/.env" ]] || echo "JWT=secret-value" > "$workdir/nas-root/.env"
   remote "$workdir/nas-root" "$workdir/nas-root/data/backend/relive.db" "$workdir/backup" manual 0 >/dev/null 2>&1 || true
   local newest
   newest=$(find "$workdir/backup" -maxdepth 1 -mindepth 1 -type d -name '20*-*-*-*-*' | sort | tail -1)
   if [[ -n "$newest" ]]; then
     local mode
     mode=$(stat -f '%Lp' "$newest" 2>/dev/null || stat -c '%a' "$newest" 2>/dev/null)
-    assert_eq "${mode:0:4}" "0700" "final directory is 0700"
+    assert_eq "$mode" "700" "final directory is 0700"
   else
     echo "FAIL: no successful backup directory created"
     FAILURES=$((FAILURES + 1))
@@ -422,32 +436,42 @@ exit 1'
 
 install_real_fakes() {
   local fake_bin=$1 workdir=$2
-  # sqlite3: real binary if available, else a stub that emits ok.
+  # sqlite3: prefer the real binary via a here-doc wrapper. Symlinks can hit
+  # macOS SIP on /var/folders, so write a script instead.
   if command -v sqlite3 >/dev/null 2>&1; then
-    ln -sf "$(command -v sqlite3)" "$fake_bin/sqlite3" 2>/dev/null || \
-      fake_cmd "$fake_bin" sqlite3 'exec sqlite3 "$@" 2>/dev/null || true'
+    make_wrapper "$fake_bin" sqlite3 "$(command -v sqlite3)"
   else
     fake_cmd "$fake_bin" sqlite3 'echo "ok"'
   fi
-  # git: real binary.
+  # git: real binary via wrapper.
   if command -v git >/dev/null 2>&1; then
-    ln -sf "$(command -v git)" "$fake_bin/git" 2>/dev/null || \
-      fake_cmd "$fake_bin" git 'exec git "$@"'
+    make_wrapper "$fake_bin" git "$(command -v git)"
   fi
-  # tar: real.
+  # tar: real via wrapper.
   if command -v tar >/dev/null 2>&1; then
-    ln -sf "$(command -v tar)" "$fake_bin/tar" 2>/dev/null
+    make_wrapper "$fake_bin" tar "$(command -v tar)"
   fi
-  # sha256sum: macOS provides shasum; emulate sha256sum.
-  if command -v shasum >/dev/null 2>&1 && ! command -v sha256sum >/dev/null 2>&1; then
-    fake_cmd "$fake_bin" sha256sum 'shasum -a 256 "$@"'
-  elif command -v sha256sum >/dev/null 2>&1; then
-    ln -sf "$(command -v sha256sum)" "$fake_bin/sha256sum" 2>/dev/null
+  # find: real via wrapper.
+  if command -v find >/dev/null 2>&1; then
+    make_wrapper "$fake_bin" find "$(command -v find)"
   fi
+  # sha256sum: emulate with shasum (always available on macOS). The wrapper
+  # supports both generation (default) and `-c` verification.
+  cat > "$fake_bin/sha256sum" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-c" ]]; then
+  shift
+  shasum -a 256 -c "$@"
+else
+  shasum -a 256 "$@"
+fi
+EOF
+  chmod +x "$fake_bin/sha256sum"
   # docker: stub returning missing for relive containers.
   fake_cmd "$fake_bin" docker 'echo "missing"'
-  # df: report large free space.
-  fake_cmd "$fake_bin" df 'echo 999999999'
+  # df: report large free space; worker parses awk NR==2. Use a POSIX -P
+  # layout (6 whitespace-separated columns) and avoid % in the printf format.
+  fake_cmd "$fake_bin" df 'printf "Filesystem 1K-blocks Used Avail Capacity Mounted\nfake 999999999 1 999999998 1pct /\n"'
 }
 
 install_missing_dep() {
@@ -473,6 +497,8 @@ test_sqlite() {
   git -C "$workdir/nas-root" config user.name t 2>/dev/null || true
   git -C "$workdir/nas-root" add -A 2>/dev/null || true
   git -C "$workdir/nas-root" commit -qm init 2>/dev/null || true
+  # Config-archive usefulness check needs .env or backend/config.prod.yaml.
+  [[ -f "$workdir/nas-root/.env" ]] || echo "JWT=secret-value" > "$workdir/nas-root/.env"
 
   remote() {
     env -i PATH="$fake_bin:/usr/bin:/bin" \
@@ -485,28 +511,49 @@ test_sqlite() {
     return 0
   fi
 
-  # 1) worker uses SQLite .backup (not cp). Capture sqlite3 invocations.
-  local log=$tmp/sqlite.log
-  fake_cmd "$fake_bin" sqlite3 '#!/usr/bin/env bash
-echo "sqlite3 $@" >> "'"$log"'"
-exec sqlite3 "$@"'
-  : > "$log"
-  remote "$workdir/nas-root" "$workdir/nas-root/data/backend/relive.db" "$workdir/backup" manual 0 >/dev/null 2>&1 || true
-  assert_contains "$(cat "$log")" ".backup" "sqlite uses .backup command"
-  # 2) never cp on live DB/WAL/SHM: ensure no `cp ... relive.db` in worker source.
-  if grep -E 'cp[[:space:]].*relive\.db' "$SCRIPTS/backup-nas-remote.sh"; then
+  # 1) worker uses SQLite .backup (not cp). The worker feeds a command file
+  #    containing `.backup '.../relive.db'` to sqlite3 on stdin. We verify by
+  #    inspecting the worker source for the documented command-file approach
+  #    and by confirming the produced relive.db is a valid SQLite database
+  #    (not a byte-for-byte copy timestamped identically to the live DB).
+  if ! grep -Fq ".backup '" "$SCRIPTS/backup-nas-remote.sh"; then
+    echo "FAIL: worker does not use SQLite .backup command-file"
+    FAILURES=$((FAILURES + 1))
+  else
+    COUNT=$((COUNT + 1))
+  fi
+  if ! grep -Fq "sqlite3 \"\$db_path\" < \"\$cmd_file\"" "$SCRIPTS/backup-nas-remote.sh"; then
+    echo "FAIL: worker does not feed command file via stdin redirection"
+    FAILURES=$((FAILURES + 1))
+  else
+    COUNT=$((COUNT + 1))
+  fi
+  # 2) never cp on live DB/WAL/SHM: ensure no `cp ... relive.db` in worker
+  #    source. RESTORE.txt is documentation and may mention cp as a manual
+  #    recovery step; exclude those lines.
+  if grep -nE '\bcp\b[^|]*relive\.db' "$SCRIPTS/backup-nas-remote.sh" | grep -v 'RESTORE\|<backup-dir>\|<nas-root>'; then
     echo "FAIL: worker uses cp on live DB"
     FAILURES=$((FAILURES + 1))
   else
     COUNT=$((COUNT + 1))
   fi
 
-  # 3) backup output named relive.db.
+  # Run the worker to produce a real bundle for the remaining assertions.
+  remote "$workdir/nas-root" "$workdir/nas-root/data/backend/relive.db" "$workdir/backup" manual 0 >/dev/null 2>&1 || true
+
   local newest
   newest=$(find "$workdir/backup" -maxdepth 1 -mindepth 1 -type d -name '20*-*-*-*-*' | sort | tail -1)
-  assert_match "$newest" '/relive.db$' "" || true
+  [[ -n "$newest" ]] || { echo "FAIL: no bundle directory"; FAILURES=$((FAILURES + 1)); return 0; }
+  # 3) backup output named relive.db.
   [[ -f "$newest/relive.db" ]] && COUNT=$((COUNT + 1)) || \
     { echo "FAIL: relive.db not in bundle"; FAILURES=$((FAILURES + 1)); }
+  # The backup must be a valid, queryable SQLite database produced by .backup
+  # (quick_check ok against the backup, not the live DB).
+  if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$newest/relive.db" ]]; then
+    local qc
+    qc=$(sqlite3 -readonly "$newest/relive.db" 'PRAGMA quick_check;' 2>/dev/null | tr -d '[:space:]')
+    assert_eq "$qc" "ok" "backup relive.db passes quick_check"
+  fi
 
   # 4) quick_check returns exactly one trimmed line 'ok'.
   # 5) schema.sql exported from backup.
@@ -515,17 +562,19 @@ exec sqlite3 "$@"'
 
   # 6) quick-check failure removes partial and leaves existing backups.
   install_real_fakes "$fake_bin" "$workdir"
-  # Make quick_check return "not ok".
-  fake_cmd "$fake_bin" sqlite2_ok 'true' 2>/dev/null || true
-  # Replace sqlite3 to return non-ok for quick_check only.
-  cat > "$fake_bin/sqlite3" <<'EOF'
+  local real_sqlite2
+  real_sqlite2=$(command -v sqlite3)
+  # Replace sqlite3 so .backup and .schema succeed but quick_check emits a
+  # non-ok warning. The worker trims all whitespace from the quick_check
+  # output and compares to "ok"; "ERROR:databasediskimageismalformed" != "ok"
+  # so it must abort.
+  cat > "$fake_bin/sqlite3" <<EOF
 #!/usr/bin/env bash
-# Pass through .backup, but quick_check returns warning.
-if [[ "$*" == *"quick_check"* ]]; then
-  echo "ERROR: database disk image is malformed"
+if [[ "\$*" == *"quick_check"* ]]; then
+  printf '%s\n' "ERROR: database disk image is malformed"
   exit 0
 fi
-exec sqlite3 "$@"
+exec "$real_sqlite2" "\$@"
 EOF
   chmod +x "$fake_bin/sqlite3"
   local before_count
@@ -643,6 +692,8 @@ test_publication() {
   git -C "$workdir/nas-root" config user.name t 2>/dev/null || true
   git -C "$workdir/nas-root" add -A 2>/dev/null || true
   git -C "$workdir/nas-root" commit -qm init 2>/dev/null || true
+  # Config-archive usefulness check needs .env or backend/config.prod.yaml.
+  [[ -f "$workdir/nas-root/.env" ]] || echo "JWT=secret-value" > "$workdir/nas-root/.env"
 
   remote() {
     env -i PATH="$fake_bin:/usr/bin:/bin" \
@@ -659,10 +710,10 @@ test_publication() {
   # 1) directory 0700, files 0600.
   local dmode
   dmode=$(stat -f '%Lp' "$newest" 2>/dev/null || stat -c '%a' "$newest" 2>/dev/null)
-  assert_eq "${dmode:0:4}" "0700" "bundle dir 0700"
+  assert_eq "$dmode" "700" "bundle dir 0700"
   local fmode
   fmode=$(stat -f '%Lp' "$newest/relive.db" 2>/dev/null || stat -c '%a' "$newest/relive.db" 2>/dev/null)
-  assert_eq "${fmode:0:4}" "0600" "bundle file 0600"
+  assert_eq "$fmode" "600" "bundle file 0600"
 
   # 2) manifest.txt records key fields, no ZINFOID values.
   if [[ -f "$newest/manifest.txt" ]]; then
@@ -726,6 +777,8 @@ test_retention() {
   git -C "$workdir/nas-root" config user.name t 2>/dev/null || true
   git -C "$workdir/nas-root" add -A 2>/dev/null || true
   git -C "$workdir/nas-root" commit -qm init 2>/dev/null || true
+  # Config-archive usefulness check needs .env or backend/config.prod.yaml.
+  [[ -f "$workdir/nas-root/.env" ]] || echo "JWT=secret-value" > "$workdir/nas-root/.env"
 
   remote() {
     env -i PATH="$fake_bin:/usr/bin:/bin" \
@@ -921,10 +974,16 @@ main() {
   local groups=("$@")
   [[ ${#groups[@]} -gt 0 ]] || groups=("${ALL_GROUPS[@]}")
 
-  local g
+  local g func
   for g in "${groups[@]}"; do
     echo "== running group: $g =="
-    "test_$g" || true
+    func="test_${g//-/_}"
+    if ! declare -f "$func" >/dev/null 2>&1; then
+      echo "FAIL: no test function for group '$g' ($func)" >&2
+      FAILURES=$((FAILURES + 1))
+      continue
+    fi
+    "$func" || true
   done
 
   echo ""
