@@ -69,6 +69,11 @@ type identityProfileANN struct {
 	unavailable      atomic.Bool
 	rebuildRequested atomic.Bool
 
+	// snapshotGeneration 在每次完整 snapshot 成功发布后加 1。只读 Stats 通过 atomic load 读取，
+	// 用于监控 snapshot 是否推进。以下情况不得增加：构建失败、模型不匹配、输入校验失败、
+	// 只更新 delta、只调用 RequestRebuild、InvalidatePerson、InvalidateAll。
+	snapshotGeneration atomic.Uint64
+
 	// buildHook 仅供测试注入“构建期间”的并发激活，以验证 preserve 语义；生产中始终为 nil。
 	buildHook func()
 }
@@ -252,6 +257,8 @@ func (a *identityProfileANN) Rebuild(centers []*model.PersonIdentityCenter, mode
 	// 构建期间有 delta 变更：保留 delta/invalid/activeGeneration（含更新数据），下一次干净重建再压缩。
 	a.unavailable.Store(false)
 	a.rebuildRequested.Store(false)
+	// 完整 snapshot 成功发布，推进内部 generation（仅在成功发布后增加）。
+	a.snapshotGeneration.Add(1)
 	a.deltaMu.Unlock()
 
 	return nil
@@ -391,6 +398,48 @@ func (a *identityProfileANN) Ready(model string) bool {
 		return false
 	}
 	return snap.model == model
+}
+
+// IdentityANNStatsSnapshot 是 ANN 内部运行快照的只读视图，由 Stats 填充。
+// 不含 embedding、向量或路径，仅聚合计数与状态标志。
+type IdentityANNStatsSnapshot struct {
+	Ready            bool
+	Generation       uint64
+	SnapshotNodes    int
+	DeltaNodes       int
+	InvalidNodes     int
+	RebuildRequested bool
+	Unavailable      bool
+}
+
+// Stats 返回 ANN 的只读、线程安全运行快照。snapshot 通过 atomic load 读取；
+// delta/invalid/activeGeneration 在短 RLock 下读取长度，不遍历或复制 embedding，
+// 不调用 HNSW Search，不触发 rebuild。nil ANN 返回零值且 Ready=false；模型不匹配时
+// Ready=false（其余计数仍来自 snapshot）。
+func (a *identityProfileANN) Stats(model string) IdentityANNStatsSnapshot {
+	if a == nil {
+		return IdentityANNStatsSnapshot{}
+	}
+	out := IdentityANNStatsSnapshot{
+		Unavailable:      a.unavailable.Load(),
+		RebuildRequested: a.rebuildRequested.Load(),
+		Generation:       a.snapshotGeneration.Load(),
+	}
+
+	snap := a.snapshot.Load()
+	if snap != nil {
+		if snap.graph != nil {
+			out.SnapshotNodes = snap.graph.Len()
+		}
+		out.Ready = !out.Unavailable && snap.model == model
+	}
+
+	a.deltaMu.RLock()
+	out.DeltaNodes = len(a.delta)
+	out.InvalidNodes = len(a.invalid)
+	a.deltaMu.RUnlock()
+
+	return out
 }
 
 // buildIndex 在锁外解码、校验中心并构建 HNSW 图。返回不可变 identityCenterIndex。

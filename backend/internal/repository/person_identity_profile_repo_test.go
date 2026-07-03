@@ -1016,3 +1016,123 @@ func TestPersonIdentityProfileRepository_ApplyInvalidation_ResetAllUnknownReason
 	require.NoError(t, db.Model(&model.PersonIdentityProfile{}).Count(&profileCount).Error)
 	assert.Zero(t, profileCount, "ResetAll clears all regardless of reason")
 }
+
+// ==================== GetStats 聚合统计 (Task 14) ====================
+
+// insertMemberRaw 直接写入一条 member 行到指定 generation，用于测试 member 状态聚合。
+func insertMemberRaw(t *testing.T, db *gorm.DB, personID uint, gen int, centerID *uint, faceID uint, state string) {
+	t.Helper()
+	m := &model.PersonIdentityCenterMember{
+		PersonID:   personID,
+		Generation: gen,
+		CenterID:   centerID,
+		FaceID:     faceID,
+		PhotoID:    1,
+		State:      state,
+	}
+	require.NoError(t, db.Create(m).Error)
+}
+
+func TestPersonIdentityProfileRepository_GetStats_Empty(t *testing.T) {
+	repo, db := newProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	// 两个人物但无任何 profile/center/member。
+	require.NoError(t, personRepo.Create(&model.Person{Category: model.PersonCategoryFriend}))
+	require.NoError(t, personRepo.Create(&model.Person{Category: model.PersonCategoryFriend}))
+
+	stats, err := repo.GetStats()
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), stats.TotalPeople)
+	assert.Zero(t, stats.Total)
+	assert.Zero(t, stats.CenterActive)
+	assert.Zero(t, stats.MemberTotal)
+}
+
+func TestPersonIdentityProfileRepository_GetStats_ProfileStatusCounts(t *testing.T) {
+	repo, db := newProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	p1 := createPerson(t, personRepo)
+	p2 := createPerson(t, personRepo)
+	p3 := createPerson(t, personRepo)
+	p4 := createPerson(t, personRepo)
+
+	// 四种 status 各一条。
+	upsertProfileRaw(t, db, personRepo, p1.ID, "emb-v1", model.PersonIdentityProfileStatusReady, 1)
+	upsertProfileRaw(t, db, personRepo, p2.ID, "emb-v1", model.PersonIdentityProfileStatusDirty, 0)
+	upsertProfileRaw(t, db, personRepo, p3.ID, "emb-v1", model.PersonIdentityProfileStatusBuilding, 0)
+	upsertProfileRaw(t, db, personRepo, p4.ID, "emb-v1", model.PersonIdentityProfileStatusFailed, 0)
+
+	stats, err := repo.GetStats()
+	require.NoError(t, err)
+	assert.Equal(t, int64(4), stats.Total)
+	assert.Equal(t, int64(1), stats.Ready)
+	assert.Equal(t, int64(1), stats.Dirty)
+	assert.Equal(t, int64(1), stats.Building)
+	assert.Equal(t, int64(1), stats.Failed)
+}
+
+func TestPersonIdentityProfileRepository_GetStats_ActiveCenterMemberAggregation(t *testing.T) {
+	repo, db := newProfileRepo(t)
+	defer teardownTestDB(db)
+
+	personRepo := NewPersonRepository(db)
+	p1 := createPerson(t, personRepo) // ready, active gen 2, 2 个活动中心（1 confirmed），3 accepted + 1 candidate + 1 excluded
+	p2 := createPerson(t, personRepo) // ready 但 active_generation=0 → 不计入活动
+	p3 := createPerson(t, personRepo) // ready 但人物删除 → 不计入
+	p4 := createPerson(t, personRepo) // dirty → 不计入活动
+	p5 := createPerson(t, personRepo) // ready, active gen 1, 1 个中心
+
+	// p1: ready, active gen 2。
+	upsertProfileRaw(t, db, personRepo, p1.ID, "emb-v1", model.PersonIdentityProfileStatusReady, 2)
+	insertCenterRaw(t, db, p1.ID, 1, 1, 5, 0.90) // stale gen1，不计入活动
+	c1 := insertCenterRaw(t, db, p1.ID, 2, 1, 5, 0.90)
+	c1.Confirmed = true
+	require.NoError(t, db.Model(c1).Update("confirmed", true).Error)
+	insertCenterRaw(t, db, p1.ID, 2, 2, 4, 0.85)
+	// 活动 member（gen2）。
+	insertMemberRaw(t, db, p1.ID, 2, &c1.ID, 101, model.PersonIdentityMemberStateAccepted)
+	insertMemberRaw(t, db, p1.ID, 2, &c1.ID, 102, model.PersonIdentityMemberStateAccepted)
+	insertMemberRaw(t, db, p1.ID, 2, nil, 103, model.PersonIdentityMemberStateCandidate)
+	insertMemberRaw(t, db, p1.ID, 2, nil, 104, model.PersonIdentityMemberStateExcluded)
+	// stale member（gen1），不计入活动聚合。
+	insertMemberRaw(t, db, p1.ID, 1, &c1.ID, 201, model.PersonIdentityMemberStateAccepted)
+
+	// p2: ready 但 active_generation=0。
+	upsertProfileRaw(t, db, personRepo, p2.ID, "emb-v1", model.PersonIdentityProfileStatusReady, 0)
+	insertCenterRaw(t, db, p2.ID, 1, 1, 5, 0.90)
+
+	// p3: ready 但人物删除。
+	upsertProfileRaw(t, db, personRepo, p3.ID, "emb-v1", model.PersonIdentityProfileStatusReady, 1)
+	insertCenterRaw(t, db, p3.ID, 1, 1, 5, 0.90)
+	require.NoError(t, personRepo.Delete(p3.ID))
+
+	// p4: dirty。
+	upsertProfileRaw(t, db, personRepo, p4.ID, "emb-v1", model.PersonIdentityProfileStatusDirty, 1)
+	insertCenterRaw(t, db, p4.ID, 1, 1, 5, 0.90)
+
+	// p5: ready, active gen 1, 1 个中心。
+	upsertProfileRaw(t, db, personRepo, p5.ID, "emb-v1", model.PersonIdentityProfileStatusReady, 1)
+	c5 := insertCenterRaw(t, db, p5.ID, 1, 1, 5, 0.90)
+	insertMemberRaw(t, db, p5.ID, 1, &c5.ID, 301, model.PersonIdentityMemberStateAccepted)
+
+	stats, err := repo.GetStats()
+	require.NoError(t, err)
+
+	// 活动中心：p1 有 2 个（gen2）+ p5 有 1 个 = 3。
+	assert.Equal(t, int64(3), stats.CenterActive)
+	assert.Equal(t, int64(1), stats.CenterConfirmed, "only p1's confirmed center counts")
+	assert.Equal(t, int64(2), stats.CenterActiveProfiles, "p1 and p5 have active centers")
+	assert.Equal(t, 2, stats.CenterMaxPerProfile, "p1 has 2 active centers (max)")
+	// avg = 3 / 2 = 1.5
+	assert.InDelta(t, 1.5, stats.CenterAvgPerProfile, 1e-9)
+
+	// 活动 member：p1 4 个（2 accepted + 1 candidate + 1 excluded）+ p5 1 accepted = 5。
+	assert.Equal(t, int64(5), stats.MemberTotal)
+	assert.Equal(t, int64(3), stats.MemberAccepted)
+	assert.Equal(t, int64(1), stats.MemberCandidate)
+	assert.Equal(t, int64(1), stats.MemberExcluded)
+}

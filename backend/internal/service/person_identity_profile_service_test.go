@@ -2,6 +2,8 @@ package service
 
 import (
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -148,6 +150,7 @@ func setupIdentityProfileDB(t *testing.T) (*gorm.DB, string) {
 		&model.PersonIdentityProfile{},
 		&model.PersonIdentityCenter{},
 		&model.PersonIdentityCenterMember{},
+		&model.PeopleIdentityDecision{},
 	))
 	t.Cleanup(func() {
 		sqlDB, _ := db.DB()
@@ -821,6 +824,13 @@ func TestPersonIdentityProfileService_ANNRebuildFailureDoesNotRollbackGeneration
 	active, err = svc.GetActive(person.ID)
 	require.NoError(t, err)
 	assert.Equal(t, genBefore, active.Profile.ActiveGeneration, "ANN rebuild failure must not roll back generation")
+
+	// Task 14：ListAllActiveCenters 失败应记录脱敏错误类别 list_active_centers_failed。
+	// ann.RequestRebuild() 已由失败分支再次调用，RebuildRequested 保持 true。
+	resp, err := svc.GetOperationalStats(nil)
+	require.NoError(t, err)
+	assert.Equal(t, "list_active_centers_failed", resp.ANN.LastBuildError, "list active centers failure recorded as sanitized category")
+	assert.True(t, resp.ANN.RebuildRequested)
 }
 
 // failingListCentersRepo 包装仓库，使 ListAllActiveCenters 失败，其余方法透传。
@@ -1061,4 +1071,103 @@ func TestPersonIdentityProfileService_Invalidate_PersistFailureFailsClosed(t *te
 	if ready {
 		assert.NotContains(t, got, person.ID, "dirty person must remain invalidated after persist failure")
 	}
+}
+
+// ==================== Task 14: GetOperationalStats / ListRecentDecisions ====================
+
+func TestPersonIdentityProfileService_GetOperationalStats_LegacyNoRepoAccess(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "legacy", "emb", 25, 500)
+
+	resp, err := svc.GetOperationalStats(deps.repos.IdentityDecision)
+	require.NoError(t, err)
+	assert.Equal(t, "legacy", resp.Mode)
+	// 零值运行状态。
+	assert.Zero(t, resp.Profiles.Total)
+	assert.Zero(t, resp.ANN.Generation)
+	assert.False(t, resp.ANN.Ready)
+	assert.Zero(t, resp.Decisions.Total)
+
+	// legacy 不得访问 Repository/ANN/AppConfig。
+	c := deps.countingRepo
+	assert.Equal(t, 0, c.getStats, "legacy stats must not call repo.GetStats")
+	assert.Equal(t, 0, c.listAllActiveCenters, "legacy stats must not call repo.ListAllActiveCenters")
+}
+
+func TestPersonIdentityProfileService_GetOperationalStats_ShadowAggregates(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+	person := createPersonWithFaces(t, deps.repos, 100, vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
+
+	require.NoError(t, svc.MarkDirty([]uint{person.ID}, "manual"))
+	require.NoError(t, svc.RunBackgroundSlice())
+
+	resp, err := svc.GetOperationalStats(deps.repos.IdentityDecision)
+	require.NoError(t, err)
+	assert.Equal(t, "shadow", resp.Mode)
+	assert.Greater(t, resp.Profiles.Total, int64(0))
+	assert.Equal(t, int64(1), resp.Profiles.Ready)
+	assert.Greater(t, resp.Centers.Active, int64(0))
+	assert.Greater(t, resp.Members.Total, int64(0))
+	assert.Greater(t, resp.ANN.Generation, uint64(0), "generation increments after successful ANN rebuild")
+	assert.True(t, resp.ANN.Ready)
+	assert.Empty(t, resp.ANN.LastBuildError)
+	// decisions 窗口固定 24 小时。
+	assert.Equal(t, 24, resp.Decisions.WindowHours)
+}
+
+func TestPersonIdentityProfileService_ListRecentDecisions_EmptyReturnsEmptySlice(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+	out, err := svc.ListRecentDecisions(50, deps.repos.IdentityDecision)
+	require.NoError(t, err)
+	assert.NotNil(t, out)
+	assert.Empty(t, out)
+}
+
+func TestPersonIdentityProfileService_ListRecentDecisions_CenterIDsParsed(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+	now := time.Now().UTC()
+	// 写入一条 decision，CenterIDs 含重复、0、非法值。
+	d := &model.PeopleIdentityDecision{
+		Mode:                model.PeopleIdentityModeShadow,
+		ComponentHash:       "h1",
+		ComponentSize:       2,
+		ComponentFaceIDs:    "1,2",
+		DecisionKey:         "dk1",
+		CenterIDs:           "5,3,5,0,abc,3,7",
+		Decision:            model.PeopleIdentityDecisionAgree,
+		AlgorithmVersion:    "v1",
+		IndexGeneration:     1,
+		CreatedAt:           now,
+		ElapsedMilliseconds: 10,
+	}
+	require.NoError(t, deps.db.Create(d).Error)
+
+	out, err := svc.ListRecentDecisions(50, deps.repos.IdentityDecision)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.Equal(t, []uint{3, 5, 7}, out[0].CenterIDs, "CenterIDs deduped, filtered, sorted")
+	// 不返回 ComponentFaceIDs / ComponentHash / DecisionKey。
+	assert.Empty(t, out[0].ComponentFaceIDsTruncated)
+}
+
+func TestPersonIdentityProfileService_ListRecentDecisions_CenterIDsTruncatedTo32(t *testing.T) {
+	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 5, 0)
+	now := time.Now().UTC()
+	parts := make([]string, 0, 40)
+	for i := 1; i <= 40; i++ {
+		parts = append(parts, strconv.Itoa(i))
+	}
+	d := &model.PeopleIdentityDecision{
+		Mode:            model.PeopleIdentityModeShadow,
+		ComponentHash:   "h2",
+		DecisionKey:     "dk2",
+		CenterIDs:       strings.Join(parts, ","),
+		Decision:        model.PeopleIdentityDecisionAgree,
+		CreatedAt:       now,
+	}
+	require.NoError(t, deps.db.Create(d).Error)
+
+	out, err := svc.ListRecentDecisions(50, deps.repos.IdentityDecision)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.Len(t, out[0].CenterIDs, 32, "CenterIDs truncated to 32")
 }

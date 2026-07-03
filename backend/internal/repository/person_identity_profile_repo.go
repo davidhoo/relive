@@ -628,8 +628,13 @@ func (r *personIdentityProfileRepository) ListBackfillPersonIDs(cursor uint, lim
 	return ids, nil
 }
 
-// GetStats 汇总 profile 各 status 计数与人物总数，供 service 与监控查询。
+// GetStats 汇总 profile 各 status 计数、人物总数、活动 center/member 聚合，供 service 与监控查询。
 // backfill 游标与完成标志由 service 从持久化状态补充，此处只返回数据库聚合值。
+//
+// 活动中心定义：center.generation = profile.active_generation、profile.status=ready、
+// active_generation>0、对应 people 仍存在。活动 member 同理限定 member.generation =
+// profile.active_generation。统计全部通过 COUNT/GROUP BY/MAX/AVG 在数据库侧完成，
+// 不加载全部 profile/center/member 到 Go，也不读取 centroid_embedding/sum_embedding。
 func (r *personIdentityProfileRepository) GetStats() (*model.PersonIdentityProfileStats, error) {
 	stats := &model.PersonIdentityProfileStats{}
 
@@ -665,5 +670,84 @@ func (r *personIdentityProfileRepository) GetStats() (*model.PersonIdentityProfi
 		return nil, err
 	}
 	stats.TotalPeople = people
+
+	// 活动 center 聚合：JOIN profile + people，仅统计 generation = active_generation
+	// 且 active_generation > 0 且 status=ready 且对应人物存在。
+	// total/active 在该子集下相等（都是活动中心）。
+	type centerAgg struct {
+		Total     int64
+		Confirmed int64
+	}
+	var ca centerAgg
+	if err := r.db.Table("person_identity_centers AS c").
+		Select("COUNT(*) AS total, SUM(CASE WHEN c.confirmed = 1 THEN 1 ELSE 0 END) AS confirmed").
+		Joins("INNER JOIN person_identity_profiles AS p ON p.person_id = c.person_id").
+		Joins("INNER JOIN people ON people.id = c.person_id").
+		Where("c.generation = p.active_generation AND p.active_generation > 0").
+		Where("p.status = ?", model.PersonIdentityProfileStatusReady).
+		Scan(&ca).Error; err != nil {
+		return nil, err
+	}
+	stats.CenterTotal = ca.Total
+	stats.CenterActive = ca.Total
+	stats.CenterConfirmed = ca.Confirmed
+
+	// 拥有活动中心且 ready 的人物数（avg 分母），以及单人物活动中心最大值。
+	var activeProfiles int64
+	if err := r.db.Table("person_identity_centers AS c").
+		Select("COUNT(DISTINCT c.person_id)").
+		Joins("INNER JOIN person_identity_profiles AS p ON p.person_id = c.person_id").
+		Joins("INNER JOIN people ON people.id = c.person_id").
+		Where("c.generation = p.active_generation AND p.active_generation > 0").
+		Where("p.status = ?", model.PersonIdentityProfileStatusReady).
+		Scan(&activeProfiles).Error; err != nil {
+		return nil, err
+	}
+	stats.CenterActiveProfiles = activeProfiles
+
+	var maxPer int64
+	if err := r.db.Table("person_identity_centers AS c").
+		Select("COUNT(*) AS cnt").
+		Joins("INNER JOIN person_identity_profiles AS p ON p.person_id = c.person_id").
+		Joins("INNER JOIN people ON people.id = c.person_id").
+		Where("c.generation = p.active_generation AND p.active_generation > 0").
+		Where("p.status = ?", model.PersonIdentityProfileStatusReady).
+		Group("c.person_id").
+		Order("cnt DESC").
+		Limit(1).
+		Scan(&maxPer).Error; err != nil {
+		return nil, err
+	}
+	stats.CenterMaxPerProfile = int(maxPer)
+
+	if activeProfiles > 0 {
+		stats.CenterAvgPerProfile = float64(ca.Total) / float64(activeProfiles)
+	}
+
+	// 活动 member 聚合：同样限定 generation = active_generation、ready、人物存在。
+	type memberAgg struct {
+		Total     int64
+		Accepted  int64
+		Candidate int64
+		Excluded  int64
+	}
+	var ma memberAgg
+	if err := r.db.Table("person_identity_center_members AS m").
+		Select("COUNT(*) AS total, "+
+			"SUM(CASE WHEN m.state = 'accepted' THEN 1 ELSE 0 END) AS accepted, "+
+			"SUM(CASE WHEN m.state = 'candidate' THEN 1 ELSE 0 END) AS candidate, "+
+			"SUM(CASE WHEN m.state = 'excluded' THEN 1 ELSE 0 END) AS excluded").
+		Joins("INNER JOIN person_identity_profiles AS p ON p.person_id = m.person_id").
+		Joins("INNER JOIN people ON people.id = m.person_id").
+		Where("m.generation = p.active_generation AND p.active_generation > 0").
+		Where("p.status = ?", model.PersonIdentityProfileStatusReady).
+		Scan(&ma).Error; err != nil {
+		return nil, err
+	}
+	stats.MemberTotal = ma.Total
+	stats.MemberAccepted = ma.Accepted
+	stats.MemberCandidate = ma.Candidate
+	stats.MemberExcluded = ma.Excluded
+
 	return stats, nil
 }

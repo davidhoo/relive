@@ -212,6 +212,41 @@ make build-analyzer
 - 照片详情页展示识别到的人物
 - 人物亲密度自动融入策展引擎选图
 
+### 人物身份画像模式（灰度发布中）
+
+身份画像是人物聚类之上的派生层：为每个人物维护多中心身份向量（profile），用于在 legacy 聚类之外提供更稳定的匹配参考。当前生产环境默认 `legacy`，不构建画像、不运行 matcher、不写决策遥测。模式通过 YAML 配置 + 服务重启切换，**不提供任何运行时修改模式的 API**。
+
+```yaml
+people:
+  identity_profile_mode: legacy   # 当前生产默认
+```
+
+四种模式：
+
+| 模式 | 说明 |
+|------|------|
+| `legacy`  | 当前生产默认；不构建画像、不运行 matcher、不写决策。 |
+| `shadow`  | 构建画像并记录与 legacy 的对比遥测，**不改变**人物归属。 |
+| `rescue`  | 仅在 legacy miss 且通过全部护栏时救回（挂靠已有人物）；必须先有 shadow 校准数据。 |
+| `primary` | 当前不可用于生产，不应启用。 |
+
+发布顺序（不可跳级）：
+
+1. `legacy` 部署代码和数据库迁移。
+2. 在复制的数据库上完成 `shadow` smoke test。
+3. 生产切换到 `shadow`。
+4. 收集并评审校准数据（通过只读运行状态接口观察分歧率、legacy miss/profile hit 等）。
+5. 达到安全门槛后才评估 `rescue`。
+
+只读运行状态接口（均需认证，不返回 embedding/路径/人名）：
+
+```
+GET /api/v1/people/identity-profiles/stats
+GET /api/v1/people/identity-profiles/decisions?limit=50
+```
+
+回滚：将配置改回 `legacy` 并重启服务即可。profile/center/decision 均为派生数据，回滚**不需要**恢复 `faces.person_id`；**不建议**手工删除画像表；`rescue` 不能在没有 `shadow` 校准的情况下启用。
+
 ### 往年今日 & 事件策展
 - 每天自动挑选历史上同一天或相近日期的照片
 - 事件驱动型智能策展：基于时空聚类的事件引擎，6 个提名通道（时光隧道 / 巅峰回忆 / 地理漂移 / 角落遗珠 / 人物专题 / 季节专题）

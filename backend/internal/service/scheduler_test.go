@@ -117,6 +117,12 @@ func (s *identityProfileServiceStub) GetActive(uint) (*model.PersonIdentityProfi
 func (s *identityProfileServiceStub) GetStats() (*model.PersonIdentityProfileStats, error) {
 	return &model.PersonIdentityProfileStats{}, nil
 }
+func (s *identityProfileServiceStub) GetOperationalStats(_ repository.PeopleIdentityDecisionRepository) (*model.IdentityProfileOperationalStatsResponse, error) {
+	return &model.IdentityProfileOperationalStatsResponse{Mode: s.mode}, nil
+}
+func (s *identityProfileServiceStub) ListRecentDecisions(_ int, _ repository.PeopleIdentityDecisionRepository) ([]model.IdentityDecisionResponse, error) {
+	return []model.IdentityDecisionResponse{}, nil
+}
 func (s *identityProfileServiceStub) Mode() string { return s.mode }
 
 // analysisServiceStub 是 AnalysisService 的最小桩，供调度器 Start() 测试使用，

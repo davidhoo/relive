@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -148,6 +150,13 @@ type PersonIdentityProfileService interface {
 	GetActive(personID uint) (*model.PersonIdentityProfileBuild, error)
 	// GetStats 返回画像运行统计。legacy 返回零值结构且不访问 Repository。
 	GetStats() (*model.PersonIdentityProfileStats, error)
+	// GetOperationalStats 返回完整运行状态视图（profile/center/member/backfill/ANN/decision）。
+	// legacy 仅返回 mode 与零值运行状态，不访问 Repository/ANN/AppConfig/decision 仓库。
+	// decisionRepo 为 nil 时不查询决策汇总（仍返回零值 decisions 字段）。
+	GetOperationalStats(decisionRepo repository.PeopleIdentityDecisionRepository) (*model.IdentityProfileOperationalStatsResponse, error)
+	// ListRecentDecisions 将最近 limit 条决策遥测转为只读 DTO（过滤敏感字段）。
+	// limit 由 handler 限制为 1–200；service 不再二次截断。
+	ListRecentDecisions(limit int, decisionRepo repository.PeopleIdentityDecisionRepository) ([]model.IdentityDecisionResponse, error)
 	// Mode 返回当前身份画像模式（legacy/shadow/rescue/primary）。
 	Mode() string
 }
@@ -198,6 +207,13 @@ type personIdentityProfileService struct {
 	lastRunAt time.Time
 	// stateLoaded 标记 backfill 状态是否已从持久化加载（legacy 模式永不加载）。
 	stateLoaded bool
+
+	// ANN 最近构建状态（Task 14 只读运行状态接口）。读取 stats 不触发 rebuild。
+	// 错误只保存脱敏类别，不保存路径、SQL、endpoint 或 embedding 内容。
+	annStatsMu           sync.RWMutex
+	lastANNBuildAt       *time.Time
+	lastANNBuildDuration time.Duration
+	lastANNBuildError    string
 }
 
 // NewPersonIdentityProfileService 构造身份画像服务。
@@ -408,7 +424,7 @@ func (s *personIdentityProfileService) RunBackgroundSlice() error {
 
 // rebuildANNIfNeeded 在 rebuildRequested 时从活动中心重建 ANN snapshot。
 // 使用专用后台仓库查询，仅返回当前模型签名的活动中心。重建失败只标记不可用并请求重试，
-// 不影响画像 generation 与现有聚类。
+// 不影响画像 generation 与现有聚类。同时记录脱敏构建状态供只读运行状态接口暴露。
 func (s *personIdentityProfileService) rebuildANNIfNeeded() {
 	if s.ann == nil || !s.ann.RebuildRequested() {
 		return
@@ -416,18 +432,88 @@ func (s *personIdentityProfileService) rebuildANNIfNeeded() {
 	if s.bgRepo == nil {
 		return
 	}
+	start := s.nowFn()
 	centers, err := s.bgRepo.ListAllActiveCenters(s.embeddingModel)
 	if err != nil {
 		logger.Warnf("Identity profile ANN: list active centers failed: %v", err)
-		// 查询失败：保持 rebuildRequested=true，下次切片重试。
+		// 查询失败：保持 rebuildRequested=true，下次切片重试。计为构建失败。
+		s.recordANNBuildFailure(start, annBuildErrListActiveCentersFailed)
 		s.ann.RequestRebuild()
 		return
 	}
 	if err := s.ann.Rebuild(centers, s.embeddingModel); err != nil {
 		logger.Warnf("Identity profile ANN: rebuild failed: %v", err)
 		// Rebuild 内部已标记 unavailable + rebuildRequested。
+		s.recordANNBuildFailure(start, classifyANNBuildError(err))
 		return
 	}
+	s.recordANNBuildSuccess(start)
+}
+
+// annBuildErr* 是脱敏的 ANN 构建失败类别，不暴露原始错误、路径或 SQL。
+const (
+	annBuildErrListActiveCentersFailed = "list_active_centers_failed"
+	annBuildErrModelMismatch           = "model_mismatch"
+	annBuildErrInvalidCenter           = "invalid_center"
+	annBuildErrEmbeddingDecodeFailed   = "embedding_decode_failed"
+	annBuildErrDimensionMismatch       = "dimension_mismatch"
+	annBuildErrAnnBuildFailed          = "ann_build_failed"
+)
+
+// identityProfileAnnErrMaxLen 限制暴露到 API 的脱敏错误类别长度。
+const identityProfileAnnErrMaxLen = 200
+
+// classifyANNBuildError 将 ANN Rebuild 错误映射为脱敏类别。未知错误统一归为 ann_build_failed，
+// 不暴露原始错误内容。ListAllActiveCenters 返回的查询错误单独归为 list_active_centers_failed。
+func classifyANNBuildError(err error) string {
+	if err == nil {
+		return ""
+	}
+	switch {
+	case errors.Is(err, errANNModelMismatch):
+		return annBuildErrModelMismatch
+	case errors.Is(err, errANNInvalidCenter):
+		return annBuildErrInvalidCenter
+	default:
+		// 进一步根据错误消息判定 embedding/dimension 类别（buildIndex 返回非哨兵错误）。
+		msg := err.Error()
+		if strings.Contains(msg, "embedding decode failed") {
+			return annBuildErrEmbeddingDecodeFailed
+		}
+		if strings.Contains(msg, "dim mismatch") {
+			return annBuildErrDimensionMismatch
+		}
+		return annBuildErrAnnBuildFailed
+	}
+}
+
+// recordANNBuildSuccess 清空错误并记录成功构建时间/耗时。
+func (s *personIdentityProfileService) recordANNBuildSuccess(start time.Time) {
+	duration := s.nowFn().Sub(start)
+	if duration < 0 {
+		duration = 0
+	}
+	now := s.nowFn()
+	s.annStatsMu.Lock()
+	s.lastANNBuildAt = &now
+	s.lastANNBuildDuration = duration
+	s.lastANNBuildError = ""
+	s.annStatsMu.Unlock()
+}
+
+// recordANNBuildFailure 记录失败耗时与脱敏错误类别（最长 200 字符），不清空上次成功时间。
+func (s *personIdentityProfileService) recordANNBuildFailure(start time.Time, category string) {
+	duration := s.nowFn().Sub(start)
+	if duration < 0 {
+		duration = 0
+	}
+	if len(category) > identityProfileAnnErrMaxLen {
+		category = category[:identityProfileAnnErrMaxLen]
+	}
+	s.annStatsMu.Lock()
+	s.lastANNBuildDuration = duration
+	s.lastANNBuildError = category
+	s.annStatsMu.Unlock()
 }
 
 // advanceBackfill 发现一批尚未构建画像的人物并标记 dirty，推进持久化游标。
@@ -602,6 +688,192 @@ func (s *personIdentityProfileService) GetStats() (*model.PersonIdentityProfileS
 	stats.BackfillCursor = st.CursorPersonID
 	stats.BackfillCompleted = st.Completed
 	return stats, nil
+}
+
+// identityProfileDecisionWindowHours 是决策汇总的固定时间窗口（最近 24 小时）。
+const identityProfileDecisionWindowHours = 24
+
+// identityProfileDecisionCenterIDsMax 是单条决策响应返回的最多 center ID 数。
+const identityProfileDecisionCenterIDsMax = 32
+
+// GetOperationalStats 返回完整运行状态视图。legacy 仅返回 mode 与零值运行状态，
+// 不访问 Repository/ANN/AppConfig/decision 仓库；显式调用 decisions 接口时允许读取
+// 以前保留的 decision 历史（属于用户触发的只读查询，不属于后台画像负载）。
+func (s *personIdentityProfileService) GetOperationalStats(decisionRepo repository.PeopleIdentityDecisionRepository) (*model.IdentityProfileOperationalStatsResponse, error) {
+	if s.mode == identityProfileModeLegacy {
+		return &model.IdentityProfileOperationalStatsResponse{Mode: identityProfileModeLegacy}, nil
+	}
+
+	stats, err := s.repo.GetStats()
+	if err != nil {
+		return nil, err
+	}
+	st := s.currentBackfillState()
+	stats.BackfillCursor = st.CursorPersonID
+	stats.BackfillCompleted = st.Completed
+
+	resp := &model.IdentityProfileOperationalStatsResponse{
+		Mode: s.mode,
+		Profiles: model.IdentityProfileCountStats{
+			Total:    stats.Total,
+			Ready:    stats.Ready,
+			Dirty:    stats.Dirty,
+			Building: stats.Building,
+			Failed:   stats.Failed,
+		},
+		Centers: model.IdentityCenterStats{
+			Total:             stats.CenterTotal,
+			Active:            stats.CenterActive,
+			Confirmed:         stats.CenterConfirmed,
+			AveragePerProfile: stats.CenterAvgPerProfile,
+			MaxPerProfile:     stats.CenterMaxPerProfile,
+		},
+		Members: model.IdentityMemberStats{
+			Total:     stats.MemberTotal,
+			Accepted:  stats.MemberAccepted,
+			Candidate: stats.MemberCandidate,
+			Excluded:  stats.MemberExcluded,
+		},
+		Backfill: model.IdentityBackfillStats{
+			TotalPeople: stats.TotalPeople,
+			Cursor:      stats.BackfillCursor,
+			Completed:   stats.BackfillCompleted,
+		},
+		ANN: s.buildANNStatsResponse(),
+		Decisions: model.IdentityDecisionStats{
+			WindowHours: identityProfileDecisionWindowHours,
+		},
+	}
+
+	if decisionRepo != nil {
+		since := s.nowFn().Add(-identityProfileDecisionWindowHours * time.Hour)
+		summary, err := decisionRepo.GetSummarySince(since)
+		if err != nil {
+			return nil, err
+		}
+		resp.Decisions.Total = summary.Total
+		resp.Decisions.Agree = summary.Agree
+		resp.Decisions.Disagree = summary.Disagree
+		resp.Decisions.LegacyMissProfileHit = summary.LegacyMissProfileHit
+		resp.Decisions.LegacyMissProfileMiss = summary.LegacyMissProfileMiss
+		resp.Decisions.ProfileMiss = summary.ProfileMiss
+		resp.Decisions.ProfileUnavailable = summary.ProfileUnavailable
+		resp.Decisions.ProfileBlocked = summary.ProfileBlocked
+		resp.Decisions.RescueApplied = summary.RescueApplied
+	}
+
+	return resp, nil
+}
+
+// buildANNStatsResponse 从 ANN 只读快照与最近构建状态构造响应。读取 stats 不触发 rebuild。
+func (s *personIdentityProfileService) buildANNStatsResponse() model.IdentityANNStats {
+	if s.ann == nil {
+		return model.IdentityANNStats{}
+	}
+	snap := s.ann.Stats(s.embeddingModel)
+
+	s.annStatsMu.RLock()
+	lastAt := s.lastANNBuildAt
+	lastDuration := s.lastANNBuildDuration
+	lastErr := s.lastANNBuildError
+	s.annStatsMu.RUnlock()
+
+	resp := model.IdentityANNStats{
+		Ready:            snap.Ready,
+		Generation:       snap.Generation,
+		SnapshotNodes:    snap.SnapshotNodes,
+		DeltaNodes:       snap.DeltaNodes,
+		InvalidNodes:     snap.InvalidNodes,
+		RebuildRequested: snap.RebuildRequested,
+		Unavailable:      snap.Unavailable,
+		LastBuildAt:      lastAt,
+		LastBuildError:   lastErr,
+	}
+	if lastDuration > 0 {
+		resp.LastBuildDurationMs = lastDuration.Milliseconds()
+	}
+	return resp
+}
+
+// ListRecentDecisions 返回最近 limit 条决策遥测（已转 DTO，过滤敏感字段）。
+// legacy 模式下 decisionRepo 由 handler 注入；service 仅负责 DTO 转换与 CenterIDs 解析。
+// limit 由调用方保证为 1–200；repository.ListRecent 内部会再次截断到 200。
+func (s *personIdentityProfileService) ListRecentDecisions(limit int, decisionRepo repository.PeopleIdentityDecisionRepository) ([]model.IdentityDecisionResponse, error) {
+	if decisionRepo == nil {
+		return []model.IdentityDecisionResponse{}, nil
+	}
+	rows, err := decisionRepo.ListRecent(limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.IdentityDecisionResponse, 0, len(rows))
+	for _, d := range rows {
+		out = append(out, toIdentityDecisionResponse(d))
+	}
+	return out, nil
+}
+
+// toIdentityDecisionResponse 将 GORM 模型转为只读 DTO。
+// 明确不返回 ComponentFaceIDs、ComponentHash、DecisionKey、embedding、路径、人物名称。
+// CenterIDs 从逗号字符串安全解析：过滤非法/0/重复、升序、最多 32 个；解析失败不 panic。
+func toIdentityDecisionResponse(d *model.PeopleIdentityDecision) model.IdentityDecisionResponse {
+	if d == nil {
+		return model.IdentityDecisionResponse{}
+	}
+	return model.IdentityDecisionResponse{
+		ID:                      d.ID,
+		CreatedAt:               d.CreatedAt,
+		Mode:                    d.Mode,
+		ComponentSize:           d.ComponentSize,
+		ComponentFaceIDsTruncated: d.ComponentFaceIDsTruncated,
+		LegacyTargetPersonID:    d.LegacyTargetPersonID,
+		LegacyScore:             d.LegacyScore,
+		ProfileBestPersonID:     d.ProfileBestPersonID,
+		ProfileBestScore:        d.ProfileBestScore,
+		ProfileSecondPersonID:   d.ProfileSecondPersonID,
+		ProfileSecondScore:      d.ProfileSecondScore,
+		Margin:                  d.Margin,
+		CenterIDs:               parseCenterIDsCSV(d.CenterIDs, identityProfileDecisionCenterIDsMax),
+		Decision:                d.Decision,
+		Reason:                  d.Reason,
+		ElapsedMilliseconds:     d.ElapsedMilliseconds,
+		AlgorithmVersion:        d.AlgorithmVersion,
+		IndexGeneration:         d.IndexGeneration,
+	}
+}
+
+// parseCenterIDsCSV 安全解析逗号分隔的 center ID 字符串：过滤非法/0/重复，升序，最多 max 个。
+// 解析失败跳过非法项，不 panic。空串返回空切片（非 nil）。
+func parseCenterIDsCSV(csv string, max int) []uint {
+	out := []uint{}
+	if csv == "" {
+		return out
+	}
+	seen := make(map[uint]struct{})
+	for _, part := range strings.Split(csv, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		v, err := strconv.ParseUint(part, 10, 64)
+		if err != nil {
+			continue
+		}
+		if v == 0 {
+			continue
+		}
+		id := uint(v)
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+		if max > 0 && len(out) >= max {
+			break
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 // currentBackfillState 从持久化读取当前 backfill 状态；读取失败或未初始化时返回零值。

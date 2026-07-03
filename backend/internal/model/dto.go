@@ -685,3 +685,117 @@ type BatchRotateRequest struct {
 	PhotoIDs  []uint `json:"photo_ids" binding:"required,min=1"`
 	Direction string `json:"direction" binding:"required,oneof=left right"`
 }
+
+// ==================== Identity Profile operational stats (Task 14) ====================
+//
+// 以下 DTO 仅用于只读运行状态接口 GET /people/identity-profiles/stats 与
+// GET /people/identity-profiles/decisions。所有字段均为聚合计数或脱敏元数据，
+// 不含 embedding、图片路径、缩略图路径、人物名称、API key 或原始 SQL 错误。
+
+// IdentityProfileOperationalStatsResponse 是身份画像运行状态的顶层响应。
+// legacy 模式仅返回 mode 与零值运行状态，不查询 profile/center/member/ANN/backfill/decision。
+type IdentityProfileOperationalStatsResponse struct {
+	Mode      string                     `json:"mode"`
+	Profiles  IdentityProfileCountStats  `json:"profiles"`
+	Centers   IdentityCenterStats        `json:"centers"`
+	Members   IdentityMemberStats        `json:"members"`
+	Backfill  IdentityBackfillStats      `json:"backfill"`
+	ANN       IdentityANNStats           `json:"ann"`
+	Decisions IdentityDecisionStats      `json:"decisions"`
+}
+
+// IdentityProfileCountStats 汇总 profile 各 status 计数。
+type IdentityProfileCountStats struct {
+	Total    int64 `json:"total"`
+	Ready    int64 `json:"ready"`
+	Dirty    int64 `json:"dirty"`
+	Building int64 `json:"building"`
+	Failed   int64 `json:"failed"`
+}
+
+// IdentityCenterStats 汇总活动 center 数量与每人物分布。
+type IdentityCenterStats struct {
+	Total             int64   `json:"total"`
+	Active            int64   `json:"active"`
+	Confirmed         int64   `json:"confirmed"`
+	AveragePerProfile float64 `json:"average_per_profile"`
+	MaxPerProfile     int     `json:"max_per_profile"`
+}
+
+// IdentityMemberStats 汇总活动 generation 的 member 状态分布。
+type IdentityMemberStats struct {
+	Total     int64 `json:"total"`
+	Accepted  int64 `json:"accepted"`
+	Candidate int64 `json:"candidate"`
+	Excluded  int64 `json:"excluded"`
+}
+
+// IdentityBackfillStats 汇总 backfill 进度。
+type IdentityBackfillStats struct {
+	TotalPeople int64 `json:"total_people"`
+	Cursor      uint  `json:"cursor"`
+	Completed   bool  `json:"completed"`
+}
+
+// IdentityANNStats 汇总身份中心 ANN 缓存的运行快照。读时不触发重建。
+type IdentityANNStats struct {
+	Ready            bool   `json:"ready"`
+	Generation       uint64 `json:"generation"`
+	SnapshotNodes    int    `json:"snapshot_nodes"`
+	DeltaNodes       int    `json:"delta_nodes"`
+	InvalidNodes     int    `json:"invalid_nodes"`
+	RebuildRequested bool   `json:"rebuild_requested"`
+	Unavailable      bool   `json:"unavailable"`
+
+	LastBuildAt         *time.Time `json:"last_build_at,omitempty"`
+	LastBuildDurationMs int64      `json:"last_build_duration_ms"`
+	LastBuildError      string     `json:"last_build_error,omitempty"`
+}
+
+// IdentityDecisionStats 汇总最近 24 小时窗口的决策分布。
+type IdentityDecisionStats struct {
+	WindowHours          int   `json:"window_hours"`
+	Total                int64 `json:"total"`
+	Agree                int64 `json:"agree"`
+	Disagree             int64 `json:"disagree"`
+	LegacyMissProfileHit int64 `json:"legacy_miss_profile_hit"`
+	LegacyMissProfileMiss int64 `json:"legacy_miss_profile_miss"`
+	ProfileMiss          int64 `json:"profile_miss"`
+	ProfileUnavailable   int64 `json:"profile_unavailable"`
+	ProfileBlocked       int64 `json:"profile_blocked"`
+	RescueApplied        int64 `json:"rescue_applied"`
+}
+
+// IdentityDecisionResponse 是单条决策遥测的只读响应。
+// 明确不返回 ComponentFaceIDs、ComponentHash、DecisionKey、embedding、路径、人物名称。
+// CenterIDs 从数据库逗号字符串安全解析（过滤非法/0/重复、升序、最多 32 个）。
+type IdentityDecisionResponse struct {
+	ID        uint      `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	Mode      string    `json:"mode"`
+
+	ComponentSize             int  `json:"component_size"`
+	ComponentFaceIDsTruncated bool `json:"component_face_ids_truncated"`
+
+	LegacyTargetPersonID  *uint    `json:"legacy_target_person_id,omitempty"`
+	LegacyScore           *float64 `json:"legacy_score,omitempty"`
+	ProfileBestPersonID   *uint    `json:"profile_best_person_id,omitempty"`
+	ProfileBestScore      *float64 `json:"profile_best_score,omitempty"`
+	ProfileSecondPersonID *uint    `json:"profile_second_person_id,omitempty"`
+	ProfileSecondScore    *float64 `json:"profile_second_score,omitempty"`
+
+	Margin              float64 `json:"margin"`
+	CenterIDs           []uint  `json:"center_ids"`
+	Decision            string  `json:"decision"`
+	Reason              string  `json:"reason,omitempty"`
+	ElapsedMilliseconds int     `json:"elapsed_milliseconds"`
+	AlgorithmVersion    string  `json:"algorithm_version,omitempty"`
+	IndexGeneration     int     `json:"index_generation"`
+}
+
+// IdentityDecisionListResponse 是 decisions 查询的列表响应。
+// 空表返回 items: []，不返回 null。
+type IdentityDecisionListResponse struct {
+	Items []IdentityDecisionResponse `json:"items"`
+	Limit int                        `json:"limit"`
+}

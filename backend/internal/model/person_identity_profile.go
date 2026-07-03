@@ -98,6 +98,9 @@ type PersonIdentityProfileBuild struct {
 // PersonIdentityProfileStats 汇总身份画像的运行状态：各 status 的 profile 计数、
 // 人物总数与 backfill 进度。由 repository 提供原始计数，service 补充 backfill 游标。
 // legacy 模式下 service 返回零值结构而不查询数据库。
+//
+// Task 14 起新增 center/member 活动聚合统计字段，供只读运行状态接口使用。
+// repository 通过 COUNT/GROUP BY/MAX/AVG 聚合查询填充，不加载全部行到 Go。
 type PersonIdentityProfileStats struct {
 	Total             int64 `json:"total"`
 	Dirty             int64 `json:"dirty"`
@@ -107,6 +110,37 @@ type PersonIdentityProfileStats struct {
 	TotalPeople       int64 `json:"total_people"`
 	BackfillCursor    uint  `json:"backfill_cursor"`
 	BackfillCompleted bool  `json:"backfill_completed"`
+
+	// Center 聚合：仅统计活动 generation（center.generation = profile.active_generation，
+	// profile.status=ready，active_generation>0，对应 people 仍存在）的中心。
+	CenterTotal         int64   `json:"center_total"`
+	CenterActive         int64   `json:"center_active"`
+	CenterConfirmed      int64   `json:"center_confirmed"`
+	CenterAvgPerProfile  float64 `json:"center_avg_per_profile"`
+	CenterMaxPerProfile  int     `json:"center_max_per_profile"`
+	CenterActiveProfiles int64   `json:"center_active_profiles"` // 拥有活动中心且 ready 的人物数，用于校验 avg 分母
+
+	// Member 聚合：仅统计活动 generation 的 member。
+	MemberTotal     int64 `json:"member_total"`
+	MemberAccepted  int64 `json:"member_accepted"`
+	MemberCandidate int64 `json:"member_candidate"`
+	MemberExcluded  int64 `json:"member_excluded"`
+}
+
+// IdentityDecisionSummary 汇总指定时间窗口内身份画像 shadow/rescue 决策的计数。
+// 由 repository 通过 SELECT decision, COUNT(*) GROUP BY decision 聚合填充。
+// 未知 decision 计入 Total 但不写入已知分类。空表返回零值，不返回 nil。
+type IdentityDecisionSummary struct {
+	WindowHours          int   `json:"window_hours"`
+	Total                int64 `json:"total"`
+	Agree                int64 `json:"agree"`
+	Disagree             int64 `json:"disagree"`
+	LegacyMissProfileHit int64 `json:"legacy_miss_profile_hit"`
+	LegacyMissProfileMiss int64 `json:"legacy_miss_profile_miss"`
+	ProfileMiss          int64 `json:"profile_miss"`
+	ProfileUnavailable   int64 `json:"profile_unavailable"`
+	ProfileBlocked       int64 `json:"profile_blocked"`
+	RescueApplied        int64 `json:"rescue_applied"`
 }
 
 // MemberByFaceID 返回指定人脸在本次构建中的成员记录，未找到返回 nil。

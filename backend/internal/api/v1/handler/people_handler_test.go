@@ -159,6 +159,62 @@ func (s *stubPeopleService) GetMergeJobStatus(jobID uint) (*model.PeopleMergeJob
 	return &model.PeopleMergeJob{ID: jobID, Status: model.PeopleMergeJobStatusCompleted}, nil
 }
 
+// stubIdentityProfileService 是 PersonIdentityProfileService 的最小桩，用于 handler 测试。
+// legacy 模式返回零值运行状态；可注入 err 触发 500。
+type stubIdentityProfileService struct {
+	mode           string
+	stats          *model.IdentityProfileOperationalStatsResponse
+	decisions      []model.IdentityDecisionResponse
+	statsErr       error
+	decisionsErr   error
+	statsCalls     int
+	decisionsCalls int
+	lastLimit      int
+}
+
+func (s *stubIdentityProfileService) MarkDirty([]uint, string) error { return nil }
+func (s *stubIdentityProfileService) Invalidate(service.IdentityProfileInvalidation) error {
+	return nil
+}
+func (s *stubIdentityProfileService) RunBackgroundSlice() error { return nil }
+func (s *stubIdentityProfileService) GetActive(uint) (*model.PersonIdentityProfileBuild, error) {
+	return nil, nil
+}
+func (s *stubIdentityProfileService) GetStats() (*model.PersonIdentityProfileStats, error) {
+	return &model.PersonIdentityProfileStats{}, nil
+}
+func (s *stubIdentityProfileService) GetOperationalStats(_ repository.PeopleIdentityDecisionRepository) (*model.IdentityProfileOperationalStatsResponse, error) {
+	s.statsCalls++
+	if s.statsErr != nil {
+		return nil, s.statsErr
+	}
+	if s.stats != nil {
+		return s.stats, nil
+	}
+	mode := s.mode
+	if mode == "" {
+		mode = "legacy"
+	}
+	return &model.IdentityProfileOperationalStatsResponse{Mode: mode}, nil
+}
+func (s *stubIdentityProfileService) ListRecentDecisions(limit int, _ repository.PeopleIdentityDecisionRepository) ([]model.IdentityDecisionResponse, error) {
+	s.decisionsCalls++
+	s.lastLimit = limit
+	if s.decisionsErr != nil {
+		return nil, s.decisionsErr
+	}
+	if s.decisions == nil {
+		return []model.IdentityDecisionResponse{}, nil
+	}
+	return s.decisions, nil
+}
+func (s *stubIdentityProfileService) Mode() string {
+	if s.mode == "" {
+		return "legacy"
+	}
+	return s.mode
+}
+
 type stubMergeSuggestionService struct {
 	task              *model.PersonMergeSuggestionTask
 	stats             *model.PersonMergeSuggestionStatsResponse
@@ -291,7 +347,7 @@ func newPeopleHandlerForTest(t *testing.T) (*PeopleHandler, *stubPeopleService, 
 
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Photo{}, &model.Person{}, &model.Face{}, &model.PeopleJob{}, &model.AnalysisRuntimeLease{}))
+	require.NoError(t, db.AutoMigrate(&model.Photo{}, &model.Person{}, &model.Face{}, &model.PeopleJob{}, &model.AnalysisRuntimeLease{}, &model.PeopleIdentityDecision{}))
 
 	cfg := &config.Config{
 		Photos: config.PhotosConfig{
@@ -316,6 +372,8 @@ func newPeopleHandlerForTest(t *testing.T) (*PeopleHandler, *stubPeopleService, 
 		repository.NewFaceRepository(db),
 		repository.NewPhotoRepository(db),
 		repository.NewPeopleJobRepository(db),
+		&stubIdentityProfileService{},
+		repository.NewPeopleIdentityDecisionRepository(db),
 		cfg,
 	)
 
@@ -1078,4 +1136,126 @@ func TestPeopleHandler_UpdateVisibility(t *testing.T) {
 		require.NoError(t, db.First(&photoAfter, fixture.PhotoOne.ID).Error)
 		assert.Equal(t, categoryBefore, photoAfter.TopPersonCategory)
 	})
+}
+
+// ==================== Identity Profile operational stats (Task 14) ====================
+
+func TestPeopleHandler_GetIdentityProfileStats_Legacy(t *testing.T) {
+	handler, _, _, _, _ := newPeopleHandlerForTest(t)
+	ips := &stubIdentityProfileService{mode: "legacy"}
+	handler.identityProfileService = ips
+
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/identity-profiles/stats", nil, nil, handler.GetIdentityProfileStats)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	require.True(t, resp.Success)
+	stats := decodeResponseData[model.IdentityProfileOperationalStatsResponse](t, resp)
+	assert.Equal(t, "legacy", stats.Mode)
+	assert.Zero(t, stats.Profiles.Total)
+	assert.False(t, stats.ANN.Ready)
+	assert.Equal(t, 1, ips.statsCalls)
+}
+
+func TestPeopleHandler_GetIdentityProfileStats_Error(t *testing.T) {
+	handler, _, _, _, _ := newPeopleHandlerForTest(t)
+	ips := &stubIdentityProfileService{statsErr: errors.New("db down")}
+	handler.identityProfileService = ips
+
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/identity-profiles/stats", nil, nil, handler.GetIdentityProfileStats)
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	require.False(t, resp.Success)
+	assert.Equal(t, "IDENTITY_PROFILE_STATS_FAILED", resp.Error.Code)
+	// 不暴露原始错误。
+	assert.NotContains(t, resp.Error.Message, "db down")
+}
+
+func TestPeopleHandler_ListIdentityProfileDecisions_DefaultLimit(t *testing.T) {
+	handler, _, _, _, _ := newPeopleHandlerForTest(t)
+	ips := &stubIdentityProfileService{
+		decisions: []model.IdentityDecisionResponse{
+			{ID: 1, Decision: "agree", CenterIDs: []uint{1, 2}},
+			{ID: 2, Decision: "disagree"},
+		},
+	}
+	handler.identityProfileService = ips
+
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/identity-profiles/decisions", nil, nil, handler.ListIdentityProfileDecisions)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	require.True(t, resp.Success)
+	data := decodeResponseData[model.IdentityDecisionListResponse](t, resp)
+	assert.Equal(t, 50, data.Limit, "default limit is 50")
+	assert.Len(t, data.Items, 2)
+	assert.Equal(t, []uint{1, 2}, data.Items[0].CenterIDs)
+}
+
+func TestPeopleHandler_ListIdentityProfileDecisions_LimitClampedTo200(t *testing.T) {
+	handler, _, _, _, _ := newPeopleHandlerForTest(t)
+	ips := &stubIdentityProfileService{}
+	handler.identityProfileService = ips
+
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/identity-profiles/decisions?limit=201", nil, nil, handler.ListIdentityProfileDecisions)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	require.True(t, resp.Success)
+	data := decodeResponseData[model.IdentityDecisionListResponse](t, resp)
+	assert.Equal(t, 200, data.Limit, "limit 201 clamped to 200")
+	assert.Equal(t, 200, ips.lastLimit)
+}
+
+func TestPeopleHandler_ListIdentityProfileDecisions_Limit1(t *testing.T) {
+	handler, _, _, _, _ := newPeopleHandlerForTest(t)
+	ips := &stubIdentityProfileService{}
+	handler.identityProfileService = ips
+
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/identity-profiles/decisions?limit=1", nil, nil, handler.ListIdentityProfileDecisions)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	data := decodeResponseData[model.IdentityDecisionListResponse](t, decodeAPIResponse(t, rec))
+	assert.Equal(t, 1, data.Limit)
+}
+
+func TestPeopleHandler_ListIdentityProfileDecisions_InvalidLimit400(t *testing.T) {
+	handler, _, _, _, _ := newPeopleHandlerForTest(t)
+	ips := &stubIdentityProfileService{}
+	handler.identityProfileService = ips
+
+	for _, q := range []string{"0", "-1", "abc", "1.5"} {
+		rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/identity-profiles/decisions?limit="+q, nil, nil, handler.ListIdentityProfileDecisions)
+		require.Equalf(t, http.StatusBadRequest, rec.Code, "limit=%s should be 400", q)
+		resp := decodeAPIResponse(t, rec)
+		assert.Equal(t, "INVALID_LIMIT", resp.Error.Code)
+	}
+	assert.Equal(t, 0, ips.decisionsCalls, "invalid limit must not call service")
+}
+
+func TestPeopleHandler_ListIdentityProfileDecisions_EmptyTableReturnsEmptyArray(t *testing.T) {
+	handler, _, _, _, _ := newPeopleHandlerForTest(t)
+	ips := &stubIdentityProfileService{}
+	handler.identityProfileService = ips
+
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/identity-profiles/decisions", nil, nil, handler.ListIdentityProfileDecisions)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	data := decodeResponseData[model.IdentityDecisionListResponse](t, decodeAPIResponse(t, rec))
+	assert.NotNil(t, data.Items)
+	assert.Empty(t, data.Items)
+}
+
+func TestPeopleHandler_ListIdentityProfileDecisions_RepositoryError500(t *testing.T) {
+	handler, _, _, _, _ := newPeopleHandlerForTest(t)
+	ips := &stubIdentityProfileService{decisionsErr: errors.New("repo down")}
+	handler.identityProfileService = ips
+
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/identity-profiles/decisions", nil, nil, handler.ListIdentityProfileDecisions)
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	assert.Equal(t, "IDENTITY_DECISIONS_FAILED", resp.Error.Code)
+	assert.NotContains(t, resp.Error.Message, "repo down")
 }

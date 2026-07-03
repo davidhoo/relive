@@ -652,3 +652,142 @@ func BenchmarkIdentityProfileANN_SnapshotWithDeltaSearch(b *testing.B) {
 // 防止未使用导入错误（fmt 仅在错误格式化中使用）。
 var _ = errors.New
 var _ = fmt.Sprintf
+
+// ==================== Stats (Task 14) ====================
+
+func TestIdentityProfileANN_Stats_NilReturnsZero(t *testing.T) {
+	var ann *identityProfileANN
+	stats := ann.Stats("emb-v1")
+	assert.False(t, stats.Ready)
+	assert.Zero(t, stats.Generation)
+	assert.Zero(t, stats.SnapshotNodes)
+	assert.Zero(t, stats.DeltaNodes)
+	assert.Zero(t, stats.InvalidNodes)
+}
+
+func TestIdentityProfileANN_Stats_NotReadyBeforeBuild(t *testing.T) {
+	ann := newIdentityProfileANN("emb-v1")
+	stats := ann.Stats("emb-v1")
+	assert.False(t, stats.Ready)
+	assert.Zero(t, stats.Generation)
+	assert.Zero(t, stats.SnapshotNodes)
+	assert.False(t, stats.RebuildRequested, "bare ANN does not set rebuildRequested (caller does)")
+}
+
+func TestIdentityProfileANN_Stats_ReadyAfterRebuild(t *testing.T) {
+	ann := newIdentityProfileANN("emb-v1")
+	centers := []*model.PersonIdentityCenter{
+		annCenter(1, 10, 1, 1, emb3(1, 0, 0)),
+		annCenter(2, 20, 1, 1, emb3(0, 1, 0)),
+	}
+	require.NoError(t, ann.Rebuild(centers, "emb-v1"))
+
+	stats := ann.Stats("emb-v1")
+	assert.True(t, stats.Ready)
+	assert.Equal(t, uint64(1), stats.Generation, "generation increments on successful publish")
+	assert.Equal(t, 2, stats.SnapshotNodes)
+	assert.Zero(t, stats.DeltaNodes)
+	assert.Zero(t, stats.InvalidNodes)
+	assert.False(t, stats.RebuildRequested)
+	assert.False(t, stats.Unavailable)
+}
+
+func TestIdentityProfileANN_Stats_ModelMismatchReadyFalse(t *testing.T) {
+	ann := newIdentityProfileANN("emb-v1")
+	require.NoError(t, ann.Rebuild([]*model.PersonIdentityCenter{annCenter(1, 10, 1, 1, emb3(1, 0, 0))}, "emb-v1"))
+
+	stats := ann.Stats("emb-v2")
+	assert.False(t, stats.Ready, "model mismatch -> Ready=false")
+	assert.Equal(t, 1, stats.SnapshotNodes, "snapshot nodes still reported")
+}
+
+func TestIdentityProfileANN_Stats_DeltaAndInvalidCounts(t *testing.T) {
+	ann := newIdentityProfileANN("emb-v1")
+	require.NoError(t, ann.Rebuild([]*model.PersonIdentityCenter{annCenter(1, 10, 1, 1, emb3(1, 0, 0))}, "emb-v1"))
+
+	// Activate delta for person 20.
+	require.NoError(t, ann.Activate(20, 1, []*model.PersonIdentityCenter{annCenter(2, 20, 1, 1, emb3(0, 1, 0))}))
+	// Invalidate person 10 (snapshot center).
+	ann.InvalidatePerson(10)
+
+	stats := ann.Stats("emb-v1")
+	assert.Equal(t, 1, stats.DeltaNodes, "one delta node")
+	assert.Equal(t, 1, stats.InvalidNodes, "one invalid node (person 10 snapshot center)")
+	assert.True(t, stats.Ready)
+}
+
+func TestIdentityProfileANN_Stats_FailedRebuildPreservesGeneration(t *testing.T) {
+	ann := newIdentityProfileANN("emb-v1")
+	require.NoError(t, ann.Rebuild([]*model.PersonIdentityCenter{annCenter(1, 10, 1, 1, emb3(1, 0, 0))}, "emb-v1"))
+	genBefore := ann.Stats("emb-v1").Generation
+	require.Equal(t, uint64(1), genBefore)
+
+	// 失败重建：零中心 ID 触发校验失败。
+	require.Error(t, ann.Rebuild([]*model.PersonIdentityCenter{{ID: 0, PersonID: 10, Generation: 1, CentroidEmbedding: model.EncodeEmbedding(emb3(1, 0, 0))}}, "emb-v1"))
+
+	stats := ann.Stats("emb-v1")
+	assert.False(t, stats.Ready, "failed rebuild -> not ready (unavailable)")
+	assert.Equal(t, genBefore, stats.Generation, "generation must not increment on failed rebuild")
+	assert.True(t, stats.Unavailable)
+	assert.True(t, stats.RebuildRequested)
+}
+
+func TestIdentityProfileANN_Stats_RequestRebuildAndInvalidateDoNotIncrementGeneration(t *testing.T) {
+	ann := newIdentityProfileANN("emb-v1")
+	require.NoError(t, ann.Rebuild([]*model.PersonIdentityCenter{annCenter(1, 10, 1, 1, emb3(1, 0, 0))}, "emb-v1"))
+	genBefore := ann.Stats("emb-v1").Generation
+
+	ann.RequestRebuild()
+	assert.Equal(t, genBefore, ann.Stats("emb-v1").Generation, "RequestRebuild must not increment generation")
+
+	ann.InvalidatePerson(10)
+	assert.Equal(t, genBefore, ann.Stats("emb-v1").Generation, "InvalidatePerson must not increment generation")
+
+	ann.InvalidateAll()
+	assert.Equal(t, genBefore, ann.Stats("emb-v1").Generation, "InvalidateAll must not increment generation")
+}
+
+func TestIdentityProfileANN_Stats_ActivateDoesNotIncrementGeneration(t *testing.T) {
+	ann := newIdentityProfileANN("emb-v1")
+	require.NoError(t, ann.Rebuild([]*model.PersonIdentityCenter{annCenter(1, 10, 1, 1, emb3(1, 0, 0))}, "emb-v1"))
+	genBefore := ann.Stats("emb-v1").Generation
+
+	require.NoError(t, ann.Activate(20, 1, []*model.PersonIdentityCenter{annCenter(2, 20, 1, 1, emb3(0, 1, 0))}))
+	assert.Equal(t, genBefore, ann.Stats("emb-v1").Generation, "Activate (delta only) must not increment generation")
+}
+
+// TestIdentityProfileANN_Stats_ConcurrentWithSearchRebuild 验证 Stats 与并发 Search/Rebuild/Activate/Invalidate 无 race。
+func TestIdentityProfileANN_Stats_ConcurrentWithSearchRebuild(t *testing.T) {
+	ann := newIdentityProfileANN("emb-v1")
+	require.NoError(t, ann.Rebuild([]*model.PersonIdentityCenter{
+		annCenter(1, 10, 1, 1, emb3(1, 0, 0)),
+		annCenter(2, 20, 1, 1, emb3(0, 1, 0)),
+	}, "emb-v1"))
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(4)
+		go func() {
+			defer wg.Done()
+			_, _ = ann.Search(emb3(0.99, 0.01, 0), 5, "emb-v1")
+		}()
+		go func() {
+			defer wg.Done()
+			_ = ann.Stats("emb-v1")
+		}()
+		go func(i int) {
+			defer wg.Done()
+			pid := uint(30 + i)
+			_ = ann.Activate(pid, 1, []*model.PersonIdentityCenter{annCenter(uint(100+i), pid, 1, 1, emb3(0.5, 0.5, 0))})
+		}(i)
+		go func() {
+			defer wg.Done()
+			ann.RequestRebuild()
+		}()
+	}
+	wg.Wait()
+
+	// 最终一次 Stats 不触发重建、不 panic。
+	stats := ann.Stats("emb-v1")
+	_ = stats
+}

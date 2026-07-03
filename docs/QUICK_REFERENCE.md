@@ -93,6 +93,28 @@ make build-people-worker
 - `GET /api/v1/photos/:id/people`
 - `GET /api/v1/faces/:id/thumbnail`
 
+## 人物身份画像运行状态 API（只读，需认证）
+
+- `GET /api/v1/people/identity-profiles/stats` — 返回 mode、profile/center/member/backfill/ANN/decision 汇总
+- `GET /api/v1/people/identity-profiles/decisions?limit=50` — 返回最近决策遥测（limit 1–200，默认 50）
+
+安全说明：
+
+- 两个接口都需要 JWT 认证，仅支持 GET。
+- 只读：不返回 embedding、图片路径、缩略图路径、人物名称或 API key。
+- 不提供运行时修改模式、rebuild 或 rescue 的接口；模式仍通过 YAML 配置 + 服务重启管理。
+- 生产默认 `legacy`：stats 返回 `mode=legacy` 与零值运行状态，不查询画像表/ANN/AppConfig。
+- 显式调用 decisions 接口时允许读取历史 decision 记录（用户触发的只读查询，不属于后台画像负载）。
+
+示例：
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+  http://localhost:8080/api/v1/people/identity-profiles/stats
+```
+
+> 不要在文档或外发材料中写真实 token、NAS 地址或用户数据。
+
 ## People Worker API (API Key 认证)
 
 - `GET /api/v1/people/worker/tasks` - 获取待处理任务

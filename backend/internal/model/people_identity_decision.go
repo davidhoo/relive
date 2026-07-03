@@ -9,6 +9,19 @@ const (
 	PeopleIdentityModePrimary = "primary"
 )
 
+// 身份画像决策遥测的稳定 Decision 枚举。与 service 包的 identityDecision* 常量一一对应，
+// 提供给 repository 层在 GetSummarySince 中按分类汇总，避免 service → repository 反向依赖。
+const (
+	PeopleIdentityDecisionAgree                 = "agree"
+	PeopleIdentityDecisionDisagree              = "disagree"
+	PeopleIdentityDecisionLegacyMissProfileHit  = "legacy_miss_profile_hit"
+	PeopleIdentityDecisionLegacyMissProfileMiss = "legacy_miss_profile_miss"
+	PeopleIdentityDecisionProfileMiss           = "profile_miss"
+	PeopleIdentityDecisionProfileUnavailable    = "profile_unavailable"
+	PeopleIdentityDecisionProfileBlocked        = "profile_blocked"
+	PeopleIdentityDecisionRescueApplied         = "rescue_applied"
+)
+
 // PeopleIdentityDecision 保存 shadow/rescue 决策遥测，用于评估身份画像匹配器
 // 相对 legacy 匹配器的表现。没有目标人物时，人物 ID 字段为 NULL，对应分数亦为 NULL。
 // 不保存 embedding 或图片路径。

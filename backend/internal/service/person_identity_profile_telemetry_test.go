@@ -43,6 +43,10 @@ func (f *fakeIdentityDecisionRepo) ListIDsBefore(time.Time, int) ([]uint, error)
 
 func (f *fakeIdentityDecisionRepo) DeleteByIDs([]uint) (int64, error) { return 0, nil }
 
+func (f *fakeIdentityDecisionRepo) GetSummarySince(time.Time) (*model.IdentityDecisionSummary, error) {
+	return &model.IdentityDecisionSummary{}, nil
+}
+
 func (f *fakeIdentityDecisionRepo) lastCall() *model.PeopleIdentityDecision {
 	f.mu.Lock()
 	defer f.mu.Unlock()

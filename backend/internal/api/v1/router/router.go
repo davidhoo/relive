@@ -238,6 +238,11 @@ func Setup(db *gorm.DB, cfg *config.Config, appState *lifecycle.State) (*gin.Eng
 
 			people := authorized.Group("/people")
 			{
+				// 身份画像只读运行状态接口（Task 14）：必须注册在 /:id 之前，
+				// 避免 identity-profiles 被解析成 :id。
+				people.GET("/identity-profiles/stats", handlers.People.GetIdentityProfileStats)
+				people.GET("/identity-profiles/decisions", handlers.People.ListIdentityProfileDecisions)
+
 				people.POST("/background/start", handlers.People.StartBackground)
 				people.POST("/background/stop", handlers.People.StopBackground)
 				people.POST("/rescan-by-path", handlers.People.RescanByPath)

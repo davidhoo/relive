@@ -29,6 +29,10 @@ type PeopleIdentityDecisionRepository interface {
 	ListIDsBefore(cutoff time.Time, limit int) ([]uint, error)
 	// DeleteByIDs 按 ID 物理删除一批记录。空输入返回 0。ID 去重、过滤 0、按 SQLite 参数上限分块。
 	DeleteByIDs(ids []uint) (int64, error)
+	// GetSummarySince 汇总 created_at >= since 的决策分布：SELECT decision, COUNT(*)
+	// GROUP BY decision。利用 idx_pid_created 索引。未知 decision 计入 Total 但不写入已知分类。
+	// 空表返回零值结构，不返回 nil。不加载完整 decision 行，不按 Person/Face ID 分组。
+	GetSummarySince(since time.Time) (*model.IdentityDecisionSummary, error)
 }
 
 type peopleIdentityDecisionRepository struct {
@@ -123,7 +127,49 @@ func (r *peopleIdentityDecisionRepository) DeleteByIDs(ids []uint) (int64, error
 	return total, nil
 }
 
-// dedupFilterNonZeroIDs 去除 0 并去重，升序排序，用于 DeleteByIDs 入参清洗。
+// GetSummarySince 汇总 created_at >= since 的决策分布。使用 SELECT decision, COUNT(*)
+// GROUP BY decision，利用 idx_pid_created 索引按时间范围扫描。未知 decision 计入 Total
+// 但不写入已知分类；空表返回零值结构。windowHours 由 service 注入（最近 24 小时）。
+// 不加载完整 decision 行，不按 Person/Face ID 分组。
+func (r *peopleIdentityDecisionRepository) GetSummarySince(since time.Time) (*model.IdentityDecisionSummary, error) {
+	summary := &model.IdentityDecisionSummary{}
+
+	type row struct {
+		Decision string
+		Count    int64
+	}
+	var rows []row
+	if err := r.db.Model(&model.PeopleIdentityDecision{}).
+		Select("decision, COUNT(*) as count").
+		Where("created_at >= ?", since).
+		Group("decision").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	for _, r := range rows {
+		summary.Total += r.Count
+		switch r.Decision {
+		case model.PeopleIdentityDecisionAgree:
+			summary.Agree = r.Count
+		case model.PeopleIdentityDecisionDisagree:
+			summary.Disagree = r.Count
+		case model.PeopleIdentityDecisionLegacyMissProfileHit:
+			summary.LegacyMissProfileHit = r.Count
+		case model.PeopleIdentityDecisionLegacyMissProfileMiss:
+			summary.LegacyMissProfileMiss = r.Count
+		case model.PeopleIdentityDecisionProfileMiss:
+			summary.ProfileMiss = r.Count
+		case model.PeopleIdentityDecisionProfileUnavailable:
+			summary.ProfileUnavailable = r.Count
+		case model.PeopleIdentityDecisionProfileBlocked:
+			summary.ProfileBlocked = r.Count
+		case model.PeopleIdentityDecisionRescueApplied:
+			summary.RescueApplied = r.Count
+		}
+	}
+	return summary, nil
+}
 func dedupFilterNonZeroIDs(ids []uint) []uint {
 	seen := make(map[uint]struct{}, len(ids))
 	out := make([]uint, 0, len(ids))

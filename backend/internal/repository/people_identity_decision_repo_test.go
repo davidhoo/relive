@@ -234,3 +234,60 @@ func TestPeopleIdentityDecisionRepository_NoSensitiveColumns(t *testing.T) {
 		assert.False(t, ok, "people_identity_decisions must not have column %q", f)
 	}
 }
+
+// ==================== GetSummarySince (Task 14) ====================
+
+func TestPeopleIdentityDecisionRepository_GetSummarySince_Aggregation(t *testing.T) {
+	repo, db := newIdentityDecisionRepo(t)
+	defer teardownTestDB(db)
+
+	now := time.Now().UTC()
+	cutoff := now.Add(-24 * time.Hour)
+	within := now.Add(-1 * time.Hour)
+	outside := now.Add(-48 * time.Hour)
+
+	mk := func(key string, ts time.Time, decision string) {
+		d := sampleDecision(key, "h-"+key)
+		d.Decision = decision
+		d.CreatedAt = ts
+		require.NoError(t, db.Create(d).Error)
+	}
+
+	// 窗口内：每种已知 decision 各 1 条 + 1 条未知 decision。
+	mk("k1", within, model.PeopleIdentityDecisionAgree)
+	mk("k2", within, model.PeopleIdentityDecisionDisagree)
+	mk("k3", within, model.PeopleIdentityDecisionLegacyMissProfileHit)
+	mk("k4", within, model.PeopleIdentityDecisionLegacyMissProfileMiss)
+	mk("k5", within, model.PeopleIdentityDecisionProfileMiss)
+	mk("k6", within, model.PeopleIdentityDecisionProfileUnavailable)
+	mk("k7", within, model.PeopleIdentityDecisionProfileBlocked)
+	mk("k8", within, model.PeopleIdentityDecisionRescueApplied)
+	mk("k9", within, "unknown_decision_value")
+
+	// 窗口外：不应计入。
+	mk("k0", outside, model.PeopleIdentityDecisionAgree)
+
+	summary, err := repo.GetSummarySince(cutoff)
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+
+	assert.Equal(t, int64(9), summary.Total, "9 rows within window (8 known + 1 unknown)")
+	assert.Equal(t, int64(1), summary.Agree)
+	assert.Equal(t, int64(1), summary.Disagree)
+	assert.Equal(t, int64(1), summary.LegacyMissProfileHit)
+	assert.Equal(t, int64(1), summary.LegacyMissProfileMiss)
+	assert.Equal(t, int64(1), summary.ProfileMiss)
+	assert.Equal(t, int64(1), summary.ProfileUnavailable)
+	assert.Equal(t, int64(1), summary.ProfileBlocked)
+	assert.Equal(t, int64(1), summary.RescueApplied)
+}
+
+func TestPeopleIdentityDecisionRepository_GetSummarySince_EmptyReturnsZero(t *testing.T) {
+	repo, db := newIdentityDecisionRepo(t)
+	defer teardownTestDB(db)
+
+	summary, err := repo.GetSummarySince(time.Now().Add(-24*time.Hour))
+	require.NoError(t, err)
+	require.NotNil(t, summary, "empty table returns zero-value struct, not nil")
+	assert.Equal(t, int64(0), summary.Total)
+}

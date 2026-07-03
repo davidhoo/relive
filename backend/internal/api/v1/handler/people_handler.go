@@ -23,17 +23,19 @@ import (
 )
 
 type PeopleHandler struct {
-	service                service.PeopleService
-	mergeSuggestionService service.PersonMergeSuggestionService
-	personRepo             repository.PersonRepository
-	faceRepo               repository.FaceRepository
-	photoRepo              repository.PhotoRepository
-	jobRepo                repository.PeopleJobRepository
-	runtimeService         service.AnalysisRuntimeService
-	cfg                    *config.Config
+	service                 service.PeopleService
+	mergeSuggestionService  service.PersonMergeSuggestionService
+	personRepo              repository.PersonRepository
+	faceRepo                repository.FaceRepository
+	photoRepo               repository.PhotoRepository
+	jobRepo                 repository.PeopleJobRepository
+	runtimeService          service.AnalysisRuntimeService
+	identityProfileService  service.PersonIdentityProfileService
+	identityDecisionRepo    repository.PeopleIdentityDecisionRepository
+	cfg                     *config.Config
 }
 
-func NewPeopleHandler(service service.PeopleService, mergeSuggestionService service.PersonMergeSuggestionService, personRepo repository.PersonRepository, faceRepo repository.FaceRepository, photoRepo repository.PhotoRepository, jobRepo repository.PeopleJobRepository, cfg *config.Config) *PeopleHandler {
+func NewPeopleHandler(service service.PeopleService, mergeSuggestionService service.PersonMergeSuggestionService, personRepo repository.PersonRepository, faceRepo repository.FaceRepository, photoRepo repository.PhotoRepository, jobRepo repository.PeopleJobRepository, identityProfileService service.PersonIdentityProfileService, identityDecisionRepo repository.PeopleIdentityDecisionRepository, cfg *config.Config) *PeopleHandler {
 	return &PeopleHandler{
 		service:                service,
 		mergeSuggestionService: mergeSuggestionService,
@@ -41,6 +43,8 @@ func NewPeopleHandler(service service.PeopleService, mergeSuggestionService serv
 		faceRepo:               faceRepo,
 		photoRepo:              photoRepo,
 		jobRepo:                jobRepo,
+		identityProfileService: identityProfileService,
+		identityDecisionRepo:   identityDecisionRepo,
 		cfg:                    cfg,
 	}
 }
@@ -1381,4 +1385,67 @@ func hasManualLockedFaces(faces []*model.Face) bool {
 		}
 	}
 	return false
+}
+
+// ==================== Identity Profile operational stats (Task 14) ====================
+
+// identityProfileDecisionsDefaultLimit / Max 是 decisions 查询的默认/上限 limit。
+const (
+	identityProfileDecisionsDefaultLimit = 50
+	identityProfileDecisionsMaxLimit     = 200
+)
+
+// GetIdentityProfileStats 返回身份画像只读运行状态。
+// legacy 模式仅返回 mode 与零值运行状态，不访问 Repository/ANN/AppConfig/decision 仓库。
+// 统计失败返回 500 + IDENTITY_PROFILE_STATS_FAILED，不暴露原始 SQLite 错误或路径。
+func (h *PeopleHandler) GetIdentityProfileStats(c *gin.Context) {
+	if h.identityProfileService == nil {
+		writePeopleError(c, http.StatusInternalServerError, "IDENTITY_PROFILE_STATS_FAILED", "identity profile service not configured")
+		return
+	}
+	stats, err := h.identityProfileService.GetOperationalStats(h.identityDecisionRepo)
+	if err != nil {
+		writePeopleError(c, http.StatusInternalServerError, "IDENTITY_PROFILE_STATS_FAILED", "identity profile stats unavailable")
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Data: stats})
+}
+
+// ListIdentityProfileDecisions 返回最近 limit 条身份画像决策遥测（只读 DTO）。
+// limit 规则：未传 50；小于 1 返回 400；大于 200 截断为 200；非整数返回 400。
+// 不返回 Face ID、hash、decision key、embedding 或路径。
+func (h *PeopleHandler) ListIdentityProfileDecisions(c *gin.Context) {
+	if h.identityProfileService == nil {
+		writePeopleError(c, http.StatusInternalServerError, "IDENTITY_DECISIONS_FAILED", "identity profile service not configured")
+		return
+	}
+
+	limit := identityProfileDecisionsDefaultLimit
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || v < 1 {
+			writePeopleError(c, http.StatusBadRequest, "INVALID_LIMIT", "limit must be a positive integer between 1 and 200")
+			return
+		}
+		limit = v
+	}
+	if limit > identityProfileDecisionsMaxLimit {
+		limit = identityProfileDecisionsMaxLimit
+	}
+
+	items, err := h.identityProfileService.ListRecentDecisions(limit, h.identityDecisionRepo)
+	if err != nil {
+		writePeopleError(c, http.StatusInternalServerError, "IDENTITY_DECISIONS_FAILED", "identity decisions unavailable")
+		return
+	}
+	if items == nil {
+		items = []model.IdentityDecisionResponse{}
+	}
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Data: model.IdentityDecisionListResponse{
+			Items: items,
+			Limit: limit,
+		},
+	})
 }
