@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -41,10 +42,11 @@ func newAuthedRouterForTest(t *testing.T) (*gin.Engine, *service.Services, strin
 	t.Helper()
 	db := setupRouterTestDB(t)
 
+	dbPath := filepath.Join(t.TempDir(), "router-service.db")
 	cfg := &config.Config{
 		Server:   config.ServerConfig{Mode: "release"},
 		Security: config.SecurityConfig{JWTSecret: "router-test-secret"},
-		Database: config.DatabaseConfig{Type: "sqlite"},
+		Database: config.DatabaseConfig{Type: "sqlite", Path: dbPath},
 		Photos:   config.PhotosConfig{ThumbnailPath: t.TempDir()},
 		People:   config.PeopleConfig{IdentityProfileMode: "legacy"},
 	}

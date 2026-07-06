@@ -75,6 +75,7 @@ esp32/build/
 backend/relive
 backend/relive-analyzer
 backend/relive-people-worker
+backend/relive-identity-profile-report
 
 # Config files with sensitive data
 analyzer.yaml
