@@ -46,8 +46,8 @@ func TestAIServiceLoadAIConfig_PrefersDatabaseOverYAML(t *testing.T) {
 		config: &config.Config{
 			AI: config.AIConfig{
 				Provider: "ollama",
-				Ollama: config.OllamaConfig{Model: "yaml-model", Endpoint: "http://yaml-endpoint"},
-				Qwen: config.QwenConfig{Model: "yaml-qwen", Endpoint: "https://yaml-qwen.example.com"},
+				Ollama:   config.OllamaConfig{Model: "yaml-model", Endpoint: "http://yaml-endpoint"},
+				Qwen:     config.QwenConfig{Model: "yaml-qwen", Endpoint: "https://yaml-qwen.example.com"},
 			},
 		},
 		configService: configService,
@@ -70,9 +70,9 @@ func TestGeocodeServiceLoadGeocodeConfig_PrefersDatabaseOverYAML(t *testing.T) {
 	configService := setupConfigServiceForTests(t)
 
 	dbValue := config.GeocodeConfig{
-		Provider:          "nominatim",
-		NominatimEndpoint: "https://db-nominatim.example.com/reverse",
-		NominatimTimeout:  22,
+		Provider:           "nominatim",
+		NominatimEndpoint:  "https://db-nominatim.example.com/reverse",
+		NominatimTimeout:   22,
 		OfflineMaxDistance: 12,
 	}
 	data, _ := json.Marshal(dbValue)
@@ -83,9 +83,9 @@ func TestGeocodeServiceLoadGeocodeConfig_PrefersDatabaseOverYAML(t *testing.T) {
 	svc := &geocodeService{
 		configService: configService,
 		cfg: &config.Config{Geocode: config.GeocodeConfig{
-			Provider:          "offline",
-			NominatimEndpoint: "https://yaml-nominatim.example.com/reverse",
-			NominatimTimeout:  10,
+			Provider:           "offline",
+			NominatimEndpoint:  "https://yaml-nominatim.example.com/reverse",
+			NominatimTimeout:   10,
 			OfflineMaxDistance: 100,
 		}},
 	}

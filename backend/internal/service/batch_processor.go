@@ -294,9 +294,9 @@ func (p *BatchProcessor) Stats() map[string]interface{} {
 	p.retryMu.Unlock()
 
 	return map[string]interface{}{
-		"buffer_size":  bufferSize,
-		"retry_queue":  retrySize,
-		"processed":    p.processedCount,
-		"failed":       p.failedCount,
+		"buffer_size": bufferSize,
+		"retry_queue": retrySize,
+		"processed":   p.processedCount,
+		"failed":      p.failedCount,
 	}
 }

@@ -200,4 +200,3 @@ func (s *personMergeSuggestionService) annBuildCPUDuty() float64 {
 	}
 	return 0.5
 }
-

@@ -286,7 +286,7 @@ func TestPeopleIdentityDecisionRepository_GetSummarySince_EmptyReturnsZero(t *te
 	repo, db := newIdentityDecisionRepo(t)
 	defer teardownTestDB(db)
 
-	summary, err := repo.GetSummarySince(time.Now().Add(-24*time.Hour))
+	summary, err := repo.GetSummarySince(time.Now().Add(-24 * time.Hour))
 	require.NoError(t, err)
 	require.NotNil(t, summary, "empty table returns zero-value struct, not nil")
 	assert.Equal(t, int64(0), summary.Total)

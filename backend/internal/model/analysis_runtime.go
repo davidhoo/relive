@@ -12,9 +12,9 @@ const (
 )
 
 const (
-	AnalysisOwnerTypeBatch       = "batch"
-	AnalysisOwnerTypeBackground  = "background"
-	AnalysisOwnerTypeAnalyzer    = "analyzer"
+	AnalysisOwnerTypeBatch        = "batch"
+	AnalysisOwnerTypeBackground   = "background"
+	AnalysisOwnerTypeAnalyzer     = "analyzer"
 	AnalysisOwnerTypePeopleWorker = "people_worker"
 
 	AnalysisRuntimeStatusIdle    = "idle"

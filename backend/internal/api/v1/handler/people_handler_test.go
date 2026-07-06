@@ -137,7 +137,7 @@ func (s *stubPeopleService) UpdatePersonAvatar(personID uint, faceID uint) error
 	return nil
 }
 func (s *stubPeopleService) HandleShutdown() error        { return nil }
-func (s *stubPeopleService) ResetAllPeople() (int, error)   { return 0, nil }
+func (s *stubPeopleService) ResetAllPeople() (int, error) { return 0, nil }
 func (s *stubPeopleService) DissolvePerson(_ uint) (int, error) {
 	if s.err != nil {
 		return 0, s.err

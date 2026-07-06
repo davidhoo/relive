@@ -695,13 +695,13 @@ type BatchRotateRequest struct {
 // IdentityProfileOperationalStatsResponse 是身份画像运行状态的顶层响应。
 // legacy 模式仅返回 mode 与零值运行状态，不查询 profile/center/member/ANN/backfill/decision。
 type IdentityProfileOperationalStatsResponse struct {
-	Mode      string                     `json:"mode"`
-	Profiles  IdentityProfileCountStats  `json:"profiles"`
-	Centers   IdentityCenterStats        `json:"centers"`
-	Members   IdentityMemberStats        `json:"members"`
-	Backfill  IdentityBackfillStats      `json:"backfill"`
-	ANN       IdentityANNStats           `json:"ann"`
-	Decisions IdentityDecisionStats      `json:"decisions"`
+	Mode      string                    `json:"mode"`
+	Profiles  IdentityProfileCountStats `json:"profiles"`
+	Centers   IdentityCenterStats       `json:"centers"`
+	Members   IdentityMemberStats       `json:"members"`
+	Backfill  IdentityBackfillStats     `json:"backfill"`
+	ANN       IdentityANNStats          `json:"ann"`
+	Decisions IdentityDecisionStats     `json:"decisions"`
 }
 
 // IdentityProfileCountStats 汇总 profile 各 status 计数。
@@ -754,16 +754,16 @@ type IdentityANNStats struct {
 
 // IdentityDecisionStats 汇总最近 24 小时窗口的决策分布。
 type IdentityDecisionStats struct {
-	WindowHours          int   `json:"window_hours"`
-	Total                int64 `json:"total"`
-	Agree                int64 `json:"agree"`
-	Disagree             int64 `json:"disagree"`
-	LegacyMissProfileHit int64 `json:"legacy_miss_profile_hit"`
+	WindowHours           int   `json:"window_hours"`
+	Total                 int64 `json:"total"`
+	Agree                 int64 `json:"agree"`
+	Disagree              int64 `json:"disagree"`
+	LegacyMissProfileHit  int64 `json:"legacy_miss_profile_hit"`
 	LegacyMissProfileMiss int64 `json:"legacy_miss_profile_miss"`
-	ProfileMiss          int64 `json:"profile_miss"`
-	ProfileUnavailable   int64 `json:"profile_unavailable"`
-	ProfileBlocked       int64 `json:"profile_blocked"`
-	RescueApplied        int64 `json:"rescue_applied"`
+	ProfileMiss           int64 `json:"profile_miss"`
+	ProfileUnavailable    int64 `json:"profile_unavailable"`
+	ProfileBlocked        int64 `json:"profile_blocked"`
+	RescueApplied         int64 `json:"rescue_applied"`
 }
 
 // IdentityDecisionResponse 是单条决策遥测的只读响应。

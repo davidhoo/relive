@@ -290,13 +290,13 @@ func (r *peopleJobRepository) ClaimNextRemote(workerID string, limit int, lockUn
 				now,
 			).
 			Updates(map[string]interface{}{
-				"status":             model.PeopleJobStatusProcessing,
-				"worker_id":          workerID,
-				"lock_expires_at":    lockUntil,
-				"last_heartbeat_at":  now,
-				"started_at":         &now,
-				"attempt_count":      gorm.Expr("attempt_count + 1"),
-				"status_message":     "claimed by " + workerID,
+				"status":            model.PeopleJobStatusProcessing,
+				"worker_id":         workerID,
+				"lock_expires_at":   lockUntil,
+				"last_heartbeat_at": now,
+				"started_at":        &now,
+				"attempt_count":     gorm.Expr("attempt_count + 1"),
+				"status_message":    "claimed by " + workerID,
 			})
 		if result.Error != nil {
 			return nil, result.Error

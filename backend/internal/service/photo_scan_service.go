@@ -467,8 +467,8 @@ func (s *photoService) runScanTask(runtime *activeScanJob, path string, rebuild 
 				continue
 			}
 			if err := s.executeWrite(func() error {
-					return s.deletePhotoAndTags(existing.ID)
-				}); err != nil {
+				return s.deletePhotoAndTags(existing.ID)
+			}); err != nil {
 				logger.Warnf("[Task %s] Delete missing photo failed: %v", runtime.id, err)
 				continue
 			}

@@ -18,8 +18,8 @@ func TestPhoto_CalculateOverallScore(t *testing.T) {
 		{"memory only", 100, 0, 70},
 		{"beauty only", 0, 100, 30},
 		{"both max", 100, 100, 100},
-		{"typical", 80, 60, 74},     // int(80*0.7 + 60*0.3) = int(56+18) = 74
-		{"low scores", 10, 20, 13},  // int(7+6) = 13
+		{"typical", 80, 60, 74},    // int(80*0.7 + 60*0.3) = int(56+18) = 74
+		{"low scores", 10, 20, 13}, // int(7+6) = 13
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

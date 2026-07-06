@@ -1157,12 +1157,12 @@ func TestPersonIdentityProfileService_ListRecentDecisions_CenterIDsTruncatedTo32
 		parts = append(parts, strconv.Itoa(i))
 	}
 	d := &model.PeopleIdentityDecision{
-		Mode:            model.PeopleIdentityModeShadow,
-		ComponentHash:   "h2",
-		DecisionKey:     "dk2",
-		CenterIDs:       strings.Join(parts, ","),
-		Decision:        model.PeopleIdentityDecisionAgree,
-		CreatedAt:       now,
+		Mode:          model.PeopleIdentityModeShadow,
+		ComponentHash: "h2",
+		DecisionKey:   "dk2",
+		CenterIDs:     strings.Join(parts, ","),
+		Decision:      model.PeopleIdentityDecisionAgree,
+		CreatedAt:     now,
 	}
 	require.NoError(t, deps.db.Create(d).Error)
 

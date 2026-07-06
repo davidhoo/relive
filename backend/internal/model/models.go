@@ -37,8 +37,8 @@ type DisplayRecord struct {
 	DeviceID uint `gorm:"not null;index;index:idx_display_record_lookup,priority:2" json:"device_id"` // 设备 ID
 
 	// 展示信息
-	DisplayedAt     time.Time `gorm:"not null;index;index:idx_display_record_lookup,priority:3" json:"displayed_at"`            // 展示时间
-	DisplayDuration int       `gorm:"default:0" json:"display_duration"`             // 展示时长（秒）
+	DisplayedAt     time.Time `gorm:"not null;index;index:idx_display_record_lookup,priority:3" json:"displayed_at"` // 展示时间
+	DisplayDuration int       `gorm:"default:0" json:"display_duration"`                                             // 展示时长（秒）
 	TriggerType     string    `gorm:"type:varchar(20);not null;check:chk_trigger_type,trigger_type IN ('scheduled','manual','boot')" json:"trigger_type"`
 }
 
@@ -129,10 +129,10 @@ func (City) TableName() string {
 
 // ResultQueueItem 分析结果队列项
 type ResultQueueItem struct {
-	ID         uint           `gorm:"primarykey" json:"id"`
-	CreatedAt  time.Time      `json:"created_at"`
-	UpdatedAt  time.Time      `json:"updated_at"`
-	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
+	ID        uint           `gorm:"primarykey" json:"id"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 
 	Data       string `gorm:"type:text;not null" json:"data"`       // JSON 序列化的 QueuedResult
 	Priority   int    `gorm:"default:0" json:"priority"`            // 优先级

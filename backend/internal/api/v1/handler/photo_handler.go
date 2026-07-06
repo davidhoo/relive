@@ -367,8 +367,8 @@ func (h *PhotoHandler) GetPhotos(c *gin.Context) {
 	tag := c.Query("tag")
 	sortBy := c.DefaultQuery("sort_by", "taken_at")
 	sortDesc := c.DefaultQuery("sort_desc", "true") == "true"
-	status := c.Query("status")     // active(默认)/excluded/all
-	view := c.Query("view")         // summary(默认)/full
+	status := c.Query("status")              // active(默认)/excluded/all
+	view := c.Query("view")                  // summary(默认)/full
 	noTotal := c.Query("no_total") == "true" // 不统计总数（Dashboard 最近照片）
 
 	// 构建请求

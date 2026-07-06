@@ -68,7 +68,7 @@ func (s *stubPhotoService) GetCategories() ([]string, error)               { ret
 func (s *stubPhotoService) GetTags(_ string, _ int) ([]model.TagWithCount, int64, error) {
 	return nil, 0, nil
 }
-func (s *stubPhotoService) RebuildTagStats() error { return nil }
+func (s *stubPhotoService) RebuildTagStats() error                                 { return nil }
 func (s *stubPhotoService) GeocodePhotoIfNeeded(_ *model.Photo) error              { return nil }
 func (s *stubPhotoService) RegeocodeAllPhotos() (int, error)                       { return 0, nil }
 func (s *stubPhotoService) DeletePhotosByPathPrefix(_ string) (int64, error)       { return 0, nil }

@@ -61,9 +61,9 @@ func (r *peopleMergeJobRepository) UpdateStatus(id uint, status string, errorMsg
 func (r *peopleMergeJobRepository) Complete(id uint, result string) error {
 	now := r.db.NowFunc()
 	return r.db.Model(&model.PeopleMergeJob{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"status":        model.PeopleMergeJobStatusCompleted,
-		"result":        result,
-		"completed_at":  &now,
+		"status":       model.PeopleMergeJobStatusCompleted,
+		"result":       result,
+		"completed_at": &now,
 	}).Error
 }
 

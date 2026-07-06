@@ -17,7 +17,10 @@ type PhotoTagRepository interface {
 	// GetTagsByPhotoIDs 批量加载多照片标签
 	GetTagsByPhotoIDs(ids []uint) (map[uint][]string, error)
 	// BatchMigrate 批量写入（启动迁移用）
-	BatchMigrate(items []struct{ ID uint; Tags string }) error
+	BatchMigrate(items []struct {
+		ID   uint
+		Tags string
+	}) error
 	// DeleteTagsByPhotoID 删除某照片的全部标签并同步统计表（开独立事务）
 	DeleteTagsByPhotoID(photoID uint) error
 	// DeleteTagsByPhotoIDTx 在已有事务内删除某照片的全部标签并同步统计表
@@ -93,7 +96,10 @@ func (r *photoTagRepository) GetTagsByPhotoIDs(ids []uint) (map[uint][]string, e
 	return result, nil
 }
 
-func (r *photoTagRepository) BatchMigrate(items []struct{ ID uint; Tags string }) error {
+func (r *photoTagRepository) BatchMigrate(items []struct {
+	ID   uint
+	Tags string
+}) error {
 	if len(items) == 0 {
 		return nil
 	}

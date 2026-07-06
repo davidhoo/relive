@@ -10,7 +10,7 @@ import (
 )
 
 type testModel struct {
-	ID    uint   `gorm:"primaryKey"`
+	ID    uint `gorm:"primaryKey"`
 	Name  string
 	Value int
 }

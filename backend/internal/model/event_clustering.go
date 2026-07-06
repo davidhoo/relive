@@ -28,12 +28,12 @@ func DefaultEventClusteringConfig() EventClusteringConfig {
 
 // EventClusteringProgress 聚类进度
 type EventClusteringProgress struct {
-	Phase           string `json:"phase"`            // discovering / clustering / profiling / completed
+	Phase           string `json:"phase"` // discovering / clustering / profiling / completed
 	TotalPhotos     int    `json:"total_photos"`
 	ProcessedPhotos int    `json:"processed_photos"`
 	EventsCreated   int    `json:"events_created"`
 	EventsUpdated   int    `json:"events_updated"`
-	PhotosSkipped   int    `json:"photos_skipped"`   // 因簇太小而跳过的照片数
+	PhotosSkipped   int    `json:"photos_skipped"` // 因簇太小而跳过的照片数
 }
 
 // EventClusteringTask 聚类任务 DTO（返回给前端）

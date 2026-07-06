@@ -23,16 +23,16 @@ import (
 )
 
 type PeopleHandler struct {
-	service                 service.PeopleService
-	mergeSuggestionService  service.PersonMergeSuggestionService
-	personRepo              repository.PersonRepository
-	faceRepo                repository.FaceRepository
-	photoRepo               repository.PhotoRepository
-	jobRepo                 repository.PeopleJobRepository
-	runtimeService          service.AnalysisRuntimeService
-	identityProfileService  service.PersonIdentityProfileService
-	identityDecisionRepo    repository.PeopleIdentityDecisionRepository
-	cfg                     *config.Config
+	service                service.PeopleService
+	mergeSuggestionService service.PersonMergeSuggestionService
+	personRepo             repository.PersonRepository
+	faceRepo               repository.FaceRepository
+	photoRepo              repository.PhotoRepository
+	jobRepo                repository.PeopleJobRepository
+	runtimeService         service.AnalysisRuntimeService
+	identityProfileService service.PersonIdentityProfileService
+	identityDecisionRepo   repository.PeopleIdentityDecisionRepository
+	cfg                    *config.Config
 }
 
 func NewPeopleHandler(service service.PeopleService, mergeSuggestionService service.PersonMergeSuggestionService, personRepo repository.PersonRepository, faceRepo repository.FaceRepository, photoRepo repository.PhotoRepository, jobRepo repository.PeopleJobRepository, identityProfileService service.PersonIdentityProfileService, identityDecisionRepo repository.PeopleIdentityDecisionRepository, cfg *config.Config) *PeopleHandler {
@@ -264,11 +264,11 @@ func (h *PeopleHandler) CalculateSimilarity(c *gin.Context) {
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
 		Data: gin.H{
-			"person_id_1":       personID1,
-			"person_id_2":       req.TargetPersonID,
-			"similarity_score":  score,
-			"merge_threshold":   h.mergeSuggestionService.MergeSuggestionThreshold(),
-			"attach_threshold":  h.mergeSuggestionService.AttachThreshold(),
+			"person_id_1":      personID1,
+			"person_id_2":      req.TargetPersonID,
+			"similarity_score": score,
+			"merge_threshold":  h.mergeSuggestionService.MergeSuggestionThreshold(),
+			"attach_threshold": h.mergeSuggestionService.AttachThreshold(),
 		},
 	})
 }

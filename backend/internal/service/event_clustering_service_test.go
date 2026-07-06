@@ -151,7 +151,7 @@ func TestClusterPhotos_GPSSplitsInGrayZone(t *testing.T) {
 	svc := newClusteringSvc()
 	base := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
 	photos := []*model.Photo{
-		makePhotoGPS(1, base, 31.2, 121.5),                // 上海
+		makePhotoGPS(1, base, 31.2, 121.5),                  // 上海
 		makePhotoGPS(2, base.Add(8*time.Hour), 39.9, 116.4), // 北京，~1065km 远
 	}
 	clusters := svc.clusterPhotos(photos)

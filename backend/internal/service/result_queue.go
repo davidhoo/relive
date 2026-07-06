@@ -38,9 +38,9 @@ type ResultQueue struct {
 	wg      sync.WaitGroup
 
 	// 统计
-	enqueuedCount   uint64
-	processedCount  uint64
-	failedCount     uint64
+	enqueuedCount  uint64
+	processedCount uint64
+	failedCount    uint64
 
 	// 配置
 	batchSize     int
@@ -57,9 +57,9 @@ type ResultQueueConfig struct {
 // DefaultResultQueueConfig 默认配置
 func DefaultResultQueueConfig() ResultQueueConfig {
 	return ResultQueueConfig{
-		QueueSize:     10000,              // 内存队列缓冲 10000 条
-		BatchSize:     50,                 // 每批写入 50 条
-		FlushInterval: 5 * time.Second,    // 每 5 秒刷新一次
+		QueueSize:     10000,           // 内存队列缓冲 10000 条
+		BatchSize:     50,              // 每批写入 50 条
+		FlushInterval: 5 * time.Second, // 每 5 秒刷新一次
 	}
 }
 

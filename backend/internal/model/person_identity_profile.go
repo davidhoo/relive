@@ -113,7 +113,7 @@ type PersonIdentityProfileStats struct {
 
 	// Center 聚合：仅统计活动 generation（center.generation = profile.active_generation，
 	// profile.status=ready，active_generation>0，对应 people 仍存在）的中心。
-	CenterTotal         int64   `json:"center_total"`
+	CenterTotal          int64   `json:"center_total"`
 	CenterActive         int64   `json:"center_active"`
 	CenterConfirmed      int64   `json:"center_confirmed"`
 	CenterAvgPerProfile  float64 `json:"center_avg_per_profile"`
@@ -131,16 +131,16 @@ type PersonIdentityProfileStats struct {
 // 由 repository 通过 SELECT decision, COUNT(*) GROUP BY decision 聚合填充。
 // 未知 decision 计入 Total 但不写入已知分类。空表返回零值，不返回 nil。
 type IdentityDecisionSummary struct {
-	WindowHours          int   `json:"window_hours"`
-	Total                int64 `json:"total"`
-	Agree                int64 `json:"agree"`
-	Disagree             int64 `json:"disagree"`
-	LegacyMissProfileHit int64 `json:"legacy_miss_profile_hit"`
+	WindowHours           int   `json:"window_hours"`
+	Total                 int64 `json:"total"`
+	Agree                 int64 `json:"agree"`
+	Disagree              int64 `json:"disagree"`
+	LegacyMissProfileHit  int64 `json:"legacy_miss_profile_hit"`
 	LegacyMissProfileMiss int64 `json:"legacy_miss_profile_miss"`
-	ProfileMiss          int64 `json:"profile_miss"`
-	ProfileUnavailable   int64 `json:"profile_unavailable"`
-	ProfileBlocked       int64 `json:"profile_blocked"`
-	RescueApplied        int64 `json:"rescue_applied"`
+	ProfileMiss           int64 `json:"profile_miss"`
+	ProfileUnavailable    int64 `json:"profile_unavailable"`
+	ProfileBlocked        int64 `json:"profile_blocked"`
+	RescueApplied         int64 `json:"rescue_applied"`
 }
 
 // MemberByFaceID 返回指定人脸在本次构建中的成员记录，未找到返回 nil。

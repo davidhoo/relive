@@ -277,7 +277,6 @@ func Setup(db *gorm.DB, cfg *config.Config, appState *lifecycle.State) (*gin.Eng
 				people.POST("/:id/dissolve", handlers.People.DissolvePerson)
 			}
 
-
 			thumbnails := authorized.Group("/thumbnails")
 			{
 				thumbnails.POST("/background/start", handlers.Thumbnail.StartBackground)

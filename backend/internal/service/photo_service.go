@@ -133,18 +133,18 @@ func NewPhotoService(repo repository.PhotoRepository, photoTagRepo repository.Ph
 	thumbnailGenerator := util.NewThumbnailGenerator(1024, 1024, 90, cfg.Photos.ThumbnailPath)
 
 	service := &photoService{
-		repo:                 repo,
-		photoTagRepo:         photoTagRepo,
-		db:                   db,
-		scanJobRepo:          scanJobRepo,
-		config:               cfg,
-		configService:        configService,
-		geocodeService:       geocodeService,
-		thumbnailGenerator:   thumbnailGenerator,
-		thumbnailService:     thumbnailService,
-		geocodeTaskService:   geocodeTaskService,
-		writeQueue:           database.GetWriteQueue(),
-		filteredCountCache:   make(map[string]filteredCountEntry),
+		repo:               repo,
+		photoTagRepo:       photoTagRepo,
+		db:                 db,
+		scanJobRepo:        scanJobRepo,
+		config:             cfg,
+		configService:      configService,
+		geocodeService:     geocodeService,
+		thumbnailGenerator: thumbnailGenerator,
+		thumbnailService:   thumbnailService,
+		geocodeTaskService: geocodeTaskService,
+		writeQueue:         database.GetWriteQueue(),
+		filteredCountCache: make(map[string]filteredCountEntry),
 	}
 	service.processPhotoFunc = service.processPhoto
 

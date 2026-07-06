@@ -735,7 +735,6 @@ func TestPhotoService_RebuildTagStats(t *testing.T) {
 	}
 }
 
-
 func TestPhotoService_GetPhotosByPathPrefix(t *testing.T) {
 	svc, repo, _ := newPhotoServicePure(t)
 	repo.Create(&model.Photo{FilePath: "/photos/a.jpg", FileHash: "h1"})
