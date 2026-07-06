@@ -121,6 +121,7 @@
                 {{ allCurrentSelected ? '取消全选' : '全选当前列表' }}
               </el-checkbox>
               <span class="batch-selected-count">已选 {{ selectedCount }} 人</span>
+              <span class="batch-range-tip">Shift + 点击复选框可连续选择</span>
               <div class="batch-actions">
                 <el-button
                   size="small"
@@ -528,18 +529,55 @@ const markAvatarFailed = (faceId: number) => {
 // 批量管理模式：卡片显示复选框，可批量隐藏/恢复
 const batchMode = ref(false)
 const selectedIds = ref(new Set<number>())
+// Shift 连选锚点：普通点击选中时建立，区间选择时作为起点
+const selectionAnchorId = ref<number | null>(null)
 const visibilitySubmitting = ref(false)
 
 const clearSelection = () => {
   selectedIds.value = new Set()
+  selectionAnchorId.value = null
 }
 
-const toggleSelect = (personId: number) => {
+/**
+ * 将锚点到目标人物之间（闭区间）的所有当前列表人物加入选择，
+ * 保留区间外已有选择，不取消任何项。锚点无效时返回 false。
+ */
+const selectRangeFromAnchor = (targetPersonId: number): boolean => {
+  const anchorId = selectionAnchorId.value
+  if (anchorId === null) return false
+  const list = currentListPeople.value
+  const anchorIndex = list.findIndex(person => person.id === anchorId)
+  const targetIndex = list.findIndex(person => person.id === targetPersonId)
+  if (anchorIndex === -1 || targetIndex === -1) return false
+  const start = Math.min(anchorIndex, targetIndex)
+  const end = Math.max(anchorIndex, targetIndex)
+  const next = new Set(selectedIds.value)
+  for (let i = start; i <= end; i++) {
+    const person = list[i]
+    if (person) {
+      next.add(person.id)
+    }
+  }
+  selectedIds.value = next
+  return true
+}
+
+const toggleSelect = (personId: number, shiftKey = false) => {
+  if (shiftKey && selectRangeFromAnchor(personId)) {
+    // 区间连选成功：保留原锚点，不改变单选状态
+    return
+  }
   const next = new Set(selectedIds.value)
   if (next.has(personId)) {
     next.delete(personId)
+    // 取消的是当前锚点时同时清除锚点
+    if (selectionAnchorId.value === personId) {
+      selectionAnchorId.value = null
+    }
   } else {
     next.add(personId)
+    // 新选中的人物成为连选锚点
+    selectionAnchorId.value = personId
   }
   selectedIds.value = next
 }
@@ -561,6 +599,8 @@ const selectAllCurrent = () => {
     next.add(p.id)
   }
   selectedIds.value = next
+  // 全选不产生明确起点，清除锚点避免后续 Shift 含糊范围
+  selectionAnchorId.value = null
 }
 
 const toggleBatchMode = () => {
@@ -855,17 +895,22 @@ const handleVisibilityFilterChange = async () => {
 
 const handlePageChange = async (page: number) => {
   filters.page = page
+  // 翻页可保留已选，但清除锚点，防止 Shift 在不同页面间产生含糊范围
+  selectionAnchorId.value = null
   await loadPeople()
 }
 
 const handlePageSizeChange = async (pageSize: number) => {
   filters.page_size = pageSize
   filters.page = 1
+  selectionAnchorId.value = null
   await loadPeople()
 }
 
 const handleManualRefresh = async () => {
   avatarFailed.value = new Set()
+  // 手动刷新列表：清除连选锚点，防止刷新后 Shift 产生含糊范围
+  selectionAnchorId.value = null
   if (browseMode.value === 'continuous') {
     resetContinuousList()
     await loadMoreContinuous()
@@ -1244,11 +1289,16 @@ const handleVisibilityChange = async (personId: number, hidden: boolean) => {
     if (continuousPeople.value.length < beforeContinuous) {
       continuousTotal.value = Math.max(0, continuousTotal.value - 1)
     }
-    // 人物移出当前列表后清理其勾选状态，避免悬挂选择
-    if (!belongsToCurrentVisibility({ id: personId } as Person, hidden) && selectedIds.value.has(personId)) {
-      const next = new Set(selectedIds.value)
-      next.delete(personId)
-      selectedIds.value = next
+    // 人物移出当前列表后清理其勾选状态与连选锚点，避免悬挂选择
+    if (!belongsToCurrentVisibility({ id: personId } as Person, hidden)) {
+      if (selectedIds.value.has(personId)) {
+        const next = new Set(selectedIds.value)
+        next.delete(personId)
+        selectedIds.value = next
+      }
+      if (selectionAnchorId.value === personId) {
+        selectionAnchorId.value = null
+      }
     }
     ElMessage.success(hidden ? '已隐藏该人物' : '已恢复显示')
   } catch (error: any) {
@@ -1632,6 +1682,12 @@ onBeforeUnmount(() => {
 .batch-selected-count {
   font-size: 13px;
   color: var(--color-text-secondary);
+}
+
+.batch-range-tip {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  opacity: 0.75;
 }
 
 .batch-actions {

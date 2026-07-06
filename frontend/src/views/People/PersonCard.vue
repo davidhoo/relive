@@ -1,12 +1,14 @@
 <template>
   <div class="person-card" :class="{ 'is-selected': selected, 'is-hidden': person.hidden }">
     <!-- 批量选择复选框（仅批量管理模式显示） -->
-    <div v-if="selectable" class="person-card-select">
+    <div
+      v-if="selectable"
+      class="person-card-select"
+      @click.stop="handleSelectionClick"
+    >
       <el-checkbox
         :model-value="selected"
-        :aria-label="`选择「${displayName}」`"
-        @change="emit('toggle-select', person.id)"
-        @click.stop
+        :aria-label="selected ? `取消选择「${displayName}」` : `选择「${displayName}」`"
       />
     </div>
 
@@ -86,7 +88,7 @@ const emit = defineEmits<{
   detail: [personId: number]
   edit: [person: Person]
   'avatar-failed': [faceId: number]
-  'toggle-select': [personId: number]
+  'toggle-select': [personId: number, shiftKey: boolean]
   /** 设置人物可见性，payload 为目标隐藏状态 */
   visibility: [personId: number, hidden: boolean]
 }>()
@@ -106,6 +108,15 @@ const avatarAriaLabel = computed(() =>
 const nameAriaLabel = computed(() =>
   hasName.value ? `编辑「${displayName.value}」的人物信息` : '设置人物姓名',
 )
+
+/**
+ * 复选框外层接管点击：携带原始 MouseEvent 的 shiftKey 传给父组件，
+ * 由父组件决定是普通切换还是 Shift 区间连选。
+ * 不调用 preventDefault()，避免破坏复选框自身的焦点与键盘行为。
+ */
+const handleSelectionClick = (event: MouseEvent) => {
+  emit('toggle-select', props.person.id, event.shiftKey)
+}
 </script>
 
 <style scoped>
