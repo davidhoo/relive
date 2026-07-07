@@ -19,20 +19,43 @@ func EncodeEmbedding(emb []float32) []byte {
 
 // DecodeEmbedding parses a face embedding from either the legacy JSON format
 // (starts with '[') or the current raw little-endian float32 binary format.
+//
+// 格式识别说明：raw binary embedding 的首字节可能碰巧为 0x5B（等同 ASCII '['），
+// 仅凭 payload[0]=='[' 判定 JSON 会把合法 binary 误判为 JSON 并解析失败，导致
+// identity profile ANN rebuild 持续 fail-closed。这里改用「先尝试 JSON，失败则
+// fallback 到 binary」的策略，确保两种格式都正确解析，且不做 NaN/Inf/zero-norm
+// 校验（这些由 ANN 层 validVector 负责）。
 func DecodeEmbedding(payload []byte) []float32 {
 	if len(payload) == 0 {
 		return nil
 	}
+
 	if payload[0] == '[' {
+		// 优先按 JSON 解析（兼容旧格式）。
 		var emb []float32
-		if err := json.Unmarshal(payload, &emb); err != nil {
-			return nil
+		if err := json.Unmarshal(payload, &emb); err == nil {
+			return emb
 		}
-		return emb
+
+		// JSON 解析失败但长度符合 raw float32 binary，则按 binary fallback。
+		// 这覆盖 raw binary 首字节碰巧为 0x5B 的情况。
+		if len(payload)%4 == 0 {
+			return decodeBinaryEmbedding(payload)
+		}
+
+		return nil
 	}
+
 	if len(payload)%4 != 0 {
 		return nil
 	}
+
+	return decodeBinaryEmbedding(payload)
+}
+
+// decodeBinaryEmbedding 将 raw little-endian float32 字节切片还原为 []float32。
+// 调用方需保证 len(payload)%4 == 0。
+func decodeBinaryEmbedding(payload []byte) []float32 {
 	emb := make([]float32, len(payload)/4)
 	for i := range emb {
 		emb[i] = math.Float32frombits(binary.LittleEndian.Uint32(payload[i*4:]))

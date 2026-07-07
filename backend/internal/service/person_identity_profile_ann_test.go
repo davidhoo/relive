@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -474,6 +475,55 @@ func TestIdentityProfileANN_StableSortTiebreakByPersonID(t *testing.T) {
 	require.True(t, ready)
 	// 相同距离 → person_id ASC：10, 20, 30。
 	assert.Equal(t, []uint{10, 20, 30}, got)
+}
+
+// TestIdentityProfileANN_RebuildWithBinaryEmbeddingFirstByte0x5B 是线上故障的回归测试：
+// 当 PersonIdentityCenter 的 CentroidEmbedding 是合法 raw float32 binary embedding，
+// 且首字节恰好为 0x5B（等同 ASCII '['）时，DecodeEmbedding 不能误判为 JSON 而失败，
+// ANN Rebuild 必须成功。
+func TestIdentityProfileANN_RebuildWithBinaryEmbeddingFirstByte0x5B(t *testing.T) {
+	// 搜索一个首字节为 0x5B 的合法（非 NaN/Inf/零）float32，作为 embedding 首元素。
+	var firstBits uint32
+	found := false
+	for bits := uint32(0); bits < 0xFFFFFFFF; bits++ {
+		if byte(bits) == '[' {
+			v := math.Float32frombits(bits)
+			if !math.IsNaN(float64(v)) && !math.IsInf(float64(v), 0) && v != 0 {
+				firstBits = bits
+				found = true
+				break
+			}
+		}
+	}
+	require.True(t, found, "must find a valid float32 whose little-endian first byte is 0x5B")
+
+	// 构造 3 维 embedding，首元素首字节为 0x5B，整体合法且非零范数。
+	emb := make([]byte, 12)
+	binary.LittleEndian.PutUint32(emb[0:4], firstBits)
+	binary.LittleEndian.PutUint32(emb[4:8], math.Float32bits(float32(0.5)))
+	binary.LittleEndian.PutUint32(emb[8:12], math.Float32bits(float32(0.5)))
+	require.Equal(t, byte('['), emb[0], "first byte must be 0x5B to reproduce the production bug")
+
+	center := &model.PersonIdentityCenter{
+		ID:                309, // 对应线上 center 309
+		PersonID:          10,
+		Generation:        1,
+		Ordinal:           1,
+		CentroidEmbedding: emb,
+	}
+
+	ann := newIdentityProfileANN("emb-v1")
+	require.NoError(t, ann.Rebuild([]*model.PersonIdentityCenter{center}, "emb-v1"))
+	assert.True(t, ann.Ready("emb-v1"), "rebuild with 0x5B-prefixed binary embedding must succeed")
+
+	// 解出的首元素向量可被查询召回。
+	got, ready := ann.Search([]float32{
+		math.Float32frombits(firstBits),
+		0.5,
+		0.5,
+	}, 5, "emb-v1")
+	require.True(t, ready)
+	assert.Contains(t, got, uint(10))
 }
 
 // ---- Task 13: InvalidateAll ----
