@@ -266,6 +266,7 @@ func Setup(db *gorm.DB, cfg *config.Config, appState *lifecycle.State) (*gin.Eng
 				people.PATCH("/visibility", handlers.People.UpdateVisibility)
 				people.POST("/split", handlers.People.SplitPerson)
 				people.POST("/move-faces", handlers.People.MoveFaces)
+				people.POST("/faces/:id/person-assignment", handlers.People.AssignFacePerson)
 				people.GET("", handlers.People.ListPeople)
 				people.GET("/:id", handlers.People.GetPerson)
 				people.GET("/:id/photos", handlers.People.GetPersonPhotos)

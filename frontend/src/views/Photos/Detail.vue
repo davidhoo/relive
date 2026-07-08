@@ -147,10 +147,10 @@
             <div class="people-section-header">
               <div>
                 <h3>人物信息</h3>
-                <p class="people-section-subtitle">展示这张照片中出现的人物和对应的人脸样本，便于检查聚类结果。</p>
+                <p class="people-section-subtitle">展示这张照片中检测到的人脸及其归属人物，可直接对某张人脸改名。</p>
               </div>
-              <el-tag effect="light" :type="photoPeopleGroups.length > 0 ? 'danger' : 'info'">
-                {{ photoPeopleSummaryLabel }}
+              <el-tag effect="light" :type="photoFaceEntries.length > 0 ? 'danger' : 'info'">
+                {{ photoPeopleCountTag }}
               </el-tag>
             </div>
 
@@ -177,48 +177,33 @@
                 class="people-status-alert"
               />
 
-              <div v-if="photoPeopleGroups.length > 0" class="photo-people-groups">
-                <div v-for="group in photoPeopleGroups" :key="group.category" class="photo-people-group">
-                  <div class="photo-people-group-header">
-                    <h4>{{ group.label }}</h4>
-                    <span class="photo-people-group-meta">
-                      {{ `${group.people.length} 人 · ${group.face_count} 张人脸` }}
-                    </span>
-                  </div>
-
-                  <div class="photo-people-person-grid">
-                    <router-link
-                      v-for="personItem in group.people"
-                      :key="personItem.id"
-                      :to="`/people/${personItem.id}`"
-                      class="photo-person-card"
-                    >
-                      <div class="photo-person-main">
-                        <el-avatar
-                          :size="44"
-                          :src="personItem.representative_face_id ? getFaceThumbnailUrl(personItem.representative_face_id, String(imageVersion)) : ''"
-                        >
-                          {{ getPersonAvatarFallback(personItem) }}
-                        </el-avatar>
-                        <div class="photo-person-copy">
-                          <div class="photo-person-name">{{ getPhotoPersonName(personItem) }}</div>
-                          <div class="photo-person-meta">
-                            {{ `${getPersonCategoryLabel(personItem.category)} · ${personItem.faces?.length || 0} 张样本` }}
-                          </div>
-                        </div>
+              <div v-if="photoFaceEntries.length > 0" class="photo-face-list">
+                <div v-for="entry in photoFaceEntries" :key="entry.faceId" class="photo-face-item">
+                  <router-link :to="`/people/${entry.person.id}`" class="photo-face-main">
+                    <img
+                      :src="getFaceThumbnailUrl(entry.faceId, String(imageVersion))"
+                      :alt="`face-${entry.faceId}`"
+                      class="photo-face-thumb"
+                    />
+                    <div class="photo-face-copy">
+                      <div class="photo-face-name">{{ getPhotoPersonName(entry.person) }}</div>
+                      <div class="photo-face-meta">
+                        <span class="photo-face-category" :class="`is-${entry.person.category || 'stranger'}`">
+                          {{ getPersonCategoryLabel(entry.person.category) }}
+                        </span>
                       </div>
-
-                      <div class="photo-person-face-strip">
-                        <img
-                          v-for="face in (personItem.faces || []).slice(0, 4)"
-                          :key="face.id"
-                          :src="getFaceThumbnailUrl(face.id, String(imageVersion))"
-                          :alt="`face-${face.id}`"
-                          class="photo-person-face"
-                        />
-                      </div>
-                    </router-link>
-                  </div>
+                    </div>
+                  </router-link>
+                  <el-button
+                    link
+                    type="primary"
+                    size="small"
+                    class="photo-face-edit"
+                    @click="openFaceAssignDialog(entry)"
+                  >
+                    <el-icon><Edit /></el-icon>
+                    改名
+                  </el-button>
                 </div>
               </div>
             </template>
@@ -344,6 +329,79 @@
       :initial-lng="photo?.gps_longitude"
       @confirm="handleLocationConfirm"
     />
+
+    <!-- 编辑人脸人物：对本照片中的单张人脸改名/改归属 -->
+    <el-dialog
+      v-model="faceAssignVisible"
+      title="编辑人脸人物"
+      width="420px"
+      :close-on-click-modal="false"
+      append-to-body
+    >
+      <div v-if="faceAssignTarget" class="face-assign-body">
+        <div class="face-assign-preview">
+          <img
+            :src="getFaceThumbnailUrl(faceAssignTarget.faceId, String(imageVersion))"
+            alt="当前人脸"
+            class="face-assign-thumb"
+          />
+          <div class="face-assign-current">
+            <div class="face-assign-current-label">当前归属</div>
+            <div class="face-assign-current-name">{{ getPhotoPersonName(faceAssignTarget.person) }}</div>
+            <span class="photo-face-category" :class="`is-${faceAssignTarget.person.category || 'stranger'}`">
+              {{ getPersonCategoryLabel(faceAssignTarget.person.category) }}
+            </span>
+          </div>
+        </div>
+
+        <el-form label-position="top" class="face-assign-form">
+          <el-form-item label="人物姓名">
+            <el-input
+              v-model="faceAssignName"
+              placeholder="输入人物姓名，留空则保持未命名"
+              clearable
+              :maxlength="50"
+              show-word-limit
+            />
+          </el-form-item>
+
+          <el-form-item label="人物分类">
+            <el-select v-model="faceAssignCategory" placeholder="选择类别" style="width: 100%">
+              <el-option
+                v-for="option in faceCategoryOptions"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+          </el-form-item>
+        </el-form>
+
+        <!-- 姓名搜索：命中已有人物提示移动语义；未命中提示拆分创建 -->
+        <div class="face-assign-hint">
+          <template v-if="faceAssignSearchLoading">搜索中…</template>
+          <template v-else-if="faceAssignMatchedPerson">
+            <el-icon class="face-assign-hint-icon"><InfoFilled /></el-icon>
+            <span>
+              命中已有人物「{{ faceAssignMatchedName }}」（{{ getPersonCategoryLabel(faceAssignMatchedPerson.category) }}），
+              保存将把这张人脸移动到该人物，分类使用目标人物分类。
+            </span>
+          </template>
+          <template v-else-if="faceAssignName.trim()">
+            <el-icon class="face-assign-hint-icon"><InfoFilled /></el-icon>
+            <span>未找到同名人物，保存将从当前人物拆分这张人脸，创建新人物并命名，分类使用上方选择。</span>
+          </template>
+          <template v-else>
+            <span class="face-assign-hint-muted">输入姓名后可搜索已有人物；命中则移动，未命中则拆分创建。</span>
+          </template>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="faceAssignVisible = false">取消</el-button>
+        <el-button type="primary" :loading="faceAssignSaving" @click="handleFaceAssignSave">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -362,7 +420,7 @@ import LocationPicker from '@/components/LocationPicker.vue'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getPersonAvatarFallback, getPersonCategoryLabel } from '@/views/People/peopleHelpers'
-import { buildFaceThumbnailUrl, getPhotoPeopleSummaryLabel, groupPhotoPeopleByCategory } from './photoPeopleHelpers'
+import { buildFaceThumbnailUrl, flattenPhotoPeopleFaces, getPhotoPeopleCountTag } from './photoPeopleHelpers'
 
 const route = useRoute()
 const router = useRouter()
@@ -402,8 +460,8 @@ const buildPhotoPeopleFallback = (): Pick<PhotoPeopleResponse, 'face_process_sta
 }
 
 const photoPeopleStatus = computed(() => photoPeople.value?.face_process_status || buildPhotoPeopleFallback()?.face_process_status || 'none')
-const photoPeopleGroups = computed(() => groupPhotoPeopleByCategory(photoPeople.value))
-const photoPeopleSummaryLabel = computed(() => getPhotoPeopleSummaryLabel(photoPeople.value || buildPhotoPeopleFallback()))
+const photoFaceEntries = computed(() => flattenPhotoPeopleFaces(photoPeople.value))
+const photoPeopleCountTag = computed(() => getPhotoPeopleCountTag(photoPeople.value))
 // 统一管理所有轮询定时器，离开页面时清理
 const activeTimers: ReturnType<typeof setInterval | typeof setTimeout>[] = []
 const addTimer = (id: ReturnType<typeof setInterval | typeof setTimeout>) => {
@@ -436,6 +494,107 @@ const getFaceThumbnailUrl = (faceId: number, version?: string) => {
 }
 
 const getPhotoPersonName = (personItem: Person) => personItem.name?.trim() || `未命名人物 #${personItem.id}`
+
+// ---- 编辑人脸人物对话框（本照片单张 face 改名/改归属）----
+const faceCategoryOptions: Array<{ label: string; value: Person['category'] }> = [
+  { label: '家人', value: 'family' },
+  { label: '亲友', value: 'friend' },
+  { label: '熟人', value: 'acquaintance' },
+  { label: '路人', value: 'stranger' },
+]
+
+const faceAssignVisible = ref(false)
+const faceAssignSaving = ref(false)
+const faceAssignTarget = ref<{ faceId: number; person: Person } | null>(null)
+const faceAssignName = ref('')
+const faceAssignCategory = ref<Person['category']>('stranger')
+// 姓名搜索命中已有人物（同名），用于提示移动语义
+const faceAssignMatchedPerson = ref<Person | null>(null)
+const faceAssignSearchLoading = ref(false)
+const faceAssignMatchedName = computed(() =>
+  faceAssignMatchedPerson.value
+    ? (faceAssignMatchedPerson.value.name?.trim() || `未命名人物 #${faceAssignMatchedPerson.value.id}`)
+    : '',
+)
+let faceAssignSearchTimer: number | null = null
+let faceAssignSearchSeq = 0
+
+const openFaceAssignDialog = (entry: { faceId: number; person: Person }) => {
+  faceAssignTarget.value = entry
+  faceAssignName.value = entry.person.name?.trim() ?? ''
+  faceAssignCategory.value = entry.person.category || 'stranger'
+  faceAssignMatchedPerson.value = null
+  faceAssignSearchLoading.value = false
+  faceAssignSearchSeq++
+  faceAssignVisible.value = true
+}
+
+// 姓名变化：去抖 300ms 搜索同名已有人物（排除当前归属人物自身）
+watch(faceAssignName, value => {
+  if (faceAssignSearchTimer !== null) {
+    window.clearTimeout(faceAssignSearchTimer)
+  }
+  const trimmed = value.trim()
+  if (!trimmed || !faceAssignTarget.value) {
+    faceAssignMatchedPerson.value = null
+    faceAssignSearchLoading.value = false
+    return
+  }
+  faceAssignSearchLoading.value = true
+  const currentPersonId = faceAssignTarget.value.person.id
+  const mySeq = ++faceAssignSearchSeq
+  faceAssignSearchTimer = window.setTimeout(async () => {
+    try {
+      const res = await peopleApi.getList({ search: trimmed, page: 1, page_size: 20 })
+      if (mySeq !== faceAssignSearchSeq) return
+      const items = (res.data?.data?.items || []).filter(
+        p => p.id !== currentPersonId && p.name?.trim() === trimmed,
+      )
+      faceAssignMatchedPerson.value = items.length > 0 ? items[0] ?? null : null
+    } catch {
+      if (mySeq !== faceAssignSearchSeq) return
+      faceAssignMatchedPerson.value = null
+    } finally {
+      if (mySeq === faceAssignSearchSeq) {
+        faceAssignSearchLoading.value = false
+      }
+    }
+  }, 300)
+})
+
+const handleFaceAssignSave = async () => {
+  if (!faceAssignTarget.value || !photo.value) return
+  const target = faceAssignTarget.value
+  const trimmedName = faceAssignName.value.trim()
+  // 命中已有人物时走移动；否则若姓名为空且未命中，也按“移动到自身”无意义，要求姓名
+  if (!faceAssignMatchedPerson.value && !trimmedName) {
+    ElMessage.warning('请输入人物姓名，或选择已有人物')
+    return
+  }
+
+  faceAssignSaving.value = true
+  try {
+    const res = await peopleApi.assignFacePerson(target.faceId, {
+      name: trimmedName,
+      category: faceAssignCategory.value,
+      target_person_id: faceAssignMatchedPerson.value?.id,
+    })
+    const updated = res.data?.data
+    if (updated) {
+      photoPeople.value = updated
+      // imageVersion bump 让缩略图刷新（拆分/移动后人脸缩略图本身不变，但稳妥起见）
+    } else {
+      await loadPhotoPeople(photo.value.id)
+    }
+    imageVersion.value = Date.now()
+    ElMessage.success('人脸归属已更新')
+    faceAssignVisible.value = false
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || error.message || '保存失败')
+  } finally {
+    faceAssignSaving.value = false
+  }
+}
 
 // 格式化时间
 const formatTime = (time?: string) => {
@@ -1045,6 +1204,161 @@ h4 {
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+
+/* 人脸级紧凑列表 */
+.photo-face-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.photo-face-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+}
+
+.photo-face-item:hover {
+  border-color: var(--el-color-primary);
+}
+
+.photo-face-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+  text-decoration: none;
+}
+
+.photo-face-thumb {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 10px;
+  background: #eef2f7;
+  flex-shrink: 0;
+}
+
+.photo-face-copy {
+  min-width: 0;
+}
+
+.photo-face-name {
+  font-weight: 600;
+  color: #303133;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.photo-face-meta {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.photo-face-category {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.photo-face-category.is-family {
+  background: rgba(245, 108, 108, 0.12);
+  color: #c45656;
+}
+
+.photo-face-category.is-friend {
+  background: rgba(103, 194, 58, 0.14);
+  color: #5a9a3a;
+}
+
+.photo-face-category.is-acquaintance {
+  background: rgba(230, 162, 60, 0.14);
+  color: #b8821f;
+}
+
+.photo-face-category.is-stranger {
+  background: rgba(144, 147, 153, 0.14);
+  color: #8a8d93;
+}
+
+.photo-face-edit {
+  flex-shrink: 0;
+}
+
+/* 编辑人脸人物对话框 */
+.face-assign-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.face-assign-preview {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+}
+
+.face-assign-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 10px;
+  background: #eef2f7;
+  flex-shrink: 0;
+}
+
+.face-assign-current {
+  min-width: 0;
+}
+
+.face-assign-current-label {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.face-assign-current-name {
+  font-weight: 600;
+  color: #303133;
+  margin: 2px 0 4px;
+}
+
+.face-assign-form {
+  margin-top: 0;
+}
+
+.face-assign-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 13px;
+  color: #6b7280;
+  line-height: 1.6;
+}
+
+.face-assign-hint-icon {
+  color: var(--el-color-primary);
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.face-assign-hint-muted {
+  color: #9ca3af;
 }
 
 .photo-people-group {

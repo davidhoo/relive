@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"strings"
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
@@ -15,6 +16,9 @@ type PersonRepository interface {
 	Delete(id uint) error
 	ListAll() ([]*model.Person, error)
 	ListByIDs(ids []uint) ([]*model.Person, error)
+	// ListByNameExact 返回 name 完全匹配（大小写不敏感）的人物，用于人脸级改名时
+	// 判断输入姓名是否命中已有人物。空名不返回结果。
+	ListByNameExact(name string) ([]*model.Person, error)
 	ListMergeSuggestionTargets(cursorID uint, limit int) ([]*model.Person, error) // cursor 分页，只返回 family/friend 且有脸的人物
 	ListWithAvatar() ([]*model.Person, error)                                     // 只返回有头像的人物（用于合并/移动候选列表）
 	ListPeople(opts ListPeopleOptions) ([]*model.Person, int64, error)            // 数据库层分页查询
@@ -119,6 +123,16 @@ func (r *personRepository) ListWithAvatar() ([]*model.Person, error) {
 	err := r.db.Where("representative_face_id IS NOT NULL").
 		Order("id ASC").
 		Find(&people).Error
+	return people, err
+}
+
+func (r *personRepository) ListByNameExact(name string) ([]*model.Person, error) {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return nil, nil
+	}
+	var people []*model.Person
+	err := r.db.Where("LOWER(name) = LOWER(?)", trimmed).Order("id ASC").Find(&people).Error
 	return people, err
 }
 

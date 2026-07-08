@@ -188,8 +188,12 @@ func TestIdentityProfileBuilder_SingleManualConfirmed(t *testing.T) {
 	assert.True(t, c.Confirmed)
 	assert.Equal(t, 1, c.SupportCount)
 	assert.Equal(t, uint(1), *c.MedoidFaceID)
-	assert.Equal(t, 1.0, c.SimilarityP10) // 单样本质心即自身，相似度 1
-	assert.Equal(t, 1.0, c.SimilarityP50)
+	// 单样本质心即自身，相似度应等于 1；float32/SIMD 累积误差可能使原始值略大于
+	// 1.0，cosineSimilarity 已钳制到 [-1, 1]，故断言近似 1 且不超过 1.0。
+	assert.InDelta(t, 1.0, c.SimilarityP10, 1e-6)
+	assert.InDelta(t, 1.0, c.SimilarityP50, 1e-6)
+	assert.LessOrEqual(t, c.SimilarityP10, 1.0)
+	assert.LessOrEqual(t, c.SimilarityP50, 1.0)
 	require.Len(t, build.Members, 1)
 	assert.Equal(t, model.PersonIdentityMemberStateAccepted, build.Members[0].State)
 }

@@ -4190,3 +4190,264 @@ func TestPeopleService_Invalidate_NonIdentityOpsDoNotInvalidate(t *testing.T) {
 	}
 	assert.Equal(t, 0, rec.invalidateCount(), "avatar must not invalidate")
 }
+
+ // ---------------------------------------------------------------------------
+ // AssignFacePerson — 人脸级改名归属变更测试
+ // ---------------------------------------------------------------------------
+
+ func setupAssignFacePersonTest(t *testing.T) (*peopleService, *gorm.DB, *model.Photo, *model.Person, *model.Person, *model.Face) {
+ 	t.Helper()
+ 	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+ 	photoRepo := repository.NewPhotoRepository(db)
+ 	personRepo := repository.NewPersonRepository(db)
+ 	faceRepo := repository.NewFaceRepository(db)
+
+ 	photo := &model.Photo{FilePath: "/photos/assign.jpg", FileName: "assign.jpg", FileSize: 1, FileHash: "assign", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+ 	require.NoError(t, photoRepo.Create(photo))
+
+ 	source := &model.Person{Category: model.PersonCategoryStranger}
+ 	target := &model.Person{Category: model.PersonCategoryFamily, Name: "张三"}
+ 	require.NoError(t, personRepo.Create(source))
+ 	require.NoError(t, personRepo.Create(target))
+
+ 	face := &model.Face{
+ 		PhotoID:      photo.ID,
+ 		PersonID:     &source.ID,
+ 		BBoxX:        0.1,
+ 		BBoxY:        0.1,
+ 		BBoxWidth:    0.2,
+ 		BBoxHeight:   0.2,
+ 		Confidence:   0.94,
+ 		QualityScore: 0.8,
+ 		Embedding:    encodeEmbedding(t, []float32{0, 1, 0}),
+ 	}
+ 	require.NoError(t, faceRepo.Create(face))
+ 	require.NoError(t, personRepo.RefreshStats(source.ID))
+ 	require.NoError(t, personRepo.RefreshStats(target.ID))
+ 	require.NoError(t, photoRepo.RecomputeTopPersonCategory([]uint{photo.ID}))
+
+ 	return svc, db, photo, source, target, face
+ }
+
+ // 改名命中已有人物：face 移动到目标人物，分类继承目标人物。
+func TestAssignFacePerson_MoveToExistingByName(t *testing.T) {
+	svc, db, photo, source, target, face := setupAssignFacePersonTest(t)
+
+	photoRepo := repository.NewPhotoRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+
+	returnedPhotoID, err := svc.AssignFacePerson(face.ID, model.FacePersonAssignmentRequest{
+ 		Name: "张三",
+ 	})
+ 	require.NoError(t, err)
+ 	assert.Equal(t, photo.ID, returnedPhotoID)
+
+ 	updatedFace, err := faceRepo.GetByID(face.ID)
+ 	require.NoError(t, err)
+ 	require.NotNil(t, updatedFace.PersonID)
+ 	assert.Equal(t, target.ID, *updatedFace.PersonID, "face should belong to target person")
+
+ 	updatedPhoto, err := photoRepo.GetByID(photo.ID)
+ 	require.NoError(t, err)
+ 	assert.Equal(t, model.PersonCategoryFamily, updatedPhoto.TopPersonCategory, "top_person_category should recompute to family")
+
+ 	// Source person should have 0 faces after move
+ 	sourceFaces, err := faceRepo.ListByPersonIDSummary(source.ID)
+ 	require.NoError(t, err)
+ 	assert.Equal(t, 0, len(sourceFaces), "source person should have no faces")
+ }
+
+ // 改名使用 target_person_id：face 移动到目标人物，忽略请求里的 category。
+func TestAssignFacePerson_MoveByTargetPersonID(t *testing.T) {
+	svc, db, _, _, target, face := setupAssignFacePersonTest(t)
+
+	faceRepo := repository.NewFaceRepository(db)
+
+ 	returnedPhotoID, err := svc.AssignFacePerson(face.ID, model.FacePersonAssignmentRequest{
+ 		Name:           "whatever",
+ 		Category:       model.PersonCategoryAcquaintance,
+ 		TargetPersonID: target.ID,
+ 	})
+ 	require.NoError(t, err)
+ 	assert.NotZero(t, returnedPhotoID)
+
+ 	updatedFace, err := faceRepo.GetByID(face.ID)
+ 	require.NoError(t, err)
+ 	require.NotNil(t, updatedFace.PersonID)
+ 	assert.Equal(t, target.ID, *updatedFace.PersonID)
+ }
+
+ // 改名为新人物：拆分创建新 person，设置 name/category，face 归属新人物。
+ func TestAssignFacePerson_SplitToNewPerson(t *testing.T) {
+ 	svc, db, photo, source, _, face := setupAssignFacePersonTest(t)
+
+ 	photoRepo := repository.NewPhotoRepository(db)
+ 	personRepo := repository.NewPersonRepository(db)
+ 	faceRepo := repository.NewFaceRepository(db)
+
+ 	returnedPhotoID, err := svc.AssignFacePerson(face.ID, model.FacePersonAssignmentRequest{
+ 		Name:     "李四",
+ 		Category: model.PersonCategoryFriend,
+ 	})
+ 	require.NoError(t, err)
+ 	assert.Equal(t, photo.ID, returnedPhotoID)
+
+ 	updatedFace, err := faceRepo.GetByID(face.ID)
+ 	require.NoError(t, err)
+ 	require.NotNil(t, updatedFace.PersonID)
+ 	assert.NotEqual(t, source.ID, *updatedFace.PersonID, "face should no longer belong to source person")
+
+ 	newPerson, err := personRepo.GetByID(*updatedFace.PersonID)
+ 	require.NoError(t, err)
+ 	require.NotNil(t, newPerson)
+ 	assert.Equal(t, "李四", newPerson.Name)
+ 	assert.Equal(t, model.PersonCategoryFriend, newPerson.Category)
+
+ 	updatedPhoto, err := photoRepo.GetByID(photo.ID)
+ 	require.NoError(t, err)
+ 	assert.Equal(t, model.PersonCategoryFriend, updatedPhoto.TopPersonCategory, "top_person_category should recompute to friend")
+
+ 	// Source person should have 0 faces
+ 	sourceFaces, err := faceRepo.ListByPersonIDSummary(source.ID)
+ 	require.NoError(t, err)
+ 	assert.Equal(t, 0, len(sourceFaces))
+ }
+
+ // 当前 face 无 person_id：返回错误。
+ func TestAssignFacePerson_FaceWithoutPerson(t *testing.T) {
+ 	svc, db, photo, _, _, _ := setupAssignFacePersonTest(t)
+ 	faceRepo := repository.NewFaceRepository(db)
+
+ 	// Create a face with no person
+ 	orphanFace := &model.Face{
+ 		PhotoID:      photo.ID,
+ 		BBoxX:        0.3,
+ 		BBoxY:        0.3,
+ 		BBoxWidth:    0.2,
+ 		BBoxHeight:   0.2,
+ 		Confidence:   0.9,
+ 		QualityScore: 0.7,
+ 		Embedding:    encodeEmbedding(t, []float32{1, 0, 0}),
+ 	}
+ 	require.NoError(t, faceRepo.Create(orphanFace))
+
+ 	_, err := svc.AssignFacePerson(orphanFace.ID, model.FacePersonAssignmentRequest{
+ 		Name:     "新人物",
+ 		Category: model.PersonCategoryFamily,
+ 	})
+ 	require.Error(t, err)
+ 	assert.Contains(t, err.Error(), "has no person")
+ }
+
+ // face 不存在：返回错误。
+ func TestAssignFacePerson_FaceNotFound(t *testing.T) {
+ 	svc, _, _, _, _, _ := setupAssignFacePersonTest(t)
+
+ 	_, err := svc.AssignFacePerson(99999, model.FacePersonAssignmentRequest{
+ 		Name: "新人物",
+ 	})
+ 	require.Error(t, err)
+ }
+
+ // 目标与当前归属相同：无变化，不产生副作用。
+ func TestAssignFacePerson_NoOpSamePerson(t *testing.T) {
+ 	svc, db, _, _, target, face := setupAssignFacePersonTest(t)
+ 	faceRepo := repository.NewFaceRepository(db)
+
+ 	// Move face to target first
+ 	_, err := svc.MoveFaces([]uint{face.ID}, target.ID)
+ 	require.NoError(t, err)
+
+ 	rec := &shadowHookRecorder{}
+ 	svc.SetIdentityProfileInvalidationHook(rec.invalidate)
+ 	svc.setMergeSuggestionDirtyHookForTest(func(string) error { return nil })
+
+ 	// Assign to target again by name — should be no-op
+ 	_, err = svc.AssignFacePerson(face.ID, model.FacePersonAssignmentRequest{
+ 		Name: "张三",
+ 	})
+ 	require.NoError(t, err)
+ 	assert.Equal(t, 0, rec.invalidateCount(), "no-op assign must not invalidate")
+
+ 	updatedFace, err := faceRepo.GetByID(face.ID)
+ 	require.NoError(t, err)
+ 	require.NotNil(t, updatedFace.PersonID)
+ 	assert.Equal(t, target.ID, *updatedFace.PersonID)
+ }
+
+ // 拆分场景验证 cannot-link 规则被创建。
+ func TestAssignFacePerson_SplitCreatesCannotLink(t *testing.T) {
+ 	svc, db, _, source, _, face := setupAssignFacePersonTest(t)
+
+ 	faceRepo := repository.NewFaceRepository(db)
+ 	personRepo := repository.NewPersonRepository(db)
+
+ 	_, err := svc.AssignFacePerson(face.ID, model.FacePersonAssignmentRequest{
+ 		Name:     "王五",
+ 		Category: model.PersonCategoryFamily,
+ 	})
+ 	require.NoError(t, err)
+
+ 	updatedFace, err := faceRepo.GetByID(face.ID)
+ 	require.NoError(t, err)
+ 	require.NotNil(t, updatedFace.PersonID)
+ 	newPersonID := *updatedFace.PersonID
+
+	// cannot-link constraint should exist between source and new person
+	var count int64
+	err = db.Model(&model.CannotLinkConstraint{}).
+		Where("(person_id_a = ? AND person_id_b = ?) OR (person_id_a = ? AND person_id_b = ?)",
+			source.ID, newPersonID, newPersonID, source.ID).
+		Count(&count).Error
+ 	require.NoError(t, err)
+ 	assert.Equal(t, int64(1), count, "cannot-link constraint should exist between source and new person")
+
+ 	// New person should have correct name
+ 	newPerson, err := personRepo.GetByID(newPersonID)
+ 	require.NoError(t, err)
+ 	assert.Equal(t, "王五", newPerson.Name)
+ }
+
+ // 拆分场景验证 identity profile 失效。
+ func TestAssignFacePerson_SplitInvalidatesIdentityProfile(t *testing.T) {
+ 	svc, db, _, source, _, face := setupAssignFacePersonTest(t)
+ 	rec := &shadowHookRecorder{}
+ 	svc.SetIdentityProfileInvalidationHook(rec.invalidate)
+ 	svc.setMergeSuggestionDirtyHookForTest(func(string) error { return nil })
+
+ 	_, err := svc.AssignFacePerson(face.ID, model.FacePersonAssignmentRequest{
+ 		Name:     "赵六",
+ 		Category: model.PersonCategoryFriend,
+ 	})
+ 	require.NoError(t, err)
+
+ 	require.Equal(t, 1, rec.invalidateCount())
+ 	inv := rec.invalidateCallsSnapshot()[0]
+ 	assert.Equal(t, "person_split", inv.reason)
+ 	assert.Contains(t, inv.dirty, source.ID)
+
+ 	faceRepo := repository.NewFaceRepository(db)
+ 	updatedFace, err := faceRepo.GetByID(face.ID)
+ 	require.NoError(t, err)
+ 	assert.Contains(t, inv.dirty, *updatedFace.PersonID)
+ }
+
+ // 移动场景验证 identity profile 失效。
+func TestAssignFacePerson_MoveInvalidatesIdentityProfile(t *testing.T) {
+	svc, _, _, source, target, face := setupAssignFacePersonTest(t)
+	rec := &shadowHookRecorder{}
+	svc.SetIdentityProfileInvalidationHook(rec.invalidate)
+	svc.setMergeSuggestionDirtyHookForTest(func(string) error { return nil })
+
+	_, err := svc.AssignFacePerson(face.ID, model.FacePersonAssignmentRequest{
+		Name: "张三",
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, 1, rec.invalidateCount())
+	inv := rec.invalidateCallsSnapshot()[0]
+	assert.Equal(t, "faces_moved", inv.reason)
+	assert.Contains(t, inv.dirty, source.ID)
+	assert.Contains(t, inv.dirty, target.ID)
+}

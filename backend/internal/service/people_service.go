@@ -83,6 +83,12 @@ type PeopleService interface {
 	GetMergeJobStatus(jobID uint) (*model.PeopleMergeJob, error)
 	SplitPerson(faceIDs []uint) (*model.Person, *model.ReclusterResult, error)
 	MoveFaces(faceIDs []uint, targetPersonID uint) (*model.ReclusterResult, error)
+	// AssignFacePerson 针对单张人脸执行“改名”归属变更，供照片详情页使用：
+	//   - targetPersonID 有值：移动到目标人物，忽略 name/category；
+	//   - targetPersonID 为空但 name 命中已有人物：移动到命中人物；
+	//   - targetPersonID 为空且 name 未命中：拆分创建新人物并命名/分类。
+	// 返回操作涉及的照片 ID（face 所在照片），便于 handler 复用 GetPhotoPeople 重算返回。
+	AssignFacePerson(faceID uint, req model.FacePersonAssignmentRequest) (photoID uint, err error)
 	UpdatePersonCategory(personID uint, category string) error
 	UpdatePersonName(personID uint, name string) error
 	UpdatePersonAvatar(personID uint, faceID uint) error
@@ -894,6 +900,183 @@ func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) (*model.R
 	s.markMergeSuggestionsDirty("move_faces")
 	s.scheduleFeedbackRecluster()
 	return &model.ReclusterResult{}, nil
+}
+
+// AssignFacePerson 针对单张人脸执行“改名”归属变更。复用 SplitPerson/MoveFaces
+// 的核心逻辑与副作用链路（状态同步、top_person_category 重算、画像失效、合并建议
+// dirty 标记、feedback recluster 调度、cannot-link 规则）。
+//
+// 决策规则：
+//   - req.TargetPersonID 有值：移动到目标人物，忽略 name/category，分类用目标人物。
+//   - req.TargetPersonID 为空但 name 命中已有人物：移动到命中人物，分类用命中人物。
+//     同名多人物时取 id 最小者（与现有同名搜索选择目标语义一致）。
+//   - req.TargetPersonID 为空且 name 未命中：拆分创建新人物，name=name，
+//     category=req.Category（缺省 stranger）。
+func (s *peopleService) AssignFacePerson(faceID uint, req model.FacePersonAssignmentRequest) (uint, error) {
+	s.beginForegroundMutation()
+	defer s.endForegroundMutation()
+
+	// face 必须存在且已有 person_id；无归属 face 不支持改名。
+	face, err := s.faceRepo.GetByID(faceID)
+	if err != nil {
+		return 0, err
+	}
+	if face == nil {
+		return 0, fmt.Errorf("face %d not found", faceID)
+	}
+	if face.PersonID == nil || *face.PersonID == 0 {
+		return 0, fmt.Errorf("face %d has no person", faceID)
+	}
+	sourcePersonID := *face.PersonID
+
+	targetPersonID, createNew, err := s.resolveAssignTarget(sourcePersonID, req)
+	if err != nil {
+		return 0, err
+	}
+
+	// 目标与当前归属相同：视为无变化，直接返回，不产生副作用。
+	if !createNew && targetPersonID == sourcePersonID {
+		return face.PhotoID, nil
+	}
+
+	if createNew {
+		newPerson := &model.Person{Category: resolvePersonCategory(req.Category)}
+		coreCommitted := false
+		defer func() {
+			if coreCommitted {
+				s.recordFeedbackEvent(buildFeedbackEvent(
+					repository.PeopleFeedbackEventPersonSplit,
+					newPerson.ID,
+					[]uint{sourcePersonID},
+					[]uint{faceID},
+					peopleManualAlgorithmVersion,
+					nil,
+				))
+				s.invalidateIdentityProfiles(IdentityProfileInvalidation{
+					DirtyPersonIDs: []uint{sourcePersonID, newPerson.ID},
+					Reason:         "person_split",
+				})
+			}
+		}()
+		if err := s.executeWrite(func() error {
+			if err := s.personRepo.Create(newPerson); err != nil {
+				return err
+			}
+			return s.faceRepo.ReassignFaces([]uint{faceID}, newPerson.ID, "split")
+		}); err != nil {
+			return 0, err
+		}
+		coreCommitted = true
+
+		// 命名/分类在状态同步后单独更新，避免 Create 时未带 name。
+		if trimmedName := strings.TrimSpace(req.Name); trimmedName != "" {
+			if err := s.executeWrite(func() error {
+				return s.personRepo.UpdateFields(newPerson.ID, map[string]interface{}{"name": trimmedName})
+			}); err != nil {
+				return 0, err
+			}
+		}
+
+		if err := s.syncPersonState(sourcePersonID); err != nil {
+			return 0, err
+		}
+		if err := s.syncPersonState(newPerson.ID); err != nil {
+			return 0, err
+		}
+		if err := s.executeWrite(func() error {
+			if err := s.photoRepo.RecomputeTopPersonCategory([]uint{face.PhotoID}); err != nil {
+				return err
+			}
+			return s.cannotLinkRepo.Create(sourcePersonID, newPerson.ID)
+		}); err != nil {
+			return 0, err
+		}
+		s.markMergeSuggestionsDirty("assign_face_person_split")
+		s.scheduleFeedbackRecluster()
+		return face.PhotoID, nil
+	}
+
+	// 移动到已有人物（目标或命中人物）。
+	movedFaceIDs := []uint{faceID}
+	sourcePersonIDs := map[uint]struct{}{sourcePersonID: {}}
+	coreCommitted := false
+	defer func() {
+		if coreCommitted {
+			s.recordFeedbackEvent(buildFeedbackEvent(
+				repository.PeopleFeedbackEventFaceMoved,
+				targetPersonID,
+				mapKeys(sourcePersonIDs),
+				movedFaceIDs,
+				peopleManualAlgorithmVersion,
+				nil,
+			))
+			s.invalidateIdentityProfiles(IdentityProfileInvalidation{
+				DirtyPersonIDs: append(mapKeys(sourcePersonIDs), targetPersonID),
+				Reason:         "faces_moved",
+			})
+		}
+	}()
+	if err := s.executeWrite(func() error {
+		return s.faceRepo.ReassignFaces([]uint{faceID}, targetPersonID, "move")
+	}); err != nil {
+		return 0, err
+	}
+	coreCommitted = true
+
+	if err := s.syncPersonState(targetPersonID); err != nil {
+		return 0, err
+	}
+	if err := s.syncPersonState(sourcePersonID); err != nil {
+		return 0, err
+	}
+	if err := s.executeWrite(func() error {
+		return s.photoRepo.RecomputeTopPersonCategory([]uint{face.PhotoID})
+	}); err != nil {
+		return 0, err
+	}
+	s.markMergeSuggestionsDirty("assign_face_person_move")
+	s.scheduleFeedbackRecluster()
+	return face.PhotoID, nil
+}
+
+// resolveAssignTarget 解析改名请求的目标人物。返回 (targetPersonID, createNew, err)。
+func (s *peopleService) resolveAssignTarget(sourcePersonID uint, req model.FacePersonAssignmentRequest) (uint, bool, error) {
+	if req.TargetPersonID != 0 {
+		target, err := s.personRepo.GetByID(req.TargetPersonID)
+		if err != nil {
+			return 0, false, err
+		}
+		if target == nil {
+			return 0, false, fmt.Errorf("target person %d not found", req.TargetPersonID)
+		}
+		return target.ID, false, nil
+	}
+
+	trimmedName := strings.TrimSpace(req.Name)
+	if trimmedName == "" {
+		return 0, false, fmt.Errorf("name is required when target_person_id is empty")
+	}
+
+	matches, err := s.personRepo.ListByNameExact(trimmedName)
+	if err != nil {
+		return 0, false, err
+	}
+	if len(matches) > 0 {
+		// 同名命中已有人物：移动过去。同名多人物取 id 最小者。
+		return matches[0].ID, false, nil
+	}
+	// 未命中：拆分创建新人物。分类由 resolvePersonCategory 决定。
+	return 0, true, nil
+}
+
+// resolvePersonCategory 校验并归一化人物分类，缺省/非法值回退 stranger。
+func resolvePersonCategory(category string) string {
+	switch strings.TrimSpace(category) {
+	case model.PersonCategoryFamily, model.PersonCategoryFriend, model.PersonCategoryAcquaintance, model.PersonCategoryStranger:
+		return category
+	default:
+		return model.PersonCategoryStranger
+	}
 }
 
 func (s *peopleService) UpdatePersonCategory(personID uint, category string) error {
@@ -3336,7 +3519,16 @@ func cosineSimilarity(a, b []float32) float64 {
 	if normA == 0 || normB == 0 {
 		return -1
 	}
-	return float64(vek32.Dot(a, b)) / (normA * normB)
+	// float32/SIMD 累积误差可能使余弦相似度略超出 [-1, 1]（如自身相似度得到
+	// 1.0000001192093002），按余弦语义钳制到合法区间，避免下游断言与阈值比较脆弱。
+	sim := float64(vek32.Dot(a, b)) / (normA * normB)
+	if sim > 1 {
+		return 1
+	}
+	if sim < -1 {
+		return -1
+	}
+	return sim
 }
 
 // faceWithEmbedding holds a face with its pre-decoded embedding and precomputed norm.

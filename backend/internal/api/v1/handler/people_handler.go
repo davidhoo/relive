@@ -758,27 +758,70 @@ func (h *PeopleHandler) GetPhotoPeople(c *gin.Context) {
 		return
 	}
 
-	photo, err := h.photoRepo.GetByID(photoID)
+	resp, err := h.buildPhotoPeopleResponse(photoID)
 	if err != nil {
 		status := http.StatusInternalServerError
+		code := "LIST_FAILED"
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusNotFound
+			code = "NOT_FOUND"
 		}
-		writePeopleError(c, status, "NOT_FOUND", "Photo not found")
+		writePeopleError(c, status, code, err.Error())
 		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{Success: true, Data: resp})
+}
+
+// AssignFacePerson 针对单张人脸执行“改名”归属变更，返回更新后的照片人物信息。
+func (h *PeopleHandler) AssignFacePerson(c *gin.Context) {
+	faceID, ok := parseUintParam(c, "id", "Invalid face ID")
+	if !ok {
+		return
+	}
+
+	var req model.FacePersonAssignmentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+
+	photoID, err := h.service.AssignFacePerson(faceID, req)
+	if err != nil {
+		writeServiceFailure(c, err)
+		return
+	}
+
+	resp, err := h.buildPhotoPeopleResponse(photoID)
+	if err != nil {
+		// 归属变更已成功，仅刷新返回失败时不回滚，向前端报错让其手动刷新。
+		writePeopleError(c, http.StatusInternalServerError, "REFRESH_FAILED", err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: "人脸归属已更新",
+		Data:    resp,
+	})
+}
+
+// buildPhotoPeopleResponse 复用 GetPhotoPeople 与 AssignFacePerson 的数据组装逻辑。
+func (h *PeopleHandler) buildPhotoPeopleResponse(photoID uint) (model.PhotoPersonResponse, error) {
+	photo, err := h.photoRepo.GetByID(photoID)
+	if err != nil {
+		return model.PhotoPersonResponse{}, err
 	}
 
 	faces, err := h.faceRepo.ListByPhotoID(photoID)
 	if err != nil {
-		writePeopleError(c, http.StatusInternalServerError, "LIST_FAILED", err.Error())
-		return
+		return model.PhotoPersonResponse{}, err
 	}
 
 	personIDs := uniquePersonIDs(faces)
 	people, err := h.personRepo.ListByIDs(personIDs)
 	if err != nil {
-		writePeopleError(c, http.StatusInternalServerError, "LIST_FAILED", err.Error())
-		return
+		return model.PhotoPersonResponse{}, err
 	}
 
 	facesByPerson := make(map[uint][]model.FaceResponse, len(personIDs))
@@ -801,16 +844,13 @@ func (h *PeopleHandler) GetPhotoPeople(c *gin.Context) {
 		respPeople = append(respPeople, personToResponse(person, personFaces))
 	}
 
-	c.JSON(http.StatusOK, model.Response{
-		Success: true,
-		Data: model.PhotoPersonResponse{
-			PhotoID:           photo.ID,
-			FaceProcessStatus: photo.FaceProcessStatus,
-			FaceCount:         photo.FaceCount,
-			TopPersonCategory: photo.TopPersonCategory,
-			People:            respPeople,
-		},
-	})
+	return model.PhotoPersonResponse{
+		PhotoID:           photo.ID,
+		FaceProcessStatus: photo.FaceProcessStatus,
+		FaceCount:         photo.FaceCount,
+		TopPersonCategory: photo.TopPersonCategory,
+		People:            respPeople,
+	}, nil
 }
 
 func (h *PeopleHandler) GetFaceThumbnail(c *gin.Context) {

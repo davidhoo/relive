@@ -599,6 +599,29 @@ type MoveFacesRequest struct {
 	TargetPersonID uint   `json:"target_person_id" binding:"required"`
 }
 
+// FacePersonAssignmentRequest 用于照片详情页对单张人脸执行“改名”。
+// 该操作针对的是某张 face 的归属，而非直接修改某个人物整体信息。
+//   - TargetPersonID 有值：把该 face 移动到目标人物，忽略 Name/Category，
+//     最终分类使用目标人物分类。
+//   - TargetPersonID 为空但 Name 命中已有人物：把该 face 移动到命中人物，
+//     分类使用命中人物分类。
+//   - TargetPersonID 为空且 Name 未命中：拆分当前 face 创建新人物，
+//     新人物 name 设置为 Name，category 设置为 Category。
+type FacePersonAssignmentRequest struct {
+	Name           string `json:"name"`
+	Category       string `json:"category" binding:"omitempty,oneof=family friend acquaintance stranger"`
+	TargetPersonID uint   `json:"target_person_id"`
+}
+
+// FacePersonAssignmentResult 返回人脸归属变更后的结果，供前端刷新照片人物信息。
+type FacePersonAssignmentResult struct {
+	PhotoID           uint             `json:"photo_id"`
+	FaceProcessStatus string           `json:"face_process_status"`
+	FaceCount         int              `json:"face_count"`
+	TopPersonCategory string           `json:"top_person_category"`
+	People            []PersonResponse `json:"people"`
+}
+
 // UpdatePeopleVisibilityRequest 批量设置人物隐藏状态。
 // Hidden=true 表示从人物管理主列表隐藏，false 表示恢复显示。
 // 该操作仅修改 hidden 字段，不触发分类更新、聚类、合并建议重算或照片变更。

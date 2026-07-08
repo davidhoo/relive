@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 
 import {
   buildFaceThumbnailUrl,
+  flattenPhotoPeopleFaces,
+  getPhotoPeopleCountTag,
   getPhotoPeopleSummaryLabel,
   groupPhotoPeopleByCategory,
 } from '../src/views/Photos/photoPeopleHelpers.js'
@@ -58,4 +60,61 @@ test('buildFaceThumbnailUrl 生成带版本参数的人脸缩略图地址', () =
     buildFaceThumbnailUrl(8, 'http://localhost:8080/api/v1'),
     'http://localhost:8080/api/v1/faces/8/thumbnail',
   )
+})
+
+test('getPhotoPeopleCountTag 只反映识别状态/人数，不展示人脸数', () => {
+  assert.equal(getPhotoPeopleCountTag(null), '未检测')
+  assert.equal(getPhotoPeopleCountTag({ face_process_status: 'none', face_count: 0 }), '未检测')
+  assert.equal(getPhotoPeopleCountTag({ face_process_status: 'pending', face_count: 0 }), '识别中')
+  assert.equal(getPhotoPeopleCountTag({ face_process_status: 'processing', face_count: 0 }), '识别中')
+  assert.equal(getPhotoPeopleCountTag({ face_process_status: 'failed', face_count: 0 }), '识别失败')
+  assert.equal(getPhotoPeopleCountTag({ face_process_status: 'no_face', face_count: 0 }), '未检测到人脸')
+  // ready 但无人脸归属：仍按未检测到人脸处理
+  assert.equal(getPhotoPeopleCountTag({ face_process_status: 'ready', face_count: 2, people: [] }), '未检测到人脸')
+  // ready 且有人物：只显示人数，不显示人脸数
+  assert.equal(
+    getPhotoPeopleCountTag({
+      face_process_status: 'ready',
+      face_count: 2,
+      people: [
+        { id: 1, category: 'family', face_count: 1, photo_count: 1, created_at: '', updated_at: '', faces: [{ id: 11, photo_id: 12 }] },
+        { id: 2, category: 'stranger', face_count: 1, photo_count: 1, created_at: '', updated_at: '', faces: [{ id: 21, photo_id: 12 }] },
+      ],
+    }),
+    '2 人',
+  )
+})
+
+test('flattenPhotoPeopleFaces 把按人物分组展开为每张 face 一项', () => {
+  assert.deepEqual(flattenPhotoPeopleFaces(null), [])
+  const entries = flattenPhotoPeopleFaces({
+    photo_id: 12,
+    face_process_status: 'ready',
+    face_count: 3,
+    people: [
+      {
+        id: 1,
+        category: 'family',
+        face_count: 2,
+        photo_count: 1,
+        created_at: '',
+        updated_at: '',
+        faces: [{ id: 11, photo_id: 12 }, { id: 12, photo_id: 12 }],
+      },
+      {
+        id: 2,
+        category: 'stranger',
+        face_count: 1,
+        photo_count: 1,
+        created_at: '',
+        updated_at: '',
+        faces: [{ id: 21, photo_id: 12 }],
+      },
+    ],
+  })
+  assert.equal(entries.length, 3)
+  assert.equal(entries[0].faceId, 11)
+  assert.equal(entries[0].person.id, 1)
+  assert.equal(entries[2].faceId, 21)
+  assert.equal(entries[2].person.id, 2)
 })

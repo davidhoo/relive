@@ -74,6 +74,14 @@ export const peopleApi = {
     })
   },
 
+  /**
+   * 照片详情页对单张人脸执行“改名”归属变更。后端聚合接口，原子完成移动/拆分/命名/分类。
+   * 返回更新后的照片人物信息，前端直接刷新即可。
+   */
+  assignFacePerson(faceId: number, payload: { name: string; category: string; target_person_id?: number }) {
+    return http.post<ApiResponse<PhotoPeopleResponse>>(`/people/faces/${faceId}/person-assignment`, payload)
+  },
+
   getTask() {
     return http.get<ApiResponse<PeopleTask | null>>('/people/task')
   },
