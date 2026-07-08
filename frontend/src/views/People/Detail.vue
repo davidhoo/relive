@@ -1,90 +1,94 @@
 <template>
   <div class="people-detail-page" v-loading="loading">
-    <div class="detail-toolbar">
-      <el-button @click="goBack">返回列表</el-button>
-      <el-button type="primary" @click="loadData">刷新</el-button>
-    </div>
-
     <template v-if="person">
       <!-- 顶部紧凑操作台 -->
       <el-card shadow="never" class="section-card console-card">
+        <template #header>
+          <SectionHeader :icon="User" :title="`人物详情（#${person.id}）`">
+            <template #actions>
+              <el-button size="small" @click="goBack">返回列表</el-button>
+              <el-button size="small" type="primary" @click="loadData">刷新</el-button>
+            </template>
+          </SectionHeader>
+        </template>
+
         <div class="console-layout">
-          <!-- 左侧：人物信息 -->
+          <!-- 左侧：人物身份摘要 -->
           <div class="console-info">
-            <div class="summary-avatar">
-              <el-avatar :size="72" :src="avatarUrl">
+            <div class="summary-avatar" @click="openEditDialog">
+              <el-avatar :size="64" :src="avatarUrl" class="summary-avatar-img">
                 {{ getPersonAvatarFallback(person) }}
               </el-avatar>
               <div class="summary-avatar-text">
-                <div class="summary-name">{{ personTitle }}</div>
-                <div class="summary-subtitle">
-                  {{ getPersonCategoryLabel(person.category) }} · {{ person.face_count }} 张人脸 · {{ person.photo_count }} 张照片
+                <div class="summary-name-row">
+                  <span class="summary-name">{{ personTitle }}</span>
+                  <span class="summary-category-chip" :class="`is-${person.category}`">{{ getPersonCategoryLabel(person.category) }}</span>
+                  <el-button text type="primary" size="small" class="summary-edit-btn" @click.stop="openEditDialog">编辑</el-button>
                 </div>
                 <div class="summary-meta">
                   <span>人物 #{{ person.id }}</span>
+                  <span>{{ person.face_count }} 张人脸</span>
+                  <span>{{ person.photo_count }} 张照片</span>
                   <span v-if="person.representative_face_id">头像 Face #{{ person.representative_face_id }}</span>
                   <span v-else>未设置头像</span>
+                  <el-tooltip v-if="person.created_at || person.updated_at" placement="top">
+                    <template #content>
+                      <div v-if="person.created_at">创建：{{ formatTime(person.created_at) }}</div>
+                      <div v-if="person.updated_at">更新：{{ formatTime(person.updated_at) }}</div>
+                    </template>
+                    <span class="summary-meta-time">时间</span>
+                  </el-tooltip>
                 </div>
-              </div>
-            </div>
-
-            <div class="edit-grid">
-              <div class="edit-field">
-                <span class="edit-label">人物姓名</span>
-                <div class="edit-inline">
-                  <el-input v-model="editableName" placeholder="未命名人物" clearable />
-                  <el-button type="primary" :loading="nameSaving" @click="saveName">保存</el-button>
-                </div>
-              </div>
-
-              <div class="edit-field">
-                <span class="edit-label">人物类别</span>
-                <el-select v-model="editableCategory" class="category-select" @change="saveCategory">
-                  <el-option v-for="option in categoryOptions" :key="option.value" :label="option.label" :value="option.value" />
-                </el-select>
               </div>
             </div>
           </div>
 
           <!-- 右侧：纠错操作 -->
           <div class="console-ops">
-            <div class="ops-header">
-              <span class="ops-title">纠错操作</span>
-              <el-tag size="small" effect="plain" :type="selectedFaceIds.length > 0 ? 'warning' : 'info'">
-                已选择 {{ selectedFaceIds.length }} 张
-              </el-tag>
+            <div class="ops-group">
+              <div class="ops-group-label">样本纠错</div>
+              <div class="ops-group-actions">
+                <el-tag size="small" effect="plain" :type="selectedFaceIds.length > 0 ? 'warning' : 'info'">
+                  已选 {{ selectedFaceIds.length }} 张
+                </el-tag>
+                <el-tooltip content="把当前选中的人脸拆成一个新人物" placement="top">
+                  <el-button size="small" type="warning" plain :disabled="selectedFaceIds.length === 0" :loading="splitting" @click="splitSelectedFaces">
+                    拆分
+                  </el-button>
+                </el-tooltip>
+                <el-tooltip content="把选中的人脸移动到已有人物" placement="top">
+                  <el-button size="small" plain :disabled="selectedFaceIds.length === 0" @click="ensureCandidatePeople(); showMoveDialog = true">
+                    移动到其他人物
+                  </el-button>
+                </el-tooltip>
+              </div>
             </div>
-            <div class="ops-grid">
-              <el-tooltip content="把当前选中的人脸拆成一个新人物" placement="top">
-                <el-button type="warning" plain :disabled="selectedFaceIds.length === 0" :loading="splitting" @click="splitSelectedFaces">
-                  拆分
-                </el-button>
-              </el-tooltip>
-              <el-tooltip content="把选中的人脸移动到已有人物" placement="top">
-                <el-button plain :disabled="selectedFaceIds.length === 0" @click="ensureCandidatePeople(); showMoveDialog = true">
-                  移动
-                </el-button>
-              </el-tooltip>
-              <el-tooltip content="从其他人物中选择若干个，并入当前人物" placement="top">
-                <el-button plain @click="ensureCandidatePeople(); showMergeDialog = true">
-                  合并进来
-                </el-button>
-              </el-tooltip>
-              <el-tooltip content="将当前人物并入目标人物，当前人物将被删除" placement="top">
-                <el-button plain @click="ensureCandidatePeople(); showMergeIntoDialog = true">
-                  合并过去
-                </el-button>
-              </el-tooltip>
-              <el-tooltip content="计算当前人物与目标人物的相似度" placement="top">
-                <el-button plain @click="ensureCandidatePeople(); showSimilarityDialog = true">
-                  相似度
-                </el-button>
-              </el-tooltip>
-              <el-tooltip content="将所有人脸打回未聚类状态，删除当前人物" placement="top">
-                <el-button type="danger" plain :loading="dissolving" @click="handleDissolve">
-                  解散
-                </el-button>
-              </el-tooltip>
+
+            <div class="ops-group">
+              <div class="ops-group-label">人物合并</div>
+              <div class="ops-group-actions">
+                <el-tooltip content="从其他人物中选择若干个，并入当前人物" placement="top">
+                  <el-button size="small" plain @click="ensureCandidatePeople(); showMergeDialog = true">
+                    合并其他人物到当前
+                  </el-button>
+                </el-tooltip>
+              </div>
+            </div>
+
+            <div class="ops-group">
+              <div class="ops-group-label">辅助操作</div>
+              <div class="ops-group-actions">
+                <el-tooltip content="计算当前人物与目标人物的相似度" placement="top">
+                  <el-button size="small" plain @click="ensureCandidatePeople(); showSimilarityDialog = true">
+                    计算相似度
+                  </el-button>
+                </el-tooltip>
+                <el-tooltip content="将所有人脸打回未聚类状态，删除当前人物" placement="top">
+                  <el-button size="small" type="danger" plain :loading="dissolving" @click="handleDissolve">
+                    解散此人物
+                  </el-button>
+                </el-tooltip>
+              </div>
             </div>
           </div>
         </div>
@@ -214,26 +218,6 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showMergeIntoDialog" title="合并当前人物到其他人物" width="560px">
-      <el-select v-model="mergeIntoTargetId" filterable class="dialog-select" placeholder="选择目标人物（当前人物将并入该人物）">
-        <el-option v-for="candidate in candidatePeople" :key="candidate.id" :label="candidateLabel(candidate)" :value="candidate.id">
-          <div class="candidate-option">
-            <el-avatar :size="34" :src="candidateAvatarUrl(candidate)">
-              {{ getPersonAvatarFallback(candidate) }}
-            </el-avatar>
-            <div class="candidate-option-body">
-              <div class="candidate-option-title">{{ candidate.name?.trim() || `未命名人物 #${candidate.id}` }}</div>
-              <div class="candidate-option-subtitle">{{ getPersonCategoryLabel(candidate.category) }}</div>
-            </div>
-          </div>
-        </el-option>
-      </el-select>
-      <template #footer>
-        <el-button @click="showMergeIntoDialog = false">取消</el-button>
-        <el-button type="primary" :disabled="!mergeIntoTargetId" :loading="mergingInto" @click="confirmMergeInto">确认合并</el-button>
-      </template>
-    </el-dialog>
-
     <el-dialog v-model="showSimilarityDialog" title="计算人物相似度" width="560px">
       <el-select v-model="similarityTargetId" filterable class="dialog-select" placeholder="选择目标人物进行相似度计算">
         <el-option v-for="candidate in candidatePeople" :key="candidate.id" :label="candidateLabel(candidate)" :value="candidate.id">
@@ -280,14 +264,36 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 复用人物列表页编辑弹窗：姓名 / 类别编辑 + 搜索目标人物合并 -->
+    <PersonEditDialog
+      v-model="editDialogVisible"
+      :person="editingPerson"
+      :loading="editSaving"
+      @submit="handleEditSubmit"
+      @merge="handleEditMergeRequest"
+    />
+
+    <PersonMergeConfirmDialog
+      v-model="mergeConfirmVisible"
+      :source="editingPerson"
+      :target="mergeTarget"
+      :loading="mergeSubmitting"
+      :error="mergeError"
+      @confirm="handleMergeConfirm"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { User } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
+import SectionHeader from '@/components/SectionHeader.vue'
+import PersonEditDialog from './PersonEditDialog.vue'
+import PersonMergeConfirmDialog from './PersonMergeConfirmDialog.vue'
 import { peopleApi } from '@/api/people'
 import type { Face, Person, PersonCategory } from '@/types/people'
 import type { Photo } from '@/types/photo'
@@ -302,24 +308,17 @@ const person = ref<Person | null>(null)
 const faces = ref<Face[]>([])
 const photos = ref<Photo[]>([])
 const allPeople = ref<Person[]>([])
-const editableName = ref('')
-const editableCategory = ref<PersonCategory>('stranger')
 const selectedFaceIds = ref<number[]>([])
 const avatarSavingFaceId = ref<number | null>(null)
-const nameSaving = ref(false)
-const categorySaving = ref(false)
 const splitting = ref(false)
 const moving = ref(false)
 const merging = ref(false)
-const mergingInto = ref(false)
 const dissolving = ref(false)
 const showMoveDialog = ref(false)
 const showMergeDialog = ref(false)
-const showMergeIntoDialog = ref(false)
 const showSimilarityDialog = ref(false)
 const moveTargetPersonId = ref<number>()
 const mergeSourceIds = ref<number[]>([])
-const mergeIntoTargetId = ref<number>()
 const similarityTargetId = ref<number>()
 const calculatingSimilarity = ref(false)
 const similarityResult = ref<{
@@ -329,14 +328,8 @@ const similarityResult = ref<{
   merge_threshold: number
   attach_threshold: number
 } | null>(null)
-const categoryOptions = [
-  { label: '家人', value: 'family' },
-  { label: '亲友', value: 'friend' },
-  { label: '熟人', value: 'acquaintance' },
-  { label: '路人', value: 'stranger' },
-] satisfies Array<{ label: string; value: PersonCategory }>
 
-// Tab 状态
+// Tab 状态：默认关联照片
 const activeTab = ref<'photos' | 'faces'>('photos')
 
 // 关联照片 - 无限滚动状态
@@ -363,6 +356,17 @@ let facesObserver: IntersectionObserver | null = null
 
 // 候选人物懒加载
 const candidatePeopleLoaded = ref(false)
+
+// ---- 编辑弹窗状态：与人物列表页一致 ----
+const editDialogVisible = ref(false)
+const editingPerson = ref<Person | null>(null)
+const editSaving = ref(false)
+
+// 编辑弹窗内发起的合并：来源=当前人物，目标=搜索结果所选
+const mergeConfirmVisible = ref(false)
+const mergeTarget = ref<Person | null>(null)
+const mergeSubmitting = ref(false)
+const mergeError = ref('')
 
 const personTitle = computed(() => {
   if (!person.value) return '人物详情'
@@ -396,12 +400,10 @@ const resetSelections = () => {
   selectedFaceIds.value = []
   moveTargetPersonId.value = undefined
   mergeSourceIds.value = []
-  mergeIntoTargetId.value = undefined
   similarityTargetId.value = undefined
   similarityResult.value = null
   showMoveDialog.value = false
   showMergeDialog.value = false
-  showMergeIntoDialog.value = false
   showSimilarityDialog.value = false
 }
 
@@ -563,6 +565,7 @@ const loadData = async () => {
   photosTotal.value = 0
 
   try {
+    // 进入页面后自动加载人物信息、关联照片与人脸样本
     const [personRes] = await Promise.all([
       peopleApi.getById(personId),
       loadMorePhotos(),
@@ -570,8 +573,6 @@ const loadData = async () => {
     ])
 
     person.value = personRes.data?.data || null
-    editableName.value = person.value?.name || ''
-    editableCategory.value = person.value?.category || 'stranger'
     resetSelections()
     candidatePeopleLoaded.value = false
 
@@ -586,15 +587,13 @@ const loadData = async () => {
   }
 }
 
-// 精准刷新：只刷新人物信息
+// 精准刷新：只刷新人物信息，不重载照片和样本，不清空已选人脸
 const refreshPerson = async () => {
   const personId = Number(route.params.id)
   if (!personId) return
   try {
     const res = await peopleApi.getById(personId)
     person.value = res.data?.data || null
-    editableName.value = person.value?.name || ''
-    editableCategory.value = person.value?.category || 'stranger'
   } catch (error: any) {
     ElMessage.error(error.message || '刷新人物信息失败')
   }
@@ -617,8 +616,6 @@ const refreshPersonAndFaces = async () => {
       loadMoreFaces(),
     ])
     person.value = personRes.data?.data || null
-    editableName.value = person.value?.name || ''
-    editableCategory.value = person.value?.category || 'stranger'
 
     await nextTick()
     setupFacesObserver()
@@ -627,31 +624,114 @@ const refreshPersonAndFaces = async () => {
   }
 }
 
-const saveName = async () => {
+// ---- 编辑弹窗：打开 / 提交 / 合并 ----
+
+const openEditDialog = () => {
   if (!person.value) return
+  editingPerson.value = person.value
+  editDialogVisible.value = true
+}
+
+/**
+ * 提交姓名 / 类别修改：成功后仅刷新人物信息，
+ * 不重载关联照片与人脸样本，不清空已选人脸。
+ */
+const handleEditSubmit = async (payload: { name?: string; category?: PersonCategory }) => {
+  const current = editingPerson.value
+  if (!current) return
+  editSaving.value = true
   try {
-    nameSaving.value = true
-    await peopleApi.updateName(person.value.id, editableName.value.trim())
-    ElMessage.success('人物姓名已更新')
+    const tasks: Promise<unknown>[] = []
+    if (payload.name !== undefined) {
+      tasks.push(peopleApi.updateName(current.id, payload.name))
+    }
+    if (payload.category !== undefined) {
+      tasks.push(peopleApi.updateCategory(current.id, payload.category))
+    }
+    await Promise.all(tasks)
+    ElMessage.success('人物信息已更新')
+    editDialogVisible.value = false
     await refreshPerson()
   } catch (error: any) {
-    ElMessage.error(error.message || '更新人物姓名失败')
+    ElMessage.error(error.response?.data?.error?.message || error.message || '保存失败')
   } finally {
-    nameSaving.value = false
+    editSaving.value = false
   }
 }
 
-const saveCategory = async (category: PersonCategory) => {
-  if (!person.value) return
+/**
+ * 编辑弹框中点击搜索结果：打开合并确认弹框。
+ * 来源=当前编辑人物（使用已保存信息），目标=搜索结果所选。
+ */
+const handleEditMergeRequest = (target: Person) => {
+  mergeTarget.value = target
+  mergeError.value = ''
+  mergeConfirmVisible.value = true
+}
+
+/**
+ * 轮询合并任务直到完成/失败/超时。
+ * - completed: 返回 true
+ * - failed: 返回 { failed: true, message }
+ * - 超时（状态未知）: 返回 'timeout'
+ */
+const pollMergeJob = async (
+  jobId: number,
+): Promise<boolean | 'timeout' | { failed: true; message: string }> => {
+  const maxPolls = 60
+  for (let i = 0; i < maxPolls; i++) {
+    await new Promise(resolve => setTimeout(resolve, 2000))
+    let job
+    try {
+      const res = await peopleApi.getMergeJob(jobId)
+      job = res.data?.data
+    } catch {
+      continue
+    }
+    if (!job) return 'timeout'
+    if (job.status === 'completed') return true
+    if (job.status === 'failed') {
+      return { failed: true, message: job.error_message || '合并任务失败' }
+    }
+  }
+  return 'timeout'
+}
+
+/**
+ * 确认合并：当前人物合并到目标人物。
+ * 成功后跳转到目标人物详情页；失败/超时保留弹框并提示，不跳转。
+ */
+const handleMergeConfirm = async () => {
+  const source = editingPerson.value
+  const target = mergeTarget.value
+  if (!source || !target) return
+  mergeSubmitting.value = true
+  mergeError.value = ''
   try {
-    categorySaving.value = true
-    await peopleApi.updateCategory(person.value.id, category)
-    ElMessage.success('人物类别已更新')
-    await refreshPerson()
+    const res = await peopleApi.merge(target.id, [source.id])
+    const jobId = res.data?.data?.job_id
+    if (!jobId) {
+      mergeError.value = '合并任务未返回任务 ID，请稍后刷新页面查看结果'
+      return
+    }
+    const result = await pollMergeJob(jobId)
+    if (result === 'timeout') {
+      mergeError.value = '合并任务超时，请稍后刷新页面查看结果'
+      return
+    }
+    if (typeof result === 'object' && result.failed) {
+      mergeError.value = result.message
+      return
+    }
+    // 合并成功：关闭弹框，跳转到目标人物详情页
+    mergeConfirmVisible.value = false
+    editDialogVisible.value = false
+    ElMessage.success('当前人物已合并到目标人物')
+    router.push(`/people/${target.id}`)
   } catch (error: any) {
-    ElMessage.error(error.message || '更新人物类别失败')
+    mergeError.value = error.response?.data?.error?.message || error.message || '合并人物失败'
   } finally {
-    categorySaving.value = false
+    mergeSubmitting.value = false
   }
 }
 
@@ -730,7 +810,7 @@ const confirmMoveFaces = async () => {
   }
 }
 
-const pollMergeJob = async (jobId: number, targetPersonId: number, isMergeInto: boolean) => {
+const pollMergeJobForMerge = async (jobId: number) => {
   const maxPolls = 60
   for (let i = 0; i < maxPolls; i++) {
     await new Promise(resolve => setTimeout(resolve, 2000))
@@ -740,13 +820,8 @@ const pollMergeJob = async (jobId: number, targetPersonId: number, isMergeInto: 
       if (!job) break
 
       if (job.status === 'completed') {
-        if (isMergeInto) {
-          ElMessage.success('当前人物已合并到目标人物')
-          router.push(`/people/${targetPersonId}`)
-        } else {
-          ElMessage.success('人物已合并')
-          await loadData()
-        }
+        ElMessage.success('人物已合并')
+        await loadData()
         return
       }
 
@@ -771,32 +846,12 @@ const confirmMerge = async () => {
     mergeSourceIds.value = []
     if (jobId) {
       ElMessage.info('合并任务已提交，正在后台处理...')
-      await pollMergeJob(jobId, person.value.id, false)
+      await pollMergeJobForMerge(jobId)
     }
   } catch (error: any) {
     ElMessage.error(error.message || '合并人物失败')
   } finally {
     merging.value = false
-  }
-}
-
-const confirmMergeInto = async () => {
-  if (!person.value || !mergeIntoTargetId.value) return
-  const targetId = mergeIntoTargetId.value
-  try {
-    mergingInto.value = true
-    const res = await peopleApi.merge(targetId, [person.value.id])
-    const jobId = res.data?.data?.job_id
-    showMergeIntoDialog.value = false
-    mergeIntoTargetId.value = undefined
-    if (jobId) {
-      ElMessage.info('合并任务已提交，正在后台处理...')
-      await pollMergeJob(jobId, targetId, true)
-    }
-  } catch (error: any) {
-    ElMessage.error(error.message || '合并人物失败')
-  } finally {
-    mergingInto.value = false
   }
 }
 
@@ -863,7 +918,7 @@ const goBack = () => {
   }
 }
 
-// Tab 切换后重新挂载滚动观察器
+// Tab 切换后重新挂载滚动观察器（仅展示切换，不触发首次加载，不清空已选人脸）
 watch(activeTab, async () => {
   await nextTick()
   setupPhotosObserver()
@@ -892,23 +947,6 @@ onBeforeUnmount(() => {
   padding: var(--spacing-xl);
 }
 
-.detail-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  min-height: 0;
-}
-
-@media (max-width: 768px) {
-  .detail-toolbar {
-    justify-content: stretch;
-  }
-
-  .detail-toolbar :deep(.el-button) {
-    flex: 1;
-  }
-}
-
 .section-card {
   border-radius: 18px;
 }
@@ -935,9 +973,6 @@ onBeforeUnmount(() => {
 .console-info {
   flex: 1 1 50%;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
 }
 
 .console-ops {
@@ -963,10 +998,31 @@ onBeforeUnmount(() => {
   }
 }
 
+/* 人物身份摘要 */
 .summary-avatar {
   display: flex;
   gap: 14px;
   align-items: center;
+  cursor: pointer;
+  border-radius: 12px;
+  padding: 6px;
+  margin: -6px;
+  transition: background 0.15s ease;
+}
+
+.summary-avatar:hover {
+  background: var(--color-bg-soft);
+}
+
+.summary-avatar-img {
+  flex-shrink: 0;
+}
+
+.summary-name-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .summary-name {
@@ -975,70 +1031,79 @@ onBeforeUnmount(() => {
   color: var(--color-text-primary);
 }
 
-.summary-subtitle {
-  margin-top: 4px;
-  color: var(--color-text-secondary);
-  font-size: 14px;
+.summary-category-chip {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.summary-category-chip.is-family {
+  background: rgba(245, 108, 108, 0.12);
+  color: #c45656;
+}
+
+.summary-category-chip.is-friend {
+  background: rgba(103, 194, 58, 0.14);
+  color: #5a9a3a;
+}
+
+.summary-category-chip.is-acquaintance {
+  background: rgba(230, 162, 60, 0.14);
+  color: #b8821f;
+}
+
+.summary-category-chip.is-stranger {
+  background: rgba(144, 147, 153, 0.14);
+  color: #8a8d93;
+}
+
+.summary-edit-btn {
+  margin-left: 4px;
 }
 
 .summary-meta {
-  margin-top: 4px;
+  margin-top: 6px;
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
+  align-items: center;
   color: var(--color-text-secondary);
   font-size: 12px;
 }
 
-.edit-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+.summary-meta-time {
+  cursor: help;
+  text-decoration: underline dotted;
 }
 
-.edit-field {
+/* 纠错操作区分组 */
+.ops-group {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.edit-label {
-  font-size: 13px;
+.ops-group-label {
+  font-size: 12px;
+  font-weight: 600;
   color: var(--color-text-secondary);
 }
 
-.edit-inline {
-  display: flex;
-  gap: 10px;
-}
-
-.category-select,
-.dialog-select {
-  width: 100%;
-}
-
-/* 纠错操作区 */
-.ops-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.ops-title {
-  font-weight: 600;
-  font-size: 15px;
-  color: var(--color-text-primary);
-}
-
-.ops-grid {
+.ops-group-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 
-.ops-grid .el-button {
+.ops-group-actions .el-button {
   margin-left: 0 !important;
+}
+
+.dialog-select {
+  width: 100%;
 }
 
 /* Tab 内容 */
@@ -1321,12 +1386,6 @@ onBeforeUnmount(() => {
 
   .console-card :deep(.el-card__body) {
     padding: 16px 18px;
-  }
-
-  .summary-avatar,
-  .edit-inline {
-    flex-direction: column;
-    align-items: stretch;
   }
 
   .face-grid {
