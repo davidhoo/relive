@@ -177,35 +177,33 @@
                 class="people-status-alert"
               />
 
-              <div v-if="photoFaceEntries.length > 0" class="photo-face-list">
-                <div v-for="entry in photoFaceEntries" :key="entry.faceId" class="photo-face-item">
-                  <router-link :to="`/people/${entry.person.id}`" class="photo-face-main">
-                    <img
-                      :src="getFaceThumbnailUrl(entry.faceId, String(imageVersion))"
-                      :alt="`face-${entry.faceId}`"
-                      class="photo-face-thumb"
-                    />
-                    <div class="photo-face-copy">
-                      <div class="photo-face-name">{{ getPhotoPersonName(entry.person) }}</div>
-                      <div class="photo-face-meta">
-                        <span class="photo-face-category" :class="`is-${entry.person.category || 'stranger'}`">
-                          {{ getPersonCategoryLabel(entry.person.category) }}
-                        </span>
-                      </div>
-                    </div>
-                  </router-link>
+             <div v-if="photoFaceEntries.length > 0" class="photo-face-list">
+               <div v-for="entry in photoFaceEntries" :key="entry.faceId" class="photo-face-item">
+                 <router-link :to="`/people/${entry.person.id}`" class="photo-face-main">
+                   <img
+                     :src="getFaceThumbnailUrl(entry.faceId, String(imageVersion))"
+                     :alt="`face-${entry.faceId}`"
+                     class="photo-face-thumb"
+                   />
+                   <div class="photo-face-copy">
+                     <div class="photo-face-name">{{ getPhotoPersonName(entry.person) }}</div>
+                     <div class="photo-face-meta">
+                       <span class="photo-face-category" :class="`is-${entry.person.category || 'stranger'}`">
+                         {{ getPersonCategoryLabel(entry.person.category) }}
+                       </span>
+                     </div>
+                   </div>
+                 </router-link>
                   <el-button
                     link
-                    type="primary"
                     size="small"
                     class="photo-face-edit"
                     @click="openFaceAssignDialog(entry)"
                   >
                     <el-icon><Edit /></el-icon>
-                    改名
                   </el-button>
-                </div>
-              </div>
+               </div>
+             </div>
             </template>
           </div>
 
@@ -398,8 +396,19 @@
       </div>
 
       <template #footer>
-        <el-button @click="faceAssignVisible = false">取消</el-button>
-        <el-button type="primary" :loading="faceAssignSaving" @click="handleFaceAssignSave">保存</el-button>
+        <div class="face-assign-footer">
+          <el-button
+            type="warning"
+            plain
+            :loading="faceAssignSplitting"
+            :disabled="faceAssignSaving"
+            @click="handleFaceAssignSplit"
+          >拆分</el-button>
+          <div class="face-assign-footer-right">
+            <el-button @click="faceAssignVisible = false">取消</el-button>
+            <el-button type="primary" :loading="faceAssignSaving" :disabled="faceAssignSplitting" @click="handleFaceAssignSave">保存</el-button>
+          </div>
+        </div>
       </template>
     </el-dialog>
   </div>
@@ -505,6 +514,7 @@ const faceCategoryOptions: Array<{ label: string; value: Person['category'] }> =
 
 const faceAssignVisible = ref(false)
 const faceAssignSaving = ref(false)
+const faceAssignSplitting = ref(false)
 const faceAssignTarget = ref<{ faceId: number; person: Person } | null>(null)
 const faceAssignName = ref('')
 const faceAssignCategory = ref<Person['category']>('stranger')
@@ -593,6 +603,37 @@ const handleFaceAssignSave = async () => {
     ElMessage.error(error.response?.data?.error?.message || error.message || '保存失败')
   } finally {
     faceAssignSaving.value = false
+  }
+}
+
+// 拆分：把当前 face 从所属人物直接拆分出去，创建新人物（不命名）
+const handleFaceAssignSplit = async () => {
+  if (!faceAssignTarget.value || !photo.value) return
+  const target = faceAssignTarget.value
+
+  faceAssignSplitting.value = true
+  try {
+    const res = await peopleApi.split([target.faceId])
+    const data = res.data?.data as any
+    const evaluated = data?.recluster_evaluated || 0
+    const reassigned = data?.recluster_reassigned || 0
+    let msg = '已拆分为新人物'
+    if (reassigned > 0) {
+      msg += `（已重新评估 ${evaluated} 张不确定人脸，${reassigned} 张已重新分配）`
+    } else if (evaluated > 0) {
+      msg += `（已重新评估 ${evaluated} 张不确定人脸，无需调整）`
+    } else {
+      msg += '，后台将继续重新评估不确定人脸'
+    }
+    ElMessage.success(msg)
+    faceAssignVisible.value = false
+    // split 接口不返回 photo people 数据，需重新加载
+    await loadPhotoPeople(photo.value.id)
+    imageVersion.value = Date.now()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || error.message || '拆分失败')
+  } finally {
+    faceAssignSplitting.value = false
   }
 }
 
@@ -1209,17 +1250,16 @@ h4 {
 /* 人脸级紧凑列表 */
 .photo-face-list {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .photo-face-item {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: 12px;
+  gap: 4px;
+  padding: 6px 10px 6px 6px;
+  border-radius: 10px;
   background: #fff;
   border: 1px solid #e5e7eb;
 }
@@ -1231,17 +1271,16 @@ h4 {
 .photo-face-main {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
-  flex: 1;
   text-decoration: none;
 }
 
 .photo-face-thumb {
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   object-fit: cover;
-  border-radius: 10px;
+  border-radius: 8px;
   background: #eef2f7;
   flex-shrink: 0;
 }
@@ -1252,6 +1291,7 @@ h4 {
 
 .photo-face-name {
   font-weight: 600;
+  font-size: 13px;
   color: #303133;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1259,16 +1299,16 @@ h4 {
 }
 
 .photo-face-meta {
-  margin-top: 4px;
+  margin-top: 2px;
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
 .photo-face-category {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
-  padding: 1px 7px;
+  padding: 0 6px;
   border-radius: 999px;
   white-space: nowrap;
 }
@@ -1295,6 +1335,8 @@ h4 {
 
 .photo-face-edit {
   flex-shrink: 0;
+  padding: 2px;
+  color: #9ca3af;
 }
 
 /* 编辑人脸人物对话框 */
@@ -1359,6 +1401,18 @@ h4 {
 
 .face-assign-hint-muted {
   color: #9ca3af;
+}
+
+.face-assign-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.face-assign-footer-right {
+  display: flex;
+  gap: 8px;
 }
 
 .photo-people-group {
