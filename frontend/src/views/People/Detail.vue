@@ -361,10 +361,22 @@ const similarityResult = ref<{
 // Tab 状态：默认关联照片
 const activeTab = ref<'photos' | 'faces'>('photos')
 
-// 视图密度：默认中图
+// 视图密度：默认值 照片=中图、人脸=小图；并记忆到 localStorage（按浏览器持久化）
 type GridSize = 'small' | 'medium' | 'large'
-const photoGridSize = ref<GridSize>('medium')
-const faceGridSize = ref<GridSize>('medium')
+
+const PHOTO_GRID_KEY = 'people_detail_photoGridSize'
+const FACE_GRID_KEY = 'people_detail_faceGridSize'
+
+const isValidGridSize = (value: string | null): value is GridSize =>
+  value === 'small' || value === 'medium' || value === 'large'
+
+const readGridSize = (key: string, fallback: GridSize): GridSize => {
+  const stored = localStorage.getItem(key)
+  return isValidGridSize(stored) ? stored : fallback
+}
+
+const photoGridSize = ref<GridSize>(readGridSize(PHOTO_GRID_KEY, 'medium'))
+const faceGridSize = ref<GridSize>(readGridSize(FACE_GRID_KEY, 'small'))
 
 // 当前 tab 对应的密度状态
 const currentGridSize = computed<GridSize>(() =>
@@ -374,8 +386,10 @@ const currentGridSize = computed<GridSize>(() =>
 const setGridSize = (size: GridSize) => {
   if (activeTab.value === 'photos') {
     photoGridSize.value = size
+    localStorage.setItem(PHOTO_GRID_KEY, size)
   } else {
     faceGridSize.value = size
+    localStorage.setItem(FACE_GRID_KEY, size)
   }
 }
 
