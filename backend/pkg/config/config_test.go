@@ -250,6 +250,18 @@ func assertPeopleIdentityProfileDefaults(t *testing.T, got PeopleConfig) {
 	if got.IdentityProfileCooldownMs != 500 {
 		t.Errorf("identity_profile_cooldown_ms = %d, want 500", got.IdentityProfileCooldownMs)
 	}
+	if got.IdentityProfileBuildWorkers != 2 {
+		t.Errorf("identity_profile_build_workers = %d, want 2", got.IdentityProfileBuildWorkers)
+	}
+	if got.IdentityProfileDirtyBatchSize != 10 {
+		t.Errorf("identity_profile_dirty_batch_size = %d, want 10", got.IdentityProfileDirtyBatchSize)
+	}
+	if got.IdentityProfileSliceBudgetMs != 5000 {
+		t.Errorf("identity_profile_slice_budget_ms = %d, want 5000", got.IdentityProfileSliceBudgetMs)
+	}
+	if got.IdentityProfileAnnRebuildDeltaThreshold != 0.75 {
+		t.Errorf("identity_profile_ann_rebuild_delta_threshold = %v, want 0.75", got.IdentityProfileAnnRebuildDeltaThreshold)
+	}
 }
 
 func TestPeopleIdentityProfileExampleConfigs(t *testing.T) {
@@ -280,6 +292,10 @@ func TestPeopleIdentityProfileRejectsInvalidConfig(t *testing.T) {
 		IdentityProfileRescueThreshold: 0.65,
 		IdentityProfileBatchSize:       25,
 		IdentityProfileCooldownMs:      500,
+		IdentityProfileBuildWorkers:    2,
+		IdentityProfileDirtyBatchSize:  10,
+		IdentityProfileSliceBudgetMs:   5000,
+		IdentityProfileAnnRebuildDeltaThreshold: 0.75,
 		MergeSuggestionThreshold:       0.55,
 		MergeSuggestionMaxPairsPerRun:  200,
 		MergeSuggestionBatchSize:       100,
@@ -314,6 +330,12 @@ func TestPeopleIdentityProfileRejectsInvalidConfig(t *testing.T) {
 		{name: "negative batch size", field: "identity_profile_batch_size", apply: func(c *PeopleConfig) { c.IdentityProfileBatchSize = -1 }},
 		{name: "zero cooldown", field: "identity_profile_cooldown_ms", apply: func(c *PeopleConfig) { c.IdentityProfileCooldownMs = 0 }},
 		{name: "negative cooldown", field: "identity_profile_cooldown_ms", apply: func(c *PeopleConfig) { c.IdentityProfileCooldownMs = -1 }},
+		{name: "zero build workers", field: "identity_profile_build_workers", apply: func(c *PeopleConfig) { c.IdentityProfileBuildWorkers = 0 }},
+		{name: "too many build workers", field: "identity_profile_build_workers", apply: func(c *PeopleConfig) { c.IdentityProfileBuildWorkers = 5 }},
+		{name: "zero dirty batch size", field: "identity_profile_dirty_batch_size", apply: func(c *PeopleConfig) { c.IdentityProfileDirtyBatchSize = 0 }},
+		{name: "zero slice budget", field: "identity_profile_slice_budget_ms", apply: func(c *PeopleConfig) { c.IdentityProfileSliceBudgetMs = 0 }},
+		{name: "zero ann delta threshold", field: "identity_profile_ann_rebuild_delta_threshold", apply: func(c *PeopleConfig) { c.IdentityProfileAnnRebuildDeltaThreshold = 0 }},
+		{name: "ann delta threshold above one", field: "identity_profile_ann_rebuild_delta_threshold", apply: func(c *PeopleConfig) { c.IdentityProfileAnnRebuildDeltaThreshold = 1.1 }},
 	}
 
 	for _, tt := range tests {
@@ -354,6 +376,10 @@ func TestPeopleIdentityProfileLoadRejectsExplicitInvalidValues(t *testing.T) {
 		{name: "NaN rescue threshold", field: "identity_profile_rescue_threshold", value: ".nan"},
 		{name: "zero batch size", field: "identity_profile_batch_size", value: "0"},
 		{name: "zero cooldown", field: "identity_profile_cooldown_ms", value: "0"},
+		{name: "zero build workers", field: "identity_profile_build_workers", value: "0"},
+		{name: "zero dirty batch size", field: "identity_profile_dirty_batch_size", value: "0"},
+		{name: "zero slice budget", field: "identity_profile_slice_budget_ms", value: "0"},
+		{name: "zero ann delta threshold", field: "identity_profile_ann_rebuild_delta_threshold", value: "0"},
 	}
 
 	for _, tt := range tests {

@@ -3,7 +3,6 @@ package service
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -180,6 +179,10 @@ type personIdentityProfileService struct {
 	mode           string
 	batchSize      int
 	cooldownMs     int
+	workers        int
+	dirtyBatch     int
+	sliceBudgetMs  int
+	annDeltaThresh float64
 	embeddingModel string
 	// algorithmVersion 与 builder 内部常量保持一致，用于 backfill 版本比对。
 	algorithmVersion string
@@ -199,6 +202,10 @@ type personIdentityProfileService struct {
 	// ann 是身份中心 ANN 缓存。仅非 legacy 模式初始化；首次/按需重建只在后台切片中执行。
 	// legacy 模式下为 nil，保证对 ANN、Repository 和现有聚类调用链完全 no-op。
 	ann *identityProfileANN
+
+	// coordinator 是后台构建轻量调度器（有界并发 + 串行写入 + 批末 ANN 合并）。
+	// legacy 模式下为 nil；RunBackgroundSlice 通过它执行有界 slice。
+	coordinator *identityProfileCoordinator
 
 	// nowFn 注入时钟，测试无需真实 sleep。
 	nowFn func() time.Time
@@ -235,12 +242,20 @@ func NewPersonIdentityProfileService(
 	mode := identityProfileModeLegacy
 	batchSize := 0
 	cooldownMs := 0
+	workers := 0
+	dirtyBatch := 0
+	sliceBudgetMs := 0
+	annDeltaThresh := 0.0
 	embeddingModel := identityProfileDefaultEmbeddingModel
 	var builderCfg identityProfileBuilderConfig
 	if cfg != nil {
 		mode = cfg.People.IdentityProfileMode
 		batchSize = cfg.People.IdentityProfileBatchSize
 		cooldownMs = cfg.People.IdentityProfileCooldownMs
+		workers = cfg.People.IdentityProfileBuildWorkers
+		dirtyBatch = cfg.People.IdentityProfileDirtyBatchSize
+		sliceBudgetMs = cfg.People.IdentityProfileSliceBudgetMs
+		annDeltaThresh = cfg.People.IdentityProfileAnnRebuildDeltaThreshold
 		if cfg.People.MLEndpoint != "" {
 			embeddingModel = cfg.People.MLEndpoint
 		}
@@ -256,11 +271,27 @@ func NewPersonIdentityProfileService(
 	if cooldownMs <= 0 {
 		cooldownMs = 500
 	}
+	if workers <= 0 {
+		workers = 2
+	}
+	if dirtyBatch <= 0 {
+		dirtyBatch = 10
+	}
+	if sliceBudgetMs <= 0 {
+		sliceBudgetMs = 5000
+	}
+	if annDeltaThresh <= 0 || annDeltaThresh > 1 {
+		annDeltaThresh = 0.75
+	}
 
 	svc := &personIdentityProfileService{
 		mode:             mode,
 		batchSize:        batchSize,
 		cooldownMs:       cooldownMs,
+		workers:          workers,
+		dirtyBatch:       dirtyBatch,
+		sliceBudgetMs:    sliceBudgetMs,
+		annDeltaThresh:   annDeltaThresh,
 		embeddingModel:   embeddingModel,
 		algorithmVersion: identityProfileAlgorithmVersion,
 		repo:             repo,
@@ -278,6 +309,8 @@ func NewPersonIdentityProfileService(
 		// ANN 仅在非 legacy 模式初始化；首次构建延迟到后台切片，不阻塞构造与 HTTP 请求。
 		svc.ann = newIdentityProfileANN(embeddingModel)
 		svc.ann.rebuildRequested.Store(true) // 标记需要首次构建
+		// 协调器在后台 DB 可用时构造；foregroundBusyFn 由 service.go 装配时注入。
+		svc.coordinator = newIdentityProfileCoordinator(svc, workers, dirtyBatch, sliceBudgetMs, annDeltaThresh)
 		// 加载并校验 backfill 状态；版本不一致时重置。
 		svc.loadAndAlignBackfillState()
 	} else if mode != identityProfileModeLegacy && bgDB == nil {
@@ -310,6 +343,20 @@ func (s *personIdentityProfileService) SetBackgroundDB(bgDB *gorm.DB) {
 	if !s.stateLoaded {
 		s.loadAndAlignBackfillStateLocked()
 	}
+	// 后台 DB 注入成功后构造协调器（若尚未构造）。
+	if s.coordinator == nil {
+		s.coordinator = newIdentityProfileCoordinator(s, s.workers, s.dirtyBatch, s.sliceBudgetMs, s.annDeltaThresh)
+	}
+}
+
+// SetForegroundBusyFn 注入前台让路判定函数。非 legacy 模式下由 service.go 装配时调用一次，
+// 将 peopleService 的前台写状态接入身份画像协调器，避免后台构建与前台 merge/split/move 争抢资源。
+// legacy 模式下协调器为 nil，直接返回。
+func (s *personIdentityProfileService) SetForegroundBusyFn(fn func() bool) {
+	if s.coordinator == nil {
+		return
+	}
+	s.coordinator.setForegroundBusyFn(fn)
 }
 
 // loadAndAlignBackfillState 加载持久化 backfill 状态，并在算法/embedding 版本变化时重置。
@@ -416,14 +463,20 @@ func (s *personIdentityProfileService) RunBackgroundSlice() error {
 		return err
 	}
 
-	// 2. 构建最多一个 dirty 人物画像。
-	s.buildOneDirtyPerson()
-
-	// 3. 按需重建身份中心 ANN（首次构建或失败后重建）。
-	//    仅在 rebuildRequested 时调用 ListAllActiveCenters，避免每个切片都全量加载。
-	s.rebuildANNIfNeeded()
+	// 2. 通过协调器执行一个有界构建 slice（有界并发构建 + 串行写入 + 批末 ANN 合并）。
+	//    协调器在启动新批次前检查前台让路；已开始的小批次允许完成。
+	if s.coordinator != nil {
+		s.coordinator.runSlice()
+	}
 
 	return nil
+}
+
+// rebuildANNFromCoordinator 由协调器统一触发的一次 full rebuild。
+// 复用现有 rebuildANNIfNeeded 逻辑，确保 full rebuild 只由协调器触发，避免多路径重复请求。
+// 重建成功/失败状态由 rebuildANNIfNeeded 内部记录到 annStats（脱敏），协调器据此暴露 stats。
+func (s *personIdentityProfileService) rebuildANNFromCoordinator() {
+	s.rebuildANNIfNeeded()
 }
 
 // rebuildANNIfNeeded 在 rebuildRequested 时从活动中心重建 ANN snapshot。
@@ -579,61 +632,6 @@ func (s *personIdentityProfileService) advanceBackfill(now time.Time) error {
 	return s.persistBackfillState(st)
 }
 
-// buildOneDirtyPerson 取一个 dirty 人物完成构建、激活与清理。
-func (s *personIdentityProfileService) buildOneDirtyPerson() {
-	dirty, err := s.bgRepo.ListDirty(0, 1)
-	if err != nil {
-		logger.Warnf("Identity profile: list dirty failed: %v", err)
-		return
-	}
-	if len(dirty) == 0 {
-		return
-	}
-	personID := dirty[0].PersonID
-
-	// 读取轻量人脸（embedding）。
-	faces, err := s.bgFaceRepo.ListProfileFaces(personID)
-	if err != nil {
-		s.markFailed(personID, fmt.Sprintf("list profile faces: %v", err))
-		return
-	}
-
-	// 调用纯 Builder。
-	build, err := s.builder.Build(personID, faces)
-	if err != nil {
-		s.markFailed(personID, err.Error())
-		return
-	}
-	build.Profile.EmbeddingModel = s.embeddingModel
-
-	// WriteQueue 串行化写入 + 原子激活新 generation。
-	writeErr := s.executeWrite(func() error {
-		return s.bgRepo.ReplaceGeneration(personID, build)
-	})
-	if writeErr != nil {
-		if errors.Is(writeErr, repository.ErrPersonNotFound) {
-			// 人物在 backfill 查询后、构建前被删除：清理派生画像，不计为系统失败。
-			s.cleanupDeletedPerson(personID)
-			return
-		}
-		// 写入失败：ReplaceGeneration 已原子回滚，旧 generation 保留。MarkFailed 记录原因。
-		s.markFailed(personID, fmt.Sprintf("replace generation: %v", writeErr))
-		return
-	}
-
-	// 成功：清理过期 generation，保留 active + 最近一个历史 generation。
-	// 清理失败只记录警告，不回滚已激活的新画像。
-	if err := s.executeWrite(func() error {
-		return s.bgRepo.DeleteInactiveGenerations(personID, 1)
-	}); err != nil {
-		logger.Warnf("Identity profile: cleanup inactive generations for person %d failed: %v", personID, err)
-	}
-
-	// 将新激活的 generation 接入 ANN delta。ReplaceGeneration 把 builder ordinal 重映射成
-	// 真实 center ID，因此必须从事务成功后的 GetActive 重新读取真实 center，不得直接用写入前的 build。
-	s.activateANN(personID)
-}
-
 // activateANN 从数据库读取人物活动 generation 的真实中心并接入 ANN delta。
 // ANN 更新失败只标记 ANN 不可用并请求重建，不回滚已成功激活的数据库 generation。
 func (s *personIdentityProfileService) activateANN(personID uint) {
@@ -758,6 +756,7 @@ func (s *personIdentityProfileService) GetOperationalStats(decisionRepo reposito
 			Completed:   stats.BackfillCompleted,
 		},
 		ANN: s.buildANNStatsResponse(),
+		Coordinator: s.coordinator.toStatsResponse(),
 		Decisions: model.IdentityDecisionStats{
 			WindowHours: identityProfileDecisionWindowHours,
 		},

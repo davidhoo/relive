@@ -58,3 +58,7 @@ people:
   identity_profile_rescue_threshold: 0.65
   identity_profile_batch_size: 25
   identity_profile_cooldown_ms: 500
+  identity_profile_build_workers: 2          # 后台画像构建并发 worker 数（1-4），写入仍串行
+  identity_profile_dirty_batch_size: 10      # 单轮调度最多构建的 dirty 人物数
+  identity_profile_slice_budget_ms: 5000     # 单轮调度时间预算（软上限）
+  identity_profile_ann_rebuild_delta_threshold: 0.75  # delta 占用比例达阈值时批末触发 ANN full rebuild

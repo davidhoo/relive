@@ -99,6 +99,16 @@ type PeopleConfig struct {
 	IdentityProfileRescueThreshold float64 `yaml:"identity_profile_rescue_threshold"`
 	IdentityProfileBatchSize       int     `yaml:"identity_profile_batch_size"`
 	IdentityProfileCooldownMs      int     `yaml:"identity_profile_cooldown_ms"`
+	// IdentityProfileBuildWorkers 是后台画像构建并发 worker 数（只读+纯计算阶段），
+	// 写入仍串行提交。范围 1-4，默认 2。
+	IdentityProfileBuildWorkers int `yaml:"identity_profile_build_workers"`
+	// IdentityProfileDirtyBatchSize 是单轮调度最多构建的 dirty 人物数（高/低优先级合并计数）。
+	IdentityProfileDirtyBatchSize int `yaml:"identity_profile_dirty_batch_size"`
+	// IdentityProfileSliceBudgetMs 是单轮调度的时间预算（软上限），超时后不再启动新 worker。
+	IdentityProfileSliceBudgetMs int `yaml:"identity_profile_slice_budget_ms"`
+	// IdentityProfileAnnRebuildDeltaThreshold 是 delta 占用比例阈值（0-1），
+	// 达到或超过时批末优先触发 ANN full rebuild 而非继续 activate。
+	IdentityProfileAnnRebuildDeltaThreshold float64 `yaml:"identity_profile_ann_rebuild_delta_threshold"`
 }
 
 const (
@@ -118,6 +128,10 @@ const (
 	defaultIdentityProfileRescueThreshold = 0.65
 	defaultIdentityProfileBatchSize       = 25
 	defaultIdentityProfileCooldownMs      = 500
+	defaultIdentityProfileBuildWorkers    = 2
+	defaultIdentityProfileDirtyBatchSize  = 10
+	defaultIdentityProfileSliceBudgetMs   = 5000
+	defaultIdentityProfileAnnDeltaThresh  = 0.75
 )
 
 // LegacyMLConfig 兼容旧版人物配置块
@@ -341,8 +355,12 @@ func Load(path string) (*Config, error) {
 			IdentityProfileMinCenterPhotos: defaultIdentityProfileMinCenterPhotos,
 			IdentityProfileMargin:          defaultIdentityProfileMargin,
 			IdentityProfileRescueThreshold: defaultIdentityProfileRescueThreshold,
-			IdentityProfileBatchSize:       defaultIdentityProfileBatchSize,
-			IdentityProfileCooldownMs:      defaultIdentityProfileCooldownMs,
+			IdentityProfileBatchSize:                defaultIdentityProfileBatchSize,
+			IdentityProfileCooldownMs:               defaultIdentityProfileCooldownMs,
+			IdentityProfileBuildWorkers:             defaultIdentityProfileBuildWorkers,
+			IdentityProfileDirtyBatchSize:           defaultIdentityProfileDirtyBatchSize,
+			IdentityProfileSliceBudgetMs:            defaultIdentityProfileSliceBudgetMs,
+			IdentityProfileAnnRebuildDeltaThreshold: defaultIdentityProfileAnnDeltaThresh,
 		},
 	}
 
@@ -523,6 +541,20 @@ func (c *Config) Validate() error {
 	}
 	if c.People.IdentityProfileCooldownMs <= 0 {
 		return fmt.Errorf("people.identity_profile_cooldown_ms must be greater than 0")
+	}
+	if c.People.IdentityProfileBuildWorkers < 1 || c.People.IdentityProfileBuildWorkers > 4 {
+		return fmt.Errorf("people.identity_profile_build_workers must be between 1 and 4")
+	}
+	if c.People.IdentityProfileDirtyBatchSize <= 0 {
+		return fmt.Errorf("people.identity_profile_dirty_batch_size must be greater than 0")
+	}
+	if c.People.IdentityProfileSliceBudgetMs <= 0 {
+		return fmt.Errorf("people.identity_profile_slice_budget_ms must be greater than 0")
+	}
+	if math.IsNaN(c.People.IdentityProfileAnnRebuildDeltaThreshold) ||
+		c.People.IdentityProfileAnnRebuildDeltaThreshold <= 0 ||
+		c.People.IdentityProfileAnnRebuildDeltaThreshold > 1 {
+		return fmt.Errorf("people.identity_profile_ann_rebuild_delta_threshold must be in (0,1]")
 	}
 
 	return nil

@@ -93,6 +93,10 @@ people:
   identity_profile_rescue_threshold: 0.65
   identity_profile_batch_size: 25
   identity_profile_cooldown_ms: 500
+  identity_profile_build_workers: 2
+  identity_profile_dirty_batch_size: 10
+  identity_profile_slice_budget_ms: 5000
+  identity_profile_ann_rebuild_delta_threshold: 0.75
 
 # 地理编码配置（启动默认值，运行时通过管理后台配置后以数据库为准）
 geocode:

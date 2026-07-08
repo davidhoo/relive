@@ -718,13 +718,14 @@ type BatchRotateRequest struct {
 // IdentityProfileOperationalStatsResponse 是身份画像运行状态的顶层响应。
 // legacy 模式仅返回 mode 与零值运行状态，不查询 profile/center/member/ANN/backfill/decision。
 type IdentityProfileOperationalStatsResponse struct {
-	Mode      string                    `json:"mode"`
-	Profiles  IdentityProfileCountStats `json:"profiles"`
-	Centers   IdentityCenterStats       `json:"centers"`
-	Members   IdentityMemberStats       `json:"members"`
-	Backfill  IdentityBackfillStats     `json:"backfill"`
-	ANN       IdentityANNStats          `json:"ann"`
-	Decisions IdentityDecisionStats     `json:"decisions"`
+	Mode        string                    `json:"mode"`
+	Profiles    IdentityProfileCountStats `json:"profiles"`
+	Centers     IdentityCenterStats       `json:"centers"`
+	Members     IdentityMemberStats       `json:"members"`
+	Backfill    IdentityBackfillStats     `json:"backfill"`
+	ANN         IdentityANNStats          `json:"ann"`
+	Coordinator IdentityCoordinatorStats  `json:"coordinator"`
+	Decisions   IdentityDecisionStats     `json:"decisions"`
 }
 
 // IdentityProfileCountStats 汇总 profile 各 status 计数。
@@ -797,6 +798,31 @@ type IdentityDecisionStats struct {
 	ProfileUnavailable    int64 `json:"profile_unavailable"`
 	ProfileBlocked        int64 `json:"profile_blocked"`
 	RescueApplied         int64 `json:"rescue_applied"`
+}
+
+// IdentityCoordinatorStats 汇总身份画像后台构建协调器的运行状态。
+// 用于判断瓶颈在 backfill / build / write / ANN rebuild 哪一阶段。
+// 不含 person ID、embedding、路径或原始 SQL 错误。
+type IdentityCoordinatorStats struct {
+	Running bool `json:"running"`
+
+	LastSliceStartedAt *time.Time `json:"last_slice_started_at,omitempty"`
+	LastSliceEndedAt   *time.Time `json:"last_slice_ended_at,omitempty"`
+
+	LastDirtySelected int `json:"last_dirty_selected"`
+	LastBuiltSuccess  int `json:"last_built_success"`
+	LastBuiltFailed   int `json:"last_built_failed"`
+	LastSkipped       int `json:"last_skipped"`
+
+	Workers int `json:"workers"`
+
+	LastBuildDurationMs int64 `json:"last_build_duration_ms"`
+	MaxBuildDurationMs  int64 `json:"max_build_duration_ms"`
+	LastWriteDurationMs int64 `json:"last_write_duration_ms"`
+
+	LastAnnActivated   int    `json:"last_ann_activated"`
+	LastAnnRebuild     bool   `json:"last_ann_rebuild"`
+	LastAnnRebuildReason string `json:"last_ann_rebuild_reason,omitempty"`
 }
 
 // IdentityDecisionResponse 是单条决策遥测的只读响应。

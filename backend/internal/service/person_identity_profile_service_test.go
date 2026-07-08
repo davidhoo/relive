@@ -62,6 +62,12 @@ func (c *countingIdentityProfileRepo) ListDirty(cursor uint, limit int) ([]*mode
 	c.mu.Unlock()
 	return c.inner.ListDirty(cursor, limit)
 }
+func (c *countingIdentityProfileRepo) ListDirtyByReasons(reasons []string, cursor uint, limit int) ([]*model.PersonIdentityProfile, error) {
+	c.mu.Lock()
+	c.listDirty++
+	c.mu.Unlock()
+	return c.inner.ListDirtyByReasons(reasons, cursor, limit)
+}
 func (c *countingIdentityProfileRepo) ListBackfillPersonIDs(cursor uint, limit int) ([]uint, error) {
 	c.mu.Lock()
 	c.listBackfill++
@@ -240,8 +246,10 @@ func vec3(x, y, z float32) []float32 { return []float32{x, y, z} }
 
 // runSliceWithClock 推进注入时钟并执行一次 slice，避免真实 sleep。
 func runSliceWithClock(svc *personIdentityProfileService, advance time.Duration) {
-	svc.nowFn = func() time.Time {
-		return svc.lastRunAt.Add(advance)
+	next := svc.lastRunAt.Add(advance)
+	svc.nowFn = func() time.Time { return next }
+	if svc.coordinator != nil {
+		svc.coordinator.setNowFn(func() time.Time { return next })
 	}
 	_ = svc.RunBackgroundSlice()
 }
@@ -358,7 +366,7 @@ func TestPersonIdentityProfileService_BackfillBatchSizeBounded(t *testing.T) {
 	assert.Equal(t, 1, deps.countingRepo.listBackfill, "one backfill listing per slice")
 }
 
-func TestPersonIdentityProfileService_SliceBuildsAtMostOnePerson(t *testing.T) {
+func TestPersonIdentityProfileService_SliceBuildsBoundedDirtyBatch(t *testing.T) {
 	svc, deps := newIdentityProfileServiceForTest(t, "shadow", "emb", 10, 0)
 
 	for i := 0; i < 5; i++ {
@@ -367,11 +375,11 @@ func TestPersonIdentityProfileService_SliceBuildsAtMostOnePerson(t *testing.T) {
 
 	require.NoError(t, svc.RunBackgroundSlice())
 
-	// 一次 slice 最多构建一个人物 → ready 数 ≤ 1。
+	// 一次 slice 通过协调器构建有界 dirty 批次（默认 dirtyBatch=10），5 个人物全部构建。
 	var ready int64
 	require.NoError(t, deps.db.Model(&model.PersonIdentityProfile{}).Where("status = ?", model.PersonIdentityProfileStatusReady).Count(&ready).Error)
-	assert.LessOrEqual(t, ready, int64(1), "one slice must build at most one person")
-	assert.Equal(t, 1, deps.countingRepo.replaceGeneration, "at most one ReplaceGeneration per slice")
+	assert.Equal(t, int64(5), ready, "one slice builds the bounded dirty batch")
+	assert.Equal(t, 5, deps.countingRepo.replaceGeneration, "ReplaceGeneration called once per dirty person")
 }
 
 func TestPersonIdentityProfileService_BackfillCursorPersisted(t *testing.T) {
@@ -519,6 +527,9 @@ func TestPersonIdentityProfileService_BuilderFailureMarkFailed(t *testing.T) {
 	require.NoError(t, svc.MarkDirty([]uint{person.ID}, "manual"))
 
 	svc.builder = &failingIdentityBuilder{}
+	if svc.coordinator != nil {
+		svc.coordinator.builder = svc.builder
+	}
 
 	require.NoError(t, svc.RunBackgroundSlice())
 
@@ -560,7 +571,11 @@ func TestPersonIdentityProfileService_WriteFailurePreservesOldGeneration(t *test
 	require.NoError(t, svc.MarkDirty([]uint{person.ID}, "second"))
 	svc.bgRepo = &failingReplaceRepo{inner: svc.bgRepo}
 	// 推进时钟绕过 cooldown（构造时 cooldownMs=0 被默认为 500）。
-	svc.nowFn = func() time.Time { return svc.lastRunAt.Add(1 * time.Second) }
+	next := svc.lastRunAt.Add(1 * time.Second)
+	svc.nowFn = func() time.Time { return next }
+	if svc.coordinator != nil {
+		svc.coordinator.setNowFn(func() time.Time { return next })
+	}
 	require.NoError(t, svc.RunBackgroundSlice())
 
 	// 旧 active generation 保留不变。
@@ -580,6 +595,9 @@ func (r *failingReplaceRepo) MarkDirty(p []uint, reason string) error {
 }
 func (r *failingReplaceRepo) ListDirty(cursor uint, limit int) ([]*model.PersonIdentityProfile, error) {
 	return r.inner.ListDirty(cursor, limit)
+}
+func (r *failingReplaceRepo) ListDirtyByReasons(reasons []string, cursor uint, limit int) ([]*model.PersonIdentityProfile, error) {
+	return r.inner.ListDirtyByReasons(reasons, cursor, limit)
 }
 func (r *failingReplaceRepo) ListBackfillPersonIDs(cursor uint, limit int) ([]uint, error) {
 	return r.inner.ListBackfillPersonIDs(cursor, limit)
@@ -817,7 +835,11 @@ func TestPersonIdentityProfileService_ANNRebuildFailureDoesNotRollbackGeneration
 
 	// 注入会让 ListAllActiveCenters 失败的后台仓库，触发 ANN 重建失败。
 	svc.bgRepo = &failingListCentersRepo{inner: svc.bgRepo}
+	// 清空已构建 snapshot 后再请求重建，使 ListAllActiveCenters 失败时 stats 反映失败。
+	svc.ann.InvalidateAll()
 	svc.ann.RequestRebuild()
+	// 第二个 slice：无 dirty（人物已 ready），协调器批末因 RebuildRequested 触发 full rebuild，
+	// ListAllActiveCenters 失败 → 记录 list_active_centers_failed。
 	runSliceWithClock(svc, time.Duration(svc.cooldownMs)*time.Millisecond+1)
 
 	// generation 不变（ANN 失败不回滚）。
@@ -845,6 +867,9 @@ func (r *failingListCentersRepo) MarkDirty(p []uint, reason string) error {
 }
 func (r *failingListCentersRepo) ListDirty(cursor uint, limit int) ([]*model.PersonIdentityProfile, error) {
 	return r.inner.ListDirty(cursor, limit)
+}
+func (r *failingListCentersRepo) ListDirtyByReasons(reasons []string, cursor uint, limit int) ([]*model.PersonIdentityProfile, error) {
+	return r.inner.ListDirtyByReasons(reasons, cursor, limit)
 }
 func (r *failingListCentersRepo) ListBackfillPersonIDs(cursor uint, limit int) ([]uint, error) {
 	return r.inner.ListBackfillPersonIDs(cursor, limit)
@@ -1013,6 +1038,9 @@ func (r *failingApplyInvalidationRepo) MarkDirty(p []uint, reason string) error 
 }
 func (r *failingApplyInvalidationRepo) ListDirty(cursor uint, limit int) ([]*model.PersonIdentityProfile, error) {
 	return r.inner.ListDirty(cursor, limit)
+}
+func (r *failingApplyInvalidationRepo) ListDirtyByReasons(reasons []string, cursor uint, limit int) ([]*model.PersonIdentityProfile, error) {
+	return r.inner.ListDirtyByReasons(reasons, cursor, limit)
 }
 func (r *failingApplyInvalidationRepo) ListBackfillPersonIDs(cursor uint, limit int) ([]uint, error) {
 	return r.inner.ListBackfillPersonIDs(cursor, limit)

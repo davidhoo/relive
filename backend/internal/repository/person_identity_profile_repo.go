@@ -71,6 +71,10 @@ type PersonIdentityProfileRepository interface {
 	// ListDirty 返回 status=dirty 且 person_id > cursor 的 profile，按 person_id ASC，
 	// 严格应用 limit，游标分页避免全量加载。
 	ListDirty(cursor uint, limit int) ([]*model.PersonIdentityProfile, error)
+	// ListDirtyByReasons 返回 status=dirty、person_id > cursor 且 dirty_reason IN reasons
+	// 的 profile，按 person_id ASC，严格应用 limit。reasons 为空时不按 reason 过滤
+	// （等价于 ListDirty）。用于协调器高/低优先级分批拉取，避免全量加载后内存排序。
+	ListDirtyByReasons(reasons []string, cursor uint, limit int) ([]*model.PersonIdentityProfile, error)
 	// GetActive 加载人物活动 generation 的完整构建（profile + centers + members）。
 	// profile 不存在或 active_generation=0 时返回 (nil, nil)。
 	GetActive(personID uint) (*model.PersonIdentityProfileBuild, error)
@@ -180,6 +184,25 @@ func (r *personIdentityProfileRepository) ListDirty(cursor uint, limit int) ([]*
 	var profiles []*model.PersonIdentityProfile
 	q := r.db.Where("status = ? AND person_id > ?", model.PersonIdentityProfileStatusDirty, cursor).
 		Order("person_id ASC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	if err := q.Find(&profiles).Error; err != nil {
+		return nil, err
+	}
+	return profiles, nil
+}
+
+// ListDirtyByReasons 返回 status=dirty、person_id > cursor 且 dirty_reason IN reasons 的 profile。
+// reasons 为空时不按 reason 过滤（等价于 ListDirty），避免空 IN 子句语义歧义。
+// 按 person_id ASC，严格应用 limit，游标分页避免全量加载。
+func (r *personIdentityProfileRepository) ListDirtyByReasons(reasons []string, cursor uint, limit int) ([]*model.PersonIdentityProfile, error) {
+	var profiles []*model.PersonIdentityProfile
+	q := r.db.Where("status = ? AND person_id > ?", model.PersonIdentityProfileStatusDirty, cursor)
+	if len(reasons) > 0 {
+		q = q.Where("dirty_reason IN ?", reasons)
+	}
+	q = q.Order("person_id ASC")
 	if limit > 0 {
 		q = q.Limit(limit)
 	}

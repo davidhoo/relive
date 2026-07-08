@@ -145,8 +145,16 @@ func GetWriteDB() *gorm.DB {
 }
 
 // NewBackgroundDB creates a dedicated SQLite connection pool for background read-only tasks
-// (e.g. personMergeSuggestionService). With all writes going through WriteQueue, this pool
-// only needs a single connection for heavy read operations (ANN index building, similarity search).
+// (e.g. personMergeSuggestionService, identityProfileCoordinator). With all writes going
+// through WriteQueue, this pool only performs reads, so it may hold multiple connections
+// to allow concurrent read-only workers (identity profile coordinator runs up to 4 build
+// workers, each calling ListProfileFaces concurrently). SQLite in WAL mode supports
+// concurrent readers without locking each other.
+//
+// maxConns is sized to cover the identity profile build workers (up to 4) plus a margin
+// for the merge-suggestion background reads, so a worker never blocks on the pool.
+const backgroundDBMaxOpenConns = 8
+
 func NewBackgroundDB(cfg config.DatabaseConfig) (*gorm.DB, error) {
 	if cfg.Type != "sqlite" {
 		return nil, fmt.Errorf("NewBackgroundDB: unsupported database type: %s", cfg.Type)
@@ -169,8 +177,8 @@ func NewBackgroundDB(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		return nil, err
 	}
 	db.Exec("PRAGMA foreign_keys=ON")
-	sqlDB.SetMaxOpenConns(1)
-	sqlDB.SetMaxIdleConns(1)
+	sqlDB.SetMaxOpenConns(backgroundDBMaxOpenConns)
+	sqlDB.SetMaxIdleConns(backgroundDBMaxOpenConns)
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
 	return db, nil

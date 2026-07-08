@@ -159,6 +159,13 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 			peopleSvc.(*peopleService).SetIdentityProfileInvalidationHook(
 				identityProfileService.Invalidate,
 			)
+			// 注入前台让路判定：当 peopleService 存在前台写操作等待/进行中（foregroundWaiters>0
+			// 或 writeGate 被独占持有）时，身份画像协调器不启动新的构建批次，已开始的小批次
+			// 允许完成。复用 clusteringCoordinator.foregroundWaiterCount 作为前台忙判定。
+			ips := identityProfileService.(*personIdentityProfileService)
+			ips.SetForegroundBusyFn(func() bool {
+				return peopleSvc.(*peopleService).clusteringCoordinator.foregroundWaiterCount() > 0
+			})
 		}
 	}
 
