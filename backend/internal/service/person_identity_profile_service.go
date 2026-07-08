@@ -208,12 +208,16 @@ type personIdentityProfileService struct {
 	// stateLoaded 标记 backfill 状态是否已从持久化加载（legacy 模式永不加载）。
 	stateLoaded bool
 
-	// ANN 最近构建状态（Task 14 只读运行状态接口）。读取 stats 不触发 rebuild。
+	// ANN 最近构建状态（只读运行状态接口）。读取 stats 不触发 rebuild。
 	// 错误只保存脱敏类别，不保存路径、SQL、endpoint 或 embedding 内容。
-	annStatsMu           sync.RWMutex
-	lastANNBuildAt       *time.Time
-	lastANNBuildDuration time.Duration
-	lastANNBuildError    string
+	// 时间戳与耗时统一使用 nowFn，便于测试注入确定值。
+	annStatsMu            sync.RWMutex
+	lastANNBuildStatus    string // success / failed / never（空值在 buildANNStatsResponse 归一为 never）
+	lastANNBuildStartedAt *time.Time
+	lastANNBuildEndedAt   *time.Time
+	lastANNBuildDuration  time.Duration
+	lastANNBuildError     string
+	lastANNBuildCenters   int
 }
 
 // NewPersonIdentityProfileService 构造身份画像服务。
@@ -442,12 +446,16 @@ func (s *personIdentityProfileService) rebuildANNIfNeeded() {
 		return
 	}
 	if err := s.ann.Rebuild(centers, s.embeddingModel); err != nil {
-		logger.Warnf("Identity profile ANN: rebuild failed: %v", err)
+		category := classifyANNBuildError(err)
+		logger.Warnf("Identity profile ANN: rebuild failed category=%s elapsed=%dms",
+			category, s.nowFn().Sub(start).Milliseconds())
 		// Rebuild 内部已标记 unavailable + rebuildRequested。
-		s.recordANNBuildFailure(start, classifyANNBuildError(err))
+		s.recordANNBuildFailure(start, category)
 		return
 	}
-	s.recordANNBuildSuccess(start)
+	s.recordANNBuildSuccess(start, len(centers))
+	logger.Infof("Identity profile ANN: rebuild succeeded centers=%d generation=%d elapsed=%dms",
+		len(centers), s.ann.snapshotGeneration.Load(), s.nowFn().Sub(start).Milliseconds())
 }
 
 // annBuildErr* 是脱敏的 ANN 构建失败类别，不暴露原始错误、路径或 SQL。
@@ -487,17 +495,20 @@ func classifyANNBuildError(err error) string {
 	}
 }
 
-// recordANNBuildSuccess 清空错误并记录成功构建时间/耗时。
-func (s *personIdentityProfileService) recordANNBuildSuccess(start time.Time) {
+// recordANNBuildSuccess 清空错误并记录成功构建状态/时间/耗时/中心数。
+func (s *personIdentityProfileService) recordANNBuildSuccess(start time.Time, centers int) {
 	duration := s.nowFn().Sub(start)
 	if duration < 0 {
 		duration = 0
 	}
-	now := s.nowFn()
+	end := s.nowFn()
 	s.annStatsMu.Lock()
-	s.lastANNBuildAt = &now
+	s.lastANNBuildStatus = annBuildStatusSuccess
+	s.lastANNBuildStartedAt = &start
+	s.lastANNBuildEndedAt = &end
 	s.lastANNBuildDuration = duration
 	s.lastANNBuildError = ""
+	s.lastANNBuildCenters = centers
 	s.annStatsMu.Unlock()
 }
 
@@ -510,7 +521,11 @@ func (s *personIdentityProfileService) recordANNBuildFailure(start time.Time, ca
 	if len(category) > identityProfileAnnErrMaxLen {
 		category = category[:identityProfileAnnErrMaxLen]
 	}
+	end := s.nowFn()
 	s.annStatsMu.Lock()
+	s.lastANNBuildStatus = annBuildStatusFailed
+	s.lastANNBuildStartedAt = &start
+	s.lastANNBuildEndedAt = &end
 	s.lastANNBuildDuration = duration
 	s.lastANNBuildError = category
 	s.annStatsMu.Unlock()
@@ -701,7 +716,10 @@ const identityProfileDecisionCenterIDsMax = 32
 // 以前保留的 decision 历史（属于用户触发的只读查询，不属于后台画像负载）。
 func (s *personIdentityProfileService) GetOperationalStats(decisionRepo repository.PeopleIdentityDecisionRepository) (*model.IdentityProfileOperationalStatsResponse, error) {
 	if s.mode == identityProfileModeLegacy {
-		return &model.IdentityProfileOperationalStatsResponse{Mode: identityProfileModeLegacy}, nil
+		return &model.IdentityProfileOperationalStatsResponse{
+			Mode: identityProfileModeLegacy,
+			ANN:  model.IdentityANNStats{LastBuildStatus: annBuildStatusNever},
+		}, nil
 	}
 
 	stats, err := s.repo.GetStats()
@@ -768,26 +786,40 @@ func (s *personIdentityProfileService) GetOperationalStats(decisionRepo reposito
 // buildANNStatsResponse 从 ANN 只读快照与最近构建状态构造响应。读取 stats 不触发 rebuild。
 func (s *personIdentityProfileService) buildANNStatsResponse() model.IdentityANNStats {
 	if s.ann == nil {
-		return model.IdentityANNStats{}
+		// ann 为 nil（legacy 或未启用后台 DB）：返回零值，状态显式为 never。
+		return model.IdentityANNStats{LastBuildStatus: annBuildStatusNever}
 	}
 	snap := s.ann.Stats(s.embeddingModel)
 
 	s.annStatsMu.RLock()
-	lastAt := s.lastANNBuildAt
+	status := s.lastANNBuildStatus
+	startedAt := s.lastANNBuildStartedAt
+	endedAt := s.lastANNBuildEndedAt
 	lastDuration := s.lastANNBuildDuration
 	lastErr := s.lastANNBuildError
+	lastCenters := s.lastANNBuildCenters
 	s.annStatsMu.RUnlock()
 
+	if status == "" {
+		status = annBuildStatusNever
+	}
+
 	resp := model.IdentityANNStats{
-		Ready:            snap.Ready,
-		Generation:       snap.Generation,
-		SnapshotNodes:    snap.SnapshotNodes,
-		DeltaNodes:       snap.DeltaNodes,
-		InvalidNodes:     snap.InvalidNodes,
-		RebuildRequested: snap.RebuildRequested,
-		Unavailable:      snap.Unavailable,
-		LastBuildAt:      lastAt,
-		LastBuildError:   lastErr,
+		Ready:             snap.Ready,
+		RebuildRequested:  snap.RebuildRequested,
+		Generation:        snap.Generation,
+		SnapshotNodes:     snap.SnapshotNodes,
+		DeltaNodes:        snap.DeltaNodes,
+		DeltaMax:          snap.DeltaMax,
+		InvalidNodes:      snap.InvalidNodes,
+		ActiveGenerations: snap.ActiveGenerations,
+		Unavailable:       snap.Unavailable,
+
+		LastBuildStatus:    status,
+		LastBuildError:     lastErr,
+		LastBuildStartedAt: startedAt,
+		LastBuildEndedAt:   endedAt,
+		LastBuildCenters:   lastCenters,
 	}
 	if lastDuration > 0 {
 		resp.LastBuildDurationMs = lastDuration.Milliseconds()

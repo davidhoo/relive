@@ -740,16 +740,26 @@ type IdentityBackfillStats struct {
 // IdentityANNStats 汇总身份中心 ANN 缓存的运行快照。读时不触发重建。
 type IdentityANNStats struct {
 	Ready            bool   `json:"ready"`
-	Generation       uint64 `json:"generation"`
-	SnapshotNodes    int    `json:"snapshot_nodes"`
-	DeltaNodes       int    `json:"delta_nodes"`
-	InvalidNodes     int    `json:"invalid_nodes"`
 	RebuildRequested bool   `json:"rebuild_requested"`
-	Unavailable      bool   `json:"unavailable"`
+	Generation       uint64 `json:"generation"`
 
-	LastBuildAt         *time.Time `json:"last_build_at,omitempty"`
-	LastBuildDurationMs int64      `json:"last_build_duration_ms"`
+	SnapshotNodes     int `json:"snapshot_nodes"`
+	DeltaNodes        int `json:"delta_nodes"`
+	DeltaMax          int `json:"delta_max"`
+	InvalidNodes      int `json:"invalid_nodes"`
+	ActiveGenerations int `json:"active_generations"`
+
+	Unavailable bool `json:"unavailable"`
+
+	// 最近一次完整重建状态。从未构建时为 "never"；成功 "success"；失败 "failed"。
+	LastBuildStatus string `json:"last_build_status"`
+	// LastBuildError 仅在失败时填充脱敏类别（不含原始错误、SQL、路径或 embedding）。
 	LastBuildError      string     `json:"last_build_error,omitempty"`
+	LastBuildStartedAt  *time.Time `json:"last_build_started_at,omitempty"`
+	LastBuildEndedAt    *time.Time `json:"last_build_ended_at,omitempty"`
+	LastBuildDurationMs int64      `json:"last_build_duration_ms"`
+	// LastBuildCenters 是最近一次成功构建的 snapshot 中心数（0 表示尚无成功构建）。
+	LastBuildCenters int `json:"last_build_centers"`
 }
 
 // IdentityDecisionStats 汇总最近 24 小时窗口的决策分布。

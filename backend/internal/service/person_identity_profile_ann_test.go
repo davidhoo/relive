@@ -722,6 +722,7 @@ func TestIdentityProfileANN_Stats_NotReadyBeforeBuild(t *testing.T) {
 	assert.Zero(t, stats.Generation)
 	assert.Zero(t, stats.SnapshotNodes)
 	assert.False(t, stats.RebuildRequested, "bare ANN does not set rebuildRequested (caller does)")
+	assert.Equal(t, identityProfileANNDeltaMax, stats.DeltaMax, "delta max exposes configured cap")
 }
 
 func TestIdentityProfileANN_Stats_ReadyAfterRebuild(t *testing.T) {
@@ -840,4 +841,68 @@ func TestIdentityProfileANN_Stats_ConcurrentWithSearchRebuild(t *testing.T) {
 	// 最终一次 Stats 不触发重建、不 panic。
 	stats := ann.Stats("emb-v1")
 	_ = stats
+}
+
+// ==================== Stats 扩展：delta max / active generations / 构建前后 ====================
+
+func TestIdentityProfileANN_Stats_ActiveGenerationsAndDeltaFull(t *testing.T) {
+	ann := newIdentityProfileANN("emb-v1")
+	ann.deltaMax = 3
+	require.NoError(t, ann.Rebuild([]*model.PersonIdentityCenter{annCenter(1, 10, 1, 1, emb3(1, 0, 0))}, "emb-v1"))
+
+	// 填充 delta 到上限（deltaMax=3）。
+	require.NoError(t, ann.Activate(20, 1, []*model.PersonIdentityCenter{annCenter(2, 20, 1, 1, emb3(0, 1, 0))}))
+	require.NoError(t, ann.Activate(30, 1, []*model.PersonIdentityCenter{annCenter(3, 30, 1, 1, emb3(0, 0, 1))}))
+	require.NoError(t, ann.Activate(40, 1, []*model.PersonIdentityCenter{annCenter(4, 40, 1, 1, emb3(1, 1, 0))}))
+
+	stats := ann.Stats("emb-v1")
+	assert.Equal(t, 3, stats.DeltaNodes, "delta filled to cap")
+	assert.Equal(t, 3, stats.DeltaMax, "delta max exposes configured cap")
+	// snapshot 1 (person 10) + delta 3 (person 20/30/40) = 4 活动 generation。
+	assert.Equal(t, 4, stats.ActiveGenerations, "active generations counts snapshot + delta persons")
+
+	// 第 4 个 delta 触发容量上限（len(delta)+len(vecs) > deltaMax）。
+	err := ann.Activate(50, 1, []*model.PersonIdentityCenter{annCenter(5, 50, 1, 1, emb3(1, 0, 1))})
+	require.Error(t, err)
+
+	stats = ann.Stats("emb-v1")
+	assert.True(t, stats.RebuildRequested, "delta full must request rebuild")
+	assert.False(t, stats.Ready, "delta full leaves ANN not ready")
+	assert.True(t, stats.Unavailable)
+	// 失败后 delta 规模仍可见（仍是触发前的 3，因为失败的 Activate 未进入临界区写入）。
+	assert.Equal(t, 3, stats.DeltaNodes)
+	assert.Equal(t, 3, stats.DeltaMax)
+}
+
+func TestIdentityProfileANN_Stats_RebuildSuccessExposesSnapshotCenters(t *testing.T) {
+	ann := newIdentityProfileANN("emb-v1")
+	centers := []*model.PersonIdentityCenter{
+		annCenter(1, 10, 1, 1, emb3(1, 0, 0)),
+		annCenter(2, 20, 1, 1, emb3(0, 1, 0)),
+		annCenter(3, 30, 1, 1, emb3(0, 0, 1)),
+	}
+	require.NoError(t, ann.Rebuild(centers, "emb-v1"))
+
+	stats := ann.Stats("emb-v1")
+	assert.True(t, stats.Ready)
+	assert.Equal(t, uint64(1), stats.Generation)
+	assert.Equal(t, 3, stats.SnapshotNodes)
+	assert.Zero(t, stats.DeltaNodes)
+	assert.False(t, stats.RebuildRequested)
+}
+
+func TestIdentityProfileANN_Stats_FailedRebuildRequestsRebuildAndStaysUnready(t *testing.T) {
+	ann := newIdentityProfileANN("emb-v1")
+	require.NoError(t, ann.Rebuild([]*model.PersonIdentityCenter{annCenter(1, 10, 1, 1, emb3(1, 0, 0))}, "emb-v1"))
+
+	// 非法中心（零范数）触发构建失败。
+	err := ann.Rebuild([]*model.PersonIdentityCenter{annCenter(2, 20, 1, 1, emb3(0, 0, 0))}, "emb-v1")
+	require.Error(t, err)
+
+	stats := ann.Stats("emb-v1")
+	assert.False(t, stats.Ready, "failed rebuild -> not ready")
+	assert.True(t, stats.RebuildRequested, "failed rebuild must request rebuild")
+	assert.True(t, stats.Unavailable)
+	// generation 不在失败时推进。
+	assert.Equal(t, uint64(1), stats.Generation)
 }

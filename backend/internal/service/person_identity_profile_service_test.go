@@ -831,6 +831,8 @@ func TestPersonIdentityProfileService_ANNRebuildFailureDoesNotRollbackGeneration
 	require.NoError(t, err)
 	assert.Equal(t, "list_active_centers_failed", resp.ANN.LastBuildError, "list active centers failure recorded as sanitized category")
 	assert.True(t, resp.ANN.RebuildRequested)
+	assert.Equal(t, "failed", resp.ANN.LastBuildStatus, "failed rebuild recorded as failed")
+	assert.GreaterOrEqual(t, resp.ANN.LastBuildDurationMs, int64(0))
 }
 
 // failingListCentersRepo 包装仓库，使 ListAllActiveCenters 失败，其余方法透传。
@@ -1091,6 +1093,8 @@ func TestPersonIdentityProfileService_GetOperationalStats_LegacyNoRepoAccess(t *
 	c := deps.countingRepo
 	assert.Equal(t, 0, c.getStats, "legacy stats must not call repo.GetStats")
 	assert.Equal(t, 0, c.listAllActiveCenters, "legacy stats must not call repo.ListAllActiveCenters")
+	// legacy ann 字段为零值，构建状态显式 never（ann 为 nil）。
+	assert.Equal(t, "never", resp.ANN.LastBuildStatus, "legacy ANN build status must be never")
 }
 
 func TestPersonIdentityProfileService_GetOperationalStats_ShadowAggregates(t *testing.T) {
@@ -1110,6 +1114,13 @@ func TestPersonIdentityProfileService_GetOperationalStats_ShadowAggregates(t *te
 	assert.Greater(t, resp.ANN.Generation, uint64(0), "generation increments after successful ANN rebuild")
 	assert.True(t, resp.ANN.Ready)
 	assert.Empty(t, resp.ANN.LastBuildError)
+	assert.Equal(t, "success", resp.ANN.LastBuildStatus, "successful rebuild recorded as success")
+	assert.GreaterOrEqual(t, resp.ANN.LastBuildDurationMs, int64(0))
+	assert.Equal(t, resp.Centers.Active, int64(resp.ANN.LastBuildCenters), "last build centers equals active centers after rebuild")
+	assert.False(t, resp.ANN.RebuildRequested, "successful rebuild clears rebuild requested")
+	assert.Equal(t, identityProfileANNDeltaMax, resp.ANN.DeltaMax, "delta max exposed in stats")
+	assert.NotNil(t, resp.ANN.LastBuildStartedAt)
+	assert.NotNil(t, resp.ANN.LastBuildEndedAt)
 	// decisions 窗口固定 24 小时。
 	assert.Equal(t, 24, resp.Decisions.WindowHours)
 }

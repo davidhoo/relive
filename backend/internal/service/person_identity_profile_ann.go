@@ -403,14 +403,23 @@ func (a *identityProfileANN) Ready(model string) bool {
 // IdentityANNStatsSnapshot 是 ANN 内部运行快照的只读视图，由 Stats 填充。
 // 不含 embedding、向量或路径，仅聚合计数与状态标志。
 type IdentityANNStatsSnapshot struct {
-	Ready            bool
-	Generation       uint64
-	SnapshotNodes    int
-	DeltaNodes       int
-	InvalidNodes     int
-	RebuildRequested bool
-	Unavailable      bool
+	Ready             bool
+	Generation        uint64
+	SnapshotNodes     int
+	DeltaNodes        int
+	InvalidNodes      int
+	DeltaMax          int
+	ActiveGenerations int
+	RebuildRequested  bool
+	Unavailable       bool
 }
+
+// annBuildStatus* 是脱敏的最近一次构建状态类别，用于 stats 与日志。
+const (
+	annBuildStatusNever   = "never"
+	annBuildStatusSuccess = "success"
+	annBuildStatusFailed  = "failed"
+)
 
 // Stats 返回 ANN 的只读、线程安全运行快照。snapshot 通过 atomic load 读取；
 // delta/invalid/activeGeneration 在短 RLock 下读取长度，不遍历或复制 embedding，
@@ -437,6 +446,8 @@ func (a *identityProfileANN) Stats(model string) IdentityANNStatsSnapshot {
 	a.deltaMu.RLock()
 	out.DeltaNodes = len(a.delta)
 	out.InvalidNodes = len(a.invalid)
+	out.ActiveGenerations = len(a.activeGeneration)
+	out.DeltaMax = a.deltaMax
 	a.deltaMu.RUnlock()
 
 	return out
