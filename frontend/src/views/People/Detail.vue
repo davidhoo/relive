@@ -6,217 +6,172 @@
     </div>
 
     <template v-if="person">
-      <el-row :gutter="20">
-        <el-col :xs="24" :lg="10">
-          <div class="section-stack">
-            <el-card shadow="never" class="section-card">
-              <template #header>
-                <SectionHeader :icon="User" title="人物信息" />
-              </template>
-
-              <div class="summary-card">
-                <div class="summary-avatar">
-                  <el-avatar :size="88" :src="avatarUrl">
-                    {{ getPersonAvatarFallback(person) }}
-                  </el-avatar>
-                  <div class="summary-avatar-text">
-                    <div class="summary-name">{{ personTitle }}</div>
-                    <div class="summary-subtitle">
-                      {{ getPersonCategoryLabel(person.category) }} · {{ person.face_count }} 张人脸 · {{ person.photo_count }} 张照片
-                    </div>
-                  </div>
+      <!-- 顶部紧凑操作台 -->
+      <el-card shadow="never" class="section-card console-card">
+        <div class="console-layout">
+          <!-- 左侧：人物信息 -->
+          <div class="console-info">
+            <div class="summary-avatar">
+              <el-avatar :size="72" :src="avatarUrl">
+                {{ getPersonAvatarFallback(person) }}
+              </el-avatar>
+              <div class="summary-avatar-text">
+                <div class="summary-name">{{ personTitle }}</div>
+                <div class="summary-subtitle">
+                  {{ getPersonCategoryLabel(person.category) }} · {{ person.face_count }} 张人脸 · {{ person.photo_count }} 张照片
                 </div>
-
-                <div class="edit-grid">
-                  <div class="edit-field">
-                    <span class="edit-label">人物姓名</span>
-                    <div class="edit-inline">
-                      <el-input v-model="editableName" placeholder="未命名人物" clearable />
-                      <el-button type="primary" :loading="nameSaving" @click="saveName">保存</el-button>
-                    </div>
-                  </div>
-
-                  <div class="edit-field">
-                    <span class="edit-label">人物类别</span>
-                    <el-select v-model="editableCategory" class="category-select" @change="saveCategory">
-                      <el-option v-for="option in categoryOptions" :key="option.value" :label="option.label" :value="option.value" />
-                    </el-select>
-                  </div>
-                </div>
-
-                <el-descriptions :column="1" border class="summary-descriptions">
-                  <el-descriptions-item label="人物 ID">{{ `#${person.id}` }}</el-descriptions-item>
-                  <el-descriptions-item label="代表头像">
-                    {{ person.representative_face_id ? `Face #${person.representative_face_id}` : '未设置' }}
-                  </el-descriptions-item>
-                  <el-descriptions-item label="创建时间">{{ formatTime(person.created_at) }}</el-descriptions-item>
-                  <el-descriptions-item label="更新时间">{{ formatTime(person.updated_at) }}</el-descriptions-item>
-                </el-descriptions>
-              </div>
-            </el-card>
-
-            <el-card shadow="never" class="section-card animate-delay-1">
-              <template #header>
-                <SectionHeader :icon="Operation" title="纠错操作" />
-              </template>
-
-              <div class="operation-list">
-                <div class="operation-item">
-                  <div>
-                    <div class="operation-title">拆分选中人脸</div>
-                    <div class="operation-desc">把当前选中的人脸拆成一个新人物，适合把误聚类的人脸拆出去。</div>
-                  </div>
-                  <el-button type="warning" plain :disabled="selectedFaceIds.length === 0" :loading="splitting" @click="splitSelectedFaces">
-                    拆分
-                  </el-button>
-                </div>
-
-                <div class="operation-item">
-                  <div>
-                    <div class="operation-title">移动到其他人物</div>
-                    <div class="operation-desc">把当前选中的人脸移动到已有人物，适合做误归属修正。</div>
-                  </div>
-                  <el-button plain :disabled="selectedFaceIds.length === 0" @click="ensureCandidatePeople(); showMoveDialog = true">
-                    选择目标
-                  </el-button>
-                </div>
-
-                <div class="operation-item">
-                  <div>
-                    <div class="operation-title">合并其他人物到当前人物</div>
-                    <div class="operation-desc">从其他人物中选择若干个，并把它们全部并入当前人物。</div>
-                  </div>
-                  <el-button plain @click="ensureCandidatePeople(); showMergeDialog = true">
-                    发起合并
-                  </el-button>
-                </div>
-
-                <div class="operation-item">
-                  <div>
-                    <div class="operation-title">合并当前人物到其他人物</div>
-                    <div class="operation-desc">将当前人物并入选定的目标人物，当前人物将被删除。</div>
-                  </div>
-                  <el-button plain @click="ensureCandidatePeople(); showMergeIntoDialog = true">
-                    选择目标
-                  </el-button>
-                </div>
-
-                <div class="operation-item">
-                  <div>
-                    <div class="operation-title">计算相似度</div>
-                    <div class="operation-desc">计算当前人物与目标人物的相似度，用于人工评判阈值调整。</div>
-                  </div>
-                  <el-button plain @click="ensureCandidatePeople(); showSimilarityDialog = true">
-                    选择目标
-                  </el-button>
-                </div>
-
-                <div class="operation-item operation-item-danger">
-                  <div>
-                    <div class="operation-title">解散此人物</div>
-                    <div class="operation-desc">将所有人脸打回未聚类状态，删除当前人物。系统将自动重新聚类。</div>
-                  </div>
-                  <el-button type="danger" plain :loading="dissolving" @click="handleDissolve">
-                    解散
-                  </el-button>
+                <div class="summary-meta">
+                  <span>人物 #{{ person.id }}</span>
+                  <span v-if="person.representative_face_id">头像 Face #{{ person.representative_face_id }}</span>
+                  <span v-else>未设置头像</span>
                 </div>
               </div>
-            </el-card>
+            </div>
+
+            <div class="edit-grid">
+              <div class="edit-field">
+                <span class="edit-label">人物姓名</span>
+                <div class="edit-inline">
+                  <el-input v-model="editableName" placeholder="未命名人物" clearable />
+                  <el-button type="primary" :loading="nameSaving" @click="saveName">保存</el-button>
+                </div>
+              </div>
+
+              <div class="edit-field">
+                <span class="edit-label">人物类别</span>
+                <el-select v-model="editableCategory" class="category-select" @change="saveCategory">
+                  <el-option v-for="option in categoryOptions" :key="option.value" :label="option.label" :value="option.value" />
+                </el-select>
+              </div>
+            </div>
           </div>
-        </el-col>
 
-        <el-col :xs="24" :lg="14">
-          <div class="section-stack">
-            <el-card shadow="never" class="section-card">
-              <template #header>
-                <SectionHeader :icon="Crop" :title="`人脸样本（${person?.face_count ?? 0}）`">
-                  <template #actions>
-                    <el-tag size="small" effect="plain">
-                      已选择 {{ selectedFaceIds.length }} 张
-                    </el-tag>
-                  </template>
-                </SectionHeader>
-              </template>
+          <!-- 右侧：纠错操作 -->
+          <div class="console-ops">
+            <div class="ops-header">
+              <span class="ops-title">纠错操作</span>
+              <el-tag size="small" effect="plain" :type="selectedFaceIds.length > 0 ? 'warning' : 'info'">
+                已选择 {{ selectedFaceIds.length }} 张
+              </el-tag>
+            </div>
+            <div class="ops-grid">
+              <el-tooltip content="把当前选中的人脸拆成一个新人物" placement="top">
+                <el-button type="warning" plain :disabled="selectedFaceIds.length === 0" :loading="splitting" @click="splitSelectedFaces">
+                  拆分
+                </el-button>
+              </el-tooltip>
+              <el-tooltip content="把选中的人脸移动到已有人物" placement="top">
+                <el-button plain :disabled="selectedFaceIds.length === 0" @click="ensureCandidatePeople(); showMoveDialog = true">
+                  移动
+                </el-button>
+              </el-tooltip>
+              <el-tooltip content="从其他人物中选择若干个，并入当前人物" placement="top">
+                <el-button plain @click="ensureCandidatePeople(); showMergeDialog = true">
+                  合并进来
+                </el-button>
+              </el-tooltip>
+              <el-tooltip content="将当前人物并入目标人物，当前人物将被删除" placement="top">
+                <el-button plain @click="ensureCandidatePeople(); showMergeIntoDialog = true">
+                  合并过去
+                </el-button>
+              </el-tooltip>
+              <el-tooltip content="计算当前人物与目标人物的相似度" placement="top">
+                <el-button plain @click="ensureCandidatePeople(); showSimilarityDialog = true">
+                  相似度
+                </el-button>
+              </el-tooltip>
+              <el-tooltip content="将所有人脸打回未聚类状态，删除当前人物" placement="top">
+                <el-button type="danger" plain :loading="dissolving" @click="handleDissolve">
+                  解散
+                </el-button>
+              </el-tooltip>
+            </div>
+          </div>
+        </div>
+      </el-card>
 
-              <el-empty v-if="faces.length === 0" description="暂无人脸样本" />
+      <!-- 下方 Tab 内容 -->
+      <el-card shadow="never" class="section-card content-card">
+        <el-tabs v-model="activeTab" class="content-tabs">
+          <el-tab-pane :label="`关联照片（${person?.photo_count ?? 0}）`" name="photos">
+            <el-empty v-if="photos.length === 0 && !photosLoading" description="暂无关联照片" />
 
-              <div v-else class="face-grid">
-                <div v-for="face in faces" :key="face.id" class="face-card" :class="{ 'is-selected': selectedFaceIds.includes(face.id) }">
-                  <div class="face-image-wrap">
-                    <img :src="faceThumbnail(face.id)" alt="face" class="face-image" />
-                    <el-checkbox class="face-checkbox" :model-value="selectedFaceIds.includes(face.id)" @change="toggleFace(face.id, $event as boolean)" />
+            <div v-else class="photo-grid">
+              <button v-for="photo in photos" :key="photo.id" type="button" class="photo-card" @click="goToPhoto(photo.id)">
+                <img :src="photoThumbnail(photo.id)" :alt="photo.file_name || `photo-${photo.id}`" class="photo-image" />
+                <div class="photo-card-main">
+                  <div class="photo-title">{{ photo.caption || photo.file_name || `Photo #${photo.id}` }}</div>
+                  <div class="photo-subtitle">{{ formatTime(photo.taken_at || photo.created_at) }}</div>
+                </div>
+              </button>
+            </div>
+
+            <!-- 无限滚动哨兵 -->
+            <div ref="photosSentinelRef" class="scroll-sentinel">
+              <span v-if="photosLoading" class="sentinel-status">加载中...</span>
+              <span v-else-if="photosError" class="sentinel-status sentinel-error">
+                加载失败，<el-button text type="primary" size="small" @click="loadMorePhotos">重试</el-button>
+              </span>
+              <span v-else-if="photosFinished" class="sentinel-status">已加载全部 {{ photosTotal }} 张照片</span>
+            </div>
+          </el-tab-pane>
+
+          <el-tab-pane :label="`人脸样本（${person?.face_count ?? 0}）`" name="faces">
+            <div class="faces-toolbar">
+              <el-tag size="small" effect="plain" :type="selectedFaceIds.length > 0 ? 'warning' : 'info'">
+                已选择 {{ selectedFaceIds.length }} 张
+              </el-tag>
+            </div>
+
+            <el-empty v-if="faces.length === 0 && !facesLoading" description="暂无人脸样本" />
+
+            <div v-else class="face-grid">
+              <div v-for="face in faces" :key="face.id" class="face-card" :class="{ 'is-selected': selectedFaceIds.includes(face.id) }">
+                <div class="face-image-wrap">
+                  <img :src="faceThumbnail(face.id)" alt="face" class="face-image" />
+                  <el-checkbox class="face-checkbox" :model-value="selectedFaceIds.includes(face.id)" @change="toggleFace(face.id, $event as boolean)" />
+                </div>
+                <div class="face-info">
+                  <div class="face-info-row">
+                    <span class="face-info-id">{{ `#${face.id}` }}</span>
+                    <el-tag v-if="person.representative_face_id === face.id" type="success" size="small">头像</el-tag>
                   </div>
-                  <div class="face-info">
-                    <div class="face-info-row">
-                      <span class="face-info-id">{{ `#${face.id}` }}</span>
-                      <el-tag v-if="person.representative_face_id === face.id" type="success" size="small">头像</el-tag>
-                    </div>
-                    <div class="face-info-row">
-                      <el-tooltip content="人脸图像质量评分" placement="top">
-                        <span class="face-info-quality">{{ `质量 ${(face.quality_score || 0).toFixed(2)}` }}</span>
-                      </el-tooltip>
-                      <el-tooltip v-if="face.manual_locked" content="用户已人工确认归属" placement="top">
-                        <span class="face-info-tag tag-success">人工</span>
-                      </el-tooltip>
-                      <el-tooltip v-else-if="face.cluster_score" :content="`聚类置信度 ${Math.round((face.cluster_score || 0) * 100)}%，越高表示归属越可靠`" placement="top">
-                        <span class="face-info-tag" :class="(face.cluster_score || 0) >= 0.55 ? 'tag-success' : (face.cluster_score || 0) >= 0.45 ? 'tag-warning' : 'tag-danger'">{{ `${Math.round((face.cluster_score || 0) * 100)}%` }}</span>
-                      </el-tooltip>
-                    </div>
-                    <div class="face-info-actions">
-                      <el-tooltip :content="person.representative_face_id === face.id ? '已是当前头像' : '将此人脸设为人物代表头像'" placement="top">
-                        <el-button size="small" plain :disabled="person.representative_face_id === face.id || avatarSavingFaceId === face.id" @click="setAvatar(face.id)">
-                          {{ avatarSavingFaceId === face.id ? '设置中' : '头像' }}
-                        </el-button>
-                      </el-tooltip>
-                      <el-tooltip content="查看此人脸所在的原始照片" placement="top">
-                        <el-button size="small" plain @click="goToPhoto(face.photo_id)">照片</el-button>
-                      </el-tooltip>
-                    </div>
+                  <div class="face-info-row">
+                    <el-tooltip content="人脸图像质量评分" placement="top">
+                      <span class="face-info-quality">{{ `质量 ${(face.quality_score || 0).toFixed(2)}` }}</span>
+                    </el-tooltip>
+                    <el-tooltip v-if="face.manual_locked" content="用户已人工确认归属" placement="top">
+                      <span class="face-info-tag tag-success">人工</span>
+                    </el-tooltip>
+                    <el-tooltip v-else-if="face.cluster_score" :content="`聚类置信度 ${Math.round((face.cluster_score || 0) * 100)}%，越高表示归属越可靠`" placement="top">
+                      <span class="face-info-tag" :class="(face.cluster_score || 0) >= 0.55 ? 'tag-success' : (face.cluster_score || 0) >= 0.45 ? 'tag-warning' : 'tag-danger'">{{ `${Math.round((face.cluster_score || 0) * 100)}%` }}</span>
+                    </el-tooltip>
+                  </div>
+                  <div class="face-info-actions">
+                    <el-tooltip :content="person.representative_face_id === face.id ? '已是当前头像' : '将此人脸设为人物代表头像'" placement="top">
+                      <el-button size="small" plain :disabled="person.representative_face_id === face.id || avatarSavingFaceId === face.id" @click="setAvatar(face.id)">
+                        {{ avatarSavingFaceId === face.id ? '设置中' : '头像' }}
+                      </el-button>
+                    </el-tooltip>
+                    <el-tooltip content="查看此人脸所在的原始照片" placement="top">
+                      <el-button size="small" plain @click="goToPhoto(face.photo_id)">照片</el-button>
+                    </el-tooltip>
                   </div>
                 </div>
               </div>
+            </div>
 
-              <el-pagination
-                v-if="facesTotal > facesPageSize"
-                layout="prev, pager, next"
-                :total="facesTotal"
-                :page-size="facesPageSize"
-                v-model:current-page="facesPage"
-                @current-change="onFacesPageChange"
-                class="section-pagination"
-              />
-            </el-card>
-
-            <el-card shadow="never" class="section-card animate-delay-1">
-              <template #header>
-                <SectionHeader :icon="Picture" :title="`关联照片（${person?.photo_count ?? 0}）`" />
-              </template>
-
-              <el-empty v-if="photos.length === 0" description="暂无关联照片" />
-
-              <div v-else class="photo-grid">
-                <button v-for="photo in photos" :key="photo.id" type="button" class="photo-card" @click="goToPhoto(photo.id)">
-                  <img :src="photoThumbnail(photo.id)" :alt="photo.file_name || `photo-${photo.id}`" class="photo-image" />
-                  <div class="photo-card-main">
-                    <div class="photo-title">{{ photo.caption || photo.file_name || `Photo #${photo.id}` }}</div>
-                    <div class="photo-subtitle">{{ formatTime(photo.taken_at || photo.created_at) }}</div>
-                  </div>
-                </button>
-              </div>
-
-              <el-pagination
-                v-if="photosTotal > photosPageSize"
-                layout="prev, pager, next"
-                :total="photosTotal"
-                :page-size="photosPageSize"
-                v-model:current-page="photosPage"
-                @current-change="onPhotosPageChange"
-                class="section-pagination"
-              />
-            </el-card>
-          </div>
-        </el-col>
-      </el-row>
+            <!-- 无限滚动哨兵 -->
+            <div ref="facesSentinelRef" class="scroll-sentinel">
+              <span v-if="facesLoading" class="sentinel-status">加载中...</span>
+              <span v-else-if="facesError" class="sentinel-status sentinel-error">
+                加载失败，<el-button text type="primary" size="small" @click="loadMoreFaces">重试</el-button>
+              </span>
+              <span v-else-if="facesFinished" class="sentinel-status">已加载全部 {{ facesTotal }} 张人脸</span>
+            </div>
+          </el-tab-pane>
+        </el-tabs>
+      </el-card>
     </template>
 
     <el-dialog v-model="showMoveDialog" title="移动到其他人物" width="480px">
@@ -329,12 +284,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Crop, Operation, Picture, User } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import SectionHeader from '@/components/SectionHeader.vue'
 import { peopleApi } from '@/api/people'
 import type { Face, Person, PersonCategory } from '@/types/people'
 import type { Photo } from '@/types/photo'
@@ -383,13 +336,30 @@ const categoryOptions = [
   { label: '路人', value: 'stranger' },
 ] satisfies Array<{ label: string; value: PersonCategory }>
 
-// 分页状态
-const facesPage = ref(1)
-const facesPageSize = ref(50)
-const facesTotal = ref(0)
+// Tab 状态
+const activeTab = ref<'photos' | 'faces'>('photos')
+
+// 关联照片 - 无限滚动状态
+const photosLoading = ref(false)
+const photosError = ref(false)
+const photosFinished = ref(false)
 const photosPage = ref(1)
 const photosPageSize = ref(30)
 const photosTotal = ref(0)
+const photosSentinelRef = ref<HTMLElement | null>(null)
+
+// 人脸样本 - 无限滚动状态
+const facesLoading = ref(false)
+const facesError = ref(false)
+const facesFinished = ref(false)
+const facesPage = ref(1)
+const facesPageSize = ref(50)
+const facesTotal = ref(0)
+const facesSentinelRef = ref<HTMLElement | null>(null)
+
+// 滚动观察器
+let photosObserver: IntersectionObserver | null = null
+let facesObserver: IntersectionObserver | null = null
 
 // 候选人物懒加载
 const candidatePeopleLoaded = ref(false)
@@ -446,52 +416,157 @@ const ensureCandidatePeople = async () => {
   }
 }
 
-const loadFaces = async () => {
-  const personId = Number(route.params.id)
-  if (!personId) return
-  try {
-    const res = await peopleApi.getFaces(personId, { page: facesPage.value, page_size: facesPageSize.value })
-    const data = res.data?.data as any
-    if (data && 'items' in data) {
-      faces.value = data.items as Face[]
-      facesTotal.value = data.total as number
-    } else {
-      faces.value = (data as Face[]) || []
-      facesTotal.value = faces.value.length
-    }
-  } catch (error: any) {
-    ElMessage.error(error.message || '加载人脸失败')
-  }
-}
+// --- 无限滚动：关联照片 ---
 
-const loadPhotos = async () => {
+const loadMorePhotos = async () => {
+  if (photosLoading.value || photosFinished.value) return
   const personId = Number(route.params.id)
   if (!personId) return
+
+  photosLoading.value = true
+  photosError.value = false
   try {
     const res = await peopleApi.getPhotos(personId, { page: photosPage.value, page_size: photosPageSize.value })
     const data = res.data?.data as any
-    if (data && 'items' in data) {
-      photos.value = data.items as Photo[]
-      photosTotal.value = data.total as number
-    } else {
-      photos.value = (data as Photo[]) || []
-      photosTotal.value = photos.value.length
+    const items: Photo[] = (data && 'items' in data ? data.items : data as Photo[]) || []
+    const totalCount: number = (data && 'total' in data ? data.total : items.length) || 0
+
+    const existing = new Set(photos.value.map(p => p.id))
+    const fresh = items.filter(p => !existing.has(p.id))
+    photos.value = [...photos.value, ...fresh]
+    photosTotal.value = totalCount
+    photosPage.value += 1
+
+    if (items.length < photosPageSize.value || photos.value.length >= totalCount) {
+      photosFinished.value = true
     }
   } catch (error: any) {
+    photosError.value = true
     ElMessage.error(error.message || '加载照片失败')
+  } finally {
+    photosLoading.value = false
   }
 }
+
+// --- 无限滚动：人脸样本 ---
+
+const loadMoreFaces = async () => {
+  if (facesLoading.value || facesFinished.value) return
+  const personId = Number(route.params.id)
+  if (!personId) return
+
+  facesLoading.value = true
+  facesError.value = false
+  try {
+    const res = await peopleApi.getFaces(personId, { page: facesPage.value, page_size: facesPageSize.value })
+    const data = res.data?.data as any
+    const items: Face[] = (data && 'items' in data ? data.items : data as Face[]) || []
+    const totalCount: number = (data && 'total' in data ? data.total : items.length) || 0
+
+    const existing = new Set(faces.value.map(f => f.id))
+    const fresh = items.filter(f => !existing.has(f.id))
+    faces.value = [...faces.value, ...fresh]
+    facesTotal.value = totalCount
+    facesPage.value += 1
+
+    if (items.length < facesPageSize.value || faces.value.length >= totalCount) {
+      facesFinished.value = true
+    }
+  } catch (error: any) {
+    facesError.value = true
+    ElMessage.error(error.message || '加载人脸失败')
+  } finally {
+    facesLoading.value = false
+  }
+}
+
+// --- 滚动容器查找 ---
+
+const getScrollContainer = (): HTMLElement | null => {
+  let el: HTMLElement | null = document.querySelector('.content-card')
+  while (el && el !== document.body) {
+    if (el.scrollHeight > el.clientHeight && getComputedStyle(el).overflowY !== 'visible') {
+      return el
+    }
+    el = el.parentElement
+  }
+  return document.scrollingElement as HTMLElement | null
+}
+
+// --- 滚动观察器管理 ---
+
+const setupPhotosObserver = () => {
+  teardownPhotosObserver()
+  if (!photosSentinelRef.value) return
+  const container = getScrollContainer()
+  photosObserver = new IntersectionObserver(
+    entries => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          void loadMorePhotos()
+        }
+      }
+    },
+    { root: container, rootMargin: '200px' },
+  )
+  photosObserver.observe(photosSentinelRef.value)
+}
+
+const teardownPhotosObserver = () => {
+  if (photosObserver) {
+    photosObserver.disconnect()
+    photosObserver = null
+  }
+}
+
+const setupFacesObserver = () => {
+  teardownFacesObserver()
+  if (!facesSentinelRef.value) return
+  const container = getScrollContainer()
+  facesObserver = new IntersectionObserver(
+    entries => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          void loadMoreFaces()
+        }
+      }
+    },
+    { root: container, rootMargin: '200px' },
+  )
+  facesObserver.observe(facesSentinelRef.value)
+}
+
+const teardownFacesObserver = () => {
+  if (facesObserver) {
+    facesObserver.disconnect()
+    facesObserver = null
+  }
+}
+
+// --- 数据加载 ---
 
 const loadData = async () => {
   const personId = Number(route.params.id)
   if (!personId) return
 
   loading.value = true
+  // 重置无限滚动状态
+  faces.value = []
+  photos.value = []
+  facesPage.value = 1
+  photosPage.value = 1
+  facesFinished.value = false
+  photosFinished.value = false
+  facesError.value = false
+  photosError.value = false
+  facesTotal.value = 0
+  photosTotal.value = 0
+
   try {
     const [personRes] = await Promise.all([
       peopleApi.getById(personId),
-      loadFaces(),
-      loadPhotos(),
+      loadMorePhotos(),
+      loadMoreFaces(),
     ])
 
     person.value = personRes.data?.data || null
@@ -499,6 +574,11 @@ const loadData = async () => {
     editableCategory.value = person.value?.category || 'stranger'
     resetSelections()
     candidatePeopleLoaded.value = false
+
+    // 等待 DOM 渲染后设置滚动观察器
+    await nextTick()
+    setupPhotosObserver()
+    setupFacesObserver()
   } catch (error: any) {
     ElMessage.error(error.message || '加载人物详情失败')
   } finally {
@@ -525,26 +605,26 @@ const refreshPersonAndFaces = async () => {
   const personId = Number(route.params.id)
   if (!personId) return
   try {
+    // 重置人脸无限滚动
+    faces.value = []
+    facesPage.value = 1
+    facesFinished.value = false
+    facesError.value = false
+    facesTotal.value = 0
+
     const [personRes] = await Promise.all([
       peopleApi.getById(personId),
-      loadFaces(),
+      loadMoreFaces(),
     ])
     person.value = personRes.data?.data || null
     editableName.value = person.value?.name || ''
     editableCategory.value = person.value?.category || 'stranger'
+
+    await nextTick()
+    setupFacesObserver()
   } catch (error: any) {
     ElMessage.error(error.message || '刷新数据失败')
   }
-}
-
-const onFacesPageChange = async (page: number) => {
-  facesPage.value = page
-  await loadFaces()
-}
-
-const onPhotosPageChange = async (page: number) => {
-  photosPage.value = page
-  await loadPhotos()
 }
 
 const saveName = async () => {
@@ -775,7 +855,7 @@ const goBack = () => {
         ...(query.page && { page: query.page }),
         ...(query.page_size && { page_size: query.page_size }),
         ...(query.search && { search: query.search }),
-        ...(query.category && { query: query.category }),
+        ...(query.category && { category: query.category }),
       }
     })
   } else {
@@ -783,14 +863,24 @@ const goBack = () => {
   }
 }
 
+// Tab 切换后重新挂载滚动观察器
+watch(activeTab, async () => {
+  await nextTick()
+  setupPhotosObserver()
+  setupFacesObserver()
+})
+
 watch(() => route.params.id, async () => {
-  facesPage.value = 1
-  photosPage.value = 1
   await loadData()
 })
 
 onMounted(async () => {
   await loadData()
+})
+
+onBeforeUnmount(() => {
+  teardownPhotosObserver()
+  teardownFacesObserver()
 })
 </script>
 
@@ -831,39 +921,85 @@ onMounted(async () => {
   padding: 24px 28px;
 }
 
-.summary-card {
+/* 顶部操作台 */
+.console-card :deep(.el-card__body) {
+  padding: 20px 24px;
+}
+
+.console-layout {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.console-info {
+  flex: 1 1 50%;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
+}
+
+.console-ops {
+  flex: 1 1 50%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-left: 1px solid var(--color-border);
+  padding-left: 24px;
+}
+
+@media (max-width: 768px) {
+  .console-layout {
+    flex-direction: column;
+  }
+
+  .console-ops {
+    border-left: none;
+    border-top: 1px solid var(--color-border);
+    padding-left: 0;
+    padding-top: 16px;
+  }
 }
 
 .summary-avatar {
   display: flex;
-  gap: 16px;
+  gap: 14px;
   align-items: center;
 }
 
 .summary-name {
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 700;
   color: var(--color-text-primary);
 }
 
 .summary-subtitle {
-  margin-top: 6px;
+  margin-top: 4px;
   color: var(--color-text-secondary);
+  font-size: 14px;
+}
+
+.summary-meta {
+  margin-top: 4px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: var(--color-text-secondary);
+  font-size: 12px;
 }
 
 .edit-grid {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .edit-field {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .edit-label {
@@ -873,7 +1009,7 @@ onMounted(async () => {
 
 .edit-inline {
   display: flex;
-  gap: 12px;
+  gap: 10px;
 }
 
 .category-select,
@@ -881,68 +1017,44 @@ onMounted(async () => {
   width: 100%;
 }
 
-.summary-descriptions {
-  margin-top: 4px;
-}
-
-.candidate-option {
+/* 纠错操作区 */
+.ops-header {
   display: flex;
   align-items: center;
-  gap: 12px;
-}
-
-.candidate-option-body {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.candidate-option-title {
-  color: var(--color-text-primary);
-  font-weight: 600;
-  line-height: 1.4;
-}
-
-.candidate-option-subtitle {
-  color: var(--color-text-secondary);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.operation-list {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.operation-item {
-  display: flex;
   justify-content: space-between;
-  gap: 16px;
-  padding: 16px 18px;
-  border-radius: 14px;
-  background: var(--color-bg-soft);
-  border: 1px solid var(--color-border);
+  gap: 8px;
 }
 
-.operation-item-danger {
-  border-color: rgba(245, 108, 108, 0.3);
-  background: rgba(245, 108, 108, 0.04);
-}
-
-.operation-title {
+.ops-title {
   font-weight: 600;
+  font-size: 15px;
   color: var(--color-text-primary);
-  margin-bottom: 4px;
 }
 
-.operation-desc {
-  color: var(--color-text-secondary);
-  font-size: 13px;
-  line-height: 1.7;
+.ops-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
+.ops-grid .el-button {
+  margin-left: 0 !important;
+}
+
+/* Tab 内容 */
+.content-card :deep(.el-card__body) {
+  padding: 16px 24px 24px;
+}
+
+.content-tabs :deep(.el-tabs__header) {
+  margin-bottom: 16px;
+}
+
+.faces-toolbar {
+  margin-bottom: 12px;
+}
+
+/* 人脸网格 */
 .face-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -1039,11 +1151,7 @@ onMounted(async () => {
   overflow: hidden;
 }
 
-.section-pagination {
-  margin-top: 16px;
-  justify-content: center;
-}
-
+/* 照片网格 */
 .photo-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1089,6 +1197,51 @@ onMounted(async () => {
   font-size: 12px;
 }
 
+/* 无限滚动哨兵 */
+.scroll-sentinel {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 40px;
+  margin-top: 16px;
+}
+
+.sentinel-status {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.sentinel-error {
+  color: var(--color-danger, #f56c6c);
+}
+
+/* 候选人选项 */
+.candidate-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.candidate-option-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.candidate-option-title {
+  color: var(--color-text-primary);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.candidate-option-subtitle {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* 相似度结果 */
 .similarity-result {
   margin-top: 12px;
 }
@@ -1144,6 +1297,7 @@ onMounted(async () => {
   color: var(--color-text-primary);
 }
 
+/* 响应式 */
 @media (max-width: 1200px) {
   .face-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1165,9 +1319,12 @@ onMounted(async () => {
     padding-right: 18px;
   }
 
+  .console-card :deep(.el-card__body) {
+    padding: 16px 18px;
+  }
+
   .summary-avatar,
-  .edit-inline,
-  .operation-item {
+  .edit-inline {
     flex-direction: column;
     align-items: stretch;
   }
