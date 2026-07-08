@@ -94,10 +94,48 @@
       <!-- 下方 Tab 内容 -->
       <el-card shadow="never" class="section-card content-card">
         <el-tabs v-model="activeTab" class="content-tabs">
-          <el-tab-pane :label="`关联照片（${person?.photo_count ?? 0}）`" name="photos">
+          <template #extra>
+            <div class="density-switcher">
+              <el-tooltip content="小图" placement="top">
+                <el-button
+                  size="small"
+                  :type="currentGridSize === 'small' ? 'primary' : 'default'"
+                  :plain="currentGridSize !== 'small'"
+                  class="density-btn"
+                  @click="setGridSize('small')"
+                >
+                  <el-icon><Grid /></el-icon>
+                </el-button>
+              </el-tooltip>
+              <el-tooltip content="中图" placement="top">
+                <el-button
+                  size="small"
+                  :type="currentGridSize === 'medium' ? 'primary' : 'default'"
+                  :plain="currentGridSize !== 'medium'"
+                  class="density-btn"
+                  @click="setGridSize('medium')"
+                >
+                  <el-icon><Menu /></el-icon>
+                </el-button>
+              </el-tooltip>
+              <el-tooltip content="大图" placement="top">
+                <el-button
+                  size="small"
+                  :type="currentGridSize === 'large' ? 'primary' : 'default'"
+                  :plain="currentGridSize !== 'large'"
+                  class="density-btn"
+                  @click="setGridSize('large')"
+                >
+                  <el-icon><Monitor /></el-icon>
+                </el-button>
+              </el-tooltip>
+            </div>
+          </template>
+
+          <el-tab-pane :label="`照片（${person?.photo_count ?? 0}）`" name="photos">
             <el-empty v-if="photos.length === 0 && !photosLoading" description="暂无关联照片" />
 
-            <div v-else class="photo-grid">
+            <div v-else class="photo-grid" :class="`is-${photoGridSize}`">
               <button v-for="photo in photos" :key="photo.id" type="button" class="photo-card" @click="goToPhoto(photo.id)">
                 <img :src="photoThumbnail(photo.id)" :alt="photo.file_name || `photo-${photo.id}`" class="photo-image" />
                 <div class="photo-card-main">
@@ -117,16 +155,10 @@
             </div>
           </el-tab-pane>
 
-          <el-tab-pane :label="`人脸样本（${person?.face_count ?? 0}）`" name="faces">
-            <div class="faces-toolbar">
-              <el-tag size="small" effect="plain" :type="selectedFaceIds.length > 0 ? 'warning' : 'info'">
-                已选择 {{ selectedFaceIds.length }} 张
-              </el-tag>
-            </div>
-
+          <el-tab-pane :label="`人脸（${person?.face_count ?? 0}）`" name="faces">
             <el-empty v-if="faces.length === 0 && !facesLoading" description="暂无人脸样本" />
 
-            <div v-else class="face-grid">
+            <div v-else class="face-grid" :class="`is-${faceGridSize}`">
               <div v-for="face in faces" :key="face.id" class="face-card" :class="{ 'is-selected': selectedFaceIds.includes(face.id) }">
                 <div class="face-image-wrap">
                   <img :src="faceThumbnail(face.id)" alt="face" class="face-image" />
@@ -285,7 +317,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { User } from '@element-plus/icons-vue'
+import { Grid, Menu, Monitor, User } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import SectionHeader from '@/components/SectionHeader.vue'
@@ -329,6 +361,24 @@ const similarityResult = ref<{
 
 // Tab 状态：默认关联照片
 const activeTab = ref<'photos' | 'faces'>('photos')
+
+// 视图密度：默认中图
+type GridSize = 'small' | 'medium' | 'large'
+const photoGridSize = ref<GridSize>('medium')
+const faceGridSize = ref<GridSize>('medium')
+
+// 当前 tab 对应的密度状态
+const currentGridSize = computed<GridSize>(() =>
+  activeTab.value === 'photos' ? photoGridSize.value : faceGridSize.value,
+)
+
+const setGridSize = (size: GridSize) => {
+  if (activeTab.value === 'photos') {
+    photoGridSize.value = size
+  } else {
+    faceGridSize.value = size
+  }
+}
 
 // 关联照片 - 无限滚动状态
 const photosLoading = ref(false)
@@ -1160,15 +1210,46 @@ onBeforeUnmount(() => {
   margin-bottom: 16px;
 }
 
-.faces-toolbar {
-  margin-bottom: 12px;
+.content-tabs :deep(.el-tabs__nav-wrap) {
+  padding-right: 12px;
+}
+
+/* 视图密度切换控件 */
+.density-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.density-btn {
+  padding: 0;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.density-btn .el-icon {
+  font-size: 16px;
 }
 
 /* 人脸网格 */
 .face-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
+}
+
+.face-grid.is-small {
+  grid-template-columns: repeat(15, minmax(0, 1fr));
+}
+
+.face-grid.is-medium {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.face-grid.is-large {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .face-card {
@@ -1264,8 +1345,19 @@ onBeforeUnmount(() => {
 /* 照片网格 */
 .photo-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
+}
+
+.photo-grid.is-small {
+  grid-template-columns: repeat(15, minmax(0, 1fr));
+}
+
+.photo-grid.is-medium {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.photo-grid.is-large {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .photo-card {
@@ -1409,11 +1501,23 @@ onBeforeUnmount(() => {
 
 /* 响应式 */
 @media (max-width: 1200px) {
-  .face-grid {
+  .face-grid.is-small {
+    grid-template-columns: repeat(10, minmax(0, 1fr));
+  }
+
+  .face-grid.is-medium {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
-  .photo-grid {
+  .photo-grid.is-small {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+
+  .photo-grid.is-medium {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .photo-grid.is-large {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -1433,24 +1537,48 @@ onBeforeUnmount(() => {
     padding: 16px 18px;
   }
 
-  .face-grid {
+  .face-grid.is-small {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .face-grid.is-medium {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .photo-grid {
+  .face-grid.is-large {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .photo-grid.is-small {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .photo-grid.is-medium {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .photo-grid.is-large {
     grid-template-columns: 1fr;
   }
 }
 
-@media (max-width: 640px) {
-  .face-grid {
+@media (max-width: 480px) {
+  .face-grid.is-small {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .face-grid.is-medium,
+  .face-grid.is-large {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-}
 
-@media (max-width: 480px) {
-  .face-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .photo-grid.is-small {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .photo-grid.is-medium,
+  .photo-grid.is-large {
+    grid-template-columns: 1fr;
   }
 }
 </style>
