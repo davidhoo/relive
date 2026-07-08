@@ -1,11 +1,9 @@
 <template>
   <div class="people-detail-page" v-loading="loading">
-    <PageHeader :title="personTitle" subtitle="查看构成人脸样本、关联照片，并执行拆分、移动、合并与头像修正">
-      <template #actions>
-        <el-button @click="goBack">返回列表</el-button>
-        <el-button type="primary" @click="loadData">刷新</el-button>
-      </template>
-    </PageHeader>
+    <div class="detail-toolbar">
+      <el-button @click="goBack">返回列表</el-button>
+      <el-button type="primary" @click="loadData">刷新</el-button>
+    </div>
 
     <template v-if="person">
       <el-row :gutter="20">
@@ -336,7 +334,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { Crop, Operation, Picture, User } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 import { peopleApi } from '@/api/people'
 import type { Face, Person, PersonCategory } from '@/types/people'
@@ -803,6 +800,23 @@ onMounted(async () => {
   flex-direction: column;
   gap: 20px;
   padding: var(--spacing-xl);
+}
+
+.detail-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  min-height: 0;
+}
+
+@media (max-width: 768px) {
+  .detail-toolbar {
+    justify-content: stretch;
+  }
+
+  .detail-toolbar :deep(.el-button) {
+    flex: 1;
+  }
 }
 
 .section-card {

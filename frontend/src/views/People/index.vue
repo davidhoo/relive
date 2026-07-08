@@ -1,13 +1,5 @@
 <template>
   <div ref="peoplePageRef" class="people-page">
-    <PageHeader title="人物管理" subtitle="按人物维度浏览聚类结果，查看后台进度，并集中审核系统给出的合并建议" :gradient="true">
-      <template #actions>
-        <el-button class="header-action-btn" @click="refreshCurrentTab">
-          刷新当前标签
-        </el-button>
-      </template>
-    </PageHeader>
-
     <el-tabs v-model="activeTab" class="people-tabs">
       <el-tab-pane label="人物列表" name="people">
         <div class="section-stack">
@@ -223,6 +215,7 @@
               <SectionHeader :icon="Clock" title="Worker 控制">
                 <template #actions>
                   <span class="status-pill" :class="taskMeta.type">{{ taskMeta.label }}</span>
+                  <el-button size="small" plain class="mini-action-btn" @click="refreshCurrentTab">刷新</el-button>
                   <el-button
                     v-if="!workerActive"
                     size="small"
@@ -434,7 +427,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowUp, Clock, Connection, Document, User } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 import { peopleApi } from '@/api/people'
 import type {

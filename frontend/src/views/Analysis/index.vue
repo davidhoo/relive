@@ -1,14 +1,5 @@
 <template>
   <div class="analysis-page">
-    <PageHeader title="AI 分析" subtitle="管理分析任务、查看运行状态与批量处理进度" :gradient="true">
-      <template #actions>
-        <el-button class="header-action-btn" @click="$router.push('/config')">
-          <el-icon><Setting /></el-icon>
-          前往配置
-        </el-button>
-      </template>
-    </PageHeader>
-
     <div class="section-stack">
       <el-card shadow="never" class="section-card animate-fade-in">
         <template #header>
@@ -17,6 +8,10 @@
               <div class="header-actions-inline">
                 <span class="status-pill" :class="providerPillClass">AI {{ providerPillText }}</span>
                 <span class="status-pill" :class="runtimePillClass">{{ runtimePillText }}</span>
+                <el-button size="small" plain @click="$router.push('/config')">
+                  <el-icon><Setting /></el-icon>
+                  前往配置
+                </el-button>
               </div>
             </template>
           </SectionHeader>
@@ -248,7 +243,6 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 import { Cpu, DataLine, MagicStick, Setting } from '@element-plus/icons-vue'
 import { aiApi } from '@/api/ai'
@@ -563,33 +557,15 @@ watch(backgroundLogs, async () => {
   min-height: 100vh;
 }
 
-.header-action-btn {
-  height: 36px;
-  padding-inline: 16px;
-  border-radius: 999px;
-  border-color: var(--color-border);
-}
-
-.section-card {
-  border-radius: 24px;
-  border: 1px solid var(--color-border);
-  overflow: hidden;
-}
-
-.section-card :deep(.el-card__header) {
-  padding: 22px 28px;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.section-card :deep(.el-card__body) {
-  padding: 24px 28px;
-}
-
 .status-pill,
 .header-actions-inline {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+}
+
+.header-actions-inline {
+  flex-wrap: wrap;
 }
 
 .status-pill {
@@ -608,6 +584,21 @@ watch(backgroundLogs, async () => {
   color: #389e0d;
   background: #f6ffed;
   border-color: #b7eb8f;
+}
+
+.section-card {
+  border-radius: 24px;
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+}
+
+.section-card :deep(.el-card__header) {
+  padding: 22px 28px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.section-card :deep(.el-card__body) {
+  padding: 24px 28px;
 }
 
 .status-pill.warning {
@@ -971,8 +962,7 @@ watch(backgroundLogs, async () => {
     padding-bottom: 14px;
   }
 
-  .background-log-header,
-  .header-actions-inline {
+  .background-log-header {
     flex-wrap: wrap;
   }
 }

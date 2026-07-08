@@ -1,7 +1,5 @@
 <template>
   <div class="system-page">
-    <PageHeader title="系统信息" subtitle="查看系统运行状态和详细信息" :gradient="true" />
-
     <!-- 系统健康状态 -->
     <div class="health-section animate-fade-in">
       <div class="health-card" :class="healthCardClass">
@@ -383,23 +381,6 @@ onMounted(async () => {
   min-height: 100vh;
 }
 
-/* ============ 页面标题 ============ */
-.page-header {
-  margin-bottom: var(--spacing-2xl);
-}
-
-.page-title {
-  font-size: var(--font-size-4xl);
-  font-weight: var(--font-weight-bold);
-  margin-bottom: var(--spacing-sm);
-  line-height: 1.2;
-}
-
-.page-subtitle {
-  font-size: var(--font-size-lg);
-  color: var(--color-text-secondary);
-}
-
 /* ============ 健康状态卡片 ============ */
 .health-section {
   margin-bottom: var(--spacing-2xl);
@@ -719,10 +700,6 @@ onMounted(async () => {
 @media (max-width: 768px) {
   .system-page {
     padding: var(--spacing-md);
-  }
-
-  .page-title {
-    font-size: var(--font-size-2xl);
   }
 
   .health-card {

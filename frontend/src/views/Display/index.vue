@@ -1,20 +1,14 @@
 <template>
   <div class="display-page">
-    <PageHeader title="展示策略" subtitle="配置每日展示批次、渲染规格与设备展示内容" :gradient="true">
-      <template #actions>
-        <el-button type="primary" @click="handleSave" :loading="saving">
-          保存配置
-        </el-button>
-        <el-button @click="handleReset">重置</el-button>
-        <el-button @click="handlePreview" :loading="previewLoading">
-          刷新预览
-        </el-button>
-      </template>
-    </PageHeader>
-
     <el-card shadow="never">
       <template #header>
-        <SectionHeader :icon="View" title="展示策略" />
+        <SectionHeader :icon="View" title="展示策略">
+          <template #actions>
+            <el-button type="primary" size="small" @click="handleSave" :loading="saving">保存配置</el-button>
+            <el-button size="small" @click="handleReset">重置</el-button>
+            <el-button size="small" @click="handlePreview" :loading="previewLoading">刷新预览</el-button>
+          </template>
+        </SectionHeader>
       </template>
 
       <el-form :model="form" label-width="150px" class="display-form">
@@ -490,7 +484,6 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 import http from '@/utils/request'
 import type { ApiResponse } from '@/types/api'

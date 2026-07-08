@@ -1,7 +1,5 @@
 <template>
   <div class="events-page">
-    <PageHeader title="事件浏览" subtitle="基于时空聚类的照片事件" :gradient="true" />
-
     <div v-if="loading" v-loading="true" class="loading-placeholder" />
 
     <template v-else-if="events.length > 0">
@@ -78,7 +76,6 @@ import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Location, Picture, PictureFilled, Star } from '@element-plus/icons-vue'
-import PageHeader from '@/components/PageHeader.vue'
 import { eventApi } from '@/api/event'
 import type { Event } from '@/types/event'
 

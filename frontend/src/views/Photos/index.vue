@@ -1,7 +1,5 @@
 <template>
   <div class="photos-page">
-    <PageHeader title="照片管理" subtitle="浏览和管理您的照片集合" :gradient="true" />
-
     <!-- 扫描路径列表 -->
     <el-card shadow="never" class="scan-paths-card animate-fade-in" :class="{ 'is-collapsed': scanPathsCollapsed }" v-loading="scanPathLoading">
       <template #header>
@@ -625,7 +623,6 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ArrowUp, Check, CircleCheck, CircleClose, Clock, Close, Collection, Delete, Files, Filter, Folder, FolderOpened, FullScreen, Loading, Location, MagicStick, Picture, PictureFilled, Plus, PriceTag, QuestionFilled, Refresh, RefreshLeft, RefreshRight, Search, Select, Star, SwitchButton, Timer } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 import PathBrowser from '@/components/PathBrowser.vue'
 import LocationPicker from '@/components/LocationPicker.vue'

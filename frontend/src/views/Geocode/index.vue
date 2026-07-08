@@ -1,14 +1,5 @@
 <template>
   <div class="geocode-page">
-    <PageHeader title="GPS 位置解析" subtitle="管理后台 GPS 逆地理编码队列，支持开始、停止和进度查看" :gradient="true">
-      <template #actions>
-        <el-button class="header-action-btn" @click="$router.push('/photos')">
-          <el-icon><Picture /></el-icon>
-          前往照片管理
-        </el-button>
-      </template>
-    </PageHeader>
-
     <el-card shadow="never" class="section-card animate-fade-in">
       <template #header>
         <SectionHeader :icon="Location" title="后台任务">
@@ -16,6 +7,10 @@
             <span class="status-pill" :class="taskRunning ? 'warning' : taskStopping ? 'warning' : 'success'">
               {{ taskRunning ? '运行中' : taskStopping ? '停止中' : '未运行' }}
             </span>
+            <el-button size="small" plain @click="$router.push('/photos')">
+              <el-icon><Picture /></el-icon>
+              前往照片管理
+            </el-button>
           </template>
         </SectionHeader>
       </template>
@@ -81,7 +76,6 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Clock, DataLine, Location, Picture } from '@element-plus/icons-vue'
-import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 import { geocodeApi } from '@/api/geocode'
 import type { GeocodeStats, GeocodeTask } from '@/types/geocode'

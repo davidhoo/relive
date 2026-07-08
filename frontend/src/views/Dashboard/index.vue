@@ -1,7 +1,5 @@
 <template>
   <div class="dashboard">
-    <PageHeader title="仪表盘" subtitle="照片管理系统概览" :gradient="true" />
-
     <el-row :gutter="20" class="stats-row animate-fade-in">
       <el-col :xs="24" :sm="12" :md="6">
         <el-card shadow="hover">
@@ -233,7 +231,6 @@ import { photoApi } from '@/api/photo'
 import { aiApi } from '@/api/ai'
 import type { Photo } from '@/types/photo'
 import type { AIAnalyzeProgress } from '@/types/ai'
-import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 
 const router = useRouter()

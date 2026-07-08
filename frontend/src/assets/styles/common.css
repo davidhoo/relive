@@ -36,24 +36,6 @@ body {
   gap: 20px;
 }
 
-.page-header {
-  margin-bottom: var(--spacing-2xl);
-}
-
-.page-title {
-  font-size: var(--font-size-4xl);
-  font-weight: var(--font-weight-bold);
-  color: var(--color-text-primary);
-  margin-bottom: var(--spacing-sm);
-  line-height: var(--line-height-tight);
-}
-
-.page-subtitle {
-  font-size: var(--font-size-lg);
-  color: var(--color-text-secondary);
-  font-weight: var(--font-weight-normal);
-}
-
 /* ============ 卡片设计 - WeDance 风格 ============ */
 .modern-card {
   background: var(--color-bg-tertiary);
@@ -403,10 +385,6 @@ body {
     padding: var(--spacing-lg);
   }
 
-  .page-title {
-    font-size: var(--font-size-2xl);
-  }
-
   .stat-card-value {
     font-size: 36px;
   }
@@ -415,10 +393,6 @@ body {
 @media (max-width: 480px) {
   .page-container {
     padding: var(--spacing-md);
-  }
-
-  .page-title {
-    font-size: var(--font-size-xl);
   }
 
   .stat-card-value {

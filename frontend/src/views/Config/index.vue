@@ -1,7 +1,5 @@
 <template>
   <div class="config-page">
-    <PageHeader title="配置管理" subtitle="维护地理编码、AI 服务与提示词配置" :gradient="true" />
-
     <!-- Geocode Configuration Card -->
     <el-card shadow="never" class="geocode-card">
       <template #header>
@@ -670,7 +668,6 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { configApi, promptApi, type AutoScanConfig, type GeocodeConfig, type AIConfig, type PromptConfig, defaultPrompts } from '@/api/config'

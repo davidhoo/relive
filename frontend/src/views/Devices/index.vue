@@ -1,18 +1,5 @@
 <template>
   <div class="devices-page">
-    <PageHeader title="设备管理" subtitle="管理设备、查看状态并维护展示配置" :gradient="true">
-      <template #actions>
-        <el-button type="primary" @click="openCreateDialog">
-          <el-icon><Plus /></el-icon>
-          新增设备
-        </el-button>
-        <el-button @click="loadDevices">
-          <el-icon><Refresh /></el-icon>
-          刷新
-        </el-button>
-      </template>
-    </PageHeader>
-
     <!-- 设备统计 -->
     <el-row :gutter="20" class="stats-row">
       <el-col :span="8">
@@ -47,7 +34,18 @@
     <!-- 设备列表 -->
     <el-card shadow="never" class="devices-list-card" v-loading="loading">
       <template #header>
-        <SectionHeader :icon="List" title="设备列表" />
+        <SectionHeader :icon="List" title="设备列表">
+          <template #actions>
+            <el-button type="primary" size="small" @click="openCreateDialog">
+              <el-icon><Plus /></el-icon>
+              新增设备
+            </el-button>
+            <el-button size="small" @click="loadDevices">
+              <el-icon><Refresh /></el-icon>
+              刷新
+            </el-button>
+          </template>
+        </SectionHeader>
       </template>
 
       <el-table :data="devices" stripe class="devices-table" size="small">
@@ -249,7 +247,6 @@
 <script setup lang="ts">
 import { ref, onMounted, reactive } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import PageHeader from '@/components/PageHeader.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 import { deviceApi, type CreateDeviceRequest, type CreateDeviceResponse } from '@/api/device'
 import { dailyDisplayApi, type RenderProfileOption } from '@/api/display'
