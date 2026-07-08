@@ -23,7 +23,7 @@
                 <div class="summary-name-row">
                   <span class="summary-name">{{ personTitle }}</span>
                   <span class="summary-category-chip" :class="`is-${person.category}`">{{ getPersonCategoryLabel(person.category) }}</span>
-                  <el-button text type="primary" size="small" class="summary-edit-btn" @click.stop="openEditDialog">编辑</el-button>
+                  <el-button size="small" plain class="summary-edit-btn" @click.stop="openEditDialog">编辑</el-button>
                 </div>
                 <div class="summary-meta">
                   <span>人物 #{{ person.id }}</span>
@@ -43,14 +43,16 @@
             </div>
           </div>
 
-          <!-- 右侧：纠错操作 -->
+          <!-- 右侧：纠错操作工具条 -->
           <div class="console-ops">
-            <div class="ops-group">
-              <div class="ops-group-label">样本纠错</div>
-              <div class="ops-group-actions">
+            <div class="ops-toolbar">
+              <div class="ops-toolbar-head">
+                <span class="ops-toolbar-title">纠错操作</span>
                 <el-tag size="small" effect="plain" :type="selectedFaceIds.length > 0 ? 'warning' : 'info'">
                   已选 {{ selectedFaceIds.length }} 张
                 </el-tag>
+              </div>
+              <div class="ops-toolbar-actions">
                 <el-tooltip content="把当前选中的人脸拆成一个新人物" placement="top">
                   <el-button size="small" type="warning" plain :disabled="selectedFaceIds.length === 0" :loading="splitting" @click="splitSelectedFaces">
                     拆分
@@ -58,34 +60,29 @@
                 </el-tooltip>
                 <el-tooltip content="把选中的人脸移动到已有人物" placement="top">
                   <el-button size="small" plain :disabled="selectedFaceIds.length === 0" @click="ensureCandidatePeople(); showMoveDialog = true">
-                    移动到其他人物
+                    移动
                   </el-button>
                 </el-tooltip>
-              </div>
-            </div>
-
-            <div class="ops-group">
-              <div class="ops-group-label">人物合并</div>
-              <div class="ops-group-actions">
+                <span class="ops-divider" />
                 <el-tooltip content="从其他人物中选择若干个，并入当前人物" placement="top">
                   <el-button size="small" plain @click="ensureCandidatePeople(); showMergeDialog = true">
-                    合并其他人物到当前
+                    合并到当前
                   </el-button>
                 </el-tooltip>
-              </div>
-            </div>
-
-            <div class="ops-group">
-              <div class="ops-group-label">辅助操作</div>
-              <div class="ops-group-actions">
+                <span class="ops-divider" />
                 <el-tooltip content="计算当前人物与目标人物的相似度" placement="top">
                   <el-button size="small" plain @click="ensureCandidatePeople(); showSimilarityDialog = true">
-                    计算相似度
+                    相似度
+                  </el-button>
+                </el-tooltip>
+                <el-tooltip :content="person.hidden ? '在人物管理列表中恢复显示此人物' : '在人物管理列表中隐藏此人物'" placement="top">
+                  <el-button size="small" plain :loading="togglingVisibility" @click="handleToggleVisibility">
+                    {{ person.hidden ? '恢复显示' : '隐藏' }}
                   </el-button>
                 </el-tooltip>
                 <el-tooltip content="将所有人脸打回未聚类状态，删除当前人物" placement="top">
                   <el-button size="small" type="danger" plain :loading="dissolving" @click="handleDissolve">
-                    解散此人物
+                    解散
                   </el-button>
                 </el-tooltip>
               </div>
@@ -314,6 +311,7 @@ const splitting = ref(false)
 const moving = ref(false)
 const merging = ref(false)
 const dissolving = ref(false)
+const togglingVisibility = ref(false)
 const showMoveDialog = ref(false)
 const showMergeDialog = ref(false)
 const showSimilarityDialog = ref(false)
@@ -897,6 +895,37 @@ const handleDissolve = async () => {
   }
 }
 
+const handleToggleVisibility = async () => {
+  if (!person.value) return
+  const willHide = !person.value.hidden
+  const displayName = person.value.name?.trim() || `人物 #${person.value.id}`
+  if (willHide) {
+    try {
+      await ElMessageBox.confirm(
+        `确定要在人物管理列表中隐藏「${displayName}」吗？\n隐藏后此人物不会出现在默认人物列表中，但不会删除人物、人脸或照片。`,
+        '隐藏人物确认',
+        { confirmButtonText: '确认隐藏', cancelButtonText: '取消', type: 'warning' },
+      )
+    } catch {
+      return
+    }
+  }
+  togglingVisibility.value = true
+  try {
+    await peopleApi.updateVisibility([person.value.id], willHide)
+    ElMessage.success(willHide ? '已隐藏该人物' : '已恢复显示')
+    if (willHide) {
+      goBack()
+    } else {
+      await refreshPerson()
+    }
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error?.message || error.message || '操作失败')
+  } finally {
+    togglingVisibility.value = false
+  }
+}
+
 const goToPhoto = (photoId: number) => {
   router.push(`/photos/${photoId}`)
 }
@@ -980,6 +1009,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 12px;
   border-left: 1px solid var(--color-border);
   padding-left: 24px;
@@ -1061,6 +1091,7 @@ onBeforeUnmount(() => {
 
 .summary-edit-btn {
   margin-left: 4px;
+  font-weight: 400;
 }
 
 .summary-meta {
@@ -1078,28 +1109,42 @@ onBeforeUnmount(() => {
   text-decoration: underline dotted;
 }
 
-/* 纠错操作区分组 */
-.ops-group {
+/* 纠错操作工具条 */
+.ops-toolbar {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  width: 100%;
 }
 
-.ops-group-label {
+.ops-toolbar-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ops-toolbar-title {
   font-size: 12px;
   font-weight: 600;
   color: var(--color-text-secondary);
 }
 
-.ops-group-actions {
+.ops-toolbar-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
 
-.ops-group-actions .el-button {
+.ops-toolbar-actions .el-button {
   margin-left: 0 !important;
+}
+
+.ops-divider {
+  width: 1px;
+  align-self: stretch;
+  background: var(--color-border);
+  margin: 2px 0;
 }
 
 .dialog-select {
