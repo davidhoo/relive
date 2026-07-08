@@ -93,45 +93,43 @@
 
       <!-- 下方 Tab 内容 -->
       <el-card shadow="never" class="section-card content-card">
-        <el-tabs v-model="activeTab" class="content-tabs">
-          <template #extra>
-            <div class="density-switcher">
-              <el-tooltip content="小图" placement="top">
-                <el-button
-                  size="small"
-                  :type="currentGridSize === 'small' ? 'primary' : 'default'"
-                  :plain="currentGridSize !== 'small'"
-                  class="density-btn"
-                  @click="setGridSize('small')"
-                >
-                  <el-icon><Grid /></el-icon>
-                </el-button>
-              </el-tooltip>
-              <el-tooltip content="中图" placement="top">
-                <el-button
-                  size="small"
-                  :type="currentGridSize === 'medium' ? 'primary' : 'default'"
-                  :plain="currentGridSize !== 'medium'"
-                  class="density-btn"
-                  @click="setGridSize('medium')"
-                >
-                  <el-icon><Menu /></el-icon>
-                </el-button>
-              </el-tooltip>
-              <el-tooltip content="大图" placement="top">
-                <el-button
-                  size="small"
-                  :type="currentGridSize === 'large' ? 'primary' : 'default'"
-                  :plain="currentGridSize !== 'large'"
-                  class="density-btn"
-                  @click="setGridSize('large')"
-                >
-                  <el-icon><Monitor /></el-icon>
-                </el-button>
-              </el-tooltip>
-            </div>
-          </template>
-
+        <div class="content-tabs-wrapper">
+          <div class="density-switcher">
+            <el-tooltip content="小图" placement="top">
+              <el-button
+                size="small"
+                :type="currentGridSize === 'small' ? 'primary' : 'default'"
+                :plain="currentGridSize !== 'small'"
+                class="density-btn"
+                @click="setGridSize('small')"
+              >
+                <el-icon><Grid /></el-icon>
+              </el-button>
+            </el-tooltip>
+            <el-tooltip content="中图" placement="top">
+              <el-button
+                size="small"
+                :type="currentGridSize === 'medium' ? 'primary' : 'default'"
+                :plain="currentGridSize !== 'medium'"
+                class="density-btn"
+                @click="setGridSize('medium')"
+              >
+                <el-icon><Menu /></el-icon>
+              </el-button>
+            </el-tooltip>
+            <el-tooltip content="大图" placement="top">
+              <el-button
+                size="small"
+                :type="currentGridSize === 'large' ? 'primary' : 'default'"
+                :plain="currentGridSize !== 'large'"
+                class="density-btn"
+                @click="setGridSize('large')"
+              >
+                <el-icon><Monitor /></el-icon>
+              </el-button>
+            </el-tooltip>
+          </div>
+          <el-tabs v-model="activeTab" class="content-tabs">
           <el-tab-pane :label="`照片（${person?.photo_count ?? 0}）`" name="photos">
             <el-empty v-if="photos.length === 0 && !photosLoading" description="暂无关联照片" />
 
@@ -204,6 +202,7 @@
             </div>
           </el-tab-pane>
         </el-tabs>
+        </div>
       </el-card>
     </template>
 
@@ -1210,12 +1209,16 @@ onBeforeUnmount(() => {
   margin-bottom: 16px;
 }
 
-.content-tabs :deep(.el-tabs__nav-wrap) {
-  padding-right: 12px;
+.content-tabs-wrapper {
+  position: relative;
 }
 
 /* 视图密度切换控件 */
 .density-switcher {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1232,6 +1235,13 @@ onBeforeUnmount(() => {
 
 .density-btn .el-icon {
   font-size: 16px;
+}
+
+@media (max-width: 480px) {
+  .density-switcher {
+    top: auto;
+    bottom: -40px;
+  }
 }
 
 /* 人脸网格 */
