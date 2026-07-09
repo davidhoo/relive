@@ -39,7 +39,7 @@ func isKnown(v float64) bool { return v >= 0 }
 //
 // 线程安全：通过 mu 保护缓存的 prev CPU 字段。设计为低频调用（调度器每分钟级别），
 // 不追求高精度，只供 advisory 背压。
-type backgroundLoadSampler struct {
+type BackgroundLoadSampler struct {
 	mu      sync.Mutex
 	prevCPU *cpuStatSample // 上一次 /proc/stat cpu 行累计值，nil 表示首次
 }
@@ -49,13 +49,18 @@ type cpuStatSample struct {
 	user, nice, system, idle, iowait, irq, softirq, steal, guest, guestNice uint64
 }
 
-func newBackgroundLoadSampler() *backgroundLoadSampler {
-	return &backgroundLoadSampler{}
+func newBackgroundLoadSampler() *BackgroundLoadSampler {
+	return &BackgroundLoadSampler{}
+}
+
+// NewBackgroundLoadSamplerForTest 暴露构造器供 handler 测试使用（生产用 newBackgroundLoadSampler）。
+func NewBackgroundLoadSamplerForTest() *BackgroundLoadSampler {
+	return newBackgroundLoadSampler()
 }
 
 // Sample 采集一次负载快照。非 Linux 平台返回全 unknown 快照（不报错）。
 // 单次 /proc 读取失败时，对应字段为 unknown，其余字段仍尽量填充。
-func (s *backgroundLoadSampler) Sample() BackgroundLoadSnapshot {
+func (s *BackgroundLoadSampler) Sample() BackgroundLoadSnapshot {
 	snap := BackgroundLoadSnapshot{
 		Load1:        unknownLoad,
 		CPUUserPct:   unknownLoad,
@@ -86,7 +91,7 @@ func (s *backgroundLoadSampler) Sample() BackgroundLoadSnapshot {
 // sampleCPU 读取 /proc/stat 第一行 cpu，与上次缓存值计算 delta 百分比。
 // 返回 (userPct, systemPct, iowaitPct, currentSample, ok)。首次采样无 delta，
 // 返回 unknown 但仍缓存当前值供下次使用。
-func (s *backgroundLoadSampler) sampleCPU() (float64, float64, float64, *cpuStatSample, bool) {
+func (s *BackgroundLoadSampler) sampleCPU() (float64, float64, float64, *cpuStatSample, bool) {
 	cur, ok := readProcStatCPU()
 	if !ok {
 		return unknownLoad, unknownLoad, unknownLoad, nil, false

@@ -110,6 +110,14 @@ func Setup(db *gorm.DB, cfg *config.Config, appState *lifecycle.State) (*gin.Eng
 			system.GET("/environment", handlers.System.Environment)
 		}
 
+		// 后台任务治理状态（只读，JWT 认证 - 管理员运维用）
+		background := v1.Group("/background")
+		background.Use(middleware.JWTAuth(services.Auth))
+		background.Use(middleware.FirstLoginCheck(services.Auth))
+		{
+			background.GET("/status", handlers.Background.GetStatus)
+		}
+
 		// 设备管理（JWT 认证 - 管理员操作）
 		devicesManage := v1.Group("/devices")
 		devicesManage.Use(middleware.JWTAuth(services.Auth))

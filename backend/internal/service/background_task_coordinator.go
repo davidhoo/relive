@@ -406,3 +406,51 @@ func (c *BackgroundTaskCoordinator) Snapshot() BackgroundTaskSnapshot {
 	}
 	return snap
 }
+
+// BackgroundTaskStatus 是 Snapshot 加上配置/阈值信息的完整状态视图（供状态 API）。
+type BackgroundTaskStatus struct {
+	BackgroundTaskSnapshot
+	AutoTasksEnabled     bool
+	CPUPauseThreshold    float64
+	IOWaitPauseThreshold float64
+	MemoryPauseThreshold float64
+	DBLockedCooldownMs  int64
+}
+
+// Status 返回 Snapshot + 配置/阈值的完整状态视图（供状态 API，Task 16）。
+func (c *BackgroundTaskCoordinator) Status() BackgroundTaskStatus {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	status := BackgroundTaskStatus{
+		BackgroundTaskSnapshot: BackgroundTaskSnapshot{
+			ForegroundActive: c.foregroundActive > 0,
+			ForegroundCount:  c.foregroundActive,
+			Cooldowns:        make(map[BackgroundTaskClass]time.Time, len(c.cooldowns)),
+		},
+		AutoTasksEnabled:     c.autoTasksEnabled,
+		CPUPauseThreshold:    c.cpuPauseThreshold,
+		IOWaitPauseThreshold: c.iowaitPauseThreshold,
+		MemoryPauseThreshold: c.memoryPauseThreshold,
+		DBLockedCooldownMs:  c.dbLockedCooldown.Milliseconds(),
+	}
+	now := time.Now()
+	for class, until := range c.cooldowns {
+		if now.Before(until) {
+			status.Cooldowns[class] = until
+		}
+	}
+	for entry, slot := range c.slots {
+		if slot.running {
+			status.Running = append(status.Running, BackgroundTaskRuntime{
+				Class: entry.Class, DedupeKey: entry.DedupeKey,
+				Priority: slot.priority, StartedAt: slot.startedAt,
+			})
+		}
+		if slot.pending {
+			status.PendingDedupe = append(status.PendingDedupe, BackgroundTaskDedupeEntry{
+				Class: entry.Class, DedupeKey: entry.DedupeKey,
+			})
+		}
+	}
+	return status
+}

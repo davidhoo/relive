@@ -13,25 +13,27 @@ import (
 
 // Services 所有服务的集合
 type Services struct {
-	Photo           PhotoService
-	People          PeopleService
-	MergeSuggestion PersonMergeSuggestionService
-	Thumbnail       ThumbnailService
-	GeocodeTask     GeocodeTaskService
-	Display         DisplayService
-	Device          DeviceService
-	AI              AIService
-	AnalysisRuntime AnalysisRuntimeService
-	Config          ConfigService
-	Prompt          PromptService
-	Geocode         GeocodeService
-	Auth            AuthService
-	Analysis        AnalysisService
-	System          SystemService
-	EventClustering EventClusteringService
-	Scheduler       *TaskScheduler
-	ResultQueue     *ResultQueue // 结果队列服务
-	IdentityProfile PersonIdentityProfileService
+	Photo               PhotoService
+	People              PeopleService
+	MergeSuggestion     PersonMergeSuggestionService
+	Thumbnail           ThumbnailService
+	GeocodeTask         GeocodeTaskService
+	Display             DisplayService
+	Device              DeviceService
+	AI                  AIService
+	AnalysisRuntime     AnalysisRuntimeService
+	Config              ConfigService
+	Prompt              PromptService
+	Geocode             GeocodeService
+	Auth                AuthService
+	Analysis            AnalysisService
+	System              SystemService
+	EventClustering     EventClusteringService
+	Scheduler           *TaskScheduler
+	ResultQueue         *ResultQueue // 结果队列服务
+	IdentityProfile     PersonIdentityProfileService
+	BackgroundCoordinator *BackgroundTaskCoordinator // 后台任务治理准入控制器（状态 API 用）
+	BackgroundLoadSampler *BackgroundLoadSampler      // 负载采样器（状态 API 用，advisory）
 }
 
 // NewServices 创建所有服务
@@ -236,8 +238,10 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		Analysis:        analysisService,
 		System:          NewSystemService(db),
 		EventClustering: eventClusteringService,
-		Scheduler:       scheduler,
-		ResultQueue:     resultQueue,
-		IdentityProfile: identityProfileService,
+		Scheduler:             scheduler,
+		ResultQueue:           resultQueue,
+		IdentityProfile:       identityProfileService,
+		BackgroundCoordinator: backgroundCoordinator,
+		BackgroundLoadSampler: loadSampler,
 	}
 }
