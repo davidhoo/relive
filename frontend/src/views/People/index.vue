@@ -210,6 +210,16 @@
 
       <el-tab-pane label="后台任务" name="task">
         <div class="section-stack">
+          <!-- 后台任务治理状态条：foreground 让路 / cooldown / advisory 负载，紧凑只读 -->
+          <div v-if="backgroundStatus" class="background-pressure-bar">
+            <span class="pressure-chip" :class="{ 'is-foreground': backgroundStatus.foreground_active }">
+              {{ backgroundStatus.foreground_active ? `前台进行中 (${backgroundStatus.foreground_count})` : '前台空闲' }}
+            </span>
+            <span v-if="backgroundPauseReason" class="pressure-chip is-pause">{{ backgroundPauseReason }}</span>
+            <span v-if="backgroundRunningLabel" class="pressure-chip">运行: {{ backgroundRunningLabel }}</span>
+            <span v-if="backgroundLoadLabel" class="pressure-chip is-load">{{ backgroundLoadLabel }}</span>
+            <span v-if="!backgroundStatus.auto_tasks_enabled" class="pressure-chip is-pause">自动任务已禁用</span>
+          </div>
           <el-card shadow="never" class="section-card animate-fade-in">
             <template #header>
               <SectionHeader :icon="Clock" title="Worker 控制">
@@ -429,6 +439,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 import SectionHeader from '@/components/SectionHeader.vue'
 import { peopleApi } from '@/api/people'
+import { backgroundApi } from '@/api/background'
 import type {
   PeopleStats,
   PeopleTask,
@@ -439,6 +450,7 @@ import type {
   PersonMergeSuggestionStats,
   PersonMergeSuggestionTask,
 } from '@/types/people'
+import type { BackgroundTaskStatus } from '@/types/background'
 import MergeSuggestionReviewDialog from './MergeSuggestionReviewDialog.vue'
 import PersonCard from './PersonCard.vue'
 import PersonEditDialog from './PersonEditDialog.vue'
@@ -656,6 +668,49 @@ const mergeLogContainerRef = ref<HTMLElement | null>(null)
 let taskTimer: number | null = null
 // 后台任务数据按需懒加载保护：避免轮询、Tab 切换、操作回调并发触发重复请求
 const taskDataLoading = ref(false)
+
+// 后台任务治理状态（前台/后台让路 + advisory 负载）。仅 People 页面打开时轮询，最多 30s 一次。
+const backgroundStatus = ref<BackgroundTaskStatus | null>(null)
+let backgroundStatusTimer: number | null = null
+const backgroundStatusLoading = ref(false)
+
+const loadBackgroundStatus = async () => {
+  if (backgroundStatusLoading.value) return
+  backgroundStatusLoading.value = true
+  try {
+    const res = await backgroundApi.getStatus()
+    backgroundStatus.value = res.data?.data || null
+  } catch {
+    // 静默失败：状态条是 advisory，不阻塞主流程
+  } finally {
+    backgroundStatusLoading.value = false
+  }
+}
+
+// 紧凑状态条展示用 computed
+const backgroundRunningLabel = computed(() => {
+  const running = backgroundStatus.value?.running || []
+  if (running.length === 0) return ''
+  return running.map(r => r.class).join(', ')
+})
+const backgroundPauseReason = computed(() => {
+  const s = backgroundStatus.value
+  if (!s) return ''
+  if (s.foreground_active) return '前台操作进行中'
+  const classes = Object.keys(s.cooldowns || {})
+  if (classes.length > 0) return `${classes.length} 项冷却中`
+  if (!s.auto_tasks_enabled) return '自动任务已禁用'
+  return ''
+})
+const backgroundLoadLabel = computed(() => {
+  const load = backgroundStatus.value?.load
+  if (!load) return ''
+  const parts: string[] = []
+  if (load.cpu_user_pct >= 0) parts.push(`CPU ${Math.round(load.cpu_user_pct)}%`)
+  if (load.cpu_iowait_pct >= 0) parts.push(`IO ${Math.round(load.cpu_iowait_pct)}%`)
+  if (load.mem_used_pct >= 0) parts.push(`MEM ${Math.round(load.mem_used_pct)}%`)
+  return parts.join(' · ')
+})
 
 const workerActive = computed(() => {
   const s = task.value?.status
@@ -1572,6 +1627,11 @@ onMounted(async () => {
   } else {
     await Promise.all([loadPeople(), loadMergeSuggestions()])
   }
+  // 后台治理状态条：独立轮询，最多 30s 一次，仅页面打开时。
+  void loadBackgroundStatus()
+  backgroundStatusTimer = window.setInterval(() => {
+    void loadBackgroundStatus()
+  }, 30000)
   taskTimer = window.setInterval(() => {
     // 仅在后台任务 Tab 时轮询后台任务数据；切回人物列表后不再产生后台任务请求
     if (activeTab.value === 'task') {
@@ -1586,11 +1646,50 @@ onBeforeUnmount(() => {
     clearInterval(taskTimer)
     taskTimer = null
   }
+  if (backgroundStatusTimer) {
+    clearInterval(backgroundStatusTimer)
+    backgroundStatusTimer = null
+  }
   teardownScrollObserver()
 })
 </script>
 
 <style scoped>
+.background-pressure-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--el-fill-color-light, #f5f7fa);
+  font-size: 12px;
+}
+
+.pressure-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--el-fill-color, #eef0f3);
+  color: var(--el-text-color-regular, #606266);
+}
+
+.pressure-chip.is-foreground {
+  background: var(--el-color-warning-light-9, #fdf6ec);
+  color: var(--el-color-warning, #e6a23c);
+}
+
+.pressure-chip.is-pause {
+  background: var(--el-color-info-light-9, #f4f4f5);
+  color: var(--el-color-info, #909399);
+}
+
+.pressure-chip.is-load {
+  background: var(--el-color-primary-light-9, #ecf5ff);
+  color: var(--el-color-primary, #409eff);
+}
+
 .people-page {
   display: flex;
   flex-direction: column;
