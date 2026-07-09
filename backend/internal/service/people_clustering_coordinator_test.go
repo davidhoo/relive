@@ -1041,3 +1041,163 @@ func TestPeopleForegroundMutationCoordinatorNilFallback(t *testing.T) {
 		assert.Equal(t, 0, svc.clusteringCoordinator.foregroundWaiterCount())
 	})
 }
+
+// ---- Task 10: protoCache refresh cooldown 与 coalescing ----
+
+// TestProtoCacheRefreshCoalescesMultipleStaleDetections 验证多次 stale detection 合并：
+// 用测试 hook 让 buildClustProtoCache 阻塞，多次 submitBackground 在第一个 refresh 完成
+// 前不应触发重复构建。refresh 完成后进入成功 cooldown，后续 stale 检测被合并（不刷新）。
+func TestProtoCacheRefreshCoalescesMultipleStaleDetections(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	coord := svc.clusteringCoordinator
+	// 用极短 min-interval 方便测试，但仍验证 coalescing 语义。
+	coord.setProtoCacheRefreshIntervalsForTest(50*time.Millisecond, 20*time.Millisecond)
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+
+	photo := &model.Photo{FilePath: "/coal/proto.jpg", FileName: "proto.jpg", FileSize: 1, FileHash: "coal-proto", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(photo))
+	person := &model.Person{Category: model.PersonCategoryFamily}
+	require.NoError(t, personRepo.Create(person))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID: photo.ID, PersonID: &person.ID,
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence: 0.9, QualityScore: 0.8,
+		Embedding:     encodeEmbedding(t, []float32{1, 0, 0}),
+		ClusterStatus: model.FaceClusterStatusAssigned,
+	}))
+	require.NoError(t, personRepo.RefreshStats(person.ID))
+
+	// 计数 buildClustProtoCache 实际执行次数。
+	buildCount := atomic.Int32{}
+	releaseBuild := make(chan struct{})
+	buildStarted := make(chan struct{}, 1)
+	svc.setProtoCacheBuildHookForTest(func() {
+		buildCount.Add(1)
+		select {
+		case buildStarted <- struct{}{}:
+		default:
+		}
+		<-releaseBuild
+	})
+	t.Cleanup(func() {
+		svc.setProtoCacheBuildHookForTest(nil)
+		select {
+		case <-releaseBuild:
+		default:
+			close(releaseBuild)
+		}
+	})
+
+	// 第一个 batch 触发 refresh 并阻塞。
+	bgDone := make(chan struct{})
+	go func() {
+		_ = coord.submitBackground()
+		close(bgDone)
+	}()
+	waitForPeopleCondition(t, time.Second, func() bool {
+		select {
+		case <-buildStarted:
+			return true
+		default:
+			return false
+		}
+	})
+
+	// refresh 阻塞期间，第二个 submitBackground 不会启动新的 refresh（running 标志保护）。
+	// 它会等待 worker，而 worker 正卡在第一个 refresh。故 buildCount 仍为 1。
+	time.Sleep(40 * time.Millisecond)
+	assert.Equal(t, int32(1), buildCount.Load(), "must not start a second refresh while one is running")
+
+	close(releaseBuild)
+	select {
+	case <-bgDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first background did not complete")
+	}
+
+	// 成功后进入 cooldown：立即再 submit，不应再次触发 refresh（cooldown 内）。
+	// 清空 hook 让后续 refresh 不再阻塞。
+	svc.setProtoCacheBuildHookForTest(nil)
+	before := buildCount.Load()
+	_ = coord.submitBackground()
+	assert.Equal(t, before, buildCount.Load(), "must not refresh again during success cooldown")
+}
+
+// TestProtoCacheRefreshFailureEntersCooldown 验证 refresh 失败后进入 cooldown，不 spin：
+// buildClustProtoCache 失败时，连续 submitBackground 不会反复触发构建。
+func TestProtoCacheRefreshFailureEntersCooldown(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	_ = db
+	coord := svc.clusteringCoordinator
+	coord.setProtoCacheRefreshIntervalsForTest(50*time.Millisecond, 50*time.Millisecond)
+
+	// 让 ListAssignedPersonIDs 失败：用失败 faceRepo 包装真实 repo，仅覆盖该方法。
+	originalFaceRepo := svc.faceRepo
+	svc.faceRepo = &failingListAssignedFaceRepo{FaceRepository: originalFaceRepo}
+	t.Cleanup(func() { svc.faceRepo = originalFaceRepo })
+
+	// submitBackground 触发 refresh：ListAssignedPersonIDs 失败 → 批次返回 err，进入失败 cooldown。
+	res := coord.submitBackground()
+	assert.Error(t, res.err, "refresh failure should surface as batch error")
+
+	// 失败后进入 cooldown：再次 submit 不应再次触发失败构建（cooldown 内 shouldRefresh 返回 false）。
+	before := failingListAssignedCount.Load()
+	_ = coord.submitBackground()
+	assert.Equal(t, before, failingListAssignedCount.Load(), "must not retry refresh during failure cooldown")
+}
+
+// TestProtoCacheRefreshForegroundBlocksStartup 验证 foreground active 阻止 refresh startup：
+// 前台 scope active 时 submitBackground 不触发 buildClustProtoCache，return no work。
+func TestProtoCacheRefreshForegroundBlocksStartup(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	coord := svc.clusteringCoordinator
+	coord.setProtoCacheRefreshIntervalsForTest(50*time.Millisecond, 20*time.Millisecond)
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+	photo := &model.Photo{FilePath: "/fg/proto.jpg", FileName: "proto.jpg", FileSize: 1, FileHash: "fg-proto", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(photo))
+	person := &model.Person{Category: model.PersonCategoryFamily}
+	require.NoError(t, personRepo.Create(person))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID: photo.ID, PersonID: &person.ID,
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence: 0.9, QualityScore: 0.8,
+		Embedding:     encodeEmbedding(t, []float32{1, 0, 0}),
+		ClusterStatus: model.FaceClusterStatusAssigned,
+	}))
+	require.NoError(t, personRepo.RefreshStats(person.ID))
+
+	buildCount := atomic.Int32{}
+	svc.setProtoCacheBuildHookForTest(func() { buildCount.Add(1) })
+	t.Cleanup(func() { svc.setProtoCacheBuildHookForTest(nil) })
+
+	// foreground scope active：refresh 被 skip，不触发 build。
+	release := svc.backgroundCoordinator.BeginForeground()
+	defer release()
+	res := coord.submitBackground()
+	assert.NoError(t, res.err)
+	assert.Equal(t, int32(0), buildCount.Load(), "must not start refresh while foreground active")
+	assert.True(t, coord.protoCacheRefreshPending, "rejected refresh must keep pending flag")
+
+	// 释放 foreground 后下次可刷新（pending 保留，下次 attempt）。
+	release()
+	_ = coord.submitBackground()
+	assert.Equal(t, int32(1), buildCount.Load(), "refresh must run after foreground released")
+}
+
+// failingListAssignedFaceRepo 让 ListAssignedPersonIDs 失败，用于测试 refresh 失败 cooldown。
+type failingListAssignedFaceRepo struct {
+	repository.FaceRepository
+}
+
+var failingListAssignedCount atomic.Int32
+
+func (r *failingListAssignedFaceRepo) ListAssignedPersonIDs() ([]uint, error) {
+	failingListAssignedCount.Add(1)
+	return nil, fmt.Errorf("simulated protoCache refresh failure")
+}

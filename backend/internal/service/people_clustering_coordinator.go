@@ -33,6 +33,15 @@ type backgroundClusterResult struct {
 
 var errCoordinatorStopped = fmt.Errorf("people clustering coordinator stopped")
 
+// protoCache refresh cooldown / coalescing 常量（Task 10）。
+const (
+	// protoCacheRefreshMinInterval 成功刷新后再次允许刷新的最小间隔，避免每个 batch 都
+	// 全量重载 prototype embeddings（220K+ rows）。
+	protoCacheRefreshMinInterval = 10 * time.Minute
+	// protoCacheRefreshFailCooldown 刷新失败/DB locked 后的退避间隔，避免 spin。
+	protoCacheRefreshFailCooldown = 2 * time.Minute
+)
+
 // peopleClusteringCoordinator is the single entry point for all incremental
 // face clustering in the people subsystem. It owns one worker goroutine that
 // is the only thing permitted to execute runIncrementalClustering (and thus
@@ -81,6 +90,24 @@ type peopleClusteringCoordinator struct {
 	fbMu             sync.Mutex
 	feedbackHook     func() model.ReclusterResult
 	feedbackCooldown time.Duration
+
+	// protoCache refresh 状态（Task 10 cooldown + coalescing）。全部内存态，不写 DB。
+	// 只由 worker goroutine 在 runClusterBatch 中读写，无需额外同步（与 protoCache
+	// single-owner 不变量一致）。
+	//   - protoCacheRefreshRunning：当前是否有一个 refresh 在执行（runClusterBatch 内同步
+	//     构建，故实际上恒为 false 的瞬时态——保留字段以表达“至多一 running”语义并供未来
+	//     异步 refresh 使用）。
+	//   - protoCacheRefreshPending：stale 检测到但本批因 foreground/cooldown 未刷新，
+	//     标记 pending；被拒绝的 refresh 不清 pending。
+	//   - protoCacheRefreshCooldownUntil：成功后最小间隔 / 失败后退避的截止时刻。
+	protoCacheRefreshRunning       bool
+	protoCacheRefreshPending       bool
+	protoCacheRefreshCooldownUntil time.Time
+
+	// protoCacheRefreshMinInterval / protoCacheRefreshFailCooldown 的可配置覆盖（测试用）。
+	// 0 时使用包级常量。仅供测试通过 setProtoCacheRefreshIntervalsForTest 设置。
+	protoCacheMinInterval time.Duration
+	protoCacheFailCool    time.Duration
 
 	workerDone chan struct{}
 }
@@ -247,29 +274,28 @@ func (c *peopleClusteringCoordinator) runClusterBatch(source clusterSource) back
 	}
 	foregroundWait := time.Since(waitStart)
 
-	// Task 9：在获取 writeGate.RLock 前同步构建/刷新 protoCache（cold 或 stale）。
-	// 构建期间若 foreground 变 active，跳过构建并 return no work，不触碰 writeGate。
-	// protoCache single-owner 不变量保持：只有本 worker goroutine 读写 s.protoCache。
-	if c.svc.protoCacheNeedsRefresh() {
-		if c.svc.backgroundCoordinator != nil && c.svc.backgroundCoordinator.ForegroundActive() {
-			// foreground 已 active：不构建，return no work。保持 refresh pending。
-			logger.Infof("people clustering coordinator: source=%s skip protoCache refresh: foreground active", source)
-			return backgroundClusterResult{}
-		}
-		// foreground 未 active，在 writeGate 外构建。构建是纯读 + CPU，不持锁。
-		// 构建期间 foreground 可能变 active——本批次仍用旧缓存（若有）继续，或 return no work。
-		newCache, err := c.svc.buildClustProtoCache()
+	// Task 9/10：在获取 writeGate.RLock 前同步构建/刷新 protoCache（cold 或 stale），
+	// 并施加 cooldown + coalescing。构建期间若 foreground 变 active，跳过构建并 return
+	// no work，不触碰 writeGate。protoCache single-owner 不变量保持：只有本 worker
+	// goroutine 读写 s.protoCache。
+	if c.shouldRefreshProtoCache() {
+		refreshed, skip, err := c.refreshProtoCacheOutsideGate(source)
 		if err != nil {
-			logger.Warnf("people clustering coordinator: source=%s protoCache rebuild failed: %v", source, err)
+			// 刷新失败：进入失败 cooldown，保持 pending 不清（下次再试）。
+			c.recordProtoCacheRefreshFailure()
 			return backgroundClusterResult{err: err}
 		}
-		// 构建完成后再次检查 foreground：若已变 active，丢弃本次构建结果 return no work，
-		// 避免在 foreground 期间用刚构建的缓存进入写临界区（保持 P0 优先）。
-		if c.svc.backgroundCoordinator != nil && c.svc.backgroundCoordinator.ForegroundActive() {
-			logger.Infof("people clustering coordinator: source=%s discard rebuilt protoCache: foreground became active", source)
+		if skip {
+			// foreground active 阻止了 refresh startup 或构建中途变 active。
+			// 保持 pending（不清），下次 worker 唤醒时再试。
+			c.protoCacheRefreshPending = true
 			return backgroundClusterResult{}
 		}
-		c.svc.protoCache = newCache
+		if refreshed {
+			// 成功刷新：清 pending，进入成功最小间隔 cooldown。
+			c.protoCacheRefreshPending = false
+			c.protoCacheRefreshCooldownUntil = time.Now().Add(c.protoCacheRefreshMinIntervalValue())
+		}
 	}
 
 	gateStart := time.Now()
@@ -338,6 +364,85 @@ func (c *peopleClusteringCoordinator) waitForegroundClear() bool {
 	stopped := c.stopping
 	c.mu.Unlock()
 	return stopped
+}
+
+// protoCacheRefreshMinIntervalValue 返回成功刷新后的最小间隔（测试可覆盖，0 用包级常量）。
+func (c *peopleClusteringCoordinator) protoCacheRefreshMinIntervalValue() time.Duration {
+	if c.protoCacheMinInterval > 0 {
+		return c.protoCacheMinInterval
+	}
+	return protoCacheRefreshMinInterval
+}
+
+// protoCacheRefreshFailCooldownValue 返回失败后退避间隔（测试可覆盖）。
+func (c *peopleClusteringCoordinator) protoCacheRefreshFailCooldownValue() time.Duration {
+	if c.protoCacheFailCool > 0 {
+		return c.protoCacheFailCool
+	}
+	return protoCacheRefreshFailCooldown
+}
+
+// shouldRefreshProtoCache 报告本批次是否应尝试刷新 protoCache。规则（Task 10）：
+//   - protoCache 不需要 refresh（fresh）→ false。
+//   - 已有一个 refresh running → false（至多一 running，coalesce 进 running）。
+//   - 在成功最小间隔 cooldown 内 → false（保持 pending）。
+//   - 否则 → true。
+//
+// pending 状态不阻止下一次尝试：pending 表示“上次想刷但没刷成”，本次应继续尝试。
+// 只由 worker goroutine 调用，无需加锁。
+func (c *peopleClusteringCoordinator) shouldRefreshProtoCache() bool {
+	if !c.svc.protoCacheNeedsRefresh() {
+		return false
+	}
+	if c.protoCacheRefreshRunning {
+		return false
+	}
+	if time.Now().Before(c.protoCacheRefreshCooldownUntil) {
+		// 成功 cooldown 内：保持 pending，不刷新。
+		c.protoCacheRefreshPending = true
+		return false
+	}
+	return true
+}
+
+// refreshProtoCacheOutsideGate 在 writeGate 外构建 protoCache。返回：
+//   - refreshed=true：成功构建并赋值给 s.protoCache。
+//   - skip=true：foreground active 阻止了 refresh（启动前或构建中途变 active），调用方应
+//     return no work 并保持 pending。
+//   - err!=nil：构建失败，调用方应进入失败 cooldown。
+//
+// refreshed 与 skip 互斥；err 非 nil 时其余两者为零值。只由 worker goroutine 调用。
+func (c *peopleClusteringCoordinator) refreshProtoCacheOutsideGate(source clusterSource) (refreshed, skip bool, err error) {
+	if c.svc.backgroundCoordinator != nil && c.svc.backgroundCoordinator.ForegroundActive() {
+		logger.Infof("people clustering coordinator: source=%s skip protoCache refresh: foreground active", source)
+		return false, true, nil
+	}
+	c.protoCacheRefreshRunning = true
+	defer func() { c.protoCacheRefreshRunning = false }()
+
+	newCache, buildErr := c.svc.buildClustProtoCache()
+	if buildErr != nil {
+		return false, false, buildErr
+	}
+	// 构建完成后再检查 foreground：若变 active，丢弃结果 return no work。
+	if c.svc.backgroundCoordinator != nil && c.svc.backgroundCoordinator.ForegroundActive() {
+		logger.Infof("people clustering coordinator: source=%s discard rebuilt protoCache: foreground became active", source)
+		return false, true, nil
+	}
+	c.svc.protoCache = newCache
+	return true, false, nil
+}
+
+// recordProtoCacheRefreshFailure 记录一次失败刷新：进入失败 cooldown，保持 pending 不清。
+func (c *peopleClusteringCoordinator) recordProtoCacheRefreshFailure() {
+	c.protoCacheRefreshPending = true
+	c.protoCacheRefreshCooldownUntil = time.Now().Add(c.protoCacheRefreshFailCooldownValue())
+}
+
+// setProtoCacheRefreshIntervalsForTest 覆盖 cooldown/min-interval（仅供测试）。
+func (c *peopleClusteringCoordinator) setProtoCacheRefreshIntervalsForTest(minInterval, failCooldown time.Duration) {
+	c.protoCacheMinInterval = minInterval
+	c.protoCacheFailCool = failCooldown
 }
 
 // submitBackground requests one background clustering batch and blocks until
