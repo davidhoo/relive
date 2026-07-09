@@ -568,15 +568,15 @@ func (s *peopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint)
 	defer s.endForegroundMutation()
 	bizStart := time.Now()
 	defer func() {
-		bizElapsed := time.Since(bizStart)
-		totalElapsed := time.Since(totalStart)
-		if err != nil {
-			logger.Warnf("merge_people target=%d sources=%d writeGateWaitMs=%d businessMs=%d totalMs=%d err=%v",
-				targetPersonID, len(sourcePersonIDs), lockWait.Milliseconds(), bizElapsed.Milliseconds(), totalElapsed.Milliseconds(), err)
-		} else {
-			logger.Infof("merge_people target=%d sources=%d writeGateWaitMs=%d businessMs=%d totalMs=%d",
-				targetPersonID, len(sourcePersonIDs), lockWait.Milliseconds(), bizElapsed.Milliseconds(), totalElapsed.Milliseconds())
-		}
+		logPeopleMutationTiming(peopleMutationTiming{
+			Operation: "merge_people",
+			TargetID:  targetPersonID,
+			FaceCount: len(sourcePersonIDs),
+			GateWait:  lockWait,
+			Business:  time.Since(bizStart),
+			Total:     time.Since(totalStart),
+			Err:       err,
+		})
 	}()
 
 	var affectedPhotoIDs []uint
@@ -743,9 +743,27 @@ func (s *peopleService) GetMergeJobStatus(jobID uint) (*model.PeopleMergeJob, er
 	return s.mergeJobRepo.GetByID(jobID)
 }
 
-func (s *peopleService) SplitPerson(faceIDs []uint) (*model.Person, *model.ReclusterResult, error) {
-	s.beginForegroundMutation()
+func (s *peopleService) SplitPerson(faceIDs []uint) (person *model.Person, result *model.ReclusterResult, err error) {
+	totalStart := time.Now()
+	lockWait := s.beginForegroundMutationTimed()
 	defer s.endForegroundMutation()
+	bizStart := time.Now()
+	defer func() {
+		faceCount := len(faceIDs)
+		var targetID uint
+		if person != nil {
+			targetID = person.ID
+		}
+		logPeopleMutationTiming(peopleMutationTiming{
+			Operation: "split_person",
+			TargetID:  targetID,
+			FaceCount: faceCount,
+			GateWait:  lockWait,
+			Business:  time.Since(bizStart),
+			Total:     time.Since(totalStart),
+			Err:       err,
+		})
+	}()
 
 	faces, err := s.faceRepo.ListByIDs(faceIDs)
 	if err != nil {
@@ -824,7 +842,7 @@ func (s *peopleService) SplitPerson(faceIDs []uint) (*model.Person, *model.Reclu
 		return nil, nil, err
 	}
 
-	person, err := s.personRepo.GetByID(newPerson.ID)
+	person, err = s.personRepo.GetByID(newPerson.ID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -833,9 +851,22 @@ func (s *peopleService) SplitPerson(faceIDs []uint) (*model.Person, *model.Reclu
 	return person, &model.ReclusterResult{}, nil
 }
 
-func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) (*model.ReclusterResult, error) {
-	s.beginForegroundMutation()
+func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) (result *model.ReclusterResult, err error) {
+	totalStart := time.Now()
+	lockWait := s.beginForegroundMutationTimed()
 	defer s.endForegroundMutation()
+	bizStart := time.Now()
+	defer func() {
+		logPeopleMutationTiming(peopleMutationTiming{
+			Operation: "move_faces",
+			TargetID:  targetPersonID,
+			FaceCount: len(faceIDs),
+			GateWait:  lockWait,
+			Business:  time.Since(bizStart),
+			Total:     time.Since(totalStart),
+			Err:       err,
+		})
+	}()
 
 	faces, err := s.faceRepo.ListByIDs(faceIDs)
 	if err != nil {
@@ -912,9 +943,22 @@ func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) (*model.R
 //     同名多人物时取 id 最小者（与现有同名搜索选择目标语义一致）。
 //   - req.TargetPersonID 为空且 name 未命中：拆分创建新人物，name=name，
 //     category=req.Category（缺省 stranger）。
-func (s *peopleService) AssignFacePerson(faceID uint, req model.FacePersonAssignmentRequest) (uint, error) {
-	s.beginForegroundMutation()
+func (s *peopleService) AssignFacePerson(faceID uint, req model.FacePersonAssignmentRequest) (photoID uint, err error) {
+	totalStart := time.Now()
+	lockWait := s.beginForegroundMutationTimed()
 	defer s.endForegroundMutation()
+	bizStart := time.Now()
+	defer func() {
+		logPeopleMutationTiming(peopleMutationTiming{
+			Operation: "assign_face_person",
+			TargetID:  faceID,
+			FaceCount: 1,
+			GateWait:  lockWait,
+			Business:  time.Since(bizStart),
+			Total:     time.Since(totalStart),
+			Err:       err,
+		})
+	}()
 
 	// face 必须存在且已有 person_id；无归属 face 不支持改名。
 	face, err := s.faceRepo.GetByID(faceID)
@@ -1120,9 +1164,22 @@ func (s *peopleService) UpdatePersonAvatar(personID uint, faceID uint) error {
 
 // DissolvePerson 解散指定人物：将其所有人脸（含人工确认）打回 pending，删除人物记录和约束。
 // 返回被释放的人脸数量。不触发自动重聚类，由后台任务自然处理。
-func (s *peopleService) DissolvePerson(personID uint) (int, error) {
-	s.beginForegroundMutation()
+func (s *peopleService) DissolvePerson(personID uint) (released int, err error) {
+	totalStart := time.Now()
+	lockWait := s.beginForegroundMutationTimed()
 	defer s.endForegroundMutation()
+	bizStart := time.Now()
+	defer func() {
+		logPeopleMutationTiming(peopleMutationTiming{
+			Operation: "dissolve_person",
+			TargetID:  personID,
+			FaceCount: released,
+			GateWait:  lockWait,
+			Business:  time.Since(bizStart),
+			Total:     time.Since(totalStart),
+			Err:       err,
+		})
+	}()
 
 	person, err := s.personRepo.GetByID(personID)
 	if err != nil {
@@ -1878,6 +1935,39 @@ func (s *peopleService) beginForegroundMutationTimed() time.Duration {
 func (s *peopleService) endForegroundMutation() {
 	s.writeGate.Unlock()
 	s.clusteringCoordinator.removeForegroundWaiter()
+}
+
+// peopleMutationTiming captures the timing breakdown of a single foreground
+// people mutation (split/move/merge/dissolve/assign) for structured observability.
+// The coordinator uses foreground-vs-background priority decisions that can make
+// writeGate wait non-trivial; recording the split between gate wait and business
+// work keeps that cost visible without changing behavior.
+type peopleMutationTiming struct {
+	Operation string
+	TargetID  uint
+	FaceCount int
+	GateWait  time.Duration
+	Business  time.Duration
+	Total     time.Duration
+	Err       error
+}
+
+// logPeopleMutationTiming emits a single structured line per foreground mutation.
+// It follows the existing MergePeople field naming (writeGateWaitMs/businessMs/
+// totalMs) so all foreground mutations share one parseable format. For merge and
+// dissolve the face-count field is reported as sourceCount; otherwise faceCount.
+func logPeopleMutationTiming(t peopleMutationTiming) {
+	countField := "faceCount"
+	if t.Operation == "merge_people" || t.Operation == "dissolve_person" {
+		countField = "sourceCount"
+	}
+	if t.Err != nil {
+		logger.Warnf("people_foreground_mutation operation=%s target_id=%d %s=%d writeGateWaitMs=%d businessMs=%d totalMs=%d err=%v",
+			t.Operation, t.TargetID, countField, t.FaceCount, t.GateWait.Milliseconds(), t.Business.Milliseconds(), t.Total.Milliseconds(), t.Err)
+		return
+	}
+	logger.Infof("people_foreground_mutation operation=%s target_id=%d %s=%d writeGateWaitMs=%d businessMs=%d totalMs=%d",
+		t.Operation, t.TargetID, countField, t.FaceCount, t.GateWait.Milliseconds(), t.Business.Milliseconds(), t.Total.Milliseconds())
 }
 
 func (s *peopleService) setFeedbackReclusterHookForTest(hook func() model.ReclusterResult) {
