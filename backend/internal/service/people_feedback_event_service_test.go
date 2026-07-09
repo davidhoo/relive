@@ -29,6 +29,10 @@ func (r *failingFeedbackEventRepo) ListForCalibration(uint, int) ([]*model.Peopl
 	return nil, nil
 }
 
+func (r *failingFeedbackEventRepo) FindByEventTypeTargetAndFaceIDs(string, uint, string) ([]*model.PeopleFeedbackEvent, error) {
+	return nil, nil
+}
+
 // failingRecomputePhotoRepo embeds a real PhotoRepository and overrides only
 // RecomputeTopPersonCategory to fail, simulating a post-core-processing failure.
 type failingRecomputePhotoRepo struct {

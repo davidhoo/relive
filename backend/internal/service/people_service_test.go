@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image/color"
 	"math"
@@ -4550,4 +4551,113 @@ func TestPeopleServiceForegroundMutationsEmitTimingNoPanic(t *testing.T) {
 	_, err = svc.AssignFacePerson(999999, model.FacePersonAssignmentRequest{Name: "x"})
 	require.Error(t, err)
 	assert.Equal(t, 0, svc.clusteringCoordinator.foregroundWaiterCount())
+}
+
+// ---- Task 3: split 幂等保护 ----
+
+// seedSplitIdempotencyDataset 植入一个 source 人物，含 faceA/faceB/faceC 三张人脸，
+// 返回 source 人物与三张人脸，用于 split 幂等测试。
+func seedSplitIdempotencyDataset(t *testing.T, svc *peopleService) (source *model.Person, faceA, faceB, faceC *model.Face) {
+	t.Helper()
+	photoRepo := repository.NewPhotoRepository(svc.db)
+	personRepo := repository.NewPersonRepository(svc.db)
+	faceRepo := repository.NewFaceRepository(svc.db)
+
+	photos := []*model.Photo{
+		{FilePath: "/split/idem-a.jpg", FileName: "idem-a.jpg", FileSize: 1, FileHash: "idem-a", Width: 100, Height: 100, Status: model.PhotoStatusActive},
+		{FilePath: "/split/idem-b.jpg", FileName: "idem-b.jpg", FileSize: 1, FileHash: "idem-b", Width: 100, Height: 100, Status: model.PhotoStatusActive},
+		{FilePath: "/split/idem-c.jpg", FileName: "idem-c.jpg", FileSize: 1, FileHash: "idem-c", Width: 100, Height: 100, Status: model.PhotoStatusActive},
+	}
+	for _, p := range photos {
+		require.NoError(t, photoRepo.Create(p))
+	}
+	person := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(person))
+
+	mkFace := func(photoID uint, emb []float32) *model.Face {
+		f := &model.Face{
+			PhotoID: photoID, PersonID: &person.ID,
+			BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+			Confidence: 0.9, QualityScore: 0.8, Embedding: encodeEmbedding(t, emb),
+		}
+		require.NoError(t, faceRepo.Create(f))
+		return f
+	}
+	faceA = mkFace(photos[0].ID, []float32{1, 0, 0})
+	faceB = mkFace(photos[1].ID, []float32{0, 1, 0})
+	faceC = mkFace(photos[2].ID, []float32{0, 0, 1})
+	require.NoError(t, personRepo.RefreshStats(person.ID))
+	return person, faceA, faceB, faceC
+}
+
+// TestPeopleService_SplitPersonRepeatedFaceSetReturnsExistingPerson 验证重复 split 请求幂等：
+// 第一次 SplitPerson([2,3]) 创建 Person B 并记录 person_split 事件；第二次相同请求应返回
+// 同一个 Person B，不创建新人物、不新增第二条 person_split 事件。
+func TestPeopleService_SplitPersonRepeatedFaceSetReturnsExistingPerson(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	svc.SetFeedbackEventRepo(repository.NewPeopleFeedbackEventRepository(svc.db))
+
+	_, _, faceB, faceC := seedSplitIdempotencyDataset(t, svc)
+
+	// 第一次 split：faceB + faceC 拆出新建 Person B。
+	newPerson1, _, err := svc.SplitPerson([]uint{faceB.ID, faceC.ID})
+	require.NoError(t, err)
+	require.NotNil(t, newPerson1)
+
+	// 第二次相同请求：应返回同一个 Person B，不创建新人物。
+	newPerson2, _, err := svc.SplitPerson([]uint{faceB.ID, faceC.ID})
+	require.NoError(t, err)
+	require.NotNil(t, newPerson2)
+	assert.Equal(t, newPerson1.ID, newPerson2.ID, "repeated split must return existing person, not create new")
+
+	// 数据库中只有 2 个 person（source + 1 new），没有第三条。
+	personRepo := repository.NewPersonRepository(svc.db)
+	allPersons, err := personRepo.ListAll()
+	require.NoError(t, err)
+	assert.Len(t, allPersons, 2, "repeated split must not create a third person")
+
+	// 只有一条 person_split 事件。
+	events := feedbackEventsFromSvc(t, svc)
+	var splitEvents []*model.PeopleFeedbackEvent
+	for _, ev := range events {
+		if ev.EventType == repository.PeopleFeedbackEventPersonSplit {
+			splitEvents = append(splitEvents, ev)
+		}
+	}
+	assert.Len(t, splitEvents, 1, "repeated split must not record a second person_split event")
+}
+
+// TestPeopleService_SplitPersonRepeatedFaceSetRequiresMatchingSplitEvent 验证：
+// 当 faceB/faceC 已通过移动/归属进入另一人物，但没有精确匹配的 person_split 事件时，
+// 再次 SplitPerson([faceB,faceC]) 必须返回 conflict，不创建新人物、不静默复用。
+func TestPeopleService_SplitPersonRepeatedFaceSetRequiresMatchingSplitEvent(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	svc.SetFeedbackEventRepo(repository.NewPeopleFeedbackEventRepository(svc.db))
+
+	_, _, faceB, faceC := seedSplitIdempotencyDataset(t, svc)
+
+	// 通过 MoveFaces 把 faceB/faceC 移到另一人物（非 split，故不产生 person_split 事件）。
+	personRepo := repository.NewPersonRepository(svc.db)
+	other := &model.Person{Category: model.PersonCategoryStranger}
+	require.NoError(t, personRepo.Create(other))
+	_, err := svc.MoveFaces([]uint{faceB.ID, faceC.ID}, other.ID)
+	require.NoError(t, err)
+
+	// 现在 faceB/faceC 属于 other，但没有匹配的 person_split 事件。
+	// 再次 split 必须返回 conflict（errors.Is errPeopleSplitConflict）。
+	_, _, err = svc.SplitPerson([]uint{faceB.ID, faceC.ID})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, errPeopleSplitConflict), "expected errPeopleSplitConflict, got %v", err)
+
+	// 没有创建第三个 person。
+	allPersons, err := personRepo.ListAll()
+	require.NoError(t, err)
+	assert.Len(t, allPersons, 2, "conflicting split must not create a new person")
+
+	// 没有 person_split 事件。
+	events := feedbackEventsFromSvc(t, svc)
+	for _, ev := range events {
+		assert.NotEqual(t, repository.PeopleFeedbackEventPersonSplit, ev.EventType,
+			"conflicting split must not record a person_split event")
+	}
 }

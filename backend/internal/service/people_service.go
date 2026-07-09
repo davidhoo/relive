@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -773,6 +774,52 @@ func (s *peopleService) SplitPerson(faceIDs []uint) (person *model.Person, resul
 		return nil, nil, fmt.Errorf("faces not found")
 	}
 
+	// 归一化请求 face 集合，用于幂等比较（去重、去零、升序）。
+	normalizedFaceIDs := normalizeFaceIDs(faceIDs)
+
+	// 幂等检测一：判断当前归属是否已经处于“split 后状态”。
+	// 收集请求 faces 当前的 distinct person_id 集合（过滤 0）。
+	currentPersonIDs := distinctFacePersonIDs(faces)
+
+	switch {
+	case len(currentPersonIDs) == 1:
+		// 所有请求 face 当前同属一个人物 singleOwner。
+		singleOwner := onlyValue(currentPersonIDs)
+		// 若 singleOwner 是某个 person_split 事件的目标，且该事件 face_ids 精确等于请求集合，
+		// 说明这是一次成功 split 的重放：返回已有目标人物，不创建新 person、不新增事件。
+		if targetPersonID, ok := s.splitTargetForFaceSet(normalizedFaceIDs); ok && targetPersonID == singleOwner {
+			existing, getErr := s.personRepo.GetByID(singleOwner)
+			if getErr != nil {
+				return nil, nil, getErr
+			}
+			if existing == nil {
+				return nil, nil, fmt.Errorf("split target person %d not found", singleOwner)
+			}
+			return existing, &model.ReclusterResult{}, nil
+		}
+		// 否则 faces 当前同属 singleOwner 但无匹配的 person_split 事件。这可能是：
+		//  (a) 首次合法 split——face 仍属原始 source（聚类分配，manual_lock_reason 非 "split"）；
+		//  (b) faces 已被 move/assign 移到 other 人物（manual_lock_reason="move"）后重复 split。
+		// 计划要求 (b) 返回 conflict，不能把无关人物静默当作幂等结果或二次拆分。判据：
+		// 若 faces 的 manual_lock_reason 全为 "split"（即确实来自一次 split），说明匹配事件应存在
+		// 却没查到（数据异常），保守放行交由正常流程；否则归属来自 move/assign → conflict。
+		// 注意：首次合法 split 的聚类分配 face 的 manual_lock_reason 不是 "split"（未手动锁定），
+		// 因此需排除“face 来自原始 source 且未手动锁定”的情况——但 (a) 与 (b) 在无 source 信号时
+		// 无法区分。实际安全判据：只有当 faces 已被手动锁定（manual_locked=true）且 reason != "split"
+		// 时，才确定是 move/assign 漂移 → conflict。聚类分配的 face manual_locked=false，不受影响。
+		if facesAnyManuallyLockedNonSplit(faces) {
+			return nil, nil, errPeopleSplitConflict
+		}
+		// 否则不在此处提前返回：让下方“同源校验 + 正常 split 流程”处理（首次合法 split 等）。
+	default:
+		// currentPersonIDs 为空（无归属）或多于一个。无归属走下方旧校验返回错误；
+		// 多于一个表示请求 faces 已分散到多个不同人物——既不是首次合法 split（同源），
+		// 也不是单目标重放。这是 stale repeat 跨人物冲突，返回 conflict，不 mutate、不创建新 person。
+		if len(currentPersonIDs) > 1 {
+			return nil, nil, errPeopleSplitConflict
+		}
+	}
+
 	var sourcePersonID uint
 	for _, face := range faces {
 		if face.PersonID == nil || *face.PersonID == 0 {
@@ -794,6 +841,8 @@ func (s *peopleService) SplitPerson(faceIDs []uint) (person *model.Person, resul
 	if sourcePerson == nil {
 		return nil, nil, fmt.Errorf("source person not found")
 	}
+
+	// 幂等检测二（cross-person conflict）已并入上方 switch 的 default 分支。
 
 	newPerson := &model.Person{Category: sourcePerson.Category}
 	// coreCommitted 标记新人物创建与人脸重指派已落库；后续 syncPersonState/分类刷新
@@ -3253,6 +3302,92 @@ func (s *peopleService) syncPersonState(personID uint) error {
 	return s.executeWrite(func() error {
 		return s.personRepo.UpdateFields(personID, updates)
 	})
+}
+
+// errPeopleSplitConflict 表示 split 请求与当前归属状态冲突（faces 已跨多个非 source
+// 人物，或已属于单一非 source 人物但无匹配 person_split 事件证明是同一次 split 的重放）。
+// 返回此错误而非静默创建新人物或复用无关人物，避免重复 split 请求造成人物链或误归属。
+var errPeopleSplitConflict = errors.New("split request conflicts with current face assignments")
+
+// normalizeFaceIDs 返回去重、去零、升序排序的 face ID 切片。用于 split/move 幂等比较，
+// 保证同一逻辑 face 集合无论输入顺序/重复都产生相同规范化结果。
+func normalizeFaceIDs(ids []uint) []uint {
+	seen := make(map[uint]struct{}, len(ids))
+	out := make([]uint, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// distinctFacePersonIDs 返回 faces 当前归属的去重非零 person_id 集合（未排序）。
+// 用于 split 幂等检测：判断请求 face 集合当前是同属一个人物、分散多人物，还是无归属。
+func distinctFacePersonIDs(faces []*model.Face) []uint {
+	seen := make(map[uint]struct{})
+	for _, face := range faces {
+		if face == nil || face.PersonID == nil || *face.PersonID == 0 {
+			continue
+		}
+		seen[*face.PersonID] = struct{}{}
+	}
+	out := make([]uint, 0, len(seen))
+	for pid := range seen {
+		out = append(out, pid)
+	}
+	return out
+}
+
+// onlyValue 返回单元素切片的唯一值；调用方需保证 len==1。
+func onlyValue(ids []uint) uint {
+	if len(ids) == 0 {
+		return 0
+	}
+	return ids[0]
+}
+
+// facesAnyManuallyLockedNonSplit 报告是否存在任一 face 被手动锁定且原因不是 "split"。
+// 用于 split 幂等检测：当请求 faces 当前同属一个人物、无匹配 person_split 事件，且存在
+// 这样的 face 时，说明归属来自 move/assign（manual_lock_reason="move"），而非一次 split，
+// 应返回 conflict，不能静默当作幂等结果或二次拆分。聚类分配的 face manual_locked=false，
+// 不会被误判。
+func facesAnyManuallyLockedNonSplit(faces []*model.Face) bool {
+	for _, face := range faces {
+		if face == nil {
+			continue
+		}
+		if face.ManualLocked && face.ManualLockReason != "split" {
+			return true
+		}
+	}
+	return false
+}
+
+// splitTargetForFaceSet 查询是否存在精确匹配请求 face 集合的 person_split 反馈事件，
+// 返回该事件的 target_person_id（即 split 创建的新人物 ID）。
+// 匹配键：event_type=person_split + face_ids=MarshalFeedbackIDs(normalizedFaceIDs)。
+// 这是 split 幂等的最低安全证明——不能只依赖 manual_lock_reason="split"。
+// feedbackEventRepo 为 nil（测试未注入）时返回 (0, false)，回退到既有 split 语义。
+func (s *peopleService) splitTargetForFaceSet(normalizedFaceIDs []uint) (uint, bool) {
+	if s.feedbackEventRepo == nil {
+		return 0, false
+	}
+	events, err := s.feedbackEventRepo.FindByEventTypeTargetAndFaceIDs(
+		repository.PeopleFeedbackEventPersonSplit,
+		0, // 不按 target 过滤；按 face_ids 精确匹配
+		repository.MarshalFeedbackIDs(normalizedFaceIDs),
+	)
+	if err != nil || len(events) == 0 {
+		return 0, false
+	}
+	return events[0].TargetPersonID, true
 }
 
 func facePhotoIDs(faces []*model.Face) []uint {

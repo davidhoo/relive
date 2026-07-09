@@ -47,6 +47,11 @@ type PeopleFeedbackEventRepository interface {
 	// ListForCalibration 返回 id > afterID 的事件，按 id ASC，limit 上限 500。
 	// limit<=0 返回空 slice；空结果返回空 slice 而非 nil/error。
 	ListForCalibration(afterID uint, limit int) ([]*model.PeopleFeedbackEvent, error)
+	// FindByEventTypeTargetAndFaceIDs 查询精确匹配 eventType + targetPersonID + faceIDs
+	// （faceIDs 经 MarshalFeedbackIDs 规范化）的反馈事件。用于 split/move 幂等证明：
+	// 只有存在匹配事件时，重复请求才可安全返回已有结果。sourcePersonIDs 可选过滤。
+	// 空结果返回空 slice 而非 nil/error。
+	FindByEventTypeTargetAndFaceIDs(eventType string, targetPersonID uint, faceIDsJSON string) ([]*model.PeopleFeedbackEvent, error)
 }
 
 type peopleFeedbackEventRepository struct {
@@ -153,6 +158,26 @@ func (r *peopleFeedbackEventRepository) ListForCalibration(afterID uint, limit i
 		Order("id ASC").
 		Limit(limit).
 		Find(&events).Error; err != nil {
+		return nil, err
+	}
+	if events == nil {
+		events = []*model.PeopleFeedbackEvent{}
+	}
+	return events, nil
+}
+
+// FindByEventTypeTargetAndFaceIDs 查询精确匹配 eventType + face_ids 的反馈事件，用于
+// split/move 幂等证明。faceIDsJSON 必须是 MarshalFeedbackIDs 产出的规范化 JSON（升序、
+// 去重、空集合为 "[]"），与写入时一致，保证精确匹配可靠。targetPersonID 为 0 时不按
+// target 过滤（仅按 event_type + face_ids 匹配），用于在不知道目标人物时按 face 集合
+// 反查 split 目标。返回按 id ASC，空结果返回空 slice 而非 nil/error。
+func (r *peopleFeedbackEventRepository) FindByEventTypeTargetAndFaceIDs(eventType string, targetPersonID uint, faceIDsJSON string) ([]*model.PeopleFeedbackEvent, error) {
+	var events []*model.PeopleFeedbackEvent
+	query := r.db.Where("event_type = ? AND face_ids = ?", eventType, faceIDsJSON)
+	if targetPersonID != 0 {
+		query = query.Where("target_person_id = ?", targetPersonID)
+	}
+	if err := query.Order("id ASC").Find(&events).Error; err != nil {
 		return nil, err
 	}
 	if events == nil {

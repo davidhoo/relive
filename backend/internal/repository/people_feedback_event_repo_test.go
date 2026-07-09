@@ -177,6 +177,61 @@ func TestPeopleFeedbackEventRepository_DoesNotLoadEmbeddings(t *testing.T) {
 	assert.NotContains(t, lower, "api_key")
 }
 
+// TestPeopleFeedbackEventRepository_FindByEventTypeTargetAndFaceIDs 验证幂等查询的精确匹配：
+// 只有 eventType + target_person_id + face_ids 三者全等才算同一事件。乱序/不同 face 集合
+// 必须不匹配；空 face_ids 用 "[]" 规范化匹配。
+func TestPeopleFeedbackEventRepository_FindByEventTypeTargetAndFaceIDs(t *testing.T) {
+	repo, db := newFeedbackEventRepo(t)
+	defer teardownTestDB(db)
+
+	// 一条 split 事件：target=10, faces=[2,3]（写入时 MarshalFeedbackIDs 升序）。
+	require.NoError(t, repo.Create(&model.PeopleFeedbackEvent{
+		EventType:       PeopleFeedbackEventPersonSplit,
+		TargetPersonID:  10,
+		SourcePersonIDs: MarshalFeedbackIDs([]uint{1}),
+		FaceIDs:         MarshalFeedbackIDs([]uint{3, 2}),
+	}))
+	// 一条 move 事件：target=20, faces=[5]。
+	require.NoError(t, repo.Create(&model.PeopleFeedbackEvent{
+		EventType:      PeopleFeedbackEventFaceMoved,
+		TargetPersonID: 20,
+		FaceIDs:        MarshalFeedbackIDs([]uint{5}),
+	}))
+
+	// 精确匹配 split 事件（target=10）。
+	got, err := repo.FindByEventTypeTargetAndFaceIDs(PeopleFeedbackEventPersonSplit, 10, MarshalFeedbackIDs([]uint{2, 3}))
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, uint(10), got[0].TargetPersonID)
+
+	// target=0 时不按 target 过滤，仅按 face_ids 匹配，仍能查到 split 事件。
+	got, err = repo.FindByEventTypeTargetAndFaceIDs(PeopleFeedbackEventPersonSplit, 0, MarshalFeedbackIDs([]uint{2, 3}))
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, uint(10), got[0].TargetPersonID)
+
+	// 乱序输入经 helper 规范化后仍匹配。
+	got, err = repo.FindByEventTypeTargetAndFaceIDs(PeopleFeedbackEventPersonSplit, 10, MarshalFeedbackIDs([]uint{3, 2, 2}))
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+
+	// 不同 face 集合不匹配。
+	got, err = repo.FindByEventTypeTargetAndFaceIDs(PeopleFeedbackEventPersonSplit, 10, MarshalFeedbackIDs([]uint{2}))
+	require.NoError(t, err)
+	assert.Empty(t, got)
+
+	// 不同 target 不匹配。
+	got, err = repo.FindByEventTypeTargetAndFaceIDs(PeopleFeedbackEventPersonSplit, 99, MarshalFeedbackIDs([]uint{2, 3}))
+	require.NoError(t, err)
+	assert.Empty(t, got)
+
+	// 空结果返回空 slice 而非 nil。
+	got, err = repo.FindByEventTypeTargetAndFaceIDs(PeopleFeedbackEventPersonDissolved, 1, "[]")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Empty(t, got)
+}
+
 // TestRepositories_FeedbackEventInitialized confirms the aggregate Repositories
 // wires the feedback event repository on construction.
 func TestRepositories_FeedbackEventInitialized(t *testing.T) {
