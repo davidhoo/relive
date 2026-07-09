@@ -83,6 +83,11 @@ type personMergeSuggestionService struct {
 	// from writing faces/people tables simultaneously, preventing SQLite "database is locked".
 	writeGateFn func() func()
 
+	// backgroundCoordinator 是统一后台任务准入控制器（Task 12）。RunBackgroundSlice 在
+	// heavy work 前请求 BackgroundTaskMergeSuggestion 准入，被拒绝则 skip return nil，
+	// 不 mark clean、不 advance cursor。nil 时不 gating（向后兼容）。
+	backgroundCoordinator *BackgroundTaskCoordinator
+
 	// postMergeFn is called after a suggestion-based merge completes.
 	// It handles syncPersonState, cannot-link cleanup, RecomputeTopPersonCategory,
 	// and feedback recluster — mirroring the cleanup that MergePeople does.
@@ -579,6 +584,11 @@ func (s *personMergeSuggestionService) SetWriteGateHook(fn func() func()) {
 	s.writeGateFn = fn
 }
 
+// SetBackgroundCoordinator 注入统一后台任务准入控制器（Task 12）。nil 时不 gating。
+func (s *personMergeSuggestionService) SetBackgroundCoordinator(c *BackgroundTaskCoordinator) {
+	s.backgroundCoordinator = c
+}
+
 // SetPostMergeHook injects the post-merge cleanup function from peopleService.
 func (s *personMergeSuggestionService) SetPostMergeHook(fn func(targetPersonID uint, sourcePersonIDs []uint, affectedPhotoIDs []uint)) {
 	s.postMergeFn = fn
@@ -797,6 +807,25 @@ func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 	cursor := s.state.CursorTargetID
 	dirtyGen := s.state.DirtyGeneration
 	s.mu.Unlock()
+
+	// Task 12：heavy work 前请求 BackgroundTaskMergeSuggestion 准入。被拒绝（foreground
+	// active / cooldown）则记录 skip 并 return nil——不 mark clean、不 advance cursor，
+	// dirty/cursor 状态保持，下次 slice 再试。轻量 stale/dirty detection 已在上面完成
+	// （低频状态更新，属既有行为），此处只 gate 重工作（listSuggestionTargets /
+	// buildAssignments / suggestion writes）。
+	if s.backgroundCoordinator != nil {
+		release, decision, ok := s.backgroundCoordinator.Begin(BackgroundTaskRequest{
+			Class:    BackgroundTaskMergeSuggestion,
+			Priority: BackgroundPriorityAutomatic,
+		})
+		if !ok {
+			s.mu.Lock()
+			s.appendBackgroundLogLocked(fmt.Sprintf("跳过合并建议巡检: 后台准入被拒 (%s)", decision.Reason))
+			s.mu.Unlock()
+			return nil
+		}
+		defer release()
+	}
 
 	// Use background-dedicated repos for the heavy work in this slice.
 	_, _, _, bgMergeSuggestionRepo := s.bgRepos()

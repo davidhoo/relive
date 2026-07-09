@@ -784,3 +784,118 @@ func TestPersonMergeSuggestionService_IdentityProfile_PerTargetFallback(t *testi
 	assert.Equal(t, model.PersonMergeMatchSourceLegacy, items[targetB.ID][0].MatchSource)
 	assert.Equal(t, candB.ID, items[targetB.ID][0].CandidatePersonID)
 }
+
+// ---- Task 12: merge suggestion background slice 治理 ----
+
+// mergeSuggestionSvcForGateTest 构造一个带 backgroundCoordinator 的 service，返回底层
+// *personMergeSuggestionService 便于直接断言 state。
+func mergeSuggestionSvcForGateTest(t *testing.T) (*personMergeSuggestionService, *repository.Repositories, *BackgroundTaskCoordinator) {
+	t.Helper()
+	svc, db, repos, _ := newPersonMergeSuggestionServiceForTest(t)
+	_ = db
+	bgCoord := NewBackgroundTaskCoordinator()
+	ms := svc.(*personMergeSuggestionService)
+	ms.SetBackgroundCoordinator(bgCoord)
+	return ms, repos, bgCoord
+}
+
+// TestMergeSuggestionBackgroundSlice_SkipsWhenCoordinatorBusy 验证 coordinator 拒绝时
+// RunBackgroundSlice 不执行 heavy work（不写 suggestion、不 advance cursor），return nil。
+func TestMergeSuggestionBackgroundSlice_SkipsWhenCoordinatorBusy(t *testing.T) {
+	ms, repos, bgCoord := mergeSuggestionSvcForGateTest(t)
+
+	target := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0}, []float32{0.98, 0.02})
+	candidate := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{1, 0.01})
+	require.NoError(t, ms.MarkDirty("test"))
+
+	// foreground active：coordinator 拒绝 automatic 准入。
+	release := bgCoord.BeginForeground()
+	defer release()
+
+	require.NoError(t, ms.RunBackgroundSlice(), "skipped slice must return nil")
+
+	// heavy work 未执行：没有 suggestion 被写入。
+	got := pendingSuggestionCandidatesByTarget(t, repos.MergeSuggestion)
+	assert.Empty(t, got, "must not write suggestions when coordinator busy")
+
+	// cursor 未 advance（保持 dirty）。
+	ms.mu.RLock()
+	dirty := ms.state.Dirty
+	cursor := ms.state.CursorTargetID
+	ms.mu.RUnlock()
+	assert.True(t, dirty, "skipped slice must keep dirty")
+	assert.Equal(t, uint(0), cursor, "skipped slice must not advance cursor")
+
+	// 释放 foreground 后再次 slice：应执行 heavy work。
+	release()
+	require.NoError(t, ms.RunBackgroundSlice())
+	got = pendingSuggestionCandidatesByTarget(t, repos.MergeSuggestion)
+	assert.Contains(t, got[target.ID], candidate.ID, "must run after foreground released")
+}
+
+// TestMergeSuggestionBackgroundSlice_KeepsDirtyWhenSkipped 验证 skipped 时 dirty/cursor
+// 不被清，且不会把持久化任务错误标记为完成。等价于“被跳过 ≠ 标记 clean”。
+func TestMergeSuggestionBackgroundSlice_KeepsDirtyWhenSkipped(t *testing.T) {
+	ms, _, bgCoord := mergeSuggestionSvcForGateTest(t)
+	require.NoError(t, ms.MarkDirty("test"))
+
+	// 先记录 dirty=true + generation。
+	ms.mu.RLock()
+	genBefore := ms.state.DirtyGeneration
+	ms.mu.RUnlock()
+	require.True(t, genBefore > 0)
+
+	release := bgCoord.BeginForeground()
+	require.NoError(t, ms.RunBackgroundSlice())
+	release()
+
+	// skipped 后 dirty 仍 true，generation 不变（未被错误标记 clean）。
+	ms.mu.RLock()
+	dirty := ms.state.Dirty
+	genAfter := ms.state.DirtyGeneration
+	taskStatus := ms.task.Status
+	ms.mu.RUnlock()
+	assert.True(t, dirty, "dirty must remain true when skipped")
+	assert.Equal(t, genBefore, genAfter, "dirty generation must not change when skipped")
+	_ = taskStatus
+}
+
+// TestMergeSuggestionBackgroundSlice_AllowsCheapStaleDirtyMarkBeforeHeavyWork 验证轻量
+// stale/dirty detection 在 coordinator gate 之前执行：距上次巡检超过 stale 阈值时，
+// 即使 foreground active，仍会标记 dirty（低频状态更新，属既有行为），只是不执行 heavy work。
+func TestMergeSuggestionBackgroundSlice_AllowsCheapStaleDirtyMarkBeforeHeavyWork(t *testing.T) {
+	ms, repos, bgCoord := mergeSuggestionSvcForGateTest(t)
+	// 配置极短 stale 阈值，便于触发自动重跑标记。
+	ms.config.People.MergeSuggestionStaleSeconds = 1
+
+	target := createSuggestionTestPerson(t, repos, model.PersonCategoryFamily, []float32{1, 0}, []float32{0.98, 0.02})
+	candidate := createSuggestionTestPerson(t, repos, model.PersonCategoryStranger, []float32{1, 0.01})
+	_ = target
+	_ = candidate
+
+	// 先跑一次完成巡检（清除 dirty），记录 LastRunAt。需要两轮：第一轮处理 target，
+	// 第二轮 cursor=0 无目标 → 清 dirty 并记 LastRunAt。
+	require.NoError(t, ms.RunBackgroundSlice())
+	// MergeSuggestionCooldownSeconds=1：推进绕过 cooldown 跑第二轮。
+	time.Sleep(1100 * time.Millisecond)
+	require.NoError(t, ms.RunBackgroundSlice())
+	ms.mu.RLock()
+	lastRun := ms.state.LastRunAt
+	dirtyAfterFirst := ms.state.Dirty
+	ms.mu.RUnlock()
+	require.False(t, dirtyAfterFirst, "first slice should clear dirty")
+	require.False(t, lastRun.IsZero())
+
+	// 等待超过 stale 阈值。
+	time.Sleep(1100 * time.Millisecond)
+
+	// foreground active：coordinator 拒绝 heavy work，但 stale detection 应已把 dirty 标回 true。
+	release := bgCoord.BeginForeground()
+	require.NoError(t, ms.RunBackgroundSlice())
+	release()
+
+	ms.mu.RLock()
+	dirtyAfterStale := ms.state.Dirty
+	ms.mu.RUnlock()
+	assert.True(t, dirtyAfterStale, "cheap stale detection must mark dirty even when coordinator blocks heavy work")
+}

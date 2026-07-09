@@ -104,6 +104,8 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	mergeSuggestionService.(*personMergeSuggestionService).SetWriteGateHook(peopleSvc.(*peopleService).AcquireWriteGate)
 	mergeSuggestionService.(*personMergeSuggestionService).SetPostMergeHook(peopleSvc.(*peopleService).PostMergeCleanup)
 	mergeSuggestionService.(*personMergeSuggestionService).SetFeedbackEventRepo(repos.FeedbackEvent)
+	// Task 12：merge suggestion heavy work 经统一 coordinator 准入，被拒绝保持 dirty/cursor。
+	mergeSuggestionService.(*personMergeSuggestionService).SetBackgroundCoordinator(backgroundCoordinator)
 	photoService.SetPeopleService(peopleSvc)
 	displayService := NewDisplayService(db, repos.Photo, repos.DisplayRecord, repos.Device, repos.Event, configService, cfg)
 
