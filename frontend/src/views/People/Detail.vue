@@ -54,34 +54,34 @@
               </div>
               <div class="ops-toolbar-actions">
                 <el-tooltip content="把当前选中的人脸拆成一个新人物" placement="top">
-                  <el-button size="small" type="warning" plain :disabled="selectedFaceIds.length === 0" :loading="splitting" @click="splitSelectedFaces">
+                  <el-button size="small" type="warning" plain :disabled="selectedFaceIds.length === 0 || foregroundBusy" :loading="splitting" @click="splitSelectedFaces">
                     拆分
                   </el-button>
                 </el-tooltip>
                 <el-tooltip content="把选中的人脸移动到已有人物" placement="top">
-                  <el-button size="small" plain :disabled="selectedFaceIds.length === 0" @click="ensureCandidatePeople(); showMoveDialog = true">
+                  <el-button size="small" plain :disabled="selectedFaceIds.length === 0 || foregroundBusy" @click="ensureCandidatePeople(); showMoveDialog = true">
                     移动
                   </el-button>
                 </el-tooltip>
                 <span class="ops-divider" />
                 <el-tooltip content="从其他人物中选择若干个，并入当前人物" placement="top">
-                  <el-button size="small" plain @click="ensureCandidatePeople(); showMergeDialog = true">
+                  <el-button size="small" plain :disabled="foregroundBusy" @click="ensureCandidatePeople(); showMergeDialog = true">
                     合并到当前
                   </el-button>
                 </el-tooltip>
                 <span class="ops-divider" />
                 <el-tooltip content="计算当前人物与目标人物的相似度" placement="top">
-                  <el-button size="small" plain @click="ensureCandidatePeople(); showSimilarityDialog = true">
+                  <el-button size="small" plain :disabled="foregroundBusy" @click="ensureCandidatePeople(); showSimilarityDialog = true">
                     相似度
                   </el-button>
                 </el-tooltip>
                 <el-tooltip :content="person.hidden ? '在人物管理列表中恢复显示此人物' : '在人物管理列表中隐藏此人物'" placement="top">
-                  <el-button size="small" plain :loading="togglingVisibility" @click="handleToggleVisibility">
+                  <el-button size="small" plain :loading="togglingVisibility" :disabled="foregroundBusy" @click="handleToggleVisibility">
                     {{ person.hidden ? '恢复显示' : '隐藏' }}
                   </el-button>
                 </el-tooltip>
                 <el-tooltip content="将所有人脸打回未聚类状态，删除当前人物" placement="top">
-                  <el-button size="small" type="danger" plain :loading="dissolving" @click="handleDissolve">
+                  <el-button size="small" type="danger" plain :loading="dissolving" :disabled="foregroundBusy" @click="handleDissolve">
                     解散
                   </el-button>
                 </el-tooltip>
@@ -350,6 +350,12 @@ const moveTargetPersonId = ref<number>()
 const mergeSourceIds = ref<number[]>([])
 const similarityTargetId = ref<number>()
 const calculatingSimilarity = ref(false)
+// foregroundBusy 统一标记任一前台人物 mutation 进行中。前台操作进行中时，禁用
+// split/move/merge/similarity 等所有前台操作，避免并发重复提交。后台任务治理计划 Task 5。
+const foregroundBusy = computed(
+  () => splitting.value || moving.value || merging.value || dissolving.value || togglingVisibility.value || calculatingSimilarity.value,
+)
+
 const similarityResult = ref<{
   person_id_1: number
   person_id_2: number
@@ -832,8 +838,21 @@ const showReclusterResult = (data: any, baseMessage: string, asyncFollowUp = fal
   }
 }
 
+// isLikelyForegroundStillProcessing 判断一个错误是否“像超时”——即请求未拿到明确响应，
+// 后端可能仍在处理中。只有这类错误才提示“操作可能仍在后台处理中，请稍后刷新”；
+// validation error、4xx、带 response body 的明确 5xx 继续显示后端真实错误。
+const isLikelyForegroundStillProcessing = (error: any): boolean => {
+  // 无 response（网络中断 / 超时 / 请求未发出）→ 后端状态未知，可能仍在处理。
+  if (!error?.response) return true
+  // 502/503/504 网关超时类：上游可能仍在处理。
+  const status = error.response.status
+  return status === 502 || status === 503 || status === 504
+}
+
 const splitSelectedFaces = async () => {
   if (selectedFaceIds.value.length === 0) return
+  // 双击防重复：若已有前台操作进行中，直接 return，不重复提交。
+  if (foregroundBusy.value) return
   try {
     splitting.value = true
     const res = await peopleApi.split(selectedFaceIds.value)
@@ -846,7 +865,11 @@ const splitSelectedFaces = async () => {
     }
     await loadData()
   } catch (error: any) {
-    ElMessage.error(error.message || '拆分人物失败')
+    if (isLikelyForegroundStillProcessing(error)) {
+      ElMessage.warning('操作可能仍在后台处理中，请稍后刷新页面查看结果')
+    } else {
+      ElMessage.error(error.response?.data?.error?.message || error.message || '拆分人物失败')
+    }
   } finally {
     splitting.value = false
   }
@@ -854,6 +877,8 @@ const splitSelectedFaces = async () => {
 
 const confirmMoveFaces = async () => {
   if (!moveTargetPersonId.value || selectedFaceIds.value.length === 0) return
+  // 双击防重复：若已有前台操作进行中，直接 return，不重复提交。
+  if (foregroundBusy.value) return
   try {
     moving.value = true
     const movedAll = selectedFaceIds.value.length === faces.value.length
@@ -865,7 +890,11 @@ const confirmMoveFaces = async () => {
     }
     await loadData()
   } catch (error: any) {
-    ElMessage.error(error.message || '移动人脸失败')
+    if (isLikelyForegroundStillProcessing(error)) {
+      ElMessage.warning('操作可能仍在后台处理中，请稍后刷新页面查看结果')
+    } else {
+      ElMessage.error(error.response?.data?.error?.message || error.message || '移动人脸失败')
+    }
   } finally {
     moving.value = false
   }

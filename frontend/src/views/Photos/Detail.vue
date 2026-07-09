@@ -574,6 +574,8 @@ watch(faceAssignName, value => {
 
 const handleFaceAssignSave = async () => {
   if (!faceAssignTarget.value || !photo.value) return
+  // 双击防重复：保存/拆分任一进行中时直接 return。
+  if (faceAssignSaving.value || faceAssignSplitting.value) return
   const target = faceAssignTarget.value
   const trimmedName = faceAssignName.value.trim()
   // 命中已有人物时走移动；否则若姓名为空且未命中，也按“移动到自身”无意义，要求姓名
@@ -600,7 +602,11 @@ const handleFaceAssignSave = async () => {
     ElMessage.success('人脸归属已更新')
     faceAssignVisible.value = false
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.error?.message || error.message || '保存失败')
+    if (!error?.response || [502, 503, 504].includes(error.response.status)) {
+      ElMessage.warning('操作可能仍在后台处理中，请稍后刷新页面查看结果')
+    } else {
+      ElMessage.error(error.response?.data?.error?.message || error.message || '保存失败')
+    }
   } finally {
     faceAssignSaving.value = false
   }
@@ -609,6 +615,8 @@ const handleFaceAssignSave = async () => {
 // 拆分：把当前 face 从所属人物直接拆分出去，创建新人物（不命名）
 const handleFaceAssignSplit = async () => {
   if (!faceAssignTarget.value || !photo.value) return
+  // 双击防重复：保存/拆分任一进行中时直接 return。
+  if (faceAssignSaving.value || faceAssignSplitting.value) return
   const target = faceAssignTarget.value
 
   faceAssignSplitting.value = true
@@ -631,7 +639,11 @@ const handleFaceAssignSplit = async () => {
     await loadPhotoPeople(photo.value.id)
     imageVersion.value = Date.now()
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.error?.message || error.message || '拆分失败')
+    if (!error?.response || [502, 503, 504].includes(error.response.status)) {
+      ElMessage.warning('操作可能仍在后台处理中，请稍后刷新页面查看结果')
+    } else {
+      ElMessage.error(error.response?.data?.error?.message || error.message || '拆分失败')
+    }
   } finally {
     faceAssignSplitting.value = false
   }
