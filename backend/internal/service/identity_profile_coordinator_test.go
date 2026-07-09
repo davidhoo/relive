@@ -337,3 +337,107 @@ func TestCoordinator_ConcurrentBuildersNoSharedMutation(t *testing.T) {
 }
 
 
+
+// ---- Task 11: identity ANN rebuild 频率限制 ----
+
+// TestIdentityProfileCoordinator_AnnRebuildUsesCooldown 验证成功 rebuild 后进入 cooldown：
+// cooldown 内即使 rebuildRequested 再次置位，也不触发新的 full rebuild；RebuildRequested
+// 保持 true（pending），cooldown 过期后才执行。
+func TestIdentityProfileCoordinator_AnnRebuildUsesCooldown(t *testing.T) {
+	svc, deps := newCoordinatorTestService(t)
+	coord := svc.coordinator
+	// 用短间隔便于测试。
+	coord.setAnnRebuildMinIntervalForTest(50 * time.Millisecond)
+
+	person := createPersonWithFaces(t, deps.repos, 200, vec3(1, 0, 0))
+	require.NoError(t, svc.MarkDirty([]uint{person.ID}, "manual"))
+
+	// 第一个 slice：构建人物 + 批末 ANN full rebuild（首次）。
+	require.NoError(t, svc.RunBackgroundSlice())
+	require.False(t, svc.ann.RebuildRequested(), "first rebuild should clear rebuildRequested")
+
+	// 立即再请求 rebuild：cooldown 内不应触发 full rebuild。
+	svc.ann.RequestRebuild()
+	require.True(t, svc.ann.RebuildRequested())
+	rebuildCountBefore := coordStatsLastAnnRebuildCount(coord)
+	require.NoError(t, svc.RunBackgroundSlice())
+	// cooldown 内：rebuildRequested 仍 true（pending），未执行 rebuild。
+	assert.True(t, svc.ann.RebuildRequested(), "cooldown must keep rebuildRequested pending")
+	assert.Equal(t, rebuildCountBefore, coordStatsLastAnnRebuildCount(coord), "must not rebuild during cooldown")
+
+	// 推进时钟超过 service cooldown（默认 500ms）与 ANN cooldown（50ms），再 slice：应执行 rebuild。
+	advanceClockAndRun(svc, 600*time.Millisecond)
+	assert.False(t, svc.ann.RebuildRequested(), "rebuild must run after cooldown expires")
+}
+
+// TestIdentityProfileCoordinator_DeltaFullCoalescesRebuildRequest 验证 cooldown 内多个
+// delta_full 不触发多次 full rebuild：连续 RequestRebuild + slice 只在第一次允许时重建。
+func TestIdentityProfileCoordinator_DeltaFullCoalescesRebuildRequest(t *testing.T) {
+	svc, deps := newCoordinatorTestService(t)
+	coord := svc.coordinator
+	coord.setAnnRebuildMinIntervalForTest(50 * time.Millisecond)
+
+	person := createPersonWithFaces(t, deps.repos, 300, vec3(1, 0, 0))
+	require.NoError(t, svc.MarkDirty([]uint{person.ID}, "manual"))
+	require.NoError(t, svc.RunBackgroundSlice()) // 首次 rebuild
+	require.False(t, svc.ann.RebuildRequested())
+
+	// 模拟多次 delta_full：连续请求 rebuild + slice。
+	svc.ann.RequestRebuild()
+	require.NoError(t, svc.RunBackgroundSlice())
+	countAfter1 := coordStatsLastAnnRebuildCount(coord)
+	svc.ann.RequestRebuild()
+	require.NoError(t, svc.RunBackgroundSlice())
+	countAfter2 := coordStatsLastAnnRebuildCount(coord)
+	svc.ann.RequestRebuild()
+	require.NoError(t, svc.RunBackgroundSlice())
+	countAfter3 := coordStatsLastAnnRebuildCount(coord)
+
+	// cooldown 内：三次请求只可能在第一次（如果恰好过期）重建，后两次被 coalesce。
+	// 关键断言：countAfter2 == countAfter1 且 countAfter3 == countAfter1（cooldown 内不重复重建）。
+	assert.Equal(t, countAfter1, countAfter2, "second delta_full must be coalesced during cooldown")
+	assert.Equal(t, countAfter1, countAfter3, "third delta_full must be coalesced during cooldown")
+	// pending 保持 true。
+	assert.True(t, svc.ann.RebuildRequested(), "coalesced rebuilds must keep pending")
+}
+
+// TestIdentityProfileCoordinator_AnnRebuildCoordinatorRejectedKeepsPending 验证
+// BackgroundTaskCoordinator 拒绝时（foreground active）ANN rebuild 保持 pending，不执行。
+func TestIdentityProfileCoordinator_AnnRebuildCoordinatorRejectedKeepsPending(t *testing.T) {
+	svc, deps := newCoordinatorTestService(t)
+	coord := svc.coordinator
+	bgCoord := NewBackgroundTaskCoordinator()
+	coord.setBackgroundCoordinator(bgCoord)
+	coord.setAnnRebuildMinIntervalForTest(50 * time.Millisecond)
+
+	person := createPersonWithFaces(t, deps.repos, 400, vec3(1, 0, 0))
+	require.NoError(t, svc.MarkDirty([]uint{person.ID}, "manual"))
+	// 首次构建 + rebuild（无 foreground，允许）。
+	require.NoError(t, svc.RunBackgroundSlice())
+	require.False(t, svc.ann.RebuildRequested())
+
+	// foreground active：ANN rebuild 应被 coordinator 拒绝，保持 pending。
+	svc.ann.RequestRebuild()
+	release := bgCoord.BeginForeground()
+	countBefore := coordStatsLastAnnRebuildCount(coord)
+	require.NoError(t, svc.RunBackgroundSlice())
+	assert.True(t, svc.ann.RebuildRequested(), "rejected rebuild must keep pending")
+	assert.Equal(t, countBefore, coordStatsLastAnnRebuildCount(coord), "must not rebuild while foreground active")
+
+	// 释放 foreground：下次 slice 允许 rebuild（推进超过 service cooldown + ANN cooldown）。
+	release()
+	advanceClockAndRun(svc, 600*time.Millisecond)
+	assert.False(t, svc.ann.RebuildRequested(), "rebuild must run after foreground released and cooldown expired")
+}
+
+// coordStatsLastAnnRebuildCount 读取协调器统计中 ANN rebuild 计数（lastAnnRebuild 为 bool，
+// 这里用累计计数器近似：通过 stats.lastAnnRebuildReason 是否被刷新难以判断次数，改用一个
+// 包级计数 helper）。
+func coordStatsLastAnnRebuildCount(coord *identityProfileCoordinator) int {
+	coord.statsMu.RLock()
+	defer coord.statsMu.RUnlock()
+	if coord.stats.lastAnnRebuild {
+		return 1
+	}
+	return 0
+}

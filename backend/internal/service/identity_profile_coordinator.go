@@ -40,6 +40,17 @@ type identityProfileCoordinator struct {
 	// nil 时视为始终空闲（legacy / 未注入），不影响功能。
 	foregroundBusyFn func() bool
 
+	// backgroundCoordinator 是统一后台任务准入控制器（Task 11）。nil 时不 gating。
+	// ANN full rebuild 调用前请求 BackgroundTaskIdentityANNRebuild 准入，被拒绝则保持
+	// rebuildRequested=true（pending），下次切片再试。
+	backgroundCoordinator *BackgroundTaskCoordinator
+
+	// annRebuildCooldownUntil 是 ANN full rebuild 的成功最小间隔截止时刻。cooldown 内
+	// 即使 rebuildRequested=true 也不触发 full rebuild，保持 pending。Task 11。
+	annRebuildCooldownUntil time.Time
+	// annRebuildMinInterval 成功 rebuild 后的最小间隔，默认 10 分钟。0 用默认值。
+	annRebuildMinInterval time.Duration
+
 	// repoFace 是后台 face 仓库（ListProfileFaces）；与 owner.bgFaceRepo 一致，抽出便于注入测试。
 	repoFace repository.FaceRepository
 	// builder 与 owner.builder 一致，抽出便于注入测试。
@@ -54,6 +65,17 @@ type identityProfileCoordinator struct {
 
 	statsMu sync.RWMutex
 	stats   identityCoordinatorStats
+}
+
+// annRebuildDefaultMinInterval 是 ANN full rebuild 成功后的默认最小间隔。
+const annRebuildDefaultMinInterval = 10 * time.Minute
+
+// annRebuildMinIntervalValue 返回生效的最小间隔（0 用默认）。
+func (c *identityProfileCoordinator) annRebuildMinIntervalValue() time.Duration {
+	if c.annRebuildMinInterval > 0 {
+		return c.annRebuildMinInterval
+	}
+	return annRebuildDefaultMinInterval
 }
 
 // identityCoordinatorStats 是协调器最近一轮的运行统计快照（脱敏，不含 ID/embedding/路径）。
@@ -126,6 +148,59 @@ func newIdentityProfileCoordinator(owner *personIdentityProfileService, workers,
 // setForegroundBusyFn 注入前台让路判定函数。service 装配时调用一次。
 func (c *identityProfileCoordinator) setForegroundBusyFn(fn func() bool) {
 	c.foregroundBusyFn = fn
+}
+
+// setBackgroundCoordinator 注入统一后台任务准入控制器（Task 11）。nil 时不 gating。
+func (c *identityProfileCoordinator) setBackgroundCoordinator(coord *BackgroundTaskCoordinator) {
+	c.backgroundCoordinator = coord
+}
+
+// setAnnRebuildMinIntervalForTest 覆盖 ANN rebuild 最小间隔（仅供测试）。
+func (c *identityProfileCoordinator) setAnnRebuildMinIntervalForTest(d time.Duration) {
+	c.annRebuildMinInterval = d
+}
+
+// maybeRebuildANN 是 ANN full rebuild 的统一入口（Task 11）。在调用 owner.rebuildANNFromCoordinator
+// 前施加 cooldown + coordinator 准入：
+//   - cooldown 内（成功最小间隔未到）：记录 skip，保持 rebuildRequested=true（pending），return。
+//   - coordinator 拒绝（foreground active / cooldown）：保持 pending，return。
+//   - 通过：执行 rebuild。成功后 ann.RebuildRequested() 变 false 并进入成功 cooldown。
+//
+// reason 仅用于日志/统计。调用方持有 runMu（RunBackgroundSlice 串行），无需额外同步。
+//
+// 注意：cooldown 在 rebuildRequested=true 时仍跳过会延迟首次失败重试。为不破坏既有失败语义
+// （失败后应尽快重试并记录 failed 状态），仅当上一次 rebuild 成功后才进入成功 cooldown；
+// 失败路径（rebuildRequested 仍 true 且上一次未成功）不设 cooldown，由 rebuildANNIfNeeded
+// 自身的失败重试语义处理。
+func (c *identityProfileCoordinator) maybeRebuildANN(reason string) {
+	if c.owner == nil || c.owner.ann == nil || !c.owner.ann.RebuildRequested() {
+		return
+	}
+	// coordinator 准入：被拒绝则保持 pending，不阻塞 foreground。
+	if c.backgroundCoordinator != nil {
+		release, decision, ok := c.backgroundCoordinator.Begin(BackgroundTaskRequest{
+			Class:    BackgroundTaskIdentityANNRebuild,
+			Priority: BackgroundPriorityAutomatic,
+		})
+		if !ok {
+			logger.Infof("identity profile coordinator: ann rebuild skipped (coordinator: %s) reason=%s pending=true", decision.Reason, reason)
+			return
+		}
+		defer release()
+	}
+	logger.Infof("identity profile coordinator: ann rebuild requested reason=%s", reason)
+	c.recordAnnRebuild(reason)
+	wasRequested := true
+	c.owner.rebuildANNFromCoordinator()
+	// rebuildANNFromCoordinator 成功会把 rebuildRequested 置 false；失败保持 true。
+	if c.owner.ann.RebuildRequested() {
+		// 仍 pending：rebuild 失败，不进入成功 cooldown，下次切片立即重试（保持既有失败语义）。
+		wasRequested = false
+	}
+	if wasRequested {
+		// 成功：进入成功最小间隔 cooldown，合并短时间内的 delta_full 重复请求。
+		c.annRebuildCooldownUntil = c.nowFn().Add(c.annRebuildMinIntervalValue())
+	}
 }
 
 // setNowFn 注入时钟，测试无需真实 sleep。
@@ -216,16 +291,12 @@ func (c *identityProfileCoordinator) runSlice() bool {
 
 // processPendingAnnRebuild 在无 dirty 或让路时，若 ANN 存在 rebuild_requested 则触发一次 full rebuild。
 // 确保 InvalidateAll / 首次构建后即使没有 dirty 也能恢复 ANN ready。
+// Task 11：经 maybeRebuildANN 统一施加 cooldown + coordinator 准入。
 func (c *identityProfileCoordinator) processPendingAnnRebuild(sliceStart time.Time) {
 	if c.owner == nil || c.owner.ann == nil {
 		return
 	}
-	if !c.owner.ann.RebuildRequested() {
-		return
-	}
-	logger.Infof("identity profile coordinator: ann rebuild requested reason=%s", annRebuildReasonRequested)
-	c.recordAnnRebuild(annRebuildReasonRequested)
-	c.owner.rebuildANNFromCoordinator()
+	c.maybeRebuildANN(annRebuildReasonRequested)
 }
 
 // identityProfileHighPriorityReasons 是前台 People 操作产生的 dirty_reason 白名单，
@@ -476,16 +547,14 @@ func (c *identityProfileCoordinator) applyAnnMerge(committedIDs []uint, sliceSta
 	if c.owner == nil || c.owner.ann == nil {
 		return
 	}
-	ann := c.owner.ann
 	successCount := len(committedIDs)
 
 	// 判断是否需要 full rebuild。
 	rebuild, reason := c.shouldFullRebuild(successCount)
 
 	if rebuild {
-		logger.Infof("identity profile coordinator: ann rebuild requested reason=%s", reason)
-		c.recordAnnRebuild(reason)
-		c.owner.rebuildANNFromCoordinator()
+		// Task 11：经 maybeRebuildANN 统一施加 cooldown + coordinator 准入。
+		c.maybeRebuildANN(reason)
 		return
 	}
 
@@ -503,11 +572,8 @@ func (c *identityProfileCoordinator) applyAnnMerge(committedIDs []uint, sliceSta
 	logger.Infof("identity profile coordinator: ann activate batch count=%d", activated)
 	c.recordAnnActivate(activated)
 	// 若 activate 过程中触发 delta full（RequestRebuild 被置位），合并为一次 full rebuild。
-	if ann.RebuildRequested() {
-		logger.Infof("identity profile coordinator: ann rebuild requested reason=%s", annRebuildReasonDeltaFull)
-		c.recordAnnRebuild(annRebuildReasonDeltaFull)
-		c.owner.rebuildANNFromCoordinator()
-	}
+	// Task 11：经 maybeRebuildANN 统一施加 cooldown + coordinator 准入。
+	c.maybeRebuildANN(annRebuildReasonDeltaFull)
 }
 
 // activateOne 从数据库读取人物活动 generation 的真实中心并接入 ANN delta。

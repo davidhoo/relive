@@ -359,6 +359,15 @@ func (s *personIdentityProfileService) SetForegroundBusyFn(fn func() bool) {
 	s.coordinator.setForegroundBusyFn(fn)
 }
 
+// SetBackgroundCoordinator 注入统一后台任务准入控制器（Task 11）。ANN full rebuild 经
+// coordinator 准入，被拒绝时保持 rebuildRequested pending。nil 时不 gating。
+func (s *personIdentityProfileService) SetBackgroundCoordinator(coord *BackgroundTaskCoordinator) {
+	if s.coordinator == nil {
+		return
+	}
+	s.coordinator.setBackgroundCoordinator(coord)
+}
+
 // loadAndAlignBackfillState 加载持久化 backfill 状态，并在算法/embedding 版本变化时重置。
 func (s *personIdentityProfileService) loadAndAlignBackfillState() {
 	s.mu.Lock()

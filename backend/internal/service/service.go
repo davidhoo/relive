@@ -175,6 +175,8 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 				return backgroundCoordinator.ForegroundActive() ||
 					peopleSvc.(*peopleService).clusteringCoordinator.foregroundWaiterCount() > 0
 			})
+			// Task 11：ANN full rebuild 经统一 coordinator 准入，被拒绝保持 rebuild pending。
+			ips.SetBackgroundCoordinator(backgroundCoordinator)
 		}
 	}
 
