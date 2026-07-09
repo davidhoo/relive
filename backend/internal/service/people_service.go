@@ -168,6 +168,11 @@ type peopleService struct {
 	// invalidateIdentityProfiles 直接返回不产生任何开销。
 	identityProfileInvalidateFn identityProfileInvalidateFn
 
+	// backgroundCoordinator 是后台任务治理的统一准入控制器（Phase 2）。Task 8 起前台
+	// mutation 通过它注册 foreground scope，使 P2 automatic 后台 slice 在前台操作期间让路。
+	// nil 时（旧测试桩）前台 mutation 仍走 clusteringCoordinator.foregroundWaiters 兼容桥。
+	backgroundCoordinator *BackgroundTaskCoordinator
+
 	// In-memory cache for GetStats() to avoid scanning 78K+ faces rows on every poll.
 	statsCache   *model.PeopleStatsResponse
 	statsCacheAt time.Time
@@ -2238,6 +2243,13 @@ func (s *peopleService) invalidateIdentityProfiles(invalidation IdentityProfileI
 // 测试可注入失败 stub 或 nil（nil 时反馈记录被静默跳过）。
 func (s *peopleService) SetFeedbackEventRepo(repo repository.PeopleFeedbackEventRepository) {
 	s.feedbackEventRepo = repo
+}
+
+// SetBackgroundCoordinator 注入后台任务治理准入控制器。生产由 service.go 装配时注入；
+// nil 时前台 mutation 退化为仅使用 clusteringCoordinator.foregroundWaiters 兼容桥（Task 8
+// 之前的既有行为），保证旧测试桩不依赖 coordinator 也能工作。
+func (s *peopleService) SetBackgroundCoordinator(c *BackgroundTaskCoordinator) {
+	s.backgroundCoordinator = c
 }
 
 // recordFeedbackEvent 在核心人物变更已提交后单独写入一条反馈事件。必须在任何

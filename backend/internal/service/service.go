@@ -62,6 +62,11 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		logger.Warnf("Failed to initialize default user: %v", err)
 	}
 
+	// 后台任务治理：统一准入控制器（前台优先 + cooldown + coalescing）。进程内内存态，
+	// 不写 SQLite。注入到 scheduler、peopleService、identity profile service、merge
+	// suggestion service。Task 8 起 canonical foreground busy source 即本 coordinator。
+	backgroundCoordinator := NewBackgroundTaskCoordinator()
+
 	// 创建分析、照片与展示服务
 	analysisService := NewAnalysisService(db, repos.Photo, repos.PhotoTag, cfg)
 	thumbnailService := NewThumbnailService(db, repos.Photo, repos.ThumbnailJob, cfg)
@@ -93,6 +98,9 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	peopleSvc.(*peopleService).setMergeSuggestionDirtyHook(mergeSuggestionService.MarkDirty)
 	peopleSvc.(*peopleService).setANNCandidateFn(mergeSuggestionService.(*personMergeSuggestionService).FindCandidates)
 	peopleSvc.(*peopleService).SetFeedbackEventRepo(repos.FeedbackEvent)
+	// 后台任务治理：把统一准入控制器注入 peopleService（Task 8 起前台 mutation 通过它
+	// 注册 foreground scope）。Task 7 先注入；foreground scope 接管在 Task 8 完成。
+	peopleSvc.(*peopleService).SetBackgroundCoordinator(backgroundCoordinator)
 	mergeSuggestionService.(*personMergeSuggestionService).SetWriteGateHook(peopleSvc.(*peopleService).AcquireWriteGate)
 	mergeSuggestionService.(*personMergeSuggestionService).SetPostMergeHook(peopleSvc.(*peopleService).PostMergeCleanup)
 	mergeSuggestionService.(*personMergeSuggestionService).SetFeedbackEventRepo(repos.FeedbackEvent)
@@ -164,13 +172,14 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 			// 允许完成。复用 clusteringCoordinator.foregroundWaiterCount 作为前台忙判定。
 			ips := identityProfileService.(*personIdentityProfileService)
 			ips.SetForegroundBusyFn(func() bool {
-				return peopleSvc.(*peopleService).clusteringCoordinator.foregroundWaiterCount() > 0
+				return backgroundCoordinator.ForegroundActive() ||
+					peopleSvc.(*peopleService).clusteringCoordinator.foregroundWaiterCount() > 0
 			})
 		}
 	}
 
 	// 创建定时任务调度器
-	scheduler := NewTaskScheduler(analysisService, displayService, photoService, mergeSuggestionService, repos.ThumbnailJob, repos.GeocodeJob, repos.PeopleJob, identityProfileService, repos.IdentityDecision)
+	scheduler := NewTaskScheduler(analysisService, displayService, photoService, mergeSuggestionService, repos.ThumbnailJob, repos.GeocodeJob, repos.PeopleJob, identityProfileService, repos.IdentityDecision, backgroundCoordinator)
 
 	// 创建提示词配置服务
 	promptService := NewPromptService(repos.Config)

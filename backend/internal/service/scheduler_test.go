@@ -640,3 +640,88 @@ func TestSchedulerIdentityDecisionCleanup_NilRepoNoop(t *testing.T) {
 	// nil repo：cleanIdentityDecisions 直接返回，不 panic
 	assert.NotPanics(t, func() { scheduler.cleanIdentityDecisions() })
 }
+
+// ---- Task 7: coordinator gating scheduler background slices ----
+
+// TestTaskSchedulerMergeSuggestionSliceSkippedWhenCoordinatorBusy 验证 coordinator
+// 拒绝 automatic 准入时，runMergeSuggestionSlice 不调用 RunBackgroundSlice。
+func TestTaskSchedulerMergeSuggestionSliceSkippedWhenCoordinatorBusy(t *testing.T) {
+	stub := &mergeSuggestionServiceStub{}
+	coord := NewBackgroundTaskCoordinator()
+	scheduler := &TaskScheduler{
+		mergeSuggestionService: stub,
+		backgroundCoordinator:  coord,
+		stopCh:                 make(chan struct{}),
+	}
+
+	// foreground active → automatic 被拒绝。
+	release := coord.BeginForeground()
+	defer release()
+
+	scheduler.runMergeSuggestionSlice()
+	assert.Equal(t, 0, stub.runCalls, "must not call RunBackgroundSlice when coordinator blocks")
+
+	// 释放 foreground 后允许运行。
+	release()
+	scheduler.runMergeSuggestionSlice()
+	assert.Equal(t, 1, stub.runCalls, "must run after foreground released")
+}
+
+// TestTaskSchedulerIdentityProfileSliceSkippedWhenCoordinatorBusy 验证 coordinator
+// 拒绝 automatic 准入时，runIdentityProfileSlice 不调用 RunBackgroundSlice。
+// 计划要求：BackgroundTaskCoordinator.BeginForeground() active 时 identity profile slice skip。
+func TestTaskSchedulerIdentityProfileSliceSkippedWhenCoordinatorBusy(t *testing.T) {
+	stub := &identityProfileServiceStub{mode: "shadow"}
+	coord := NewBackgroundTaskCoordinator()
+	scheduler := &TaskScheduler{
+		identityProfileService: stub,
+		backgroundCoordinator:  coord,
+		stopCh:                 make(chan struct{}),
+	}
+
+	release := coord.BeginForeground()
+	scheduler.runIdentityProfileSlice()
+	assert.Equal(t, int64(0), stub.runCalls.Load(), "must not call RunBackgroundSlice when foreground active")
+
+	release()
+	scheduler.runIdentityProfileSlice()
+	assert.Equal(t, int64(1), stub.runCalls.Load(), "must run after foreground released")
+}
+
+// TestTaskSchedulerSliceRunsWhenCoordinatorNil 验证 coordinator 为 nil 时（向后兼容）
+// slice 正常运行，不 gating。
+func TestTaskSchedulerSliceRunsWhenCoordinatorNil(t *testing.T) {
+	mergeStub := &mergeSuggestionServiceStub{}
+	idStub := &identityProfileServiceStub{mode: "shadow"}
+	scheduler := &TaskScheduler{
+		mergeSuggestionService: mergeStub,
+		identityProfileService: idStub,
+		stopCh:                 make(chan struct{}),
+		// backgroundCoordinator 为 nil
+	}
+
+	scheduler.runMergeSuggestionSlice()
+	assert.Equal(t, 1, mergeStub.runCalls)
+	scheduler.runIdentityProfileSlice()
+	assert.Equal(t, int64(1), idStub.runCalls.Load())
+}
+
+// TestTaskSchedulerSliceSkippedDuringCooldown 验证 class cooldown 期间 slice 被跳过，
+// 且不调用 RunBackgroundSlice（拒绝不等于标记为完成）。
+func TestTaskSchedulerSliceSkippedDuringCooldown(t *testing.T) {
+	stub := &mergeSuggestionServiceStub{}
+	coord := NewBackgroundTaskCoordinator()
+	coord.Cooldown(BackgroundTaskMergeSuggestion, 50*time.Millisecond, "db_busy")
+	scheduler := &TaskScheduler{
+		mergeSuggestionService: stub,
+		backgroundCoordinator:  coord,
+		stopCh:                 make(chan struct{}),
+	}
+
+	scheduler.runMergeSuggestionSlice()
+	assert.Equal(t, 0, stub.runCalls, "must skip slice during cooldown")
+
+	time.Sleep(60 * time.Millisecond)
+	scheduler.runMergeSuggestionSlice()
+	assert.Equal(t, 1, stub.runCalls, "must run after cooldown expires")
+}

@@ -23,10 +23,14 @@ type TaskScheduler struct {
 	identityProfileService PersonIdentityProfileService
 	identityDecisionRepo   repository.PeopleIdentityDecisionRepository
 	writeQueue             *database.WriteQueue
-	stopCh                 chan struct{}
-	wg                     sync.WaitGroup
-	running                bool
-	mu                     sync.Mutex
+	// backgroundCoordinator 是自动后台 slice 的前台优先准入控制器。nil 时退化为不 gating
+	// （向后兼容测试桩与旧调用方）。非 nil 时，runMergeSuggestionSlice / runIdentityProfileSlice
+	// 在执行重工作前请求 automatic 准入，被拒绝则跳过本次 slice，不把 dirty/state 标记为 clean。
+	backgroundCoordinator *BackgroundTaskCoordinator
+	stopCh                chan struct{}
+	wg                    sync.WaitGroup
+	running               bool
+	mu                    sync.Mutex
 }
 
 // NewTaskScheduler 创建定时任务调度器
@@ -40,6 +44,7 @@ func NewTaskScheduler(
 	peopleJobRepo repository.PeopleJobRepository,
 	identityProfileService PersonIdentityProfileService,
 	identityDecisionRepo repository.PeopleIdentityDecisionRepository,
+	backgroundCoordinator *BackgroundTaskCoordinator,
 ) *TaskScheduler {
 	return &TaskScheduler{
 		analysisService:        analysisService,
@@ -52,8 +57,28 @@ func NewTaskScheduler(
 		identityProfileService: identityProfileService,
 		identityDecisionRepo:   identityDecisionRepo,
 		writeQueue:             database.GetWriteQueue(),
+		backgroundCoordinator:  backgroundCoordinator,
 		stopCh:                 make(chan struct{}),
 	}
+}
+
+// SetBackgroundCoordinator 允许在构造后注入 coordinator（供测试与旧式直接构造
+// TaskScheduler{} 的路径补齐依赖）。生产路径通过 NewTaskScheduler 注入。
+func (s *TaskScheduler) SetBackgroundCoordinator(c *BackgroundTaskCoordinator) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.backgroundCoordinator = c
+}
+
+// admitBackground 请求一次 automatic 后台 slice 的准入。返回 release（非 nil 时必须调用）
+// 与 ok。coordinator 为 nil 时直接放行（向后兼容）。被拒绝时 ok=false，调用方须跳过本次
+// slice 且不得把持久化 dirty/state 标记为 clean。
+func (s *TaskScheduler) admitBackground(req BackgroundTaskRequest) (func(), bool) {
+	if s.backgroundCoordinator == nil {
+		return nil, true
+	}
+	release, _, ok := s.backgroundCoordinator.Begin(req)
+	return release, ok
 }
 
 // Start 启动定时任务
@@ -293,6 +318,19 @@ func (s *TaskScheduler) runMergeSuggestionSlice() {
 	if s.mergeSuggestionService == nil {
 		return
 	}
+	// 前台优先准入：coordinator 拒绝时跳过本次 slice，不调用 RunBackgroundSlice，
+	// 也不把 merge suggestion dirty/state 标记为 clean（由 service 自身状态保证）。
+	release, ok := s.admitBackground(BackgroundTaskRequest{
+		Class: BackgroundTaskMergeSuggestion, Priority: BackgroundPriorityAutomatic,
+	})
+	if !ok {
+		return
+	}
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
 	if err := s.mergeSuggestionService.RunBackgroundSlice(); err != nil {
 		logger.Warnf("Failed to run merge suggestion slice: %v", err)
 	}
@@ -326,6 +364,19 @@ func (s *TaskScheduler) runIdentityProfileSlice() {
 	if s.identityProfileService == nil {
 		return
 	}
+	// 前台优先准入：coordinator 拒绝时跳过本次 slice，不调用 RunBackgroundSlice，
+	// 也不把 identity profile dirty/state 标记为 clean。
+	release, ok := s.admitBackground(BackgroundTaskRequest{
+		Class: BackgroundTaskIdentityProfileBuild, Priority: BackgroundPriorityAutomatic,
+	})
+	if !ok {
+		return
+	}
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
 	if err := s.identityProfileService.RunBackgroundSlice(); err != nil {
 		logger.Warnf("Failed to run identity profile slice: %v", err)
 	}
