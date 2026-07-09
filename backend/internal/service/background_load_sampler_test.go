@@ -142,7 +142,7 @@ func TestBackgroundLoadSampler_IsKnown(t *testing.T) {
 
 // sampleCPUWithFixed 是 sampleCPU 的测试辅助：直接传入 cur 样本（绕过 /proc 读取），
 // 复用 delta 计算逻辑。返回与 sampleCPU 一致。
-func (s *backgroundLoadSampler) sampleCPUWithFixed(cur *cpuStatSample) (float64, float64, float64, *cpuStatSample, bool) {
+func (s *BackgroundLoadSampler) sampleCPUWithFixed(cur *cpuStatSample) (float64, float64, float64, *cpuStatSample, bool) {
 	s.mu.Lock()
 	prev := s.prevCPU
 	s.prevCPU = cur
