@@ -230,6 +230,12 @@ func (c *peopleClusteringCoordinator) runFeedbackJob(mergedRequests int) {
 // worker goroutine (directly for background, and via triggerRecluster for
 // feedback). protoCache is touched only here, so it stays single-goroutine.
 //
+// Task 9：protoCache cold/stale 构建在获取 writeGate.RLock 之前完成（buildClustProtoCache
+// 不持锁）。foreground active 时跳过冷缓存构建并 return no work，避免冷启动时唯一能刷新
+// 缓存的 worker 永远因 foreground 而不执行 refresh。stale 但 non-nil 的缓存本批次继续用
+// 旧值，标记 refresh pending（Task 10 接入 coalescing/cooldown）。永远不在 writeGate.RLock
+// 内同步 rebuild。
+//
 // 身份画像 shadow 处理在释放 writeGate.RLock 之后执行：matcher 的 ANN/Repository
 // 查询与遥测写入不得长期占用 writeGate，否则会阻塞 foreground merge/split/move。
 // shadow 处理失败不影响已经成功的 legacy 结果；其耗时不混入 writeGate 持有时间。
@@ -240,6 +246,31 @@ func (c *peopleClusteringCoordinator) runClusterBatch(source clusterSource) back
 		return backgroundClusterResult{err: errCoordinatorStopped}
 	}
 	foregroundWait := time.Since(waitStart)
+
+	// Task 9：在获取 writeGate.RLock 前同步构建/刷新 protoCache（cold 或 stale）。
+	// 构建期间若 foreground 变 active，跳过构建并 return no work，不触碰 writeGate。
+	// protoCache single-owner 不变量保持：只有本 worker goroutine 读写 s.protoCache。
+	if c.svc.protoCacheNeedsRefresh() {
+		if c.svc.backgroundCoordinator != nil && c.svc.backgroundCoordinator.ForegroundActive() {
+			// foreground 已 active：不构建，return no work。保持 refresh pending。
+			logger.Infof("people clustering coordinator: source=%s skip protoCache refresh: foreground active", source)
+			return backgroundClusterResult{}
+		}
+		// foreground 未 active，在 writeGate 外构建。构建是纯读 + CPU，不持锁。
+		// 构建期间 foreground 可能变 active——本批次仍用旧缓存（若有）继续，或 return no work。
+		newCache, err := c.svc.buildClustProtoCache()
+		if err != nil {
+			logger.Warnf("people clustering coordinator: source=%s protoCache rebuild failed: %v", source, err)
+			return backgroundClusterResult{err: err}
+		}
+		// 构建完成后再次检查 foreground：若已变 active，丢弃本次构建结果 return no work，
+		// 避免在 foreground 期间用刚构建的缓存进入写临界区（保持 P0 优先）。
+		if c.svc.backgroundCoordinator != nil && c.svc.backgroundCoordinator.ForegroundActive() {
+			logger.Infof("people clustering coordinator: source=%s discard rebuilt protoCache: foreground became active", source)
+			return backgroundClusterResult{}
+		}
+		c.svc.protoCache = newCache
+	}
 
 	gateStart := time.Now()
 	c.svc.writeGate.RLock()

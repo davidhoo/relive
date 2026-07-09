@@ -178,6 +178,10 @@ type peopleService struct {
 	// 仅在持有时非 nil；foreground mutation 串行（writeGate 独占），无需额外同步。
 	fgCoordinatorRelease func()
 
+	// protoCacheBuildHook 仅供测试：在 buildClustProtoCache 内调用，用于模拟慢速 refresh
+	// 并验证 refresh 已移出 writeGate（Task 9）。生产为 nil，无开销。
+	protoCacheBuildHook func()
+
 	// In-memory cache for GetStats() to avoid scanning 78K+ faces rows on every poll.
 	statsCache   *model.PeopleStatsResponse
 	statsCacheAt time.Time
@@ -2091,6 +2095,13 @@ func (s *peopleService) setFeedbackReclusterHookForTest(hook func() model.Reclus
 	s.clusteringCoordinator.setFeedbackHook(hook)
 }
 
+// setProtoCacheBuildHookForTest 注入一个在 buildClustProtoCache 内调用的 hook，仅供测试
+// 用于模拟慢速 proto-cache refresh（Task 9 目标测试）。hook 在不持有 writeGate 时调用，
+// hook 阻塞期间 foreground 应能获取 writeGate.Lock()，证明 refresh 已移出 writeGate。
+func (s *peopleService) setProtoCacheBuildHookForTest(hook func()) {
+	s.protoCacheBuildHook = hook
+}
+
 func (s *peopleService) setFeedbackCooldownForTest(d time.Duration) {
 	s.clusteringCoordinator.setFeedbackCooldown(d)
 }
@@ -2969,6 +2980,51 @@ func (s *peopleService) createPersonFromComponent(component []*model.Face, score
 // 返回值除 affectedPersonIDs / affectedPhotoIDs / err 外，还携带本批次的 identity
 // shadow observations。observations 必须由调用方在释放 writeGate.RLock 后处理
 // （画像 matcher 与遥测不得在持有 writeGate 时执行）。legacy 模式不分配该 slice。
+// protoCacheNeedsRefresh 报告 prototype cache 是否需要重建（nil 或已过 TTL）。
+// 仅供 people clustering coordinator worker 在获取 writeGate.RLock 前调用，决定是否
+// 在锁外同步构建。读取 s.protoCache 无需同步——它只由同一 worker goroutine 读写。
+func (s *peopleService) protoCacheNeedsRefresh() bool {
+	return s.protoCache == nil || time.Since(s.protoCache.builtAt) > clustProtoCacheTTL
+}
+
+// buildClustProtoCache 在不持有 writeGate 的情况下构建一份全新的 prototype cache。
+// 列出 assigned person IDs → 取 prototype embeddings → 选择 prototypes → 解码 embeddings。
+// 纯读取 + CPU，不写 DB、不持有 writeGate。调用方（people clustering coordinator worker）
+// 负责把返回的 cache 赋值给 s.protoCache，保持 protoCache single-owner 不变量。
+//
+// Task 9：把 protoCache rebuild 从 runIncrementalClustering 的 writeGate.RLock 临界区
+// 拆出，使慢速 refresh 不再阻塞 foreground merge/split/move。
+func (s *peopleService) buildClustProtoCache() (*clustProtoCache, error) {
+	rebuildStart := time.Now()
+	assignedPersonIDs, err := s.faceRepo.ListAssignedPersonIDs()
+	if err != nil {
+		return nil, err
+	}
+	var protoFaces []*model.Face
+	if len(assignedPersonIDs) > 0 {
+		protoFaces, err = s.faceRepo.ListPrototypeEmbeddings(assignedPersonIDs, peoplePrototypeCandidates)
+		if err != nil {
+			return nil, err
+		}
+	}
+	orig := s.selectPersonPrototypes(protoFaces, peoplePrototypeCount)
+	// 测试 hook：模拟慢速 refresh。在 writeGate 外调用，foreground 可在此期间获取写锁。
+	if s.protoCacheBuildHook != nil {
+		s.protoCacheBuildHook()
+	}
+	withEmb := make(map[uint][]faceWithEmbedding, len(orig))
+	for personID, protoList := range orig {
+		withEmb[personID] = decodeFacesWithEmbeddings(protoList)
+	}
+	logger.Infof("people clustering: protoCache rebuilt persons=%d prototypes=%d elapsed=%s",
+		len(orig), len(protoFaces), time.Since(rebuildStart).Round(time.Millisecond))
+	return &clustProtoCache{
+		prototypesWithEmb: withEmb,
+		prototypesOrig:    orig,
+		builtAt:           time.Now(),
+	}, nil
+}
+
 func (s *peopleService) runIncrementalClustering() ([]uint, []uint, []identityShadowObservation, error) {
 	pendingFaces, err := s.faceRepo.ListPending(peopleClusteringBatchSize)
 	if err != nil {
@@ -2978,31 +3034,15 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, []identitySh
 		return nil, nil, nil, nil
 	}
 
+	// protoCache cold/stale 时构建：生产路径下 coordinator worker 已在 writeGate.RLock
+	// 外预先构建好（runClusterBatch），此处 s.protoCache 通常已 fresh。本兜底分支仅用于
+	// runIncrementalClustering 被直接调用且未预构建的旧路径，保持向后兼容。
 	if s.protoCache == nil || time.Since(s.protoCache.builtAt) > clustProtoCacheTTL {
-		rebuildStart := time.Now()
-		assignedPersonIDs, err := s.faceRepo.ListAssignedPersonIDs()
+		cache, err := s.buildClustProtoCache()
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		var protoFaces []*model.Face
-		if len(assignedPersonIDs) > 0 {
-			protoFaces, err = s.faceRepo.ListPrototypeEmbeddings(assignedPersonIDs, peoplePrototypeCandidates)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-		}
-		orig := s.selectPersonPrototypes(protoFaces, peoplePrototypeCount)
-		withEmb := make(map[uint][]faceWithEmbedding, len(orig))
-		for personID, protoList := range orig {
-			withEmb[personID] = decodeFacesWithEmbeddings(protoList)
-		}
-		s.protoCache = &clustProtoCache{
-			prototypesWithEmb: withEmb,
-			prototypesOrig:    orig,
-			builtAt:           time.Now(),
-		}
-		logger.Infof("people clustering: protoCache rebuilt persons=%d prototypes=%d elapsed=%s",
-			len(orig), len(protoFaces), time.Since(rebuildStart).Round(time.Millisecond))
+		s.protoCache = cache
 	}
 	prototypesWithEmb := s.protoCache.prototypesWithEmb
 	prototypes := s.protoCache.prototypesOrig

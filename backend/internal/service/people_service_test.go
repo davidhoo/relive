@@ -4761,3 +4761,82 @@ func TestPeopleService_MoveFacesMixedAlreadyMovedAndOtherFacesConflicts(t *testi
 	}
 	assert.Len(t, movedEvents, 1, "conflicting move must not record a second face_moved event")
 }
+
+// ---- Task 9: protoCache refresh 移出 writeGate 行为等价 ----
+
+// TestPeopleService_BuildClustProtoCacheOutsideWriteGate 验证 buildClustProtoCache 在
+// writeGate 外执行：foreground 持有 writeGate.Lock 时，buildClustProtoCache 仍能完成
+// （它只读 DB、不持锁）。
+func TestPeopleService_BuildClustProtoCacheOutsideWriteGate(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+
+	photo := &model.Photo{FilePath: "/build/proto.jpg", FileName: "proto.jpg", FileSize: 1, FileHash: "build-proto", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(photo))
+	person := &model.Person{Category: model.PersonCategoryFamily}
+	require.NoError(t, personRepo.Create(person))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID: photo.ID, PersonID: &person.ID,
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence: 0.9, QualityScore: 0.8,
+		Embedding:     encodeEmbedding(t, []float32{1, 0, 0}),
+		ClusterStatus: model.FaceClusterStatusAssigned,
+	}))
+	require.NoError(t, personRepo.RefreshStats(person.ID))
+
+	// foreground 持有 writeGate.Lock，buildClustProtoCache 应仍能完成（不持锁、只读）。
+	svc.writeGate.Lock()
+	cache, err := svc.buildClustProtoCache()
+	svc.writeGate.Unlock()
+	require.NoError(t, err)
+	require.NotNil(t, cache)
+	assert.NotEmpty(t, cache.prototypesWithEmb, "protoCache must contain the assigned person prototypes")
+}
+
+// TestPeopleService_ProtoCacheRefreshEquivalentAssignment 验证 refactor 前后相同 pending
+// faces + 相同 prototype cache 产生相同 assigned person IDs。冷缓存构建移到 writeGate 外
+// 不改变聚类决策。
+func TestPeopleService_ProtoCacheRefreshEquivalentAssignment(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+
+	protoPhoto := &model.Photo{FilePath: "/equiv/proto.jpg", FileName: "proto.jpg", FileSize: 1, FileHash: "equiv-proto", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	pendingPhoto := &model.Photo{FilePath: "/equiv/pending.jpg", FileName: "pending.jpg", FileSize: 1, FileHash: "equiv-pending", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(protoPhoto))
+	require.NoError(t, photoRepo.Create(pendingPhoto))
+	person := &model.Person{Category: model.PersonCategoryFamily}
+	require.NoError(t, personRepo.Create(person))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID: protoPhoto.ID, PersonID: &person.ID,
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence: 0.95, QualityScore: 0.8,
+		Embedding:     encodeEmbedding(t, []float32{1, 0, 0}),
+		ClusterStatus: model.FaceClusterStatusAssigned, ClusterScore: 0.95,
+	}))
+	require.NoError(t, personRepo.RefreshStats(person.ID))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID: pendingPhoto.ID,
+		BBoxX:   0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence: 0.99, QualityScore: 0.8,
+		Embedding:     encodeEmbedding(t, []float32{1, 0, 0}),
+		ClusterStatus: model.FaceClusterStatusPending,
+	}))
+
+	// 聚类（cold protoCache → coordinator 在 writeGate 外构建）。
+	res := svc.clusteringCoordinator.submitBackground()
+	require.NoError(t, res.err)
+
+	// pending 脸应 attach 到已有人物——与 refactor 前行为一致。
+	pendingFaces, err := faceRepo.ListByPhotoID(pendingPhoto.ID)
+	require.NoError(t, err)
+	require.Len(t, pendingFaces, 1)
+	require.NotNil(t, pendingFaces[0].PersonID)
+	assert.Equal(t, person.ID, *pendingFaces[0].PersonID, "assignment must be unchanged after moving refresh outside writeGate")
+	assert.Equal(t, model.FaceClusterStatusAssigned, pendingFaces[0].ClusterStatus)
+}

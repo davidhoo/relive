@@ -531,16 +531,94 @@ func TestPeopleClusteringCoordinator_RunningBatchStillBlocksForeground(t *testin
 
 // TestPeopleClusteringCoordinator_RefreshWorkDoesNotHoldWriteGate 是目标行为测试：
 // 模拟一个慢速 proto-cache refresh，refresh 运行期间 foreground mutation 能立即拿到
-// writeGate.Lock()。该行为在 Task 9 把 proto cache refresh 移出 writeGate 后才成立，
-// 因此先 skip，待 Task 9 启用。
+// writeGate.Lock()。Task 9 把 proto cache refresh 移出 writeGate 后启用。
 func TestPeopleClusteringCoordinator_RefreshWorkDoesNotHoldWriteGate(t *testing.T) {
-	t.Skip("enabled after proto cache refresh is moved outside writeGate")
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
 
-	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	// 植入一个已分配人物 + 一张 pending 脸，触发聚类（cold protoCache 会触发 refresh）。
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
 
-	// TODO(Task 9): 用 hook 模拟一个慢速 proto-cache refresh，refresh 运行期间断言
-	// foreground writeGate.Lock() 能立即获取，证明 refresh 不再持有 writeGate。
-	_ = svc
+	protoPhoto := &model.Photo{FilePath: "/refresh/proto.jpg", FileName: "proto.jpg", FileSize: 1, FileHash: "refresh-proto", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	pendingPhoto := &model.Photo{FilePath: "/refresh/pending.jpg", FileName: "pending.jpg", FileSize: 1, FileHash: "refresh-pending", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(protoPhoto))
+	require.NoError(t, photoRepo.Create(pendingPhoto))
+
+	person := &model.Person{Category: model.PersonCategoryFamily}
+	require.NoError(t, personRepo.Create(person))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID: protoPhoto.ID, PersonID: &person.ID,
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence: 0.95, QualityScore: 0.8,
+		Embedding:     encodeEmbedding(t, []float32{1, 0, 0}),
+		ClusterStatus: model.FaceClusterStatusAssigned, ClusterScore: 0.95,
+	}))
+	require.NoError(t, personRepo.RefreshStats(person.ID))
+	require.NoError(t, faceRepo.Create(&model.Face{
+		PhotoID: pendingPhoto.ID,
+		BBoxX:   0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence: 0.99, QualityScore: 0.8,
+		Embedding:     encodeEmbedding(t, []float32{1, 0, 0}),
+		ClusterStatus: model.FaceClusterStatusPending,
+	}))
+
+	// protoCacheBuildHook 在 buildClustProtoCache 内（writeGate 外）调用。让 hook 阻塞，
+	// 期间 foreground 必须能获取 writeGate.Lock()——证明 refresh 不再持有 writeGate。
+	refreshStarted := make(chan struct{}, 1)
+	releaseRefresh := make(chan struct{})
+	svc.setProtoCacheBuildHookForTest(func() {
+		select {
+		case refreshStarted <- struct{}{}:
+		default:
+		}
+		<-releaseRefresh
+	})
+	t.Cleanup(func() {
+		svc.setProtoCacheBuildHookForTest(nil)
+		select {
+		case <-releaseRefresh:
+		default:
+			close(releaseRefresh)
+		}
+	})
+
+	bgDone := make(chan struct{})
+	go func() {
+		_ = svc.clusteringCoordinator.submitBackground()
+		close(bgDone)
+	}()
+
+	// 等待 refresh 开始（此时 writeGate 未被持有）。
+	waitForPeopleCondition(t, 3*time.Second, func() bool {
+		select {
+		case <-refreshStarted:
+			return true
+		default:
+			return false
+		}
+	})
+
+	// refresh 阻塞期间，foreground writeGate.Lock() 必须立即获取。
+	fgAcquired := make(chan struct{})
+	go func() {
+		svc.writeGate.Lock()
+		close(fgAcquired)
+		svc.writeGate.Unlock()
+	}()
+	select {
+	case <-fgAcquired:
+		// good: foreground acquired while refresh was running (writeGate not held)
+	case <-time.After(time.Second):
+		t.Fatal("foreground writeGate.Lock blocked during proto-cache refresh; refresh must run outside writeGate")
+	}
+
+	close(releaseRefresh)
+	select {
+	case <-bgDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("background did not complete after refresh released")
+	}
 }
 
 // ---- Task 11: 身份画像 shadow 接入增量聚类 ----
