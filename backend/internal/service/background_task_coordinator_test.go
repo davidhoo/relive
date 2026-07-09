@@ -1,9 +1,11 @@
 package service
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
+	sqlite3 "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -196,7 +198,7 @@ func fixedLoadFn(cpu, iowait, mem float64) func() BackgroundLoadSnapshot {
 // TestBackgroundTaskCoordinator_CPUHighRejectsP2 验证 CPU 超阈值拒绝 P2 automatic。
 func TestBackgroundTaskCoordinator_CPUHighRejectsP2(t *testing.T) {
 	c := NewBackgroundTaskCoordinator()
-	c.SetBackgroundConfig(true, 70, 15, 85, fixedLoadFn(80, 5, 50))
+	c.SetBackgroundConfig(true, 70, 15, 85, fixedLoadFn(80, 5, 50), 0)
 
 	decision, ok := c.CanRun(BackgroundTaskRequest{Class: BackgroundTaskPeopleClustering, Priority: BackgroundPriorityAutomatic})
 	assert.False(t, ok)
@@ -211,7 +213,7 @@ func TestBackgroundTaskCoordinator_CPUHighRejectsP2(t *testing.T) {
 // TestBackgroundTaskCoordinator_IOWaitHighRejectsP2 验证 iowait 超阈值拒绝 P2。
 func TestBackgroundTaskCoordinator_IOWaitHighRejectsP2(t *testing.T) {
 	c := NewBackgroundTaskCoordinator()
-	c.SetBackgroundConfig(true, 70, 15, 85, fixedLoadFn(20, 20, 50))
+	c.SetBackgroundConfig(true, 70, 15, 85, fixedLoadFn(20, 20, 50), 0)
 
 	decision, ok := c.CanRun(BackgroundTaskRequest{Class: BackgroundTaskProtoCacheRefresh, Priority: BackgroundPriorityAutomatic})
 	assert.False(t, ok)
@@ -221,7 +223,7 @@ func TestBackgroundTaskCoordinator_IOWaitHighRejectsP2(t *testing.T) {
 // TestBackgroundTaskCoordinator_MemoryHighRejectsP2 验证内存超阈值拒绝 P2。
 func TestBackgroundTaskCoordinator_MemoryHighRejectsP2(t *testing.T) {
 	c := NewBackgroundTaskCoordinator()
-	c.SetBackgroundConfig(true, 70, 15, 85, fixedLoadFn(20, 5, 90))
+	c.SetBackgroundConfig(true, 70, 15, 85, fixedLoadFn(20, 5, 90), 0)
 
 	decision, ok := c.CanRun(BackgroundTaskRequest{Class: BackgroundTaskMergeSuggestion, Priority: BackgroundPriorityAutomatic})
 	assert.False(t, ok)
@@ -233,7 +235,7 @@ func TestBackgroundTaskCoordinator_UnknownLoadDoesNotRejectP2(t *testing.T) {
 	c := NewBackgroundTaskCoordinator()
 	c.SetBackgroundConfig(true, 70, 15, 85, func() BackgroundLoadSnapshot {
 		return BackgroundLoadSnapshot{CPUUserPct: unknownLoad, CPUIOWaitPct: unknownLoad, MemUsedPct: unknownLoad}
-	})
+	}, 0)
 
 	_, ok := c.CanRun(BackgroundTaskRequest{Class: BackgroundTaskPeopleClustering, Priority: BackgroundPriorityAutomatic})
 	assert.True(t, ok, "unknown load must not reject P2")
@@ -243,7 +245,7 @@ func TestBackgroundTaskCoordinator_UnknownLoadDoesNotRejectP2(t *testing.T) {
 // 拒绝所有 P2 automatic。
 func TestBackgroundTaskCoordinator_AutomaticDisabledRejectsP2(t *testing.T) {
 	c := NewBackgroundTaskCoordinator()
-	c.SetBackgroundConfig(false, 70, 15, 85, nil)
+	c.SetBackgroundConfig(false, 70, 15, 85, nil, 0)
 
 	decision, ok := c.CanRun(BackgroundTaskRequest{Class: BackgroundTaskPeopleClustering, Priority: BackgroundPriorityAutomatic})
 	assert.False(t, ok)
@@ -258,7 +260,7 @@ func TestBackgroundTaskCoordinator_AutomaticDisabledRejectsP2(t *testing.T) {
 // 不被负载背压拒绝（BeginForeground 不经过 decideLocked）。
 func TestBackgroundTaskCoordinator_ForegroundNotRejectedByLoad(t *testing.T) {
 	c := NewBackgroundTaskCoordinator()
-	c.SetBackgroundConfig(true, 70, 15, 85, fixedLoadFn(99, 99, 99))
+	c.SetBackgroundConfig(true, 70, 15, 85, fixedLoadFn(99, 99, 99), 0)
 
 	// foreground scope 注册不报错，即使负载极高。
 	release := c.BeginForeground()
@@ -270,8 +272,62 @@ func TestBackgroundTaskCoordinator_ForegroundNotRejectedByLoad(t *testing.T) {
 // TestBackgroundTaskCoordinator_LoadBelowThresholdAllowsP2 验证负载低于阈值允许 P2。
 func TestBackgroundTaskCoordinator_LoadBelowThresholdAllowsP2(t *testing.T) {
 	c := NewBackgroundTaskCoordinator()
-	c.SetBackgroundConfig(true, 70, 15, 85, fixedLoadFn(50, 5, 60))
+	c.SetBackgroundConfig(true, 70, 15, 85, fixedLoadFn(50, 5, 60), 0)
 
 	_, ok := c.CanRun(BackgroundTaskRequest{Class: BackgroundTaskPeopleClustering, Priority: BackgroundPriorityAutomatic})
 	assert.True(t, ok, "load below threshold must allow P2")
+}
+
+// ---- Task 15: SQLite busy/locked 反馈 coordinator ----
+
+// TestBackgroundTaskCoordinator_DatabaseLockedStartsCooldown 验证 ReportDBBusy 后该 class
+// 进入 cooldown，P2 automatic 被拒绝为 cooldown；P1 user 不受影响。
+func TestBackgroundTaskCoordinator_DatabaseLockedStartsCooldown(t *testing.T) {
+	c := NewBackgroundTaskCoordinator()
+	c.SetBackgroundConfig(true, 70, 15, 85, nil, 50*time.Millisecond)
+
+	// 报告一个 SQLite busy 错误。
+	c.ReportDBBusy(BackgroundTaskMergeSuggestion, fmt.Errorf("background slice: %w", sqlite3.Error{Code: sqlite3.ErrBusy}))
+
+	// P2 automatic 被拒绝为 cooldown。
+	decision, ok := c.CanRun(BackgroundTaskRequest{Class: BackgroundTaskMergeSuggestion, Priority: BackgroundPriorityAutomatic})
+	assert.False(t, ok)
+	assert.Equal(t, BackgroundDecisionCooldown, decision.Reason)
+
+	// P1 user 不受影响。
+	_, ok = c.CanRun(BackgroundTaskRequest{Class: BackgroundTaskMergeSuggestion, Priority: BackgroundPriorityUser})
+	assert.True(t, ok)
+
+	// 另一 class 不受影响。
+	_, ok = c.CanRun(BackgroundTaskRequest{Class: BackgroundTaskPeopleClustering, Priority: BackgroundPriorityAutomatic})
+	assert.True(t, ok)
+
+	// cooldown 过期后恢复。
+	time.Sleep(60 * time.Millisecond)
+	_, ok = c.CanRun(BackgroundTaskRequest{Class: BackgroundTaskMergeSuggestion, Priority: BackgroundPriorityAutomatic})
+	assert.True(t, ok)
+}
+
+// TestBackgroundTaskCoordinator_ReportDBBusyIgnoresNonBusyError 验证非 busy/locked 错误
+// 不触发 cooldown。
+func TestBackgroundTaskCoordinator_ReportDBBusyIgnoresNonBusyError(t *testing.T) {
+	c := NewBackgroundTaskCoordinator()
+	c.SetBackgroundConfig(true, 70, 15, 85, nil, 50*time.Millisecond)
+
+	c.ReportDBBusy(BackgroundTaskMergeSuggestion, fmt.Errorf("no such table: faces"))
+
+	_, ok := c.CanRun(BackgroundTaskRequest{Class: BackgroundTaskMergeSuggestion, Priority: BackgroundPriorityAutomatic})
+	assert.True(t, ok, "non-busy error must not trigger cooldown")
+}
+
+// TestBackgroundTaskCoordinator_ReportDBBusyNoOpWhenCooldownDisabled 验证 dbLockedCooldown=0
+// 时不 cooldown（仅记录日志）。
+func TestBackgroundTaskCoordinator_ReportDBBusyNoOpWhenCooldownDisabled(t *testing.T) {
+	c := NewBackgroundTaskCoordinator()
+	c.SetBackgroundConfig(true, 70, 15, 85, nil, 0) // cooldown disabled
+
+	c.ReportDBBusy(BackgroundTaskMergeSuggestion, sqlite3.Error{Code: sqlite3.ErrLocked})
+
+	_, ok := c.CanRun(BackgroundTaskRequest{Class: BackgroundTaskMergeSuggestion, Priority: BackgroundPriorityAutomatic})
+	assert.True(t, ok, "cooldown disabled must not reject P2")
 }

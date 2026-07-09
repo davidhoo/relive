@@ -140,11 +140,16 @@ type BackgroundTaskCoordinator struct {
 	iowaitPauseThreshold float64
 	memoryPauseThreshold float64
 	loadFn               func() BackgroundLoadSnapshot
+
+	// dbLockedCooldown 是 SQLite busy/locked 后 P2 automatic 进入 cooldown 的时长（Task 15）。
+	// 0 表示不 cooldown（仅记录日志）。由 SetBackgroundConfig 设置。
+	dbLockedCooldown time.Duration
 }
 
-// SetBackgroundConfig 注入后台任务治理配置与负载采样函数（Task 14）。loadFn 为 nil 时
-// 不做负载背压（advisory）。生产由 service.go 装配时调用。
-func (c *BackgroundTaskCoordinator) SetBackgroundConfig(autoTasksEnabled bool, cpuPause, iowaitPause, memPause float64, loadFn func() BackgroundLoadSnapshot) {
+// SetBackgroundConfig 注入后台任务治理配置与负载采样函数（Task 14/15）。loadFn 为 nil 时
+// 不做负载背压（advisory）。dbLockedCooldown 为 SQLite busy/locked 后 P2 cooldown 时长，
+// 0 表示不 cooldown。生产由 service.go 装配时调用。
+func (c *BackgroundTaskCoordinator) SetBackgroundConfig(autoTasksEnabled bool, cpuPause, iowaitPause, memPause float64, loadFn func() BackgroundLoadSnapshot, dbLockedCooldown time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.autoTasksEnabled = autoTasksEnabled
@@ -152,6 +157,7 @@ func (c *BackgroundTaskCoordinator) SetBackgroundConfig(autoTasksEnabled bool, c
 	c.iowaitPauseThreshold = iowaitPause
 	c.memoryPauseThreshold = memPause
 	c.loadFn = loadFn
+	c.dbLockedCooldown = dbLockedCooldown
 }
 
 // NewBackgroundTaskCoordinator 构造一个空 coordinator。默认 auto_tasks_enabled=true
@@ -343,6 +349,30 @@ func (c *BackgroundTaskCoordinator) ClearCooldown(class BackgroundTaskClass) {
 	c.mu.Lock()
 	delete(c.cooldowns, class)
 	c.mu.Unlock()
+}
+
+// ReportDBBusy 让 P2 automatic 后台代码在遇到 SQLite busy/locked 时通知 coordinator。
+// coordinator 对该 class 设置 dbLockedCooldown 的 cooldown（>0 时），使后续 automatic
+// 请求在 cooldown 内被拒绝为 cooldown（保持 pending，不 spin）。err 仅用于日志判定。
+//
+// 调用方契约：仅 P2 automatic 路径调用；前台操作绝不因此 sleep——前台可上报 telemetry
+// 但不能改变用户可见错误。err 非 busy/locked 时本方法 no-op（调用方应先用 isSQLiteBusyOrLocked
+// 判定，或直接传入让本方法判定）。
+func (c *BackgroundTaskCoordinator) ReportDBBusy(class BackgroundTaskClass, err error) {
+	if err == nil {
+		return
+	}
+	if !isSQLiteBusyOrLocked(err) {
+		return
+	}
+	c.mu.Lock()
+	dur := c.dbLockedCooldown
+	c.mu.Unlock()
+	if dur <= 0 {
+		logger.Warnf("background coordinator: db busy/locked class=%s but cooldown disabled; err=%v", class, err)
+		return
+	}
+	c.Cooldown(class, dur, "db_busy_or_locked")
 }
 
 // Snapshot 返回 coordinator 当前状态的只读快照（供状态 API）。

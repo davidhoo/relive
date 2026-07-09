@@ -75,6 +75,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 			cfg.Background.IOWaitPauseThreshold,
 			cfg.Background.MemoryPauseThreshold,
 			loadSampler.Sample,
+			time.Duration(cfg.Background.DBLockedCooldownSeconds)*time.Second,
 		)
 	}
 

@@ -333,6 +333,10 @@ func (s *TaskScheduler) runMergeSuggestionSlice() {
 	}()
 	if err := s.mergeSuggestionService.RunBackgroundSlice(); err != nil {
 		logger.Warnf("Failed to run merge suggestion slice: %v", err)
+		// Task 15：SQLite busy/locked → 通知 coordinator 进入 cooldown，避免 P2 spin。
+		if s.backgroundCoordinator != nil && isSQLiteBusyOrLocked(err) {
+			s.backgroundCoordinator.ReportDBBusy(BackgroundTaskMergeSuggestion, err)
+		}
 	}
 }
 
@@ -379,6 +383,10 @@ func (s *TaskScheduler) runIdentityProfileSlice() {
 	}()
 	if err := s.identityProfileService.RunBackgroundSlice(); err != nil {
 		logger.Warnf("Failed to run identity profile slice: %v", err)
+		// Task 15：SQLite busy/locked → 通知 coordinator 进入 cooldown，避免 P2 spin。
+		if s.backgroundCoordinator != nil && isSQLiteBusyOrLocked(err) {
+			s.backgroundCoordinator.ReportDBBusy(BackgroundTaskIdentityProfileBuild, err)
+		}
 	}
 }
 
