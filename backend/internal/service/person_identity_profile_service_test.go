@@ -838,6 +838,11 @@ func TestPersonIdentityProfileService_ANNRebuildFailureDoesNotRollbackGeneration
 	// 清空已构建 snapshot 后再请求重建，使 ListAllActiveCenters 失败时 stats 反映失败。
 	svc.ann.InvalidateAll()
 	svc.ann.RequestRebuild()
+	// Task 11：第一个 slice 成功 rebuild 后进入成功 cooldown。本测试需要立即触发一次失败
+	// rebuild 来验证失败语义，故清零 coordinator 的 ANN cooldown，避免被 cooldown gate 跳过。
+	if svc.coordinator != nil {
+		svc.coordinator.annRebuildCooldownUntil = time.Time{}
+	}
 	// 第二个 slice：无 dirty（人物已 ready），协调器批末因 RebuildRequested 触发 full rebuild，
 	// ListAllActiveCenters 失败 → 记录 list_active_centers_failed。
 	runSliceWithClock(svc, time.Duration(svc.cooldownMs)*time.Millisecond+1)

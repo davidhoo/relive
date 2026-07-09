@@ -50,6 +50,9 @@ type identityProfileCoordinator struct {
 	annRebuildCooldownUntil time.Time
 	// annRebuildMinInterval 成功 rebuild 后的最小间隔，默认 10 分钟。0 用默认值。
 	annRebuildMinInterval time.Duration
+	// annRebuildTotalCount 是 maybeRebuildANN 实际触发 rebuild 的累计次数，供测试断言
+	// cooldown/coalescing 是否真的减少了 rebuild 次数（区别于 stats.lastAnnRebuild 的 bool）。
+	annRebuildTotalCount int
 
 	// repoFace 是后台 face 仓库（ListProfileFaces）；与 owner.bgFaceRepo 一致，抽出便于注入测试。
 	repoFace repository.FaceRepository
@@ -176,6 +179,13 @@ func (c *identityProfileCoordinator) maybeRebuildANN(reason string) {
 	if c.owner == nil || c.owner.ann == nil || !c.owner.ann.RebuildRequested() {
 		return
 	}
+	// cooldown gate：成功 rebuild 后的最小间隔未到时，跳过本次 rebuild，保持
+	// rebuildRequested=true（pending），下次切片在 cooldown 过后重试。这合并短时间内
+	// 的 delta_full 重复请求。失败路径不进入成功 cooldown（见下方），故失败重试不受影响。
+	if c.nowFn().Before(c.annRebuildCooldownUntil) {
+		logger.Infof("identity profile coordinator: ann rebuild skipped (cooldown) reason=%s pending=true", reason)
+		return
+	}
 	// coordinator 准入：被拒绝则保持 pending，不阻塞 foreground。
 	if c.backgroundCoordinator != nil {
 		release, decision, ok := c.backgroundCoordinator.Begin(BackgroundTaskRequest{
@@ -190,15 +200,11 @@ func (c *identityProfileCoordinator) maybeRebuildANN(reason string) {
 	}
 	logger.Infof("identity profile coordinator: ann rebuild requested reason=%s", reason)
 	c.recordAnnRebuild(reason)
-	wasRequested := true
+	c.annRebuildTotalCount++ // 累计计数，供测试断言实际 rebuild 次数。
 	c.owner.rebuildANNFromCoordinator()
 	// rebuildANNFromCoordinator 成功会把 rebuildRequested 置 false；失败保持 true。
-	if c.owner.ann.RebuildRequested() {
-		// 仍 pending：rebuild 失败，不进入成功 cooldown，下次切片立即重试（保持既有失败语义）。
-		wasRequested = false
-	}
-	if wasRequested {
-		// 成功：进入成功最小间隔 cooldown，合并短时间内的 delta_full 重复请求。
+	// 仅成功才进入成功 cooldown（合并重复请求）；失败保持既有立即重试语义，不设 cooldown。
+	if !c.owner.ann.RebuildRequested() {
 		c.annRebuildCooldownUntil = c.nowFn().Add(c.annRebuildMinIntervalValue())
 	}
 }

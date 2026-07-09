@@ -224,12 +224,18 @@ func TestCoordinator_AnnActivateWhenDeltaSufficient(t *testing.T) {
 // TestCoordinator_AnnFullRebuildWhenDeltaNearLimit 验证 delta 接近上限或 rebuild_requested 时合并触发 full rebuild。
 func TestCoordinator_AnnFullRebuildWhenDeltaNearLimit(t *testing.T) {
 	svc, deps := newCoordinatorTestService(t)
+	// Task 11：禁用 ANN 成功 cooldown，本测试验证 delta full 立即触发 rebuild 语义，
+	// 不应被成功 cooldown 跳过。
+	svc.coordinator.setAnnRebuildMinIntervalForTest(0)
+	svc.coordinator.annRebuildCooldownUntil = time.Time{}
 	p1 := createPersonWithFaces(t, deps.repos, 100, vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
 	require.NoError(t, svc.MarkDirty([]uint{p1.ID}, "first"))
 	require.NoError(t, svc.RunBackgroundSlice()) // 首次 full rebuild
 
 	// 模拟 delta full：直接 RequestRebuild。
 	svc.ann.RequestRebuild()
+	// 禁用 cooldown：确保本次 delta full 立即触发 rebuild。
+	svc.coordinator.annRebuildCooldownUntil = time.Time{}
 
 	p2 := createPersonWithFaces(t, deps.repos, 200, vec3(0, 1, 0), vec3(0.01, 0.98, 0), vec3(0, 0.99, 0.01))
 	require.NoError(t, svc.MarkDirty([]uint{p2.ID}, "second"))
@@ -253,6 +259,9 @@ func TestCoordinator_AnnFullRebuildWhenDeltaNearLimit(t *testing.T) {
 // 且不回滚已激活的数据库 generation（fail-closed）。
 func TestCoordinator_AnnRebuildFailureFailClosed(t *testing.T) {
 	svc, deps := newCoordinatorTestService(t)
+	// Task 11：禁用 ANN 成功 cooldown，本测试验证失败 fail-closed 语义，不应被 cooldown 跳过。
+	svc.coordinator.setAnnRebuildMinIntervalForTest(0)
+	svc.coordinator.annRebuildCooldownUntil = time.Time{}
 	person := createPersonWithFaces(t, deps.repos, 100, vec3(1, 0, 0), vec3(0.98, 0.01, 0), vec3(0.99, 0, 0.01))
 	require.NoError(t, svc.MarkDirty([]uint{person.ID}, "manual"))
 	require.NoError(t, svc.RunBackgroundSlice())
@@ -265,6 +274,8 @@ func TestCoordinator_AnnRebuildFailureFailClosed(t *testing.T) {
 	svc.bgRepo = &failingListCentersRepo{inner: svc.bgRepo}
 	svc.ann.InvalidateAll()
 	svc.ann.RequestRebuild()
+	// 清零 cooldown：失败 rebuild 应立即触发（不被成功 cooldown gate 跳过）。
+	svc.coordinator.annRebuildCooldownUntil = time.Time{}
 	advanceClockAndRun(svc, time.Second)
 
 	// generation 不变（fail-closed）。
@@ -430,14 +441,8 @@ func TestIdentityProfileCoordinator_AnnRebuildCoordinatorRejectedKeepsPending(t 
 	assert.False(t, svc.ann.RebuildRequested(), "rebuild must run after foreground released and cooldown expired")
 }
 
-// coordStatsLastAnnRebuildCount 读取协调器统计中 ANN rebuild 计数（lastAnnRebuild 为 bool，
-// 这里用累计计数器近似：通过 stats.lastAnnRebuildReason 是否被刷新难以判断次数，改用一个
-// 包级计数 helper）。
+// coordStatsLastAnnRebuildCount 返回 maybeRebuildANN 实际触发 rebuild 的累计次数
+//（annRebuildTotalCount），供测试断言 cooldown/coalescing 是否真正减少了 rebuild 次数。
 func coordStatsLastAnnRebuildCount(coord *identityProfileCoordinator) int {
-	coord.statsMu.RLock()
-	defer coord.statsMu.RUnlock()
-	if coord.stats.lastAnnRebuild {
-		return 1
-	}
-	return 0
+	return coord.annRebuildTotalCount
 }
