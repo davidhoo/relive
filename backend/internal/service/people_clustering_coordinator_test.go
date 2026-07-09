@@ -462,6 +462,87 @@ func TestCoordinatorProtoCacheNoDataRace(t *testing.T) {
 	_ = svc.clusteringCoordinator.submitBackground()
 }
 
+// ---- Task 1 (background task governance): 现状刻画 + 目标行为测试 ----
+
+// TestPeopleClusteringCoordinator_RunningBatchStillBlocksForeground 是现状刻画测试：
+// 今天一个运行中的 background cluster batch 持有 writeGate.RLock()，所以同时尝试的
+// foreground writeGate.Lock() 会被阻塞，直到 batch 释放 RLock。此测试今天应当通过，
+// 用以固化当前“batch 在 writeGate.RLock 下执行”的行为，作为后续 Task 9 把 refresh
+// 工作移出 writeGate 的回归基线。
+func TestPeopleClusteringCoordinator_RunningBatchStillBlocksForeground(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	// 用 feedback hook 模拟一个慢速 cluster batch：它像真实 batch 一样持有 writeGate.RLock，
+	// 并在显式释放前不退出，从而让并发 foreground writeGate.Lock() 必然被阻塞。
+	batchStarted := make(chan struct{}, 1)
+	releaseBatch := make(chan struct{})
+	svc.setFeedbackReclusterHookForTest(func() model.ReclusterResult {
+		select {
+		case batchStarted <- struct{}{}:
+		default:
+		}
+		svc.writeGate.RLock()
+		defer svc.writeGate.RUnlock()
+		<-releaseBatch
+		return model.ReclusterResult{Evaluated: 1, Reassigned: 1}
+	})
+	t.Cleanup(func() {
+		svc.setFeedbackReclusterHookForTest(nil)
+		select {
+		case <-releaseBatch:
+		default:
+			close(releaseBatch)
+		}
+	})
+
+	// 启动慢速 batch（占用 worker 并持有 writeGate.RLock）。
+	svc.scheduleFeedbackRecluster()
+	waitForPeopleCondition(t, time.Second, func() bool {
+		select {
+		case <-batchStarted:
+			return true
+		default:
+			return false
+		}
+	})
+
+	// 同时尝试 foreground writeGate.Lock()。在现状下它必须被运行中的 batch 阻塞。
+	fgAcquired := make(chan struct{})
+	go func() {
+		svc.writeGate.Lock()
+		close(fgAcquired)
+		svc.writeGate.Unlock()
+	}()
+	select {
+	case <-fgAcquired:
+		t.Fatal("foreground writeGate.Lock acquired while batch held RLock; expected to be blocked (characterization)")
+	case <-time.After(80 * time.Millisecond):
+		// 期望：foreground 被阻塞。
+	}
+
+	// 释放 batch 后 foreground 应能拿到锁。
+	close(releaseBatch)
+	select {
+	case <-fgAcquired:
+	case <-time.After(time.Second):
+		t.Fatal("foreground writeGate.Lock did not acquire after batch released RLock")
+	}
+}
+
+// TestPeopleClusteringCoordinator_RefreshWorkDoesNotHoldWriteGate 是目标行为测试：
+// 模拟一个慢速 proto-cache refresh，refresh 运行期间 foreground mutation 能立即拿到
+// writeGate.Lock()。该行为在 Task 9 把 proto cache refresh 移出 writeGate 后才成立，
+// 因此先 skip，待 Task 9 启用。
+func TestPeopleClusteringCoordinator_RefreshWorkDoesNotHoldWriteGate(t *testing.T) {
+	t.Skip("enabled after proto cache refresh is moved outside writeGate")
+
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	// TODO(Task 9): 用 hook 模拟一个慢速 proto-cache refresh，refresh 运行期间断言
+	// foreground writeGate.Lock() 能立即获取，证明 refresh 不再持有 writeGate。
+	_ = svc
+}
+
 // ---- Task 11: 身份画像 shadow 接入增量聚类 ----
 
 // clusteringSnapshot 捕获一次聚类后 Faces / People 的业务字段，用于 legacy vs shadow
