@@ -173,6 +173,11 @@ type peopleService struct {
 	// nil 时（旧测试桩）前台 mutation 仍走 clusteringCoordinator.foregroundWaiters 兼容桥。
 	backgroundCoordinator *BackgroundTaskCoordinator
 
+	// fgCoordinatorRelease 持有当前前台 mutation 注册到 backgroundCoordinator 的 release
+	// 函数。由 acquireCoordinatorForeground 设置、releaseCoordinatorForeground 释放。
+	// 仅在持有时非 nil；foreground mutation 串行（writeGate 独占），无需额外同步。
+	fgCoordinatorRelease func()
+
 	// In-memory cache for GetStats() to avoid scanning 78K+ faces rows on every poll.
 	statsCache   *model.PeopleStatsResponse
 	statsCacheAt time.Time
@@ -1997,9 +2002,17 @@ func (s *peopleService) scheduleFeedbackRecluster() {
 // foreground waiter count is restored on every return path, including panics.
 //
 // Order: increment foregroundWaiters → notify coordinator → acquire writeGate.
+//
+// Task 8: 同时向统一 BackgroundTaskCoordinator 注册 foreground scope，使 P2 automatic
+// 后台 slice（merge suggestion / identity profile 等）在前台操作期间让路。coordinator
+// 为 nil（旧测试桩）时仅走 clusteringCoordinator.foregroundWaiters 兼容桥。
+// release 顺序与获取相反：先释放 writeGate，再 removeForegroundWaiter，最后 release
+// coordinator foreground scope——保证 coordinator 在 writeGate 释放后才看到 foreground
+// 结束，避免后台 slice 在 writeGate 仍持有时抢跑。
 func (s *peopleService) beginForegroundMutation() {
 	s.clusteringCoordinator.addForegroundWaiter()
 	s.writeGate.Lock()
+	s.acquireCoordinatorForeground()
 }
 
 // beginForegroundMutationTimed is like beginForegroundMutation but returns the
@@ -2009,7 +2022,19 @@ func (s *peopleService) beginForegroundMutationTimed() time.Duration {
 	s.clusteringCoordinator.addForegroundWaiter()
 	lockStart := time.Now()
 	s.writeGate.Lock()
+	s.acquireCoordinatorForeground()
 	return time.Since(lockStart)
+}
+
+// acquireCoordinatorForeground 向统一 coordinator 注册 foreground scope（若已注入）。
+// 返回的 release 由 endForegroundMutation 在释放 writeGate 之后调用。coordinator 为
+// nil 时为 no-op。release 用 sync.Once 保护，多次调用安全（defer + 显式调用混合场景）。
+func (s *peopleService) acquireCoordinatorForeground() {
+	if s.backgroundCoordinator == nil {
+		s.fgCoordinatorRelease = nil
+		return
+	}
+	s.fgCoordinatorRelease = s.backgroundCoordinator.BeginForeground()
 }
 
 // endForegroundMutation releases the write gate and deregisters the foreground
@@ -2017,6 +2042,16 @@ func (s *peopleService) beginForegroundMutationTimed() time.Duration {
 func (s *peopleService) endForegroundMutation() {
 	s.writeGate.Unlock()
 	s.clusteringCoordinator.removeForegroundWaiter()
+	s.releaseCoordinatorForeground()
+}
+
+// releaseCoordinatorForeground 释放统一 coordinator foreground scope（若持有）。
+func (s *peopleService) releaseCoordinatorForeground() {
+	release := s.fgCoordinatorRelease
+	s.fgCoordinatorRelease = nil
+	if release != nil {
+		release()
+	}
 }
 
 // peopleMutationTiming captures the timing breakdown of a single foreground
@@ -2101,14 +2136,20 @@ func (s *peopleService) idleInterval() time.Duration {
 // and returns a release function. Foreground mutations (merge/split/move and
 // suggestion-based merges) call this so the clustering coordinator yields
 // before writing faces/people tables.
+//
+// Task 8: 同时向统一 BackgroundTaskCoordinator 注册 foreground scope，release 顺序与
+// AcquireWriteGate 内部相反：先 Unlock writeGate，再 removeForegroundWaiter，最后
+// release coordinator scope。
 func (s *peopleService) AcquireWriteGate() func() {
 	s.clusteringCoordinator.addForegroundWaiter()
 	s.writeGate.Lock()
+	s.acquireCoordinatorForeground()
 	once := sync.Once{}
 	return func() {
 		once.Do(func() {
 			s.writeGate.Unlock()
 			s.clusteringCoordinator.removeForegroundWaiter()
+			s.releaseCoordinatorForeground()
 		})
 	}
 }

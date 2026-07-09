@@ -698,6 +698,8 @@ func newPeopleServiceOnDB(t *testing.T, db *gorm.DB) *peopleService {
 		&fakePeopleMLClient{},
 		nil,
 	).(*peopleService)
+	// Task 8：注入统一 BackgroundTaskCoordinator，使前台 mutation 注册 foreground scope。
+	svc.SetBackgroundCoordinator(NewBackgroundTaskCoordinator())
 	svc.clusteringTaskCounter = peopleClusteringTaskInterval
 	t.Cleanup(func() { svc.clusteringCoordinator.stop() })
 	return svc
@@ -873,4 +875,91 @@ func TestIdentityProfileShadow_ForegroundNotBlockedBySlowMatcher(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("background did not complete after matcher released")
 	}
+}
+
+// ---- Task 8: coordinator foreground scope 接管 People 前台状态 ----
+
+// TestPeopleForegroundMutationRegistersCoordinatorScope 验证前台 mutation 进入时
+// BackgroundTaskCoordinator.ForegroundActive() 为 true，error exit 后恢复 false。
+// 覆盖 SplitPerson / MoveFaces / MergePeople / DissolvePerson / AssignFacePerson。
+func TestPeopleForegroundMutationRegistersCoordinatorScope(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	// 用一个会阻塞的前台 mutation（MergePeople 不存在 target）验证 scope 注册；
+	// 但 error 路径在返回前就 endForegroundMutation 了，无法在 error 中观察 active。
+	// 改为：手动 beginForegroundMutation/endForegroundMutation 观察 coordinator。
+	svc.beginForegroundMutation()
+	assert.True(t, svc.backgroundCoordinator.ForegroundActive(),
+		"coordinator foreground scope must be active during foreground mutation")
+	assert.Equal(t, 1, svc.clusteringCoordinator.foregroundWaiterCount(),
+		"legacy foregroundWaiters bridge must still be incremented")
+	svc.endForegroundMutation()
+	assert.False(t, svc.backgroundCoordinator.ForegroundActive(),
+		"coordinator foreground scope must be released after endForegroundMutation")
+	assert.Equal(t, 0, svc.clusteringCoordinator.foregroundWaiterCount(),
+		"legacy foregroundWaiters bridge must be restored")
+}
+
+// TestPeopleForegroundMutationReleasesCoordinatorScopeOnError 验证 split/move/merge/
+// dissolve/assign 在 error exit 时正确释放 coordinator foreground scope（不泄漏）。
+func TestPeopleForegroundMutationReleasesCoordinatorScopeOnError(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	// MergePeople 不存在 target → error。
+	_, _ = svc.MergePeople(999999, []uint{1})
+	assert.False(t, svc.backgroundCoordinator.ForegroundActive(), "merge error must release coordinator scope")
+
+	// SplitPerson 不存在 face → error。
+	_, _, _ = svc.SplitPerson([]uint{999999})
+	assert.False(t, svc.backgroundCoordinator.ForegroundActive(), "split error must release coordinator scope")
+
+	// MoveFaces 不存在 face → error。
+	_, _ = svc.MoveFaces([]uint{999999}, 1)
+	assert.False(t, svc.backgroundCoordinator.ForegroundActive(), "move error must release coordinator scope")
+
+	// DissolvePerson 不存在 person → error。
+	_, _ = svc.DissolvePerson(999999)
+	assert.False(t, svc.backgroundCoordinator.ForegroundActive(), "dissolve error must release coordinator scope")
+
+	// AssignFacePerson 不存在 face → error。
+	_, _ = svc.AssignFacePerson(999999, model.FacePersonAssignmentRequest{Name: "x"})
+	assert.False(t, svc.backgroundCoordinator.ForegroundActive(), "assign error must release coordinator scope")
+}
+
+// TestPeopleForegroundScopeBlocksP2Clustering 验证 foreground scope active 时，
+// coordinator 拒绝 P2 automatic clustering 请求（foreground_active）。
+func TestPeopleForegroundScopeBlocksP2Clustering(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+
+	svc.beginForegroundMutation()
+	decision, ok := svc.backgroundCoordinator.CanRun(BackgroundTaskRequest{
+		Class: BackgroundTaskPeopleClustering, Priority: BackgroundPriorityAutomatic,
+	})
+	assert.False(t, ok)
+	assert.False(t, decision.Allowed)
+	assert.Equal(t, BackgroundDecisionForeground, decision.Reason)
+
+	svc.endForegroundMutation()
+	// 释放后 P2 恢复允许。
+	decision, ok = svc.backgroundCoordinator.CanRun(BackgroundTaskRequest{
+		Class: BackgroundTaskPeopleClustering, Priority: BackgroundPriorityAutomatic,
+	})
+	assert.True(t, ok)
+	assert.True(t, decision.Allowed)
+}
+
+// TestPeopleForegroundMutationCoordinatorNilFallback 验证 coordinator 为 nil 时
+// （旧测试桩 / 未注入）前台 mutation 仍走 clusteringCoordinator.foregroundWaiters
+// 兼容桥，不 panic。
+func TestPeopleForegroundMutationCoordinatorNilFallback(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	svc.SetBackgroundCoordinator(nil) // 显式置 nil 模拟未注入
+
+	assert.NotPanics(t, func() {
+		svc.beginForegroundMutation()
+		assert.Equal(t, 1, svc.clusteringCoordinator.foregroundWaiterCount(),
+			"legacy bridge must still work when coordinator is nil")
+		svc.endForegroundMutation()
+		assert.Equal(t, 0, svc.clusteringCoordinator.foregroundWaiterCount())
+	})
 }

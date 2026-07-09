@@ -102,6 +102,9 @@ func newPeopleServiceForTest(t *testing.T, client PeopleMLClient) (*peopleServic
 		nil, // runtimeService not needed for these tests
 	).(*peopleService)
 
+	// Task 8：注入统一 BackgroundTaskCoordinator，使前台 mutation 注册 foreground scope。
+	svc.SetBackgroundCoordinator(NewBackgroundTaskCoordinator())
+
 	// Reset clustering task counter to ensure clustering runs on first job
 	// This is needed because tests expect immediate clustering behavior
 	svc.clusteringTaskCounter = peopleClusteringTaskInterval
