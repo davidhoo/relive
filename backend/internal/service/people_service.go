@@ -925,6 +925,34 @@ func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) (result *
 		return nil, fmt.Errorf("faces not found")
 	}
 
+	// 幂等保护：检查是否存在已漂移到非 target 人物的 face（stale repeat 跨人物冲突）。
+	// 请求的 face 可能处于三种归属状态之一：
+	//  - 已属 target：本次无需移动（幂等 no-op 部分）。
+	//  - 仍属原 source（或多个不同 source）：合法 move，按既有语义移动剩余 face。
+	//  - 已属某个非 target 的不同人物（之前 move/assign 漂移）：stale repeat 冲突。
+	//    若同时还有 face 仍在原 source，这是混合场景——不能安全地只移动剩余 face，因为
+	//    那会把已漂移的 face 留在错误人物而把剩余 face 改到 target，产生不一致结果。
+	//    按计划要求返回 conflict，不 mutate。
+	// 判据：统计非 target 归属的 distinct person_id。若 >1 个不同非 target 人物 → conflict。
+	// （全部同属一个非 target 人物 + target 的混合不在本 case；那是首次 move 的合法子集。）
+	nonTargetOwners := make(map[uint]struct{})
+	hasAtTarget := false
+	for _, face := range faces {
+		if face.PersonID == nil || *face.PersonID == 0 {
+			continue
+		}
+		if *face.PersonID == targetPersonID {
+			hasAtTarget = true
+			continue
+		}
+		nonTargetOwners[*face.PersonID] = struct{}{}
+	}
+	if len(nonTargetOwners) > 1 {
+		// 请求 face 跨多个不同非 target 人物 → stale repeat 漂移冲突，不 mutate。
+		return nil, errPeopleMoveConflict
+	}
+	_ = hasAtTarget
+
 	sourcePersonIDs := make(map[uint]struct{})
 	movedFaceIDs := make([]uint, 0, len(faces))
 	for _, face := range faces {
@@ -3308,6 +3336,11 @@ func (s *peopleService) syncPersonState(personID uint) error {
 // 人物，或已属于单一非 source 人物但无匹配 person_split 事件证明是同一次 split 的重放）。
 // 返回此错误而非静默创建新人物或复用无关人物，避免重复 split 请求造成人物链或误归属。
 var errPeopleSplitConflict = errors.New("split request conflicts with current face assignments")
+
+// errPeopleMoveConflict 表示 move 请求与当前归属状态冲突：请求的部分 face 已经移动到
+// 一个非 target 的不同人物（stale repeat 跨人物漂移），无法安全合并移动。返回此错误
+// 而非继续 mutate，避免重复 move 请求把已漂移的归属误改到 target。
+var errPeopleMoveConflict = errors.New("move request conflicts with current face assignments")
 
 // normalizeFaceIDs 返回去重、去零、升序排序的 face ID 切片。用于 split/move 幂等比较，
 // 保证同一逻辑 face 集合无论输入顺序/重复都产生相同规范化结果。

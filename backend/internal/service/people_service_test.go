@@ -4661,3 +4661,100 @@ func TestPeopleService_SplitPersonRepeatedFaceSetRequiresMatchingSplitEvent(t *t
 			"conflicting split must not record a person_split event")
 	}
 }
+
+// ---- Task 4: move 幂等保护 ----
+
+// TestPeopleService_MoveFacesRepeatedFaceSetIsNoOp 验证重复提交同一个 face_ids + target_person_id
+// 是 no-op success：第一次移动后，第二次相同请求不产生新事件、不改归属、返回空 result。
+func TestPeopleService_MoveFacesRepeatedFaceSetIsNoOp(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	svc.SetFeedbackEventRepo(repository.NewPeopleFeedbackEventRepository(svc.db))
+
+	target, source, _, sourceFace := seedTwoPersons(t, svc)
+	_ = source
+
+	// 第一次 move：sourceFace 从 source 移到 target。
+	_, err := svc.MoveFaces([]uint{sourceFace.ID}, target.ID)
+	require.NoError(t, err)
+
+	// 确认第一次产生了一条 face_moved 事件。
+	events := feedbackEventsFromSvc(t, svc)
+	require.Len(t, events, 1)
+
+	// 第二次相同请求：应 no-op success，不新增事件。
+	_, err = svc.MoveFaces([]uint{sourceFace.ID}, target.ID)
+	require.NoError(t, err)
+
+	events = feedbackEventsFromSvc(t, svc)
+	assert.Len(t, events, 1, "repeated move must not record a second face_moved event")
+
+	// 归属仍是 target。
+	faceRepo := repository.NewFaceRepository(svc.db)
+	f, err := faceRepo.GetByID(sourceFace.ID)
+	require.NoError(t, err)
+	require.NotNil(t, f.PersonID)
+	assert.Equal(t, target.ID, *f.PersonID)
+}
+
+// TestPeopleService_MoveFacesMixedAlreadyMovedAndOtherFacesConflicts 验证：
+// 当请求的部分 face 已经移动到一个非 target 的不同人物（stale repeat），剩余 face 仍在
+// 原 source 时，MoveFaces 必须返回 conflict，不继续 mutate、不创建副作用。
+func TestPeopleService_MoveFacesMixedAlreadyMovedAndOtherFacesConflicts(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	svc.SetFeedbackEventRepo(repository.NewPeopleFeedbackEventRepository(svc.db))
+
+	// 构造：source 有 faceA、faceB 两张人脸；target、other 两个目标人物。
+	photoRepo := repository.NewPhotoRepository(svc.db)
+	personRepo := repository.NewPersonRepository(svc.db)
+	faceRepo := repository.NewFaceRepository(svc.db)
+
+	photoA := &model.Photo{FilePath: "/move/mix-a.jpg", FileName: "mix-a.jpg", FileSize: 1, FileHash: "mix-a", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	photoB := &model.Photo{FilePath: "/move/mix-b.jpg", FileName: "mix-b.jpg", FileSize: 1, FileHash: "mix-b", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	require.NoError(t, photoRepo.Create(photoA))
+	require.NoError(t, photoRepo.Create(photoB))
+
+	source := &model.Person{Category: model.PersonCategoryFamily}
+	target := &model.Person{Category: model.PersonCategoryFriend}
+	other := &model.Person{Category: model.PersonCategoryStranger}
+	require.NoError(t, personRepo.Create(source))
+	require.NoError(t, personRepo.Create(target))
+	require.NoError(t, personRepo.Create(other))
+
+	faceA := &model.Face{PhotoID: photoA.ID, PersonID: &source.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.9, QualityScore: 0.8, Embedding: encodeEmbedding(t, []float32{1, 0, 0})}
+	faceB := &model.Face{PhotoID: photoB.ID, PersonID: &source.ID, BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.9, QualityScore: 0.8, Embedding: encodeEmbedding(t, []float32{0, 1, 0})}
+	require.NoError(t, faceRepo.Create(faceA))
+	require.NoError(t, faceRepo.Create(faceB))
+	require.NoError(t, personRepo.RefreshStats(source.ID))
+
+	// 先把 faceA 移到 other（非 target 的不同人物）。
+	_, err := svc.MoveFaces([]uint{faceA.ID}, other.ID)
+	require.NoError(t, err)
+
+	// 现在尝试同时把 [faceA, faceB] 移到 target：faceA 已在 other（非 target 的不同人物），
+	// faceB 仍在 source。这是 stale repeat 跨人物冲突 → 必须 conflict，不 mutate。
+	_, err = svc.MoveFaces([]uint{faceA.ID, faceB.ID}, target.ID)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, errPeopleMoveConflict), "expected errPeopleMoveConflict, got %v", err)
+
+	// faceB 仍在 source，未被移动。
+	fb, err := faceRepo.GetByID(faceB.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fb.PersonID)
+	assert.Equal(t, source.ID, *fb.PersonID, "conflicting move must not mutate faceB")
+
+	// faceA 仍在 other，未被改动。
+	fa, err := faceRepo.GetByID(faceA.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fa.PersonID)
+	assert.Equal(t, other.ID, *fa.PersonID, "conflicting move must not mutate faceA")
+
+	// conflict 请求不应产生新的 face_moved 事件（只有之前 faceA→other 那一条）。
+	events := feedbackEventsFromSvc(t, svc)
+	var movedEvents []*model.PeopleFeedbackEvent
+	for _, ev := range events {
+		if ev.EventType == repository.PeopleFeedbackEventFaceMoved {
+			movedEvents = append(movedEvents, ev)
+		}
+	}
+	assert.Len(t, movedEvents, 1, "conflicting move must not record a second face_moved event")
+}
