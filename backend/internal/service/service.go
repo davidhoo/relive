@@ -62,10 +62,21 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		logger.Warnf("Failed to initialize default user: %v", err)
 	}
 
-	// 后台任务治理：统一准入控制器（前台优先 + cooldown + coalescing）。进程内内存态，
-	// 不写 SQLite。注入到 scheduler、peopleService、identity profile service、merge
-	// suggestion service。Task 8 起 canonical foreground busy source 即本 coordinator。
+	// 后台任务治理：统一准入控制器（前台优先 + cooldown + coalescing + advisory 负载背压）。
+	// 进程内内存态，不写 SQLite。注入到 scheduler、peopleService、identity profile service、
+	// merge suggestion service。Task 8 起 canonical foreground busy source 即本 coordinator。
 	backgroundCoordinator := NewBackgroundTaskCoordinator()
+	// Task 14：注入 advisory 资源背压配置 + 负载采样器。
+	loadSampler := newBackgroundLoadSampler()
+	if cfg != nil {
+		backgroundCoordinator.SetBackgroundConfig(
+			cfg.Background.AutoTasksEnabled,
+			cfg.Background.CPUPauseThreshold,
+			cfg.Background.IOWaitPauseThreshold,
+			cfg.Background.MemoryPauseThreshold,
+			loadSampler.Sample,
+		)
+	}
 
 	// 创建分析、照片与展示服务
 	analysisService := NewAnalysisService(db, repos.Photo, repos.PhotoTag, cfg)

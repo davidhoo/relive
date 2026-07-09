@@ -24,6 +24,17 @@ type Config struct {
 	Geocode     GeocodeConfig     `yaml:"geocode"` // 地理编码配置
 	Logging     LoggingConfig     `yaml:"logging"`
 	Security    SecurityConfig    `yaml:"security"`
+	Background  BackgroundConfig  `yaml:"background"` // 后台任务治理（advisory 资源背压）
+}
+
+// BackgroundConfig 后台任务治理配置。全部 advisory：foreground scope + cooldown 是权威机制，
+// 这些阈值只在 sampler 值 known 时才启用，unknown 不能单独拒绝 P2。
+type BackgroundConfig struct {
+	AutoTasksEnabled        bool    `yaml:"auto_tasks_enabled"`         // 是否启用 P2 自动后台任务（默认 true）
+	CPUPauseThreshold       float64 `yaml:"cpu_pause_threshold"`        // CPU 使用率超此值暂停 P2（默认 70）
+	IOWaitPauseThreshold    float64 `yaml:"iowait_pause_threshold"`     // iowait 超此值暂停 P2（默认 15）
+	MemoryPauseThreshold    float64 `yaml:"memory_pause_threshold"`     // 内存使用率超此值暂停 P2（默认 85）
+	DBLockedCooldownSeconds int     `yaml:"db_locked_cooldown_seconds"` // SQLite busy/locked 后自动任务 cooldown 秒数（默认 120）
 }
 
 // ServerConfig 服务器配置
@@ -120,6 +131,12 @@ const (
 	defaultClusteringIntervalMs           = 300
 	defaultANNBuildBatchSize              = 100
 	defaultANNBuildCPUDuty                = 0.5
+
+	// 后台任务治理默认阈值（advisory，仅在 sampler 值 known 时启用）。
+	defaultBackgroundCPUPauseThreshold       = 70.0
+	defaultBackgroundIOWaitPauseThreshold    = 15.0
+	defaultBackgroundMemoryPauseThreshold    = 85.0
+	defaultBackgroundDBLockedCooldownSeconds = 120
 	defaultIdentityProfileMode            = "legacy"
 	defaultIdentityProfileMaxCenters      = 6
 	defaultIdentityProfileMinCenterFaces  = 3
@@ -414,6 +431,19 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.People.ANNBuildCPUDuty == 0 {
 		cfg.People.ANNBuildCPUDuty = defaultANNBuildCPUDuty
+	}
+	// 后台任务治理默认值：阈值默认 70/15/85/120。
+	if cfg.Background.CPUPauseThreshold == 0 {
+		cfg.Background.CPUPauseThreshold = defaultBackgroundCPUPauseThreshold
+	}
+	if cfg.Background.IOWaitPauseThreshold == 0 {
+		cfg.Background.IOWaitPauseThreshold = defaultBackgroundIOWaitPauseThreshold
+	}
+	if cfg.Background.MemoryPauseThreshold == 0 {
+		cfg.Background.MemoryPauseThreshold = defaultBackgroundMemoryPauseThreshold
+	}
+	if cfg.Background.DBLockedCooldownSeconds == 0 {
+		cfg.Background.DBLockedCooldownSeconds = defaultBackgroundDBLockedCooldownSeconds
 	}
 	// 从环境变量覆盖敏感配置
 	if secret := os.Getenv("JWT_SECRET"); secret != "" {

@@ -109,3 +109,12 @@ geocode:
     max_distance: 100
   nominatim:
     endpoint: "https://nominatim.openstreetmap.org/reverse"
+
+# 后台任务治理（advisory 资源背压）。foreground scope + cooldown 是权威机制；
+# 这些阈值仅在负载采样值 known 时启用，unknown 不单独拒绝 P2 自动后台任务。
+background:
+  auto_tasks_enabled: true
+  cpu_pause_threshold: 70
+  iowait_pause_threshold: 15
+  memory_pause_threshold: 85
+  db_locked_cooldown_seconds: 120

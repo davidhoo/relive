@@ -427,3 +427,76 @@ security:
 people:
   ` + peopleEntry + "\n"
 }
+
+// TestBackgroundDefaults 验证后台任务治理默认阈值：缺省时填默认 70/15/85/120。
+func TestBackgroundDefaults(t *testing.T) {
+	dir := t.TempDir()
+	basePath := filepath.Join(dir, "config.base.yaml")
+	overridePath := filepath.Join(dir, "config.prod.yaml")
+	writeTestFile(t, basePath, `server:
+  port: 8080
+database:
+  type: "sqlite"
+photos:
+  root_path: "/tmp/photos"
+security:
+  jwt_Secret: "x"
+`)
+	writeTestFile(t, overridePath, `logging:
+  level: "info"
+`)
+
+	cfg, err := Load(overridePath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Background.CPUPauseThreshold != 70 {
+		t.Fatalf("cpu_pause_threshold default = %v, want 70", cfg.Background.CPUPauseThreshold)
+	}
+	if cfg.Background.IOWaitPauseThreshold != 15 {
+		t.Fatalf("iowait_pause_threshold default = %v, want 15", cfg.Background.IOWaitPauseThreshold)
+	}
+	if cfg.Background.MemoryPauseThreshold != 85 {
+		t.Fatalf("memory_pause_threshold default = %v, want 85", cfg.Background.MemoryPauseThreshold)
+	}
+	if cfg.Background.DBLockedCooldownSeconds != 120 {
+		t.Fatalf("db_locked_cooldown_seconds default = %v, want 120", cfg.Background.DBLockedCooldownSeconds)
+	}
+}
+
+// TestBackgroundOverride 验证显式配置覆盖默认值。
+func TestBackgroundOverride(t *testing.T) {
+	dir := t.TempDir()
+	basePath := filepath.Join(dir, "config.base.yaml")
+	overridePath := filepath.Join(dir, "config.prod.yaml")
+	writeTestFile(t, basePath, `server:
+  port: 8080
+database:
+  type: "sqlite"
+photos:
+  root_path: "/tmp/photos"
+security:
+  jwt_Secret: "x"
+`)
+	writeTestFile(t, overridePath, `background:
+  auto_tasks_enabled: false
+  cpu_pause_threshold: 50
+  iowait_pause_threshold: 10
+  memory_pause_threshold: 80
+  db_locked_cooldown_seconds: 60
+`)
+
+	cfg, err := Load(overridePath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Background.AutoTasksEnabled != false {
+		t.Fatalf("auto_tasks_enabled = %v, want false", cfg.Background.AutoTasksEnabled)
+	}
+	if cfg.Background.CPUPauseThreshold != 50 {
+		t.Fatalf("cpu_pause_threshold = %v, want 50", cfg.Background.CPUPauseThreshold)
+	}
+	if cfg.Background.DBLockedCooldownSeconds != 60 {
+		t.Fatalf("db_locked_cooldown_seconds = %v, want 60", cfg.Background.DBLockedCooldownSeconds)
+	}
+}

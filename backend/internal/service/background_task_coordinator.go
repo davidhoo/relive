@@ -54,11 +54,15 @@ type BackgroundTaskRequest struct {
 type BackgroundDecisionReason string
 
 const (
-	BackgroundDecisionAllowed        BackgroundDecisionReason = "allowed"
-	BackgroundDecisionCoalesced      BackgroundDecisionReason = "coalesced"
-	BackgroundDecisionForeground     BackgroundDecisionReason = "foreground_active"
-	BackgroundDecisionCooldown       BackgroundDecisionReason = "cooldown"
-	BackgroundDecisionAlreadyRunning BackgroundDecisionReason = "already_running"
+	BackgroundDecisionAllowed          BackgroundDecisionReason = "allowed"
+	BackgroundDecisionCoalesced        BackgroundDecisionReason = "coalesced"
+	BackgroundDecisionForeground       BackgroundDecisionReason = "foreground_active"
+	BackgroundDecisionCooldown         BackgroundDecisionReason = "cooldown"
+	BackgroundDecisionAlreadyRunning   BackgroundDecisionReason = "already_running"
+	BackgroundDecisionCPUHigh          BackgroundDecisionReason = "cpu_high"
+	BackgroundDecisionIOWaitHigh       BackgroundDecisionReason = "iowait_high"
+	BackgroundDecisionMemoryHigh       BackgroundDecisionReason = "memory_high"
+	BackgroundDecisionAutomaticDisabled BackgroundDecisionReason = "automatic_disabled"
 )
 
 // BackgroundTaskDecision 是一次准入决策的结果。Reason=allowed 且 Allowed=true 时可运行；
@@ -127,13 +131,36 @@ type BackgroundTaskCoordinator struct {
 
 	// slots[(class, dedupeKey)] 跟踪 running/pending，用于 coalescing。
 	slots map[BackgroundTaskDedupeEntry]*dedupeSlot
+
+	// thresholds 是 advisory 资源背压阈值（Task 14）。0 表示禁用对应检查。autoTasksEnabled
+	// 为 false 时所有 automatic 任务被拒绝为 automatic_disabled。loadFn 注入负载采样，
+	// nil 时不做负载检查（unknown 不单独拒绝 P2）。
+	autoTasksEnabled     bool
+	cpuPauseThreshold    float64
+	iowaitPauseThreshold float64
+	memoryPauseThreshold float64
+	loadFn               func() BackgroundLoadSnapshot
 }
 
-// NewBackgroundTaskCoordinator 构造一个空 coordinator。
+// SetBackgroundConfig 注入后台任务治理配置与负载采样函数（Task 14）。loadFn 为 nil 时
+// 不做负载背压（advisory）。生产由 service.go 装配时调用。
+func (c *BackgroundTaskCoordinator) SetBackgroundConfig(autoTasksEnabled bool, cpuPause, iowaitPause, memPause float64, loadFn func() BackgroundLoadSnapshot) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.autoTasksEnabled = autoTasksEnabled
+	c.cpuPauseThreshold = cpuPause
+	c.iowaitPauseThreshold = iowaitPause
+	c.memoryPauseThreshold = memPause
+	c.loadFn = loadFn
+}
+
+// NewBackgroundTaskCoordinator 构造一个空 coordinator。默认 auto_tasks_enabled=true
+// （与配置默认一致）；调用方可用 SetBackgroundConfig 覆盖。
 func NewBackgroundTaskCoordinator() *BackgroundTaskCoordinator {
 	return &BackgroundTaskCoordinator{
-		cooldowns: make(map[BackgroundTaskClass]time.Time),
-		slots:     make(map[BackgroundTaskDedupeEntry]*dedupeSlot),
+		cooldowns:        make(map[BackgroundTaskClass]time.Time),
+		slots:            make(map[BackgroundTaskDedupeEntry]*dedupeSlot),
+		autoTasksEnabled: true,
 	}
 }
 
@@ -221,18 +248,35 @@ func (c *BackgroundTaskCoordinator) Begin(req BackgroundTaskRequest) (func(), Ba
 // decideLocked 是准入决策的核心（调用方持锁）。allocate=true 表示允许占用 pending slot
 // （仅 Begin 路径）；CanRun 用 allocate=false 避免改变 pending 状态。
 func (c *BackgroundTaskCoordinator) decideLocked(req BackgroundTaskRequest, allocate bool) (BackgroundTaskDecision, bool) {
-	// P1 user 永远允许——不被 foreground/cooldown 拒绝。
+	// P1 user 永远允许——不被 foreground/cooldown/load 拒绝。
 	if req.Priority == BackgroundPriorityUser {
 		return BackgroundTaskDecision{Allowed: true, Reason: BackgroundDecisionAllowed}, true
 	}
 
-	// P2 automatic：foreground active 优先拒绝。
+	// P2 automatic：auto_tasks_enabled 关闭 → 拒绝。
+	if !c.autoTasksEnabled {
+		return BackgroundTaskDecision{Allowed: false, Reason: BackgroundDecisionAutomaticDisabled}, false
+	}
+	// foreground active 优先拒绝。
 	if c.foregroundActive > 0 {
 		return BackgroundTaskDecision{Allowed: false, Reason: BackgroundDecisionForeground}, false
 	}
 	// class cooldown 未过期 → 拒绝。
 	if until, ok := c.cooldowns[req.Class]; ok && time.Now().Before(until) {
 		return BackgroundTaskDecision{Allowed: false, Reason: BackgroundDecisionCooldown, CooldownUntil: until}, false
+	}
+	// advisory 负载背压：只在 sampler 值 known 且超阈值时拒绝。unknown 不单独拒绝 P2。
+	if c.loadFn != nil {
+		snap := c.loadFn()
+		if isKnown(snap.CPUUserPct) && c.cpuPauseThreshold > 0 && snap.CPUUserPct >= c.cpuPauseThreshold {
+			return BackgroundTaskDecision{Allowed: false, Reason: BackgroundDecisionCPUHigh}, false
+		}
+		if isKnown(snap.CPUIOWaitPct) && c.iowaitPauseThreshold > 0 && snap.CPUIOWaitPct >= c.iowaitPauseThreshold {
+			return BackgroundTaskDecision{Allowed: false, Reason: BackgroundDecisionIOWaitHigh}, false
+		}
+		if isKnown(snap.MemUsedPct) && c.memoryPauseThreshold > 0 && snap.MemUsedPct >= c.memoryPauseThreshold {
+			return BackgroundTaskDecision{Allowed: false, Reason: BackgroundDecisionMemoryHigh}, false
+		}
 	}
 
 	// DedupeKey 非空时做 coalescing 检查。
