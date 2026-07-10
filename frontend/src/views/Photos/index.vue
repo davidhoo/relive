@@ -85,7 +85,7 @@
 
         <el-table-column label="照片数" width="80" align="center">
           <template #default="{ row }">
-            <span class="photo-count">{{ getDisplayPathPhotoCount(row.path) }}</span>
+            <span class="photo-count" :class="{ 'is-loading-stat': !pathDerivedStatusLoaded }">{{ getDisplayPathPhotoCount(row.path) }}</span>
           </template>
         </el-table-column>
 
@@ -279,7 +279,7 @@
       </template>
 
       <!-- 空状态：系统中没有照片 -->
-      <el-empty v-if="!photos.length && !loading && initialized && systemTotal === 0" description="暂无照片" :image-size="120">
+      <el-empty v-if="!photos.length && !loading && statsReady && systemTotal === 0" description="暂无照片" :image-size="120">
         <el-button type="primary" @click="handleAddPath">
           <el-icon><Plus /></el-icon>
           添加扫描路径
@@ -287,7 +287,7 @@
       </el-empty>
 
       <!-- 空状态：搜索结果为空 -->
-      <el-empty v-else-if="!photos.length && !loading && initialized && systemTotal > 0" description="未找到匹配的照片" :image-size="120">
+      <el-empty v-else-if="!photos.length && !loading && statsReady && systemTotal > 0" description="未找到匹配的照片" :image-size="120">
         <p class="empty-hint">系统中共有 {{ systemTotal }} 张照片，但没有符合当前搜索条件的结果</p>
         <el-button type="primary" @click="resetSearch">
           <el-icon><Refresh /></el-icon>
@@ -632,6 +632,11 @@ import { configApi, type ScanPathConfig, type AutoScanConfig } from '@/api/confi
 import type { Photo, TagInfo } from '@/types/photo'
 import { usePhotoStore } from '@/stores/photo'
 import { shouldLoadScanPathDerivedStatus } from './scanPathStatsHelpers'
+import {
+  buildFirstScreenListParams,
+  isStaleRequest,
+  nextReqId,
+} from './loadOrchestration'
 import { v4 as uuidv4 } from 'uuid'
 
 const router = useRouter()
@@ -817,6 +822,10 @@ const pathPhotoCountDeltas = ref<Record<string, number>>({})
 const pathDerivedStatus = ref<Record<string, any>>({})
 
 const getDisplayPathPhotoCount = (path: string) => {
+  // 派生统计尚未返回时显示占位，避免误读为 0
+  if (!pathDerivedStatusLoaded.value && pathPhotoCountDeltas.value[path] === undefined) {
+    return '—'
+  }
   return Math.max(0, (pathPhotoCounts.value[path] || 0) + (pathPhotoCountDeltas.value[path] || 0))
 }
 
@@ -891,6 +900,9 @@ const refreshPathDerivedStatusWhenVisible = async () => {
   await loadPathDerivedStatusWhenVisible()
 }
 
+// 派生状态加载中时统一显示占位提示，避免误读为“无照片”
+const isPathStatsLoading = computed(() => !pathDerivedStatusLoaded.value)
+
 const getPathAnalysisDerivedState = (path: string) => {
   const stats = pathDerivedStatus.value[path]
   if (!stats || !stats.photo_total) return 'is-idle'
@@ -901,7 +913,8 @@ const getPathAnalysisDerivedState = (path: string) => {
 
 const getPathAnalysisDerivedTooltip = (path: string) => {
   const stats = pathDerivedStatus.value[path]
-  if (!stats || !stats.photo_total) return 'AI 分析：无照片'
+  if (!stats) return isPathStatsLoading.value ? 'AI 分析：统计中…' : 'AI 分析：无照片'
+  if (!stats.photo_total) return 'AI 分析：无照片'
   return `AI 分析：${stats.analyzed_total || 0}/${stats.photo_total}`
 }
 
@@ -915,7 +928,8 @@ const getPathThumbnailDerivedState = (path: string) => {
 
 const getPathThumbnailDerivedTooltip = (path: string) => {
   const stats = pathDerivedStatus.value[path]
-  if (!stats || !stats.thumbnail_total) return '缩略图：无照片'
+  if (!stats) return isPathStatsLoading.value ? '缩略图：统计中…' : '缩略图：无照片'
+  if (!stats.thumbnail_total) return '缩略图：无照片'
   if (stats.thumbnail_failed > 0) return `缩略图：失败 ${stats.thumbnail_failed}`
   return `缩略图：${stats.thumbnail_ready}/${stats.thumbnail_total}`
 }
@@ -930,7 +944,8 @@ const getPathGeocodeDerivedState = (path: string) => {
 
 const getPathGeocodeDerivedTooltip = (path: string) => {
   const stats = pathDerivedStatus.value[path]
-  if (!stats || !stats.geocode_total) return 'GPS：无GPS照片'
+  if (!stats) return isPathStatsLoading.value ? 'GPS：统计中…' : 'GPS：无GPS照片'
+  if (!stats.geocode_total) return 'GPS：无GPS照片'
   if (stats.geocode_failed > 0) return `GPS：失败 ${stats.geocode_failed}`
   return `GPS：${stats.geocode_ready}/${stats.geocode_total}`
 }
@@ -1168,61 +1183,77 @@ const resetSearch = () => {
   filterStatus.value = ''
   currentPage.value = 1
   syncStateToURL()
-  loadPhotos()
+  refreshListAndTotal()
 }
 
-// 加载照片列表
+// 请求序号：快速切换筛选/分页时丢弃过期结果，避免旧请求覆盖新状态
+let photoListReqId = 0
+let filteredTotalReqId = 0
+// 统计是否就绪：控制空状态展示，避免首屏误判“暂无照片”
+const statsReady = ref(false)
+
+// 构建照片筛选参数（不含分页与 no_total）
+const buildPhotoFilterParams = () => {
+  const params: any = {}
+  if (searchQuery.value) params.search = searchQuery.value
+  if (filterCategory.value) params.category = filterCategory.value
+  if (filterTag.value) params.tag = filterTag.value
+  if (filterAnalyzed.value) params.analyzed = filterAnalyzed.value
+  if (filterThumbnail.value) params.has_thumbnail = filterThumbnail.value
+  if (filterGPS.value) params.has_gps = filterGPS.value
+  if (filterStatus.value) params.status = filterStatus.value
+  return params
+}
+
+// 加载照片列表（首屏优先，携带 no_total=true 跳过慢 COUNT；total 由 loadFilteredTotal 单独补齐）
 const loadPhotos = async () => {
+  const reqId = nextReqId(photoListReqId)
+  photoListReqId = reqId
   loading.value = true
   try {
-    const params: any = {
-      page: currentPage.value,
-      page_size: pageSize.value,
-    }
-
-    if (searchQuery.value) {
-      params.search = searchQuery.value
-    }
-
-    if (filterCategory.value) {
-      params.category = filterCategory.value
-    }
-
-    if (filterTag.value) {
-      params.tag = filterTag.value
-    }
-
-    if (filterAnalyzed.value) {
-      params.analyzed = filterAnalyzed.value
-    }
-
-    if (filterThumbnail.value) {
-      params.has_thumbnail = filterThumbnail.value
-    }
-
-    if (filterGPS.value) {
-      params.has_gps = filterGPS.value
-    }
-
-    if (filterStatus.value) {
-      params.status = filterStatus.value
-    }
-
+    const params = buildFirstScreenListParams(currentPage.value, pageSize.value, buildPhotoFilterParams())
     const res = await photoApi.getList(params)
+    if (isStaleRequest(reqId, photoListReqId)) return // 已有更新请求，丢弃过期结果
     photos.value = res.data?.data?.items || []
-    total.value = res.data?.data?.total || 0
   } catch (error: any) {
+    if (isStaleRequest(reqId, photoListReqId)) return
     ElMessage.error(error.message || '加载照片列表失败')
   } finally {
-    loading.value = false
+    if (!isStaleRequest(reqId, photoListReqId)) loading.value = false
   }
+}
+
+// 加载当前筛选条件下的照片总数（独立 COUNT，命中后端 filteredCountCache；翻页不重复触发慢 COUNT）
+const loadFilteredTotal = async () => {
+  const reqId = nextReqId(filteredTotalReqId)
+  filteredTotalReqId = reqId
+  try {
+    // page_size=1 仅取 total，避免重复拉取列表数据；COUNT 才是耗时部分
+    const params: any = {
+      page: 1,
+      page_size: 1,
+      ...buildPhotoFilterParams(),
+    }
+    const res = await photoApi.getList(params)
+    if (isStaleRequest(reqId, filteredTotalReqId)) return
+    total.value = res.data?.data?.total || 0
+  } catch (error: any) {
+    if (isStaleRequest(reqId, filteredTotalReqId)) return
+    console.error('Failed to load filtered total:', error)
+  }
+}
+
+// 筛选条件变化：先快速渲染列表（no_total），再补齐总数
+const refreshListAndTotal = () => {
+  loadPhotos()
+  loadFilteredTotal()
 }
 
 // 搜索处理
 const handleSearch = () => {
   currentPage.value = 1
   syncStateToURL()
-  loadPhotos()
+  refreshListAndTotal()
 }
 
 // 分页处理
@@ -1348,7 +1379,7 @@ const handleCategoryClick = (value: string) => {
   }
   currentPage.value = 1
   syncStateToURL()
-  loadPhotos()
+  refreshListAndTotal()
 }
 
 // 点击标签筛选
@@ -1361,7 +1392,7 @@ const handleTagClick = (value: string) => {
   }
   currentPage.value = 1
   syncStateToURL()
-  loadPhotos()
+  refreshListAndTotal()
 }
 
 // 折叠/展开扫描路径
@@ -1384,7 +1415,7 @@ const handlePathClick = (row: ScanPathConfig) => {
   }
   currentPage.value = 1
   syncStateToURL()
-  loadPhotos()
+  refreshListAndTotal()
 }
 
 const handleRecycleBinClick = () => {
@@ -1571,7 +1602,7 @@ const startPollingScanProgress = (pathName: string) => {
         // 刷新数据
         clearPathPhotoCountDelta(task.path || currentScanPath.value)
         photoStore.invalidateAll()
-        await loadPhotos()
+        refreshListAndTotal()
         await loadScanPaths()
         await Promise.all([loadPathPhotoCounts(), refreshPathDerivedStatusWhenVisible()])
       }
@@ -1598,7 +1629,7 @@ const handleCleanup = async () => {
     }
 
     // Reload photos to update the list
-    await loadPhotos()
+    refreshListAndTotal()
     // 刷新路径照片数量
     await Promise.all([loadPathPhotoCounts(), refreshPathDerivedStatusWhenVisible()])
   } catch (error: any) {
@@ -1748,17 +1779,30 @@ onMounted(async () => {
 
   syncStateToURL()
 
-  // 并行加载所有独立数据
-  await Promise.all([
-    loadScanPaths(),
-    loadAutoScanConfig(),
-    loadPhotoCounts(),
-    loadCategoriesAndTags(),
-    checkOngoingScanTask(),
-    loadPhotos(),
-  ])
+  // 分阶段加载：照片网格优先可用，统计类接口低优先级延后，避免首屏集中打满 SQLite 读负载。
+  //
+  // 第一阶段：照片列表（no_total=true，毫秒级）。网格可用前不等待任何统计。
+  await loadPhotos()
+
+  // 第二阶段：当前筛选条件 total、/photos/counts、分类、热门标签。
+  // 这些是“统计类”请求，与列表分离，低并发执行（不阻塞网格渲染）。
+  // 注意：不再用一个 Promise.all 同时等待所有统计请求。
+  loadFilteredTotal()
+  loadPhotoCounts()
+  loadCategoriesAndTags()
+
+  // 第三阶段：扫描路径配置与任务状态。路径配置本身很轻，但派生统计较重，
+  // 故先加载路径配置让路径表可用，派生状态按折叠态延后到第四阶段。
+  loadScanPaths()
+  loadAutoScanConfig()
+  checkOngoingScanTask()
 
   initialized.value = true
+  statsReady.value = true
+
+  // 第四阶段：仅当扫描路径展开时，低优先级加载路径照片数与派生状态。
+  // loadScanPaths 内部已会触发 loadPathDerivedStatusWhenVisible，此处兜底确保展开态补齐。
+  void loadPathDerivedStatusWhenVisible()
 })
 
 // 将当前状态同步到 URL（不触发路由跳转）
@@ -2104,6 +2148,10 @@ defineExpose({
 .photo-count {
   font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
+}
+
+.photo-count.is-loading-stat {
+  color: var(--color-text-tertiary);
 }
 
 /* 操作列按钮组 */

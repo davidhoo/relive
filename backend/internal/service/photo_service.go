@@ -112,15 +112,29 @@ type photoService struct {
 	// 筛选条件计数缓存（照片管理页分页总数，按筛选条件短期缓存）
 	filteredCountCache   map[string]filteredCountEntry
 	filteredCountCacheMu sync.RWMutex
+
+	// 按状态计数缓存（/photos/counts：active/excluded 计数，全表聚合，NAS 上较慢）
+	photoStatusCountsCache     *photoCountsCacheEntry
+	photoStatusCountsCacheMu   sync.RWMutex
 }
 
 // filteredCountCacheTTL 筛选条件计数缓存存活时间。
 const filteredCountCacheTTL = 10 * time.Second
 
+// photoStatusCountsCacheTTL /photos/counts 按状态计数缓存存活时间。
+// 短 TTL 配合写入路径主动失效，兼顾 NAS 读负载与最终一致性。
+const photoStatusCountsCacheTTL = 10 * time.Second
+
 // filteredCountEntry 筛选条件计数缓存条目。
 type filteredCountEntry struct {
 	count int64
 	at    time.Time
+}
+
+// photoCountsCacheEntry /photos/counts 按状态计数缓存条目。
+type photoCountsCacheEntry struct {
+	counts *model.PhotoCountsResponse
+	at     time.Time
 }
 
 func (s *photoService) SetPeopleService(peopleService PeopleService) {
@@ -225,6 +239,7 @@ func (s *photoService) GetPhotosSummary(req *model.GetPhotosRequest) ([]*model.P
 
 	// 列表查询始终不带总数（withTotal=false），避免 COUNT(*) OVER() 全量物化。
 	// 总数按需通过独立 COUNT 查询 + 筛选条件缓存获取。
+	start := time.Now()
 	summaries, _, err := s.repo.ListSummaries(req.Page, req.PageSize, req.Analyzed, req.HasThumbnail, req.HasGPS, req.Location, req.Search, req.Category, req.Tag, req.SortBy, req.SortDesc, enabledPaths, req.Status, false)
 	if err != nil {
 		return nil, 0, err
@@ -233,16 +248,28 @@ func (s *photoService) GetPhotosSummary(req *model.GetPhotosRequest) ([]*model.P
 
 	// Dashboard 等无需总数的场景直接返回，跳过 COUNT 查询。
 	if req.NoTotal {
+		logger.Infof("[photos] list no_total=true page=%d page_size=%d items=%d elapsed=%dms filters=%s",
+			req.Page, req.PageSize, len(summaries), time.Since(start).Milliseconds(), buildFilteredCountKey(req, enabledPaths))
 		return summaries, 0, nil
 	}
 
-	total, err := s.getCachedFilteredCount(req, enabledPaths)
+	total, hit, err := s.getCachedFilteredCount(req, enabledPaths)
 	if err != nil {
 		// 总数查询失败不阻塞列表展示
-		logger.Warnf("Failed to get filtered count: %v", err)
+		logger.Warnf("[photos] list filtered count failed: %v", err)
 		return summaries, 0, nil
 	}
+	logger.Infof("[photos] list no_total=false page=%d page_size=%d items=%d total=%d cache=%s elapsed=%dms filters=%s",
+		req.Page, req.PageSize, len(summaries), total, cacheLabel(hit), time.Since(start).Milliseconds(), buildFilteredCountKey(req, enabledPaths))
 	return summaries, total, nil
+}
+
+// cacheLabel 将布尔命中转为可读标签用于日志。
+func cacheLabel(hit bool) string {
+	if hit {
+		return "hit"
+	}
+	return "miss"
 }
 
 // GetAdjacentPhotos 获取相邻照片 ID
@@ -408,10 +435,12 @@ func (s *photoService) GetPhotosByPathPrefix(pathPrefix string) ([]*model.Photo,
 
 // CountPhotosByPathPrefix 根据路径前缀统计照片数量
 func (s *photoService) CountPhotosByPathPrefix(pathPrefix string) (int64, error) {
+	start := time.Now()
 	count, err := s.repo.CountByPathPrefix(pathPrefix)
 	if err != nil {
 		return 0, fmt.Errorf("count photos by path prefix: %w", err)
 	}
+	logger.Infof("[photos/count-by-paths] path=%s count=%d elapsed=%dms", pathPrefix, count, time.Since(start).Milliseconds())
 	return count, nil
 }
 
@@ -424,11 +453,48 @@ func (s *photoService) GetPathDerivedStatus(pathPrefix string) (*model.PathDeriv
 }
 
 func (s *photoService) GetPathDerivedStatusBatch(prefixes []string) (map[string]*model.PathDerivedStatus, error) {
-	return s.repo.GetDerivedStatusByPathPrefixes(prefixes)
+	start := time.Now()
+	stats, err := s.repo.GetDerivedStatusByPathPrefixes(prefixes)
+	if err != nil {
+		return nil, err
+	}
+	logger.Infof("[photos/derived-status-by-paths] paths=%d elapsed=%dms", len(prefixes), time.Since(start).Milliseconds())
+	return stats, nil
 }
 
 func (s *photoService) CountByStatus() (*model.PhotoCountsResponse, error) {
-	return s.repo.CountByStatus()
+	// /photos/counts 为全表聚合查询，NAS 上明显偏慢。短期缓存 + 写入路径失效，
+	// 让照片管理页首屏阶段并发打开时复用同一份计数。
+	start := time.Now()
+	s.photoStatusCountsCacheMu.RLock()
+	if s.photoStatusCountsCache != nil && time.Since(s.photoStatusCountsCache.at) < photoStatusCountsCacheTTL {
+		cached := *s.photoStatusCountsCache.counts
+		s.photoStatusCountsCacheMu.RUnlock()
+		logger.Infof("[photos/counts] cache=hit active=%d excluded=%d elapsed=%dms",
+			cached.ActiveCount, cached.ExcludedCount, time.Since(start).Milliseconds())
+		return &cached, nil
+	}
+	s.photoStatusCountsCacheMu.RUnlock()
+
+	counts, err := s.repo.CountByStatus()
+	if err != nil {
+		return nil, err
+	}
+
+	s.photoStatusCountsCacheMu.Lock()
+	s.photoStatusCountsCache = &photoCountsCacheEntry{counts: counts, at: time.Now()}
+	s.photoStatusCountsCacheMu.Unlock()
+
+	logger.Infof("[photos/counts] cache=miss active=%d excluded=%d elapsed=%dms",
+		counts.ActiveCount, counts.ExcludedCount, time.Since(start).Milliseconds())
+	return counts, nil
+}
+
+// invalidatePhotoStatusCountsCache 清除 /photos/counts 按状态计数缓存。
+func (s *photoService) invalidatePhotoStatusCountsCache() {
+	s.photoStatusCountsCacheMu.Lock()
+	s.photoStatusCountsCache = nil
+	s.photoStatusCountsCacheMu.Unlock()
 }
 
 // BatchUpdateStatus 批量更新照片状态
@@ -444,6 +510,7 @@ func (s *photoService) BatchUpdateStatus(req *model.BatchUpdateStatusRequest) (i
 	// 状态变化立即改变活跃照片计数，失效相关缓存
 	if count > 0 {
 		s.invalidateFilteredCountCache()
+		s.invalidatePhotoStatusCountsCache()
 		invalidatePhotoStatsCache()
 	}
 	return count, nil
@@ -549,29 +616,32 @@ func (s *photoService) InvalidateScanPathsCache() {
 
 	// 扫描路径变化会改变可见照片集合，筛选条件计数一并失效
 	s.invalidateFilteredCountCache()
+	// 路径启用/禁用会影响按状态计数（路径表照片数与回收站计数），一并失效
+	s.invalidatePhotoStatusCountsCache()
 }
 
 // getCachedFilteredCount 按筛选条件获取照片总数（带短期缓存）。
 // 照片管理页翻页时同一筛选条件复用缓存的总数，避免每次都执行 COUNT 全表扫描。
-func (s *photoService) getCachedFilteredCount(req *model.GetPhotosRequest, enabledPaths []string) (int64, error) {
+// 返回值 hit 表示是否命中缓存，用于上层观测日志。
+func (s *photoService) getCachedFilteredCount(req *model.GetPhotosRequest, enabledPaths []string) (count int64, hit bool, err error) {
 	key := buildFilteredCountKey(req, enabledPaths)
 
 	s.filteredCountCacheMu.RLock()
 	if entry, ok := s.filteredCountCache[key]; ok && time.Since(entry.at) < filteredCountCacheTTL {
 		s.filteredCountCacheMu.RUnlock()
-		return entry.count, nil
+		return entry.count, true, nil
 	}
 	s.filteredCountCacheMu.RUnlock()
 
-	count, err := s.repo.CountWithFilters(req.Analyzed, req.HasThumbnail, req.HasGPS, req.Location, req.Search, req.Category, req.Tag, enabledPaths, req.Status)
+	count, err = s.repo.CountWithFilters(req.Analyzed, req.HasThumbnail, req.HasGPS, req.Location, req.Search, req.Category, req.Tag, enabledPaths, req.Status)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 
 	s.filteredCountCacheMu.Lock()
 	s.filteredCountCache[key] = filteredCountEntry{count: count, at: time.Now()}
 	s.filteredCountCacheMu.Unlock()
-	return count, nil
+	return count, false, nil
 }
 
 // invalidateFilteredCountCache 清除筛选条件计数缓存。

@@ -7,7 +7,7 @@ import {
   getPhotoPeopleCountTag,
   getPhotoPeopleSummaryLabel,
   groupPhotoPeopleByCategory,
-} from '../src/views/Photos/photoPeopleHelpers.js'
+} from '../src/views/Photos/photoPeopleHelpers.ts'
 
 test('groupPhotoPeopleByCategory 按人物类别聚合照片人物响应', () => {
   const groups = groupPhotoPeopleByCategory({

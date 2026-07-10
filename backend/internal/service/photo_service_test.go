@@ -824,3 +824,60 @@ func TestPhotoService_GetPhotosSummary_FilteredCountCache_DifferentFilters(t *te
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), totalAll)
 }
+
+// TestPhotoService_CountByStatus_CacheHitAndInvalidate 验证 /photos/counts 缓存命中与失效。
+func TestPhotoService_CountByStatus_CacheHitAndInvalidate(t *testing.T) {
+	svc, repo := newPhotoServiceForList(t)
+	// 2 active + 1 excluded
+	require.NoError(t, repo.Create(&model.Photo{FilePath: "/a.jpg", FileHash: "h1"}))
+	require.NoError(t, repo.Create(&model.Photo{FilePath: "/b.jpg", FileHash: "h2"}))
+	require.NoError(t, repo.Create(&model.Photo{FilePath: "/c.jpg", FileHash: "h3", Status: "excluded"}))
+
+	// 首次查询：cache miss，从 DB 取
+	counts, err := svc.CountByStatus()
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), counts.ActiveCount)
+	assert.Equal(t, int64(1), counts.ExcludedCount)
+
+	// 直接写入一张照片（绕过服务层失效逻辑）
+	require.NoError(t, repo.Create(&model.Photo{FilePath: "/d.jpg", FileHash: "h4"}))
+
+	// 缓存未失效：仍返回旧的 active=2
+	counts, err = svc.CountByStatus()
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), counts.ActiveCount, "cached counts should be stale until invalidated")
+
+	// 失效后：重新查询得到 active=3
+	svc.invalidatePhotoStatusCountsCache()
+	counts, err = svc.CountByStatus()
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), counts.ActiveCount)
+	assert.Equal(t, int64(1), counts.ExcludedCount)
+}
+
+// TestPhotoService_BatchUpdateStatus_InvalidatesCountsCache 验证批量排除/恢复后 counts 缓存失效。
+func TestPhotoService_BatchUpdateStatus_InvalidatesCountsCache(t *testing.T) {
+	svc, repo := newPhotoServiceForList(t)
+	var ids []uint
+	for i := 0; i < 3; i++ {
+		p := &model.Photo{FilePath: fmt.Sprintf("/p%02d.jpg", i), FileHash: fmt.Sprintf("h%02d", i)}
+		require.NoError(t, repo.Create(p))
+		ids = append(ids, p.ID)
+	}
+
+	// 预热缓存：active=3
+	counts, err := svc.CountByStatus()
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), counts.ActiveCount)
+
+	// 批量排除 2 张 → 触发缓存失效
+	affected, err := svc.BatchUpdateStatus(&model.BatchUpdateStatusRequest{PhotoIDs: ids[:2], Status: "excluded"})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), affected)
+
+	// 缓存已失效，重新查询应反映最新状态
+	counts, err = svc.CountByStatus()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), counts.ActiveCount, "counts cache should be invalidated after batch status update")
+	assert.Equal(t, int64(2), counts.ExcludedCount)
+}

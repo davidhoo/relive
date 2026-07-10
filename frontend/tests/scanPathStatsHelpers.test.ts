@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { shouldLoadScanPathDerivedStatus } from '../src/views/Photos/scanPathStatsHelpers.js'
+import { shouldLoadScanPathDerivedStatus } from '../src/views/Photos/scanPathStatsHelpers.ts'
 
 test('扫描路径折叠时不加载派生统计', () => {
   assert.equal(shouldLoadScanPathDerivedStatus(true, false), false)
