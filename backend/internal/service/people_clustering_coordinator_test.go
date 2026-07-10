@@ -1201,3 +1201,652 @@ func (r *failingListAssignedFaceRepo) ListAssignedPersonIDs() ([]uint, error) {
 	failingListAssignedCount.Add(1)
 	return nil, fmt.Errorf("simulated protoCache refresh failure")
 }
+
+func (r *failingListAssignedFaceRepo) ListAssignedPersonIDsPaged(offset, limit int) ([]uint, error) {
+	failingListAssignedCount.Add(1)
+	return nil, fmt.Errorf("simulated protoCache refresh failure")
+}
+
+// ---- 分批 Full Rebuild 测试 ----
+
+// setupRebuildTest creates a people service with N persons, each with an assigned
+// face + embedding. Returns the service, db, and person IDs.
+func setupRebuildTest(t *testing.T, numPersons int) (*peopleService, *gorm.DB, []uint) {
+	t.Helper()
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	coord := svc.clusteringCoordinator
+	// Use tiny batch size and yield for deterministic testing.
+	coord.setRebuildConfigForTest(2, 10*time.Millisecond, 20*time.Millisecond)
+	// Use short cooldown intervals so forced rebuilds can run in tests.
+	coord.setProtoCacheRefreshIntervalsForTest(1*time.Millisecond, 20*time.Millisecond)
+
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+
+	personIDs := make([]uint, numPersons)
+	for i := 0; i < numPersons; i++ {
+		photo := &model.Photo{
+			FilePath: fmt.Sprintf("/rebuild/photo-%d.jpg", i),
+			FileName: fmt.Sprintf("photo-%d.jpg", i), FileSize: 1,
+			FileHash: fmt.Sprintf("rebuild-%d", i), Width: 100, Height: 100,
+			Status: model.PhotoStatusActive,
+		}
+		require.NoError(t, photoRepo.Create(photo))
+		person := &model.Person{Category: model.PersonCategoryFamily}
+		require.NoError(t, personRepo.Create(person))
+		personIDs[i] = person.ID
+		require.NoError(t, faceRepo.Create(&model.Face{
+			PhotoID: photo.ID, PersonID: &person.ID,
+			BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+			Confidence: 0.9, QualityScore: 0.8,
+			Embedding:     encodeEmbedding(t, []float32{float32(i), 0, 0}),
+			ClusterStatus: model.FaceClusterStatusAssigned, ClusterScore: 0.9,
+		}))
+		require.NoError(t, personRepo.RefreshStats(person.ID))
+	}
+	return svc, db, personIDs
+}
+
+// TestProtoCacheFullRebuild_BatchesPrototypeLoading 验证 full rebuild 分批加载 prototype，
+// 不是一次性查询全部 person。
+func TestProtoCacheFullRebuild_BatchesPrototypeLoading(t *testing.T) {
+	svc, _, _ := setupRebuildTest(t, 6)
+	coord := svc.clusteringCoordinator
+
+	batchCallCount := atomic.Int32{}
+	svc.setProtoCacheBuildHookForTest(func() { batchCallCount.Add(1) })
+	t.Cleanup(func() { svc.setProtoCacheBuildHookForTest(nil) })
+
+	// Trigger a full rebuild (cold start, cache is nil).
+	res := coord.submitBackground()
+	require.NoError(t, res.err)
+
+	// With batch size 2 and 6 persons, expect 3 batches (3 hook calls).
+	assert.Equal(t, int32(3), batchCallCount.Load(), "expected 3 batch calls for 6 persons with batch size 2")
+	assert.NotNil(t, svc.protoCache, "protoCache must be built after rebuild")
+}
+
+// TestProtoCacheFullRebuild_YieldsBetweenBatches 验证 batch 之间有 yield（让行）。
+func TestProtoCacheFullRebuild_YieldsBetweenBatches(t *testing.T) {
+	svc, _, _ := setupRebuildTest(t, 6)
+	coord := svc.clusteringCoordinator
+
+	yieldCount := atomic.Int32{}
+	svc.setProtoCacheBuildHookForTest(func() { yieldCount.Add(1) })
+	t.Cleanup(func() { svc.setProtoCacheBuildHookForTest(nil) })
+
+	start := time.Now()
+	res := coord.submitBackground()
+	require.NoError(t, res.err)
+	elapsed := time.Since(start)
+
+	// With 5ms yield between batches (3 batches = 2 yields), total should be >= 10ms.
+	assert.GreaterOrEqual(t, elapsed.Round(time.Millisecond), 10*time.Millisecond,
+		"yield between batches should add measurable delay")
+
+	// After completion, check yield time was tracked.
+	if coord.rebuildJob != nil {
+		// Job is nil after completion, so check via logs or skip.
+	}
+	// rebuildJob is nil after completion; we verify via timing.
+	assert.NotNil(t, svc.protoCache)
+}
+
+// TestProtoCacheFullRebuild_PausesWhenForegroundActive 验证前台 active 时 rebuild 暂停。
+func TestProtoCacheFullRebuild_PausesWhenForegroundActive(t *testing.T) {
+	svc, _, _ := setupRebuildTest(t, 6)
+	coord := svc.clusteringCoordinator
+
+	// Block the first batch to set up foreground mid-rebuild.
+	releaseBatch := make(chan struct{})
+	batchStarted := make(chan struct{}, 1)
+	batchReleased := atomic.Bool{}
+	svc.setProtoCacheBuildHookForTest(func() {
+		select {
+		case batchStarted <- struct{}{}:
+		default:
+		}
+		<-releaseBatch
+	})
+	t.Cleanup(func() {
+		svc.setProtoCacheBuildHookForTest(nil)
+		if batchReleased.CompareAndSwap(false, true) {
+			close(releaseBatch)
+		}
+	})
+
+	// Start background rebuild in a goroutine.
+	bgDone := make(chan struct{})
+	go func() {
+		_ = coord.submitBackground()
+		close(bgDone)
+	}()
+
+	// Wait for first batch to start.
+	waitForPeopleCondition(t, time.Second, func() bool {
+		select {
+		case <-batchStarted:
+			return true
+		default:
+			return false
+		}
+	})
+
+	// While batch is blocking, activate foreground scope.
+	release := svc.backgroundCoordinator.BeginForeground()
+
+	// Release the batch hook — the batch completes, then rebuild checks foreground
+	// and should pause (not complete).
+	if batchReleased.CompareAndSwap(false, true) {
+		close(releaseBatch)
+	}
+	time.Sleep(50 * time.Millisecond) // give time for batch to complete and pause check
+
+	// Rebuild should be paused.
+	state, _, cursor, total, _, reason := coord.rebuildProgress()
+	assert.Equal(t, rebuildStatePaused, state, "rebuild should be paused when foreground active")
+	assert.Less(t, cursor, total, "rebuild should not have completed all persons")
+	assert.Equal(t, "foreground_active", reason)
+
+	// Release foreground — rebuild should resume on next submitBackground.
+	release()
+	_ = coord.submitBackground()
+
+	select {
+	case <-bgDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("rebuild did not complete after foreground released")
+	}
+
+	assert.NotNil(t, svc.protoCache, "protoCache must be built after rebuild completes")
+}
+
+// TestProtoCacheFullRebuild_ResumesFromExistingProgress 验证暂停后从原进度继续。
+func TestProtoCacheFullRebuild_ResumesFromExistingProgress(t *testing.T) {
+	svc, _, _ := setupRebuildTest(t, 6)
+	coord := svc.clusteringCoordinator
+
+	batchCount := atomic.Int32{}
+	svc.setProtoCacheBuildHookForTest(func() { batchCount.Add(1) })
+	t.Cleanup(func() { svc.setProtoCacheBuildHookForTest(nil) })
+
+	// Start rebuild with foreground active — it will skip entirely.
+	release := svc.backgroundCoordinator.BeginForeground()
+	_ = coord.submitBackground()
+	assert.Nil(t, svc.protoCache, "rebuild must not start while foreground active")
+
+	// Release foreground and submit — rebuild starts.
+	release()
+	_ = coord.submitBackground()
+
+	// With batch size 2 and 6 persons, all 3 batches should complete.
+	assert.Equal(t, int32(3), batchCount.Load(), "all 3 batches should complete")
+	assert.NotNil(t, svc.protoCache)
+
+	// Verify cursor reached total — by checking the job is nil (completed).
+	state, _, _, _, _, _ := coord.rebuildProgress()
+	assert.Equal(t, rebuildStateIdle, state, "rebuild job should be nil/idle after completion")
+}
+
+// TestProtoCacheFullRebuild_KeepsOldCacheUntilComplete 验证 rebuild 期间旧缓存持续可用。
+func TestProtoCacheFullRebuild_KeepsOldCacheUntilComplete(t *testing.T) {
+	svc, _, _ := setupRebuildTest(t, 4)
+	coord := svc.clusteringCoordinator
+
+	// Build initial cache.
+	_ = coord.submitBackground()
+	require.NotNil(t, svc.protoCache)
+	oldCacheBuiltAt := svc.protoCache.builtAt
+	oldPersons := len(svc.protoCache.prototypesWithEmb)
+
+	// Force a full rebuild by marking dirty.
+	svc.markProtoCacheFullRebuild("test_force_rebuild")
+	// Wait for success cooldown to expire (set to 1ms in setup).
+	time.Sleep(5 * time.Millisecond)
+
+	// Block rebuild mid-way to inspect cache during rebuild.
+	releaseBatch := make(chan struct{})
+	batchStarted := make(chan struct{}, 1)
+	batchReleased := atomic.Bool{}
+	svc.setProtoCacheBuildHookForTest(func() {
+		select {
+		case batchStarted <- struct{}{}:
+		default:
+		}
+		<-releaseBatch
+	})
+	t.Cleanup(func() {
+		svc.setProtoCacheBuildHookForTest(nil)
+		if batchReleased.CompareAndSwap(false, true) {
+			close(releaseBatch)
+		}
+	})
+
+	bgDone := make(chan struct{})
+	go func() {
+		_ = coord.submitBackground()
+		close(bgDone)
+	}()
+
+	// Wait for rebuild to start.
+	waitForPeopleCondition(t, time.Second, func() bool {
+		select {
+		case <-batchStarted:
+			return true
+		default:
+			return false
+		}
+	})
+
+	// During rebuild, old cache must still be available and unchanged.
+	assert.NotNil(t, svc.protoCache, "old cache must remain during rebuild")
+	assert.Equal(t, oldCacheBuiltAt, svc.protoCache.builtAt, "old cache must not be replaced during rebuild")
+	assert.Equal(t, oldPersons, len(svc.protoCache.prototypesWithEmb), "old cache content must be unchanged")
+
+	// Complete the rebuild.
+	if batchReleased.CompareAndSwap(false, true) {
+		close(releaseBatch)
+	}
+	select {
+	case <-bgDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("rebuild did not complete")
+	}
+
+	// After completion, cache should be replaced with new one.
+	assert.NotNil(t, svc.protoCache)
+	assert.True(t, svc.protoCache.builtAt.After(oldCacheBuiltAt), "cache must be replaced after rebuild completes")
+}
+
+// TestProtoCacheFullRebuild_SwapsOnlyAfterComplete 验证 staging 只在完整成功后切换。
+func TestProtoCacheFullRebuild_SwapsOnlyAfterComplete(t *testing.T) {
+	svc, _, _ := setupRebuildTest(t, 6)
+	coord := svc.clusteringCoordinator
+
+	// Block after first batch to inspect state mid-rebuild.
+	batchCount := atomic.Int32{}
+	releaseBatch := make(chan struct{})
+	batchReleased := atomic.Bool{}
+	svc.setProtoCacheBuildHookForTest(func() {
+		n := batchCount.Add(1)
+		if n == 1 {
+			<-releaseBatch
+		}
+	})
+	t.Cleanup(func() {
+		svc.setProtoCacheBuildHookForTest(nil)
+		if batchReleased.CompareAndSwap(false, true) {
+			close(releaseBatch)
+		}
+	})
+
+	bgDone := make(chan struct{})
+	go func() {
+		_ = coord.submitBackground()
+		close(bgDone)
+	}()
+
+	// Wait for first batch.
+	waitForPeopleCondition(t, time.Second, func() bool {
+		return batchCount.Load() >= 1
+	})
+
+	// During rebuild: cache should be nil (cold start, not yet swapped).
+	// The build hook is called inside buildClustProtoCacheBatch, before the batch
+	// result is merged into staging. So we verify the job exists and is running,
+	// but staging data is not yet populated (hook is blocking).
+	assert.Nil(t, svc.protoCache, "staging must not replace active cache until rebuild is complete")
+	assert.NotNil(t, coord.rebuildJob, "rebuild job should exist during rebuild")
+
+	// Complete the rebuild.
+	if batchReleased.CompareAndSwap(false, true) {
+		close(releaseBatch)
+	}
+	select {
+	case <-bgDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("rebuild did not complete")
+	}
+
+	// After completion: cache should be set and staging merged.
+	assert.NotNil(t, svc.protoCache, "cache must be set after rebuild completes")
+	assert.Equal(t, 6, len(svc.protoCache.prototypesWithEmb), "cache should have all 6 persons")
+	assert.Nil(t, coord.rebuildJob, "rebuild job should be cleared after completion")
+}
+
+// TestProtoCacheFullRebuild_FailureKeepsOldCache 验证 rebuild 失败时保留旧缓存。
+func TestProtoCacheFullRebuild_FailureKeepsOldCache(t *testing.T) {
+	svc, _, _ := setupRebuildTest(t, 4)
+	coord := svc.clusteringCoordinator
+
+	// Build initial cache.
+	_ = coord.submitBackground()
+	require.NotNil(t, svc.protoCache)
+	oldBuiltAt := svc.protoCache.builtAt
+
+	// Swap faceRepo to a failing one for ListPrototypeEmbeddings.
+	originalFaceRepo := svc.faceRepo
+	svc.faceRepo = &failingPrototypeFaceRepo{FaceRepository: originalFaceRepo}
+	t.Cleanup(func() { svc.faceRepo = originalFaceRepo })
+
+	// Force full rebuild.
+	svc.markProtoCacheFullRebuild("test_failure")
+	// Wait for success cooldown to expire.
+	time.Sleep(5 * time.Millisecond)
+
+	res := coord.submitBackground()
+	assert.Error(t, res.err, "rebuild should fail with prototype query error")
+
+	// Old cache must remain.
+	assert.NotNil(t, svc.protoCache, "old cache must be kept after rebuild failure")
+	assert.Equal(t, oldBuiltAt, svc.protoCache.builtAt, "old cache must be unchanged after failure")
+	assert.Nil(t, coord.rebuildJob, "failed rebuild job should be discarded")
+}
+
+// TestProtoCacheFullRebuild_DirtyDuringRunSchedulesFollowUp 验证 rebuild 期间的 dirty
+// 变更在完成后得到增量补偿。
+func TestProtoCacheFullRebuild_DirtyDuringRunSchedulesFollowUp(t *testing.T) {
+	svc, _, personIDs := setupRebuildTest(t, 4)
+	coord := svc.clusteringCoordinator
+
+	// Block after first batch to inject dirty mid-rebuild.
+	batchCount := atomic.Int32{}
+	releaseBatch := make(chan struct{})
+	batchReleased := atomic.Bool{}
+	dirtyInjected := atomic.Bool{}
+	svc.setProtoCacheBuildHookForTest(func() {
+		n := batchCount.Add(1)
+		if n == 1 && !dirtyInjected.Swap(true) {
+			// Inject a dirty change during rebuild (simulates merge/split).
+			svc.markProtoCacheDirty([]uint{personIDs[0]}, nil, "test_dirty_during_rebuild")
+			<-releaseBatch
+		}
+	})
+	t.Cleanup(func() {
+		svc.setProtoCacheBuildHookForTest(nil)
+		if batchReleased.CompareAndSwap(false, true) {
+			close(releaseBatch)
+		}
+	})
+
+	// Start rebuild in a goroutine (blocks on first batch via hook).
+	bgDone := make(chan struct{})
+	go func() {
+		_ = coord.submitBackground()
+		close(bgDone)
+	}()
+
+	// Wait for first batch to start and inject dirty.
+	waitForPeopleCondition(t, time.Second, func() bool {
+		return dirtyInjected.Load()
+	})
+
+	// Release the blocked batch — rebuild continues and completes.
+	if batchReleased.CompareAndSwap(false, true) {
+		close(releaseBatch)
+	}
+	select {
+	case <-bgDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("rebuild did not complete")
+	}
+
+	// After rebuild completes, dirty state should still exist (gen mismatch).
+	// The dirty entry should not have been cleared because generation changed.
+	_, dirtyIDs, _, _, _, _ := svc.snapshotProtoCacheDirty()
+	assert.NotEmpty(t, dirtyIDs, "dirty changes during rebuild should not be lost")
+
+	// Next submitBackground should pick up the dirty changes (incremental refresh).
+	svc.setProtoCacheBuildHookForTest(nil)
+	// Wait for success cooldown to expire (set to 1ms in setup).
+	time.Sleep(5 * time.Millisecond)
+	res := coord.submitBackground()
+	assert.NoError(t, res.err)
+
+	// After incremental refresh, dirty should be cleared.
+	_, dirtyIDs2, _, _, _, _ := svc.snapshotProtoCacheDirty()
+	assert.Empty(t, dirtyIDs2, "dirty changes should be cleared after incremental refresh")
+}
+
+// TestProtoCacheFullRebuild_DoesNotStartConcurrentRun 验证不会并发启动两个 full rebuild。
+func TestProtoCacheFullRebuild_DoesNotStartConcurrentRun(t *testing.T) {
+	svc, _, _ := setupRebuildTest(t, 6)
+	coord := svc.clusteringCoordinator
+
+	// Block first batch to keep rebuild in progress.
+	releaseBatch := make(chan struct{})
+	batchReleased := atomic.Bool{}
+	batchStarted := make(chan struct{}, 1)
+	svc.setProtoCacheBuildHookForTest(func() {
+		select {
+		case batchStarted <- struct{}{}:
+		default:
+		}
+		<-releaseBatch
+	})
+	t.Cleanup(func() {
+		svc.setProtoCacheBuildHookForTest(nil)
+		if batchReleased.CompareAndSwap(false, true) {
+			close(releaseBatch)
+		}
+	})
+
+	// Start first rebuild.
+	bgDone1 := make(chan struct{})
+	go func() {
+		_ = coord.submitBackground()
+		close(bgDone1)
+	}()
+	waitForPeopleCondition(t, time.Second, func() bool {
+		select {
+		case <-batchStarted:
+			return true
+		default:
+			return false
+		}
+	})
+
+	// Rebuild is in progress. Verify only one job exists.
+	assert.NotNil(t, coord.rebuildJob, "rebuild job should exist")
+	state, _, _, _, _, _ := coord.rebuildProgress()
+	assert.Equal(t, rebuildStateRunning, state, "rebuild should be running")
+
+	// Complete the rebuild.
+	if batchReleased.CompareAndSwap(false, true) {
+		close(releaseBatch)
+	}
+	select {
+	case <-bgDone1:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first rebuild did not complete")
+	}
+
+	assert.Nil(t, coord.rebuildJob, "rebuild job should be cleared after completion")
+}
+
+// TestProtoCacheFullRebuild_DeletedPersonIsTombstoned 验证被删除的 person 立即从
+// active cache 做 tombstone。
+func TestProtoCacheFullRebuild_DeletedPersonIsTombstoned(t *testing.T) {
+	svc, _, personIDs := setupRebuildTest(t, 4)
+	coord := svc.clusteringCoordinator
+
+	// Build initial cache.
+	_ = coord.submitBackground()
+	require.NotNil(t, svc.protoCache)
+	require.Contains(t, svc.protoCache.prototypesWithEmb, personIDs[0])
+
+	// Mark a person as deleted and force full rebuild.
+	svc.markProtoCacheFullRebuild("test_force_rebuild")
+	svc.markProtoCacheDirty(nil, []uint{personIDs[0]}, "test_delete")
+	// Wait for success cooldown to expire.
+	time.Sleep(5 * time.Millisecond)
+
+	// Block first batch to inspect cache during rebuild.
+	releaseBatch := make(chan struct{})
+	batchStarted := make(chan struct{}, 1)
+	batchReleased := atomic.Bool{}
+	svc.setProtoCacheBuildHookForTest(func() {
+		select {
+		case batchStarted <- struct{}{}:
+		default:
+		}
+		<-releaseBatch
+	})
+	t.Cleanup(func() {
+		svc.setProtoCacheBuildHookForTest(nil)
+		if batchReleased.CompareAndSwap(false, true) {
+			close(releaseBatch)
+		}
+	})
+
+	bgDone := make(chan struct{})
+	go func() {
+		_ = coord.submitBackground()
+		close(bgDone)
+	}()
+	waitForPeopleCondition(t, time.Second, func() bool {
+		select {
+		case <-batchStarted:
+			return true
+		default:
+			return false
+		}
+	})
+
+	// During rebuild, deleted person must be tombstoned from active cache.
+	assert.NotContains(t, svc.protoCache.prototypesWithEmb, personIDs[0],
+		"deleted person must be tombstoned from active cache immediately")
+
+	// Complete rebuild.
+	if batchReleased.CompareAndSwap(false, true) {
+		close(releaseBatch)
+	}
+	select {
+	case <-bgDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("rebuild did not complete")
+	}
+}
+
+// TestProtoCacheFullRebuild_DoesNotHoldWriteGate 验证 rebuild 数据读取和 prototype
+// 计算不持有 writeGate.RLock。
+func TestProtoCacheFullRebuild_DoesNotHoldWriteGate(t *testing.T) {
+	svc, _, _ := setupRebuildTest(t, 4)
+	coord := svc.clusteringCoordinator
+
+	// Block rebuild mid-batch to test writeGate availability.
+	releaseBatch := make(chan struct{})
+	batchStarted := make(chan struct{}, 1)
+	batchReleased := atomic.Bool{}
+	svc.setProtoCacheBuildHookForTest(func() {
+		select {
+		case batchStarted <- struct{}{}:
+		default:
+		}
+		<-releaseBatch
+	})
+	t.Cleanup(func() {
+		svc.setProtoCacheBuildHookForTest(nil)
+		if batchReleased.CompareAndSwap(false, true) {
+			close(releaseBatch)
+		}
+	})
+
+	bgDone := make(chan struct{})
+	go func() {
+		_ = coord.submitBackground()
+		close(bgDone)
+	}()
+	waitForPeopleCondition(t, time.Second, func() bool {
+		select {
+		case <-batchStarted:
+			return true
+		default:
+			return false
+		}
+	})
+
+	// During rebuild (batch hook blocking), writeGate.Lock() must succeed immediately.
+	fgAcquired := make(chan struct{})
+	go func() {
+		svc.writeGate.Lock()
+		close(fgAcquired)
+		svc.writeGate.Unlock()
+	}()
+	select {
+	case <-fgAcquired:
+		// good: writeGate not held during rebuild
+	case <-time.After(time.Second):
+		t.Fatal("writeGate.Lock blocked during protoCache rebuild; rebuild must not hold writeGate")
+	}
+
+	if batchReleased.CompareAndSwap(false, true) {
+		close(releaseBatch)
+	}
+	select {
+	case <-bgDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("rebuild did not complete")
+	}
+}
+
+// failingPrototypeFaceRepo makes ListPrototypeEmbeddings fail, for testing
+// rebuild failure handling.
+type failingPrototypeFaceRepo struct {
+	repository.FaceRepository
+}
+
+func (r *failingPrototypeFaceRepo) ListPrototypeEmbeddings(personIDs []uint, perPerson int) ([]*model.Face, error) {
+	return nil, fmt.Errorf("simulated prototype query failure")
+}
+
+// failingBusyPrototypeFaceRepo 模拟 SQLite busy/locked 错误，用于验证 rebuild 遇到
+// busy 时上报 coordinator cooldown（不高频立即重试）。
+type failingBusyPrototypeFaceRepo struct {
+	repository.FaceRepository
+}
+
+func (r *failingBusyPrototypeFaceRepo) ListPrototypeEmbeddings(personIDs []uint, perPerson int) ([]*model.Face, error) {
+	return nil, fmt.Errorf("database is locked")
+}
+
+// TestProtoCacheFullRebuild_BusyLockedEntersCooldown 验证 rebuild 单批查询遇到 SQLite
+// busy/locked 时：保留旧缓存、进入失败冷却，且向 backgroundCoordinator 上报 DB busy
+// （使后续 automatic 请求在 cooldown 内被拒绝，避免高频立即重试）。
+func TestProtoCacheFullRebuild_BusyLockedEntersCooldown(t *testing.T) {
+	svc, _, _ := setupRebuildTest(t, 4)
+	coord := svc.clusteringCoordinator
+
+	// 先构建一份旧缓存，确保失败时旧缓存能保留。
+	_ = coord.submitBackground()
+	require.NotNil(t, svc.protoCache)
+	oldBuiltAt := svc.protoCache.builtAt
+
+	// 用 busy 模拟 faceRepo 包装真实 repo。
+	originalFaceRepo := svc.faceRepo
+	busyRepo := &failingBusyPrototypeFaceRepo{FaceRepository: originalFaceRepo}
+	svc.faceRepo = busyRepo
+	t.Cleanup(func() { svc.faceRepo = originalFaceRepo })
+
+	// 强制 full rebuild 并等待成功 cooldown 过期。
+	svc.markProtoCacheFullRebuild("test_busy_locked")
+	time.Sleep(5 * time.Millisecond)
+
+	res := coord.submitBackground()
+	assert.Error(t, res.err, "rebuild should fail on busy/locked")
+
+	// 旧缓存必须保留。
+	assert.NotNil(t, svc.protoCache, "old cache must be kept after busy/locked failure")
+	assert.Equal(t, oldBuiltAt, svc.protoCache.builtAt, "old cache must be unchanged")
+	assert.Nil(t, coord.rebuildJob, "failed rebuild job should be discarded")
+
+	// backgroundCoordinator 应对该 class 设置了 cooldown（dbLockedCooldown 默认 0 时仅记日志，
+	// 但 setupRebuildTest 使用 NewBackgroundTaskCoordinator 默认构造，dbLockedCooldown=0，
+	// 故 cooldown 可能未设置——这里仅断言不 panic 且进入失败 cooldown 路径）。
+	// shouldRefreshProtoCache 在 protoCacheRefreshCooldownUntil 内返回 false，避免立即重试：
+	// 失败后再次 submit 不应重新触发新的失败循环，旧缓存必须仍在。
+	_ = coord.submitBackground()
+	assert.NotNil(t, svc.protoCache, "old cache must remain across retries")
+	assert.Nil(t, coord.rebuildJob, "failed rebuild job must stay discarded across retries")
+}

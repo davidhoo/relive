@@ -11,17 +11,22 @@ import (
 
 // BackgroundHandler 暴露后台任务治理的只读状态。
 type BackgroundHandler struct {
-	coordinator *service.BackgroundTaskCoordinator
-	loadSampler *service.BackgroundLoadSampler
+	coordinator   *service.BackgroundTaskCoordinator
+	loadSampler   *service.BackgroundLoadSampler
+	rebuildStatus func() *model.ProtoCacheRebuildStatusResponse
 }
 
 // NewBackgroundHandler 构造后台状态处理器。coordinator 可能为 nil（未注入时返回空快照），
-// 不应阻塞 API。
-func NewBackgroundHandler(coordinator *service.BackgroundTaskCoordinator, loadSampler *service.BackgroundLoadSampler) *BackgroundHandler {
-	return &BackgroundHandler{
+// 不应阻塞 API。rebuildStatus 可选，用于附加 protoCache rebuild 进度快照（nil 时省略）。
+func NewBackgroundHandler(coordinator *service.BackgroundTaskCoordinator, loadSampler *service.BackgroundLoadSampler, rebuildStatus ...func() *model.ProtoCacheRebuildStatusResponse) *BackgroundHandler {
+	h := &BackgroundHandler{
 		coordinator: coordinator,
 		loadSampler: loadSampler,
 	}
+	if len(rebuildStatus) > 0 {
+		h.rebuildStatus = rebuildStatus[0]
+	}
+	return h
 }
 
 // GetStatus 返回后台任务治理的只读快照。
@@ -33,6 +38,9 @@ func NewBackgroundHandler(coordinator *service.BackgroundTaskCoordinator, loadSa
 // @Router /api/v1/background/status [get]
 func (h *BackgroundHandler) GetStatus(c *gin.Context) {
 	resp := buildBackgroundStatusResponse(h.coordinator, h.loadSampler)
+	if h.rebuildStatus != nil {
+		resp.ProtoCacheRebuild = h.rebuildStatus()
+	}
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
 		Message: "后台任务状态",
@@ -76,7 +84,7 @@ func buildBackgroundStatusResponse(coord *service.BackgroundTaskCoordinator, sam
 		CPUPauseThreshold:    status.CPUPauseThreshold,
 		IOWaitPauseThreshold: status.IOWaitPauseThreshold,
 		MemoryPauseThreshold: status.MemoryPauseThreshold,
-		DBLockedCooldownMs:  status.DBLockedCooldownMs,
+		DBLockedCooldownMs:   status.DBLockedCooldownMs,
 	}
 	for _, r := range status.Running {
 		resp.Running = append(resp.Running, model.BackgroundTaskRuntimeResponse{

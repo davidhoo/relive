@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/davidhoo/relive/internal/mlclient"
+	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/database"
@@ -13,27 +14,30 @@ import (
 
 // Services 所有服务的集合
 type Services struct {
-	Photo               PhotoService
-	People              PeopleService
-	MergeSuggestion     PersonMergeSuggestionService
-	Thumbnail           ThumbnailService
-	GeocodeTask         GeocodeTaskService
-	Display             DisplayService
-	Device              DeviceService
-	AI                  AIService
-	AnalysisRuntime     AnalysisRuntimeService
-	Config              ConfigService
-	Prompt              PromptService
-	Geocode             GeocodeService
-	Auth                AuthService
-	Analysis            AnalysisService
-	System              SystemService
-	EventClustering     EventClusteringService
-	Scheduler           *TaskScheduler
-	ResultQueue         *ResultQueue // 结果队列服务
-	IdentityProfile     PersonIdentityProfileService
+	Photo                 PhotoService
+	People                PeopleService
+	MergeSuggestion       PersonMergeSuggestionService
+	Thumbnail             ThumbnailService
+	GeocodeTask           GeocodeTaskService
+	Display               DisplayService
+	Device                DeviceService
+	AI                    AIService
+	AnalysisRuntime       AnalysisRuntimeService
+	Config                ConfigService
+	Prompt                PromptService
+	Geocode               GeocodeService
+	Auth                  AuthService
+	Analysis              AnalysisService
+	System                SystemService
+	EventClustering       EventClusteringService
+	Scheduler             *TaskScheduler
+	ResultQueue           *ResultQueue // 结果队列服务
+	IdentityProfile       PersonIdentityProfileService
 	BackgroundCoordinator *BackgroundTaskCoordinator // 后台任务治理准入控制器（状态 API 用）
-	BackgroundLoadSampler *BackgroundLoadSampler      // 负载采样器（状态 API 用，advisory）
+	BackgroundLoadSampler *BackgroundLoadSampler     // 负载采样器（状态 API 用，advisory）
+	// ProtoCacheRebuildStatus 返回 protoCache 分批 full rebuild 的只读进度快照（nil 表示无 rebuild）。
+	// 由 peopleService 注入，供后台状态 API 展示 rebuild 运行/暂停/进度/原因与 cold_building。
+	ProtoCacheRebuildStatus func() *model.ProtoCacheRebuildStatusResponse
 }
 
 // NewServices 创建所有服务
@@ -222,26 +226,27 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	analysisService.SetResultQueue(resultQueue)
 
 	return &Services{
-		Photo:           photoService,
-		People:          peopleSvc,
-		MergeSuggestion: mergeSuggestionService,
-		Thumbnail:       thumbnailService,
-		GeocodeTask:     geocodeTaskService,
-		Display:         displayService,
-		Device:          deviceService,
-		AI:              aiService,
-		AnalysisRuntime: runtimeService,
-		Config:          configService,
-		Prompt:          promptService,
-		Geocode:         geocodeService,
-		Auth:            authService,
-		Analysis:        analysisService,
-		System:          NewSystemService(db),
-		EventClustering: eventClusteringService,
-		Scheduler:             scheduler,
-		ResultQueue:           resultQueue,
-		IdentityProfile:       identityProfileService,
-		BackgroundCoordinator: backgroundCoordinator,
-		BackgroundLoadSampler: loadSampler,
+		Photo:                   photoService,
+		People:                  peopleSvc,
+		MergeSuggestion:         mergeSuggestionService,
+		Thumbnail:               thumbnailService,
+		GeocodeTask:             geocodeTaskService,
+		Display:                 displayService,
+		Device:                  deviceService,
+		AI:                      aiService,
+		AnalysisRuntime:         runtimeService,
+		Config:                  configService,
+		Prompt:                  promptService,
+		Geocode:                 geocodeService,
+		Auth:                    authService,
+		Analysis:                analysisService,
+		System:                  NewSystemService(db),
+		EventClustering:         eventClusteringService,
+		Scheduler:               scheduler,
+		ResultQueue:             resultQueue,
+		IdentityProfile:         identityProfileService,
+		BackgroundCoordinator:   backgroundCoordinator,
+		BackgroundLoadSampler:   loadSampler,
+		ProtoCacheRebuildStatus: peopleSvc.(*peopleService).ProtoCacheRebuildStatus,
 	}
 }

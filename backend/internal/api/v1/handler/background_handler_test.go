@@ -64,4 +64,38 @@ func TestBackgroundHandler_GetStatus_NilCoordinatorNoPanic(t *testing.T) {
 	assert.True(t, status.AutoTasksEnabled)
 	// 负载字段为 unknown（-1）。
 	assert.Equal(t, -1.0, status.Load.CPUUserPct)
+	// 无 rebuild 时省略 proto_cache_rebuild 字段（向后兼容）。
+	assert.Nil(t, status.ProtoCacheRebuild, "proto_cache_rebuild should be omitted when no rebuild")
+}
+
+// TestBackgroundHandler_GetStatus_ProtoCacheRebuildSnapshot 验证注入 rebuildStatus 回调时，
+// 响应携带 protoCache rebuild 进度快照（含 cold_building 区分冷启动）。
+func TestBackgroundHandler_GetStatus_ProtoCacheRebuildSnapshot(t *testing.T) {
+	coord := service.NewBackgroundTaskCoordinator()
+	coord.SetBackgroundConfig(true, 70, 15, 85, nil, 120*time.Second)
+	rebuildStatus := func() *model.ProtoCacheRebuildStatusResponse {
+		return &model.ProtoCacheRebuildStatusResponse{
+			Generation:   42,
+			State:        "running",
+			ColdBuilding: true,
+			Cursor:       600,
+			Total:        2200,
+			Batches:      3,
+		}
+	}
+	h := NewBackgroundHandler(coord, nil, rebuildStatus)
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/background/status", nil, nil, h.GetStatus)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	resp := decodeAPIResponse(t, rec)
+	assert.True(t, resp.Success)
+
+	var status model.BackgroundTaskStatusResponse
+	require.NoError(t, json.Unmarshal(toJSON(resp.Data), &status))
+	require.NotNil(t, status.ProtoCacheRebuild, "proto_cache_rebuild should be present when rebuildStatus set")
+	assert.Equal(t, uint64(42), status.ProtoCacheRebuild.Generation)
+	assert.Equal(t, "running", status.ProtoCacheRebuild.State)
+	assert.True(t, status.ProtoCacheRebuild.ColdBuilding, "cold_building should reflect cold-start build")
+	assert.Equal(t, 600, status.ProtoCacheRebuild.Cursor)
+	assert.Equal(t, 2200, status.ProtoCacheRebuild.Total)
 }

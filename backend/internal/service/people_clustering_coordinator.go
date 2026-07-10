@@ -33,6 +33,26 @@ type backgroundClusterResult struct {
 
 var errCoordinatorStopped = fmt.Errorf("people clustering coordinator stopped")
 
+// protoCacheRebuildJob 是分批 full rebuild 的内存状态。只由 coordinator worker goroutine 读写。
+// 状态不写 DB，不持久化。服务重启后从头开始。
+type protoCacheRebuildJob struct {
+	generation     uint64
+	totalPersons   int
+	cursor         int // 已处理的 person 数
+	batchesDone    int
+	allPersonIDs   []uint // 启动时快照
+	stagingWithEmb map[uint][]faceWithEmbedding
+	stagingOrig    map[uint][]*model.Face
+	startedAt      time.Time
+	lastResumeAt   time.Time // 上次从 pause 恢复的时刻
+	activeWorkTime time.Duration
+	yieldTime      time.Duration
+	pauseTime      time.Duration
+	state          rebuildState
+	pauseReason    string
+	batchHook      func() // 测试 hook（每批完成后调用）
+}
+
 // protoCache refresh cooldown / coalescing 常量（Task 10）。
 const (
 	// protoCacheRefreshMinInterval 成功刷新后再次允许刷新的最小间隔，避免每个 batch 都
@@ -40,6 +60,29 @@ const (
 	protoCacheRefreshMinInterval = 10 * time.Minute
 	// protoCacheRefreshFailCooldown 刷新失败/DB locked 后的退避间隔，避免 spin。
 	protoCacheRefreshFailCooldown = 2 * time.Minute
+)
+
+// Batched full rebuild 配置常量。分批处理降低 NAS 上的单次峰值负载。
+const (
+	// protoCacheRebuildBatchSize 每批处理的 person 数量。
+	protoCacheRebuildBatchSize = 200
+	// protoCacheRebuildYieldIdle 系统空闲时批次间让行时间。
+	protoCacheRebuildYieldIdle = 250 * time.Millisecond
+	// protoCacheRebuildYieldPressure 后台压力偏高时批次间让行时间。
+	protoCacheRebuildYieldPressure = 2 * time.Second
+	// protoCacheRebuildPersonIDPageSize 加载全部 person IDs 时的分页大小。
+	protoCacheRebuildPersonIDPageSize = 500
+)
+
+// rebuildState 表示分批 full rebuild job 的状态。
+type rebuildState string
+
+const (
+	rebuildStateIdle      rebuildState = "idle"
+	rebuildStateRunning   rebuildState = "running"
+	rebuildStatePaused    rebuildState = "paused"
+	rebuildStateCompleted rebuildState = "completed"
+	rebuildStateFailed    rebuildState = "failed"
 )
 
 // peopleClusteringCoordinator is the single entry point for all incremental
@@ -110,6 +153,15 @@ type peopleClusteringCoordinator struct {
 	protoCacheFailCool    time.Duration
 	protoCacheQuietWin    time.Duration
 
+	// rebuildJob 是当前分批 full rebuild 的内存状态。只由 worker goroutine 读写。
+	// nil 表示没有正在进行的 rebuild。状态不写 DB，不持久化，服务重启后从头开始。
+	rebuildJob *protoCacheRebuildJob
+
+	// rebuild 配置覆盖（测试用）。0 时使用包级常量。
+	rebuildBatchSizeForTest  int
+	rebuildYieldIdleForTest  time.Duration
+	rebuildYieldPressForTest time.Duration
+
 	workerDone chan struct{}
 }
 
@@ -146,6 +198,11 @@ func (c *peopleClusteringCoordinator) run() {
 				break
 			}
 			if c.backgroundPending {
+				break
+			}
+			if c.rebuildJob != nil && c.rebuildJob.state == rebuildStatePaused {
+				// A batched rebuild was paused (e.g. foreground was active).
+				// Now that foreground is clear, resume it as a background batch.
 				break
 			}
 			c.cond.Wait()
@@ -395,6 +452,16 @@ func (c *peopleClusteringCoordinator) protoCacheRefreshFailCooldownValue() time.
 // Cold start (nil cache) bypasses quiet window and cooldown: the worker must build
 // before it can cluster at all. Only the worker goroutine calls this.
 func (c *peopleClusteringCoordinator) shouldRefreshProtoCache() bool {
+	// If a batched rebuild job is in progress (running or paused), always attempt
+	// to advance it. The job manages its own foreground/pressure checks internally.
+	// Still respect failure cooldown to avoid spinning on repeated build failures.
+	if c.rebuildJob != nil && (c.rebuildJob.state == rebuildStateRunning || c.rebuildJob.state == rebuildStatePaused) {
+		if time.Now().Before(c.protoCacheRefreshCooldownUntil) {
+			c.protoCacheRefreshPending = true
+			return false
+		}
+		return true
+	}
 	if !c.svc.protoCacheNeedsRefresh() {
 		return false
 	}
@@ -456,19 +523,12 @@ func (c *peopleClusteringCoordinator) refreshProtoCacheOutsideGate(source cluste
 	doFullRebuild := cacheIsNil || fullRebuild || dirtyCount > protoCacheIncrementalThreshold
 
 	if doFullRebuild {
-		newCache, buildErr := c.svc.buildClustProtoCache()
-		if buildErr != nil {
-			return false, false, buildErr
+		// Apply tombstones to active cache immediately — deleted/merged persons must
+		// stop being match targets even while the full rebuild is in progress.
+		if len(deletedIDs) > 0 && c.svc.protoCache != nil {
+			c.svc.applyTombstonesToCache(deletedIDs)
 		}
-		if c.svc.backgroundCoordinator != nil && c.svc.backgroundCoordinator.ForegroundActive() {
-			logger.Infof("people clustering coordinator: source=%s discard rebuilt protoCache: foreground became active", source)
-			return false, true, nil
-		}
-		c.svc.protoCache = newCache
-		c.svc.clearProtoCacheDirty(gen)
-		logger.Infof("people clustering coordinator: source=%s protoCache full rebuild dirty=%d deleted=%d reasons=%v",
-			source, dirtyCount, len(deletedIDs), reasons)
-		return true, false, nil
+		return c.runBatchedFullRebuild(source, gen, dirtyCount, len(deletedIDs), reasons)
 	}
 
 	// Incremental refresh: reload only affected persons.
@@ -495,6 +555,241 @@ func (c *peopleClusteringCoordinator) refreshProtoCacheOutsideGate(source cluste
 func (c *peopleClusteringCoordinator) recordProtoCacheRefreshFailure() {
 	c.protoCacheRefreshPending = true
 	c.protoCacheRefreshCooldownUntil = time.Now().Add(c.protoCacheRefreshFailCooldownValue())
+}
+
+// runBatchedFullRebuild 执行分批 full rebuild。采用 Claude 方案：在单次
+// refreshProtoCacheOutsideGate 调用内循环推进多个 batch，foreground active 时
+// break 返回 skip=true 并保留 job 状态，worker loop 无需修改。
+//
+// 首次调用：初始化 job（分页拉取全部 person IDs），设置 state=running。
+// 后续调用（resume）：从 cursor 继续执行。
+// 全部 batch 完成：原子切换 s.protoCache = staging，清 dirty。
+// 失败：保留旧 cache，丢弃 staging，返回 err。
+// foreground active：暂停 job，返回 skip=true。
+func (c *peopleClusteringCoordinator) runBatchedFullRebuild(source clusterSource, gen uint64, dirtyCount, deletedCount int, reasons []string) (refreshed, skip bool, err error) {
+	// Initialize or resume the rebuild job.
+	if c.rebuildJob == nil || c.rebuildJob.state == rebuildStateIdle || c.rebuildJob.state == rebuildStateFailed {
+		allPersonIDs, collectErr := c.collectAllPersonIDsForRebuild()
+		if collectErr != nil {
+			return false, false, collectErr
+		}
+		c.rebuildJob = &protoCacheRebuildJob{
+			generation:     gen,
+			totalPersons:   len(allPersonIDs),
+			allPersonIDs:   allPersonIDs,
+			stagingWithEmb: make(map[uint][]faceWithEmbedding),
+			stagingOrig:    make(map[uint][]*model.Face),
+			startedAt:      time.Now(),
+			lastResumeAt:   time.Now(),
+			state:          rebuildStateRunning,
+		}
+		logger.Infof("protoCache rebuild started generation=%d persons=%d dirty=%d deleted=%d reasons=%v",
+			gen, len(allPersonIDs), dirtyCount, deletedCount, reasons)
+	} else if c.rebuildJob.state == rebuildStatePaused {
+		pauseElapsed := time.Since(c.rebuildJob.lastResumeAt)
+		c.rebuildJob.pauseTime += pauseElapsed
+		c.rebuildJob.state = rebuildStateRunning
+		c.rebuildJob.pauseReason = ""
+		c.rebuildJob.lastResumeAt = time.Now()
+		logger.Infof("protoCache rebuild resumed generation=%d", c.rebuildJob.generation)
+	} else if c.rebuildJob.state == rebuildStateRunning {
+		// Already running — shouldn't happen (single worker), but be defensive.
+		logger.Warnf("protoCache rebuild: runBatchedFullRebuild called while already running generation=%d", c.rebuildJob.generation)
+		return false, false, fmt.Errorf("rebuild already running")
+	}
+
+	job := c.rebuildJob
+	batchSize := c.rebuildBatchSizeValue()
+
+	for job.cursor < job.totalPersons {
+		// Check foreground between batches — does not interrupt the current batch.
+		if c.svc.backgroundCoordinator != nil && c.svc.backgroundCoordinator.ForegroundActive() {
+			job.state = rebuildStatePaused
+			job.pauseReason = "foreground_active"
+			logger.Infof("protoCache rebuild paused generation=%d reason=foreground_active batches=%d persons=%d/%d",
+				job.generation, job.batchesDone, job.cursor, job.totalPersons)
+			return false, true, nil
+		}
+
+		// Execute one batch: slice person IDs and build prototypes.
+		end := job.cursor + batchSize
+		if end > job.totalPersons {
+			end = job.totalPersons
+		}
+		batchIDs := job.allPersonIDs[job.cursor:end]
+
+		batchStart := time.Now()
+		withEmb, orig, batchErr := c.svc.buildClustProtoCacheBatch(batchIDs)
+		if batchErr != nil {
+			// SQLite busy/locked: 不高频立即重试，进入失败冷却；保留旧 cache。
+			if isSQLiteBusyOrLocked(batchErr) && c.svc.backgroundCoordinator != nil {
+				c.svc.backgroundCoordinator.ReportDBBusy(BackgroundTaskProtoCacheRefresh, batchErr)
+			}
+			job.state = rebuildStateFailed
+			logger.Warnf("protoCache rebuild failed generation=%d error=%v batches=%d persons=%d/%d",
+				job.generation, batchErr, job.batchesDone, job.cursor, job.totalPersons)
+			// Discard staging data.
+			c.rebuildJob = nil
+			return false, false, batchErr
+		}
+		job.activeWorkTime += time.Since(batchStart)
+
+		// Merge batch results into staging.
+		for pid, faces := range withEmb {
+			job.stagingWithEmb[pid] = faces
+		}
+		for pid, faces := range orig {
+			job.stagingOrig[pid] = faces
+		}
+
+		job.cursor = end
+		job.batchesDone++
+
+		logger.Infof("protoCache rebuild progress generation=%d batches=%d persons=%d/%d",
+			job.generation, job.batchesDone, job.cursor, job.totalPersons)
+
+		// Test hook: called after each batch completes.
+		if job.batchHook != nil {
+			job.batchHook()
+		}
+
+		// Yield between batches (not after the last one).
+		if job.cursor < job.totalPersons {
+			yieldDur := c.rebuildYieldDuration()
+			yieldStart := time.Now()
+			time.Sleep(yieldDur)
+			job.yieldTime += time.Since(yieldStart)
+		}
+	}
+
+	// All batches complete — atomic swap. Active cache is replaced only now;
+	// staging was never visible to business code.
+	c.svc.protoCache = &clustProtoCache{
+		prototypesWithEmb: job.stagingWithEmb,
+		prototypesOrig:    job.stagingOrig,
+		builtAt:           time.Now(),
+	}
+	c.svc.clearProtoCacheDirty(gen)
+
+	elapsed := time.Since(job.startedAt)
+	logger.Infof("protoCache rebuild completed generation=%d elapsed=%s activeWork=%s paused=%s yielded=%s batches=%d persons=%d",
+		job.generation, elapsed.Round(time.Millisecond),
+		job.activeWorkTime.Round(time.Millisecond),
+		job.pauseTime.Round(time.Millisecond),
+		job.yieldTime.Round(time.Millisecond),
+		job.batchesDone, job.cursor)
+
+	// Check if dirty changes accumulated during rebuild (gen mismatch means new changes).
+	// If so, they will be picked up by the next shouldRefreshProtoCache → incremental refresh.
+	c.rebuildJob = nil
+	return true, false, nil
+}
+
+// collectAllPersonIDsForRebuild loads all assigned person IDs using paged queries
+// to avoid a single large DISTINCT query on NAS (220K+ rows).
+func (c *peopleClusteringCoordinator) collectAllPersonIDsForRebuild() ([]uint, error) {
+	pageSize := protoCacheRebuildPersonIDPageSize
+	var allIDs []uint
+	offset := 0
+	for {
+		page, err := c.svc.faceRepo.ListAssignedPersonIDsPaged(offset, pageSize)
+		if err != nil {
+			// SQLite busy/locked：上报给 coordinator 做 cooldown，避免高频立即重试。
+			if isSQLiteBusyOrLocked(err) && c.svc.backgroundCoordinator != nil {
+				c.svc.backgroundCoordinator.ReportDBBusy(BackgroundTaskProtoCacheRefresh, err)
+			}
+			return nil, err
+		}
+		if len(page) == 0 {
+			break
+		}
+		allIDs = append(allIDs, page...)
+		offset += len(page)
+		if len(page) < pageSize {
+			break
+		}
+	}
+	return allIDs, nil
+}
+
+// rebuildBatchSizeValue returns the batch size (test-configurable, 0 uses package constant).
+func (c *peopleClusteringCoordinator) rebuildBatchSizeValue() int {
+	if c.rebuildBatchSizeForTest > 0 {
+		return c.rebuildBatchSizeForTest
+	}
+	return protoCacheRebuildBatchSize
+}
+
+// rebuildYieldDuration returns the yield duration based on current system pressure.
+// Idle → short yield; pressure high → longer yield.
+func (c *peopleClusteringCoordinator) rebuildYieldDuration() time.Duration {
+	idle := c.rebuildYieldIdleValue()
+	pressure := c.rebuildYieldPressureValue()
+	// Check system pressure via backgroundCoordinator's load function.
+	if c.svc.backgroundCoordinator != nil {
+		snap := c.svc.backgroundCoordinator.LoadSnapshot()
+		if snap.CPUUserPct > 0 || snap.CPUIOWaitPct > 0 || snap.MemUsedPct > 0 {
+			// Non-negative values mean known — use longer yield under pressure.
+			if snap.CPUUserPct >= 60 || snap.CPUIOWaitPct >= 10 || snap.MemUsedPct >= 80 {
+				return pressure
+			}
+		}
+	}
+	return idle
+}
+
+func (c *peopleClusteringCoordinator) rebuildYieldIdleValue() time.Duration {
+	if c.rebuildYieldIdleForTest > 0 {
+		return c.rebuildYieldIdleForTest
+	}
+	return protoCacheRebuildYieldIdle
+}
+
+func (c *peopleClusteringCoordinator) rebuildYieldPressureValue() time.Duration {
+	if c.rebuildYieldPressForTest > 0 {
+		return c.rebuildYieldPressForTest
+	}
+	return protoCacheRebuildYieldPressure
+}
+
+// setRebuildConfigForTest overrides batch size and yield durations for testing.
+func (c *peopleClusteringCoordinator) setRebuildConfigForTest(batchSize int, yieldIdle, yieldPressure time.Duration) {
+	c.rebuildBatchSizeForTest = batchSize
+	c.rebuildYieldIdleForTest = yieldIdle
+	c.rebuildYieldPressForTest = yieldPressure
+}
+
+// rebuildJobState returns the current rebuild job state for observability (idle if no job).
+func (c *peopleClusteringCoordinator) rebuildJobState() rebuildState {
+	if c.rebuildJob == nil {
+		return rebuildStateIdle
+	}
+	return c.rebuildJob.state
+}
+
+// rebuildProgress returns rebuild progress info for observability. Returns zeros if no job.
+//
+// 注意：本方法供 worker goroutine 内部调用（不持锁）。外部 goroutine（状态 API）须使用
+// rebuildSnapshot（加锁）读取，避免与 worker 写 rebuildJob 字段竞争。
+func (c *peopleClusteringCoordinator) rebuildProgress() (state rebuildState, generation uint64, cursor, total, batches int, pauseReason string) {
+	if c.rebuildJob == nil {
+		return rebuildStateIdle, 0, 0, 0, 0, ""
+	}
+	return c.rebuildJob.state, c.rebuildJob.generation, c.rebuildJob.cursor, c.rebuildJob.totalPersons, c.rebuildJob.batchesDone, c.rebuildJob.pauseReason
+}
+
+// rebuildSnapshot 返回 rebuild 进度的线程安全只读快照，供状态 API 从任意 goroutine 调用。
+// 同时返回 coldBuilding：protoCache 为 nil 且 rebuild 进行中（running/paused）时为 true，
+// 用于前端区分冷启动构建与普通后台 refresh。
+func (c *peopleClusteringCoordinator) rebuildSnapshot() (state rebuildState, generation uint64, cursor, total, batches int, pauseReason string, coldBuilding bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.rebuildJob == nil {
+		return rebuildStateIdle, 0, 0, 0, 0, "", false
+	}
+	job := c.rebuildJob
+	cold := c.svc.protoCache == nil && (job.state == rebuildStateRunning || job.state == rebuildStatePaused)
+	return job.state, job.generation, job.cursor, job.totalPersons, job.batchesDone, job.pauseReason, cold
 }
 
 // protoCacheQuietWindowValue returns the quiet window duration (test-configurable, 0 uses package constant).
@@ -600,6 +895,9 @@ func (c *peopleClusteringCoordinator) stop() {
 		return
 	}
 	c.stopping = true
+	// Cancel any in-progress rebuild job — staging data is discarded,
+	// active cache is not affected.
+	c.rebuildJob = nil
 	c.cond.Broadcast()
 	c.mu.Unlock()
 

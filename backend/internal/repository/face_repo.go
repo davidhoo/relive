@@ -42,6 +42,7 @@ type FaceRepository interface {
 	ListByIDs(ids []uint) ([]*model.Face, error)
 	ListAssigned() ([]*model.Face, error)
 	ListAssignedPersonIDs() ([]uint, error)
+	ListAssignedPersonIDsPaged(offset, limit int) ([]uint, error)
 	ListPending(limit int) ([]*model.Face, error)
 	GetPendingStats() (*PendingFaceStats, error)
 	ListPrototypeEmbeddings(personIDs []uint, perPerson int) ([]*model.Face, error)
@@ -182,6 +183,25 @@ func (r *faceRepository) ListAssignedPersonIDs() ([]uint, error) {
 	err := r.db.Model(&model.Face{}).
 		Where("person_id IS NOT NULL").
 		Distinct("person_id").
+		Pluck("person_id", &ids).Error
+	return ids, err
+}
+
+// ListAssignedPersonIDsPaged returns a page of distinct assigned person IDs
+// ordered by person_id ascending. offset is 0-based; limit is the page size.
+// Designed for batched protoCache rebuild to avoid loading all person IDs in
+// a single query on large datasets (NAS: 220K+ rows).
+func (r *faceRepository) ListAssignedPersonIDsPaged(offset, limit int) ([]uint, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	var ids []uint
+	err := r.db.Model(&model.Face{}).
+		Where("person_id IS NOT NULL").
+		Distinct("person_id").
+		Order("person_id ASC").
+		Offset(offset).
+		Limit(limit).
 		Pluck("person_id", &ids).Error
 	return ids, err
 }

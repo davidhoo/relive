@@ -44,9 +44,9 @@ const (
 //   - MaxRuntime：预留字段，第一波仅记录到 decision，不强制 kill（执行预算由各 worker
 //     自身的 checkpoint 保证）。
 type BackgroundTaskRequest struct {
-	Class     BackgroundTaskClass
-	Priority  BackgroundTaskPriority
-	DedupeKey string
+	Class      BackgroundTaskClass
+	Priority   BackgroundTaskPriority
+	DedupeKey  string
 	MaxRuntime time.Duration
 }
 
@@ -54,14 +54,14 @@ type BackgroundTaskRequest struct {
 type BackgroundDecisionReason string
 
 const (
-	BackgroundDecisionAllowed          BackgroundDecisionReason = "allowed"
-	BackgroundDecisionCoalesced        BackgroundDecisionReason = "coalesced"
-	BackgroundDecisionForeground       BackgroundDecisionReason = "foreground_active"
-	BackgroundDecisionCooldown         BackgroundDecisionReason = "cooldown"
-	BackgroundDecisionAlreadyRunning   BackgroundDecisionReason = "already_running"
-	BackgroundDecisionCPUHigh          BackgroundDecisionReason = "cpu_high"
-	BackgroundDecisionIOWaitHigh       BackgroundDecisionReason = "iowait_high"
-	BackgroundDecisionMemoryHigh       BackgroundDecisionReason = "memory_high"
+	BackgroundDecisionAllowed           BackgroundDecisionReason = "allowed"
+	BackgroundDecisionCoalesced         BackgroundDecisionReason = "coalesced"
+	BackgroundDecisionForeground        BackgroundDecisionReason = "foreground_active"
+	BackgroundDecisionCooldown          BackgroundDecisionReason = "cooldown"
+	BackgroundDecisionAlreadyRunning    BackgroundDecisionReason = "already_running"
+	BackgroundDecisionCPUHigh           BackgroundDecisionReason = "cpu_high"
+	BackgroundDecisionIOWaitHigh        BackgroundDecisionReason = "iowait_high"
+	BackgroundDecisionMemoryHigh        BackgroundDecisionReason = "memory_high"
 	BackgroundDecisionAutomaticDisabled BackgroundDecisionReason = "automatic_disabled"
 )
 
@@ -103,9 +103,9 @@ type BackgroundTaskDedupeEntry struct {
 // dedupeSlot 记录一个 (class, dedupeKey) 的 running/pending 状态。同一 slot 同时最多
 // 一个 running + 一个 pending；超过的请求被 coalesce 拒绝。
 type dedupeSlot struct {
-	running  bool
-	pending  bool
-	priority BackgroundTaskPriority
+	running   bool
+	pending   bool
+	priority  BackgroundTaskPriority
 	startedAt time.Time
 }
 
@@ -205,6 +205,18 @@ func (c *BackgroundTaskCoordinator) ForegroundActive() bool {
 	return c.foregroundActive > 0
 }
 
+// LoadSnapshot 返回当前系统负载快照。loadFn 未注入时返回零值（所有字段 -1=unknown）。
+// 供 protoCache rebuild 等后台任务做动态速度控制。
+func (c *BackgroundTaskCoordinator) LoadSnapshot() BackgroundLoadSnapshot {
+	c.mu.Lock()
+	fn := c.loadFn
+	c.mu.Unlock()
+	if fn == nil {
+		return BackgroundLoadSnapshot{CPUUserPct: -1, CPUIOWaitPct: -1, MemUsedPct: -1}
+	}
+	return fn()
+}
+
 // CanRun 评估一次后台任务请求是否可以运行，不占用 slot。用于调用方在启动重工作前快速
 // 检查。返回的 decision 不改变 coordinator 状态。
 //
@@ -227,6 +239,7 @@ func (c *BackgroundTaskCoordinator) CanRun(req BackgroundTaskRequest) (Backgroun
 // 对于 DedupeKey 非空的 automatic 请求，若当前已有 running：
 //   - 若尚无 pending → 记录一个 pending slot 并返回 coalesced（调用方可选择稍后重试）；
 //   - 若已有 pending → 返回 coalesced，不增加 pending（至多一 pending）。
+//
 // running 释放时不会自动触发 pending（pending 仅作为“有积压”的可观测标记；实际重试由
 // worker 调度循环驱动，避免引入任务队列语义）。
 func (c *BackgroundTaskCoordinator) Begin(req BackgroundTaskRequest) (func(), BackgroundTaskDecision, bool) {
@@ -414,7 +427,7 @@ type BackgroundTaskStatus struct {
 	CPUPauseThreshold    float64
 	IOWaitPauseThreshold float64
 	MemoryPauseThreshold float64
-	DBLockedCooldownMs  int64
+	DBLockedCooldownMs   int64
 }
 
 // Status 返回 Snapshot + 配置/阈值的完整状态视图（供状态 API，Task 16）。
@@ -431,7 +444,7 @@ func (c *BackgroundTaskCoordinator) Status() BackgroundTaskStatus {
 		CPUPauseThreshold:    c.cpuPauseThreshold,
 		IOWaitPauseThreshold: c.iowaitPauseThreshold,
 		MemoryPauseThreshold: c.memoryPauseThreshold,
-		DBLockedCooldownMs:  c.dbLockedCooldown.Milliseconds(),
+		DBLockedCooldownMs:   c.dbLockedCooldown.Milliseconds(),
 	}
 	now := time.Now()
 	for class, until := range c.cooldowns {

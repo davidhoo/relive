@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"encoding/json"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -578,4 +579,101 @@ func TestFaceRepository_ListPersonIDsSharingPhotos_NoNPlusOne(t *testing.T) {
 	// 总数远小于 600（非逐候选 N+1）。
 	assert.Less(t, atomic.LoadInt32(qcount), int32(600), "no per-candidate N+1; chunked and bounded")
 	assert.Greater(t, atomic.LoadInt32(qcount), int32(0))
+}
+
+func TestFaceRepository_ListAssignedPersonIDsPaged(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	faceRepo := NewFaceRepository(db)
+	personRepo := NewPersonRepository(db)
+
+	// Create 5 persons with faces assigned.
+	personIDs := make([]uint, 5)
+	for i := 0; i < 5; i++ {
+		p := &model.Person{Category: model.PersonCategoryFriend}
+		require.NoError(t, personRepo.Create(p))
+		personIDs[i] = p.ID
+		require.NoError(t, faceRepo.Create(&model.Face{
+			PhotoID:      uint(i + 1),
+			PersonID:     &p.ID,
+			BBoxX:        0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+			Confidence:   0.9, QualityScore: 0.8,
+		}))
+	}
+	// Also create an unassigned face — should not appear.
+	require.NoError(t, faceRepo.Create(&model.Face{PhotoID: 99, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2}))
+
+	// Page 1: offset=0, limit=3 → first 3 person IDs (ascending).
+	page1, err := faceRepo.ListAssignedPersonIDsPaged(0, 3)
+	require.NoError(t, err)
+	assert.Len(t, page1, 3)
+	assert.Equal(t, personIDs[0], page1[0])
+	assert.Equal(t, personIDs[1], page1[1])
+	assert.Equal(t, personIDs[2], page1[2])
+
+	// Page 2: offset=3, limit=3 → last 2 person IDs.
+	page2, err := faceRepo.ListAssignedPersonIDsPaged(3, 3)
+	require.NoError(t, err)
+	assert.Len(t, page2, 2)
+	assert.Equal(t, personIDs[3], page2[0])
+	assert.Equal(t, personIDs[4], page2[1])
+
+	// Page 3: offset=5, limit=3 → empty.
+	page3, err := faceRepo.ListAssignedPersonIDsPaged(5, 3)
+	require.NoError(t, err)
+	assert.Empty(t, page3)
+
+	// limit=0 → empty (no error).
+	empty, err := faceRepo.ListAssignedPersonIDsPaged(0, 0)
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+}
+
+func TestFaceRepository_ListPrototypeEmbeddings_Batched(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	faceRepo := NewFaceRepository(db)
+	personRepo := NewPersonRepository(db)
+
+	// Create 2 persons, each with 3 faces (different quality).
+	emb := encodeFloat32(t, []float32{1.0, 0.0, 0.0})
+	for pid := 1; pid <= 2; pid++ {
+		p := &model.Person{Category: model.PersonCategoryFriend}
+		require.NoError(t, personRepo.Create(p))
+		for f := 0; f < 3; f++ {
+			require.NoError(t, faceRepo.Create(&model.Face{
+				PhotoID:      uint(pid*10 + f),
+				PersonID:     &p.ID,
+				BBoxX:        0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+				Confidence:   0.9,
+				QualityScore: float64(3 - f), // 3, 2, 1
+				Embedding:    emb,
+			}))
+		}
+	}
+
+	personIDs, err := faceRepo.ListAssignedPersonIDsPaged(0, 10)
+	require.NoError(t, err)
+	assert.Len(t, personIDs, 2)
+
+	// Request top 2 per person → 4 faces total.
+	faces, err := faceRepo.ListPrototypeEmbeddings(personIDs, 2)
+	require.NoError(t, err)
+	assert.Len(t, faces, 4) // 2 persons × 2 per person
+
+	// Verify each person got 2 faces (highest quality first).
+	byPerson := make(map[uint]int)
+	for _, f := range faces {
+		byPerson[*f.PersonID]++
+	}
+	for _, count := range byPerson {
+		assert.Equal(t, 2, count)
+	}
+}
+
+func encodeFloat32(t *testing.T, vals []float32) []byte {
+	t.Helper()
+	payload, err := json.Marshal(vals)
+	require.NoError(t, err)
+	return payload
 }

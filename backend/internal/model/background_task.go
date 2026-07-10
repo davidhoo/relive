@@ -22,8 +22,24 @@ type BackgroundTaskStatusResponse struct {
 	Load BackgroundLoadSnapshotResponse `json:"load"`
 	// Thresholds 是 advisory 资源背压阈值（0 表示禁用）。
 	Thresholds BackgroundThresholdsResponse `json:"thresholds"`
+	// ProtoCacheRebuild 是 protoCache 分批 full rebuild 的进度快照。nil/省略表示当前没有
+	// rebuild 在进行（向后兼容：旧客户端忽略该字段即可）。cold_building 标识冷启动构建中。
+	ProtoCacheRebuild *ProtoCacheRebuildStatusResponse `json:"proto_cache_rebuild,omitempty"`
 	// CapturedAt 是快照采集时间（RFC3339）。
 	CapturedAt string `json:"captured_at"`
+}
+
+// ProtoCacheRebuildStatusResponse 描述一次 protoCache 分批 full rebuild 的只读进度快照。
+// 所有字段向后兼容。state 取值：idle/running/paused/completed/failed；cold_building 为
+// 独立布尔，当无可用旧缓存且 rebuild 进行中时为 true，用于前端区分冷启动与普通后台 refresh。
+type ProtoCacheRebuildStatusResponse struct {
+	Generation   uint64 `json:"generation"`
+	State        string `json:"state"`
+	ColdBuilding bool   `json:"cold_building"`
+	Cursor       int    `json:"cursor"`
+	Total        int    `json:"total"`
+	Batches      int    `json:"batches"`
+	PauseReason  string `json:"pause_reason,omitempty"`
 }
 
 // BackgroundTaskRuntimeResponse 描述一个正在运行的后台任务（脱敏，仅 class/dedupe/priority/started_at）。
@@ -54,7 +70,7 @@ type BackgroundThresholdsResponse struct {
 	CPUPauseThreshold    float64 `json:"cpu_pause_threshold"`
 	IOWaitPauseThreshold float64 `json:"iowait_pause_threshold"`
 	MemoryPauseThreshold float64 `json:"memory_pause_threshold"`
-	DBLockedCooldownMs  int64   `json:"db_locked_cooldown_ms"`
+	DBLockedCooldownMs   int64   `json:"db_locked_cooldown_ms"`
 }
 
 // FormatBackgroundTimeRFC3339 格式化时间为 RFC3339 字符串；零值返回空串。

@@ -60,9 +60,9 @@ const (
 
 	// Clustering optimization constants to prevent CPU overload on NAS
 	// See: https://github.com/davidhoo/relive/issues/XXX
-	peopleClusteringBatchSize    = 50              // Max pending faces to cluster at once
-	peopleClusteringTaskInterval = 5               // Cluster every N tasks (0 = always)
-	clustProtoCacheTTL           = 6 * time.Hour   // Safety TTL only; dirty-driven refresh is primary (Task: protoCache dirty queue)
+	peopleClusteringBatchSize    = 50            // Max pending faces to cluster at once
+	peopleClusteringTaskInterval = 5             // Cluster every N tasks (0 = always)
+	clustProtoCacheTTL           = 6 * time.Hour // Safety TTL only; dirty-driven refresh is primary (Task: protoCache dirty queue)
 
 	// protoCache dirty-queue / pressure-aware refresh constants (Task: protoCache dirty queue)
 	protoCacheIncrementalThreshold = 20               // dirty persons below or equal to this go incremental refresh
@@ -2472,6 +2472,29 @@ func (s *peopleService) SetBackgroundCoordinator(c *BackgroundTaskCoordinator) {
 	s.backgroundCoordinator = c
 }
 
+// ProtoCacheRebuildStatus 返回 protoCache 分批 full rebuild 的只读进度快照，供后台状态 API
+// 展示。线程安全（rebuildSnapshot 在 coordinator.mu 下读取）。nil 表示当前无 rebuild。
+// cold_building=true 表示系统无可用旧缓存且 rebuild 进行中（running/paused），前端据此区分
+// 冷启动构建与普通后台 refresh。
+func (s *peopleService) ProtoCacheRebuildStatus() *model.ProtoCacheRebuildStatusResponse {
+	if s.clusteringCoordinator == nil {
+		return nil
+	}
+	state, gen, cursor, total, batches, reason, cold := s.clusteringCoordinator.rebuildSnapshot()
+	if state == rebuildStateIdle {
+		return nil
+	}
+	return &model.ProtoCacheRebuildStatusResponse{
+		Generation:   gen,
+		State:        string(state),
+		ColdBuilding: cold,
+		Cursor:       cursor,
+		Total:        total,
+		Batches:      batches,
+		PauseReason:  reason,
+	}
+}
+
 // recordFeedbackEvent 在核心人物变更已提交后单独写入一条反馈事件。必须在任何
 // executeWrite 回调之外调用（由各业务方法在核心写入完成后调用），避免 WriteQueue
 // 重入死锁。写入失败仅记录脱敏 warning，不影响已成功的业务结果。
@@ -3207,6 +3230,34 @@ func (s *peopleService) buildClustProtoCache() (*clustProtoCache, error) {
 		prototypesOrig:    orig,
 		builtAt:           time.Now(),
 	}, nil
+}
+
+// buildClustProtoCacheBatch loads prototype candidates for a subset of person IDs,
+// selects prototypes, and decodes embeddings. It is the batch-level building block
+// for the incremental (batched) full rebuild. The caller (coordinator) accumulates
+// the returned maps into a staging cache and swaps atomically when all batches are done.
+//
+// Does NOT touch s.protoCache — the caller owns the staging accumulation and swap.
+// Does NOT hold writeGate. Pure read + CPU.
+func (s *peopleService) buildClustProtoCacheBatch(personIDs []uint) (withEmb map[uint][]faceWithEmbedding, orig map[uint][]*model.Face, err error) {
+	if len(personIDs) == 0 {
+		return nil, nil, nil
+	}
+	protoFaces, err := s.faceRepo.ListPrototypeEmbeddings(personIDs, peoplePrototypeCandidates)
+	if err != nil {
+		return nil, nil, err
+	}
+	orig = s.selectPersonPrototypes(protoFaces, peoplePrototypeCount)
+	withEmb = make(map[uint][]faceWithEmbedding, len(orig))
+	for personID, protoList := range orig {
+		withEmb[personID] = decodeFacesWithEmbeddings(protoList)
+	}
+	// Test hook: same as buildClustProtoCache, allows tests to simulate slow refresh
+	// and verify foreground does not block during batched rebuild.
+	if s.protoCacheBuildHook != nil {
+		s.protoCacheBuildHook()
+	}
+	return withEmb, orig, nil
 }
 
 func (s *peopleService) runIncrementalClustering() ([]uint, []uint, []identityShadowObservation, error) {
