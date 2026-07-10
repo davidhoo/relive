@@ -108,6 +108,7 @@ type peopleClusteringCoordinator struct {
 	// 0 时使用包级常量。仅供测试通过 setProtoCacheRefreshIntervalsForTest 设置。
 	protoCacheMinInterval time.Duration
 	protoCacheFailCool    time.Duration
+	protoCacheQuietWin    time.Duration
 
 	workerDone chan struct{}
 }
@@ -341,6 +342,7 @@ func (c *peopleClusteringCoordinator) runClusterBatch(source clusterSource) back
 			DirtyPersonIDs: res.affectedPersonIDs,
 			Reason:         "clustering_assignment",
 		})
+		c.svc.markProtoCacheDirty(res.affectedPersonIDs, nil, "clustering_assignment")
 	}
 
 	if res.err != nil {
@@ -382,14 +384,16 @@ func (c *peopleClusteringCoordinator) protoCacheRefreshFailCooldownValue() time.
 	return protoCacheRefreshFailCooldown
 }
 
-// shouldRefreshProtoCache 报告本批次是否应尝试刷新 protoCache。规则（Task 10）：
-//   - protoCache 不需要 refresh（fresh）→ false。
-//   - 已有一个 refresh running → false（至多一 running，coalesce 进 running）。
-//   - 在成功最小间隔 cooldown 内 → false（保持 pending）。
-//   - 否则 → true。
+// shouldRefreshProtoCache reports whether this batch should attempt a protoCache refresh.
+// Rules (dirty-queue + pressure-aware refresh):
+//   - protoCache does not need refresh (fresh, no dirty) -> false.
+//   - A refresh is already running -> false (coalesce into running).
+//   - Within success/failure cooldown -> false (keep pending).
+//   - Dirty entries exist but quiet window not yet elapsed -> false (keep pending).
+//   - Otherwise -> true.
 //
-// pending 状态不阻止下一次尝试：pending 表示“上次想刷但没刷成”，本次应继续尝试。
-// 只由 worker goroutine 调用，无需加锁。
+// Cold start (nil cache) bypasses quiet window and cooldown: the worker must build
+// before it can cluster at all. Only the worker goroutine calls this.
 func (c *peopleClusteringCoordinator) shouldRefreshProtoCache() bool {
 	if !c.svc.protoCacheNeedsRefresh() {
 		return false
@@ -397,21 +401,44 @@ func (c *peopleClusteringCoordinator) shouldRefreshProtoCache() bool {
 	if c.protoCacheRefreshRunning {
 		return false
 	}
+	// Cold start bypasses quiet window but still respects failure cooldown to avoid
+	// spinning on repeated build failures. Success cooldown is also bypassed because
+	// there is no cache to serve clustering.
+	if c.svc.protoCache == nil {
+		if time.Now().Before(c.protoCacheRefreshCooldownUntil) {
+			c.protoCacheRefreshPending = true
+			return false
+		}
+		return true
+	}
 	if time.Now().Before(c.protoCacheRefreshCooldownUntil) {
-		// 成功 cooldown 内：保持 pending，不刷新。
+		c.protoCacheRefreshPending = true
+		return false
+	}
+	// Quiet window: wait for foreground activity to settle before refreshing.
+	_, _, _, _, lastDirtyAt, _ := c.svc.snapshotProtoCacheDirty()
+	if !lastDirtyAt.IsZero() && time.Since(lastDirtyAt) < c.protoCacheQuietWindowValue() {
 		c.protoCacheRefreshPending = true
 		return false
 	}
 	return true
 }
 
-// refreshProtoCacheOutsideGate 在 writeGate 外构建 protoCache。返回：
-//   - refreshed=true：成功构建并赋值给 s.protoCache。
-//   - skip=true：foreground active 阻止了 refresh（启动前或构建中途变 active），调用方应
-//     return no work 并保持 pending。
-//   - err!=nil：构建失败，调用方应进入失败 cooldown。
+// refreshProtoCacheOutsideGate refreshes protoCache outside writeGate. Returns:
+//   - refreshed=true: successfully refreshed (incremental or full) and assigned to s.protoCache.
+//   - skip=true: foreground active prevented refresh (startup or mid-build), caller should
+//     return no work and keep pending.
+//   - err!=nil: build failed, caller should enter failure cooldown.
 //
-// refreshed 与 skip 互斥；err 非 nil 时其余两者为零值。只由 worker goroutine 调用。
+// refreshed and skip are mutually exclusive; err non-nil means the others are zero.
+// Only called by the worker goroutine.
+//
+// Refresh strategy (incremental-first, full-fallback):
+//   - If cache is nil (cold start) or fullRebuildNeeded: full rebuild via buildClustProtoCache.
+//   - If dirty person count <= protoCacheIncrementalThreshold: incremental refresh of affected
+//     persons only, avoiding the 220K-row full reload.
+//   - If dirty person count exceeds threshold: full rebuild.
+//   - Tombstones (deleted persons) are applied to the cache before any clustering batch.
 func (c *peopleClusteringCoordinator) refreshProtoCacheOutsideGate(source clusterSource) (refreshed, skip bool, err error) {
 	if c.svc.backgroundCoordinator != nil && c.svc.backgroundCoordinator.ForegroundActive() {
 		logger.Infof("people clustering coordinator: source=%s skip protoCache refresh: foreground active", source)
@@ -420,16 +447,47 @@ func (c *peopleClusteringCoordinator) refreshProtoCacheOutsideGate(source cluste
 	c.protoCacheRefreshRunning = true
 	defer func() { c.protoCacheRefreshRunning = false }()
 
-	newCache, buildErr := c.svc.buildClustProtoCache()
-	if buildErr != nil {
-		return false, false, buildErr
+	// Snapshot the dirty state to decide refresh strategy.
+	gen, dirtyIDs, deletedIDs, reasons, _, fullRebuild := c.svc.snapshotProtoCacheDirty()
+
+	// Determine refresh mode.
+	cacheIsNil := c.svc.protoCache == nil
+	dirtyCount := len(dirtyIDs)
+	doFullRebuild := cacheIsNil || fullRebuild || dirtyCount > protoCacheIncrementalThreshold
+
+	if doFullRebuild {
+		newCache, buildErr := c.svc.buildClustProtoCache()
+		if buildErr != nil {
+			return false, false, buildErr
+		}
+		if c.svc.backgroundCoordinator != nil && c.svc.backgroundCoordinator.ForegroundActive() {
+			logger.Infof("people clustering coordinator: source=%s discard rebuilt protoCache: foreground became active", source)
+			return false, true, nil
+		}
+		c.svc.protoCache = newCache
+		c.svc.clearProtoCacheDirty(gen)
+		logger.Infof("people clustering coordinator: source=%s protoCache full rebuild dirty=%d deleted=%d reasons=%v",
+			source, dirtyCount, len(deletedIDs), reasons)
+		return true, false, nil
 	}
-	// 构建完成后再检查 foreground：若变 active，丢弃结果 return no work。
+
+	// Incremental refresh: reload only affected persons.
+	// First apply tombstones to remove deleted persons from cache.
+	c.svc.applyTombstonesToCache(deletedIDs)
+	if len(dirtyIDs) > 0 {
+		n, refreshErr := c.svc.refreshProtoCacheIncremental(dirtyIDs)
+		if refreshErr != nil {
+			return false, false, refreshErr
+		}
+		_ = n
+	}
 	if c.svc.backgroundCoordinator != nil && c.svc.backgroundCoordinator.ForegroundActive() {
-		logger.Infof("people clustering coordinator: source=%s discard rebuilt protoCache: foreground became active", source)
+		logger.Infof("people clustering coordinator: source=%s discard incremental refresh: foreground became active", source)
 		return false, true, nil
 	}
-	c.svc.protoCache = newCache
+	c.svc.clearProtoCacheDirty(gen)
+	logger.Infof("people clustering coordinator: source=%s protoCache incremental refresh dirty=%d deleted=%d reasons=%v",
+		source, dirtyCount, len(deletedIDs), reasons)
 	return true, false, nil
 }
 
@@ -439,10 +497,23 @@ func (c *peopleClusteringCoordinator) recordProtoCacheRefreshFailure() {
 	c.protoCacheRefreshCooldownUntil = time.Now().Add(c.protoCacheRefreshFailCooldownValue())
 }
 
-// setProtoCacheRefreshIntervalsForTest 覆盖 cooldown/min-interval（仅供测试）。
+// protoCacheQuietWindowValue returns the quiet window duration (test-configurable, 0 uses package constant).
+func (c *peopleClusteringCoordinator) protoCacheQuietWindowValue() time.Duration {
+	if c.protoCacheQuietWin > 0 {
+		return c.protoCacheQuietWin
+	}
+	return protoCacheQuietWindow
+}
+
+// setProtoCacheRefreshIntervalsForTest 覆盖 cooldown/min-interval/quiet-window（仅供测试）。
 func (c *peopleClusteringCoordinator) setProtoCacheRefreshIntervalsForTest(minInterval, failCooldown time.Duration) {
 	c.protoCacheMinInterval = minInterval
 	c.protoCacheFailCool = failCooldown
+}
+
+// setProtoCacheQuietWindowForTest overrides the quiet window duration (test only).
+func (c *peopleClusteringCoordinator) setProtoCacheQuietWindowForTest(d time.Duration) {
+	c.protoCacheQuietWin = d
 }
 
 // submitBackground requests one background clustering batch and blocks until

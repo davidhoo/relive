@@ -105,6 +105,10 @@ func newPeopleServiceForTest(t *testing.T, client PeopleMLClient) (*peopleServic
 	// Task 8：注入统一 BackgroundTaskCoordinator，使前台 mutation 注册 foreground scope。
 	svc.SetBackgroundCoordinator(NewBackgroundTaskCoordinator())
 
+	// Disable quiet window for tests: existing tests expect immediate clustering
+	// after foreground mutations, not a 10s delay.
+	svc.clusteringCoordinator.setProtoCacheQuietWindowForTest(1 * time.Millisecond)
+
 	// Reset clustering task counter to ensure clustering runs on first job
 	// This is needed because tests expect immediate clustering behavior
 	svc.clusteringTaskCounter = peopleClusteringTaskInterval

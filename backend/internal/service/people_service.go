@@ -62,7 +62,11 @@ const (
 	// See: https://github.com/davidhoo/relive/issues/XXX
 	peopleClusteringBatchSize    = 50              // Max pending faces to cluster at once
 	peopleClusteringTaskInterval = 5               // Cluster every N tasks (0 = always)
-	clustProtoCacheTTL           = 5 * time.Minute // Prototype cache TTL; avoids reloading 220K rows per 50-face batch
+	clustProtoCacheTTL           = 6 * time.Hour   // Safety TTL only; dirty-driven refresh is primary (Task: protoCache dirty queue)
+
+	// protoCache dirty-queue / pressure-aware refresh constants (Task: protoCache dirty queue)
+	protoCacheIncrementalThreshold = 20               // dirty persons below or equal to this go incremental refresh
+	protoCacheQuietWindow          = 10 * time.Second // min idle time after last foreground change before refresh
 )
 
 type PeopleMLClient interface {
@@ -143,6 +147,13 @@ type peopleService struct {
 	// runIncrementalClustering); no locking required.
 	protoCache *clustProtoCache
 
+	// protoCacheDirty tracks foreground changes that need a cache refresh. Foreground
+	// mutations call markProtoCacheDirty instead of triggering a rebuild. The coordinator
+	// worker drains and applies the dirty set at the next safe opportunity (outside
+	// writeGate, after quiet window, respecting cooldown). Thread-safe via its own mutex
+	// because foreground goroutines write while the worker reads.
+	protoCacheDirty *protoCacheDirtyState
+
 	// annCandidateFn, when set, pre-filters the O(N) attach scan to ~O(50) ANN candidates.
 	// Injected from personMergeSuggestionService which already maintains the HNSW index.
 	annCandidateFn func(probes []faceWithEmbedding, k int) map[uint]struct{}
@@ -194,6 +205,150 @@ type clustProtoCache struct {
 	builtAt           time.Time
 }
 
+// protoCacheDirtyState tracks foreground mutations that require a protoCache refresh.
+// Foreground goroutines call markProtoCacheDirty (thread-safe via mu); the coordinator
+// worker calls snapshotProtoCacheDirty / clearProtoCacheDirty to read and clear the state.
+type protoCacheDirtyState struct {
+	mu                sync.Mutex
+	generation        uint64
+	dirtyPersonIDs    map[uint]struct{}
+	deletedPersonIDs  map[uint]struct{}
+	dirtyReasons      []string
+	lastDirtyAt       time.Time
+	lastRefreshAt     time.Time
+	refreshRunning    bool
+	refreshPendingGen uint64
+	fullRebuildNeeded bool
+}
+
+func newProtoCacheDirtyState() *protoCacheDirtyState {
+	return &protoCacheDirtyState{
+		dirtyPersonIDs:   make(map[uint]struct{}),
+		deletedPersonIDs: make(map[uint]struct{}),
+	}
+}
+
+func (s *peopleService) markProtoCacheDirty(dirtyIDs, deletedIDs []uint, reason string) {
+	if s.protoCacheDirty == nil {
+		return
+	}
+	d := s.protoCacheDirty
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.generation++
+	for _, id := range dirtyIDs {
+		if id != 0 {
+			d.dirtyPersonIDs[id] = struct{}{}
+		}
+	}
+	for _, id := range deletedIDs {
+		if id != 0 {
+			d.deletedPersonIDs[id] = struct{}{}
+			delete(d.dirtyPersonIDs, id)
+		}
+	}
+	d.dirtyReasons = append(d.dirtyReasons, reason)
+	d.lastDirtyAt = time.Now()
+}
+
+func (s *peopleService) markProtoCacheFullRebuild(reason string) {
+	if s.protoCacheDirty == nil {
+		return
+	}
+	d := s.protoCacheDirty
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.generation++
+	d.fullRebuildNeeded = true
+	d.dirtyPersonIDs = make(map[uint]struct{})
+	d.deletedPersonIDs = make(map[uint]struct{})
+	d.dirtyReasons = append(d.dirtyReasons, reason)
+	d.lastDirtyAt = time.Now()
+}
+
+func (s *peopleService) snapshotProtoCacheDirty() (generation uint64, dirtyIDs, deletedIDs []uint, reasons []string, lastDirtyAt time.Time, fullRebuild bool) {
+	if s.protoCacheDirty == nil {
+		return 0, nil, nil, nil, time.Time{}, false
+	}
+	d := s.protoCacheDirty
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	dirtyIDs = make([]uint, 0, len(d.dirtyPersonIDs))
+	for id := range d.dirtyPersonIDs {
+		dirtyIDs = append(dirtyIDs, id)
+	}
+	deletedIDs = make([]uint, 0, len(d.deletedPersonIDs))
+	for id := range d.deletedPersonIDs {
+		deletedIDs = append(deletedIDs, id)
+	}
+	reasons = make([]string, len(d.dirtyReasons))
+	copy(reasons, d.dirtyReasons)
+	return d.generation, dirtyIDs, deletedIDs, reasons, d.lastDirtyAt, d.fullRebuildNeeded
+}
+
+func (s *peopleService) clearProtoCacheDirty(refreshGeneration uint64) {
+	if s.protoCacheDirty == nil {
+		return
+	}
+	d := s.protoCacheDirty
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.generation == refreshGeneration {
+		d.dirtyPersonIDs = make(map[uint]struct{})
+		d.deletedPersonIDs = make(map[uint]struct{})
+		d.dirtyReasons = nil
+		d.fullRebuildNeeded = false
+	}
+	d.lastRefreshAt = time.Now()
+}
+
+func (s *peopleService) protoCacheDirtyGeneration() uint64 {
+	if s.protoCacheDirty == nil {
+		return 0
+	}
+	d := s.protoCacheDirty
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.generation
+}
+
+func (s *peopleService) applyTombstonesToCache(deletedIDs []uint) {
+	if s.protoCache == nil || len(deletedIDs) == 0 {
+		return
+	}
+	for _, id := range deletedIDs {
+		delete(s.protoCache.prototypesWithEmb, id)
+		delete(s.protoCache.prototypesOrig, id)
+	}
+}
+
+func (s *peopleService) refreshProtoCacheIncremental(dirtyIDs []uint) (int, error) {
+	if s.protoCache == nil || len(dirtyIDs) == 0 {
+		return 0, nil
+	}
+	protoFaces, err := s.faceRepo.ListPrototypeEmbeddings(dirtyIDs, peoplePrototypeCandidates)
+	if err != nil {
+		return 0, err
+	}
+	orig := s.selectPersonPrototypes(protoFaces, peoplePrototypeCount)
+	withEmb := make(map[uint][]faceWithEmbedding, len(orig))
+	for personID, protoList := range orig {
+		withEmb[personID] = decodeFacesWithEmbeddings(protoList)
+	}
+	for _, id := range dirtyIDs {
+		delete(s.protoCache.prototypesWithEmb, id)
+		delete(s.protoCache.prototypesOrig, id)
+	}
+	for personID, protoList := range orig {
+		s.protoCache.prototypesWithEmb[personID] = withEmb[personID]
+		s.protoCache.prototypesOrig[personID] = protoList
+	}
+	s.protoCache.builtAt = time.Now()
+	logger.Infof("people clustering: protoCache incremental refresh persons=%d prototypes=%d",
+		len(dirtyIDs), len(protoFaces))
+	return len(dirtyIDs), nil
+}
+
 type activePeopleTask struct {
 	stopCh chan struct{}
 	done   chan struct{}
@@ -232,6 +387,7 @@ func NewPeopleService(db *gorm.DB, photoRepo repository.PhotoRepository, faceRep
 	}
 	svc.clusteringCoordinator = newPeopleClusteringCoordinator(svc)
 	svc.clusteringCoordinator.start()
+	svc.protoCacheDirty = newProtoCacheDirtyState()
 	return svc
 }
 
@@ -557,6 +713,7 @@ func (s *peopleService) ResetAllPeople() (int, error) {
 		ResetAll: true,
 		Reason:   "reset_all_people",
 	})
+	s.markProtoCacheFullRebuild("reset_all_people")
 
 	enqueued := 0
 	err = s.photoRepo.IterateActivePhotos([]string{"id", "status"}, 500, func(photos []*model.Photo) error {
@@ -641,6 +798,7 @@ func (s *peopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint)
 		return nil, err
 	}
 	s.markMergeSuggestionsDirty("merge_people")
+	s.markProtoCacheDirty([]uint{targetPersonID}, sourcePersonIDs, "merge_people")
 	s.scheduleFeedbackRecluster()
 	return &model.ReclusterResult{}, nil
 }
@@ -910,6 +1068,7 @@ func (s *peopleService) SplitPerson(faceIDs []uint) (person *model.Person, resul
 		return nil, nil, err
 	}
 	s.markMergeSuggestionsDirty("split_person")
+	s.markProtoCacheDirty([]uint{sourcePersonID, newPerson.ID}, nil, "split_person")
 	s.scheduleFeedbackRecluster()
 	return person, &model.ReclusterResult{}, nil
 }
@@ -1020,6 +1179,7 @@ func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) (result *
 		return nil, err
 	}
 	s.markMergeSuggestionsDirty("move_faces")
+	s.markProtoCacheDirty(append(mapKeys(sourcePersonIDs), targetPersonID), nil, "move_faces")
 	s.scheduleFeedbackRecluster()
 	return &model.ReclusterResult{}, nil
 }
@@ -1127,6 +1287,7 @@ func (s *peopleService) AssignFacePerson(faceID uint, req model.FacePersonAssign
 			return 0, err
 		}
 		s.markMergeSuggestionsDirty("assign_face_person_split")
+		s.markProtoCacheDirty([]uint{sourcePersonID, newPerson.ID}, nil, "assign_face_person_split")
 		s.scheduleFeedbackRecluster()
 		return face.PhotoID, nil
 	}
@@ -1170,6 +1331,7 @@ func (s *peopleService) AssignFacePerson(faceID uint, req model.FacePersonAssign
 		return 0, err
 	}
 	s.markMergeSuggestionsDirty("assign_face_person_move")
+	s.markProtoCacheDirty([]uint{sourcePersonID, targetPersonID}, nil, "assign_face_person_move")
 	s.scheduleFeedbackRecluster()
 	return face.PhotoID, nil
 }
@@ -1365,6 +1527,11 @@ func (s *peopleService) DissolvePerson(personID uint) (released int, err error) 
 	personDeleted = true
 
 	// 异步触发重聚类，让 pending 人脸被重新分配
+	if personDeleted {
+		s.markProtoCacheDirty(nil, []uint{personID}, "dissolve_person")
+	} else {
+		s.markProtoCacheDirty([]uint{personID}, nil, "dissolve_person")
+	}
 	s.scheduleFeedbackRecluster()
 
 	return len(faces), nil
@@ -2199,6 +2366,7 @@ func (s *peopleService) PostMergeCleanup(targetPersonID uint, sourcePersonIDs []
 		DeletedPersonIDs: sourcePersonIDs,
 		Reason:           "people_merged",
 	})
+	s.markProtoCacheDirty([]uint{targetPersonID}, sourcePersonIDs, "merge_suggestion_apply")
 }
 
 func (s *peopleService) setMergeSuggestionDirtyHook(hook func(string) error) {
@@ -2984,7 +3152,23 @@ func (s *peopleService) createPersonFromComponent(component []*model.Face, score
 // 仅供 people clustering coordinator worker 在获取 writeGate.RLock 前调用，决定是否
 // 在锁外同步构建。读取 s.protoCache 无需同步——它只由同一 worker goroutine 读写。
 func (s *peopleService) protoCacheNeedsRefresh() bool {
-	return s.protoCache == nil || time.Since(s.protoCache.builtAt) > clustProtoCacheTTL
+	if s.protoCache == nil {
+		return true
+	}
+	// Safety TTL: long-period fallback only.
+	if time.Since(s.protoCache.builtAt) > clustProtoCacheTTL {
+		return true
+	}
+	// Dirty-driven: any pending foreground changes need a refresh.
+	if s.protoCacheDirty != nil {
+		d := s.protoCacheDirty
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		if d.fullRebuildNeeded || len(d.dirtyPersonIDs) > 0 || len(d.deletedPersonIDs) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // buildClustProtoCache 在不持有 writeGate 的情况下构建一份全新的 prototype cache。
@@ -3034,15 +3218,13 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, []identitySh
 		return nil, nil, nil, nil
 	}
 
-	// protoCache cold/stale 时构建：生产路径下 coordinator worker 已在 writeGate.RLock
-	// 外预先构建好（runClusterBatch），此处 s.protoCache 通常已 fresh。本兜底分支仅用于
-	// runIncrementalClustering 被直接调用且未预构建的旧路径，保持向后兼容。
-	if s.protoCache == nil || time.Since(s.protoCache.builtAt) > clustProtoCacheTTL {
-		cache, err := s.buildClustProtoCache()
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		s.protoCache = cache
+	// protoCache must be pre-built by the coordinator worker (runClusterBatch) before
+	// calling runIncrementalClustering. The implicit buildClustProtoCache fallback has
+	// been removed to prevent uncontrolled rebuilds inside writeGate.RLock. If protoCache
+	// is nil, return an error so the caller (coordinator) can handle it by refreshing
+	// outside the gate before retrying.
+	if s.protoCache == nil {
+		return nil, nil, nil, fmt.Errorf("protoCache is nil: coordinator must refresh before clustering")
 	}
 	prototypesWithEmb := s.protoCache.prototypesWithEmb
 	prototypes := s.protoCache.prototypesOrig
