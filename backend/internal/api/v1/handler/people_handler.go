@@ -928,7 +928,12 @@ func (h *PeopleHandler) GetFaceThumbnail(c *gin.Context) {
 			writePeopleError(c, http.StatusInternalServerError, "GENERATE_FAILED", genErr.Error())
 			return
 		}
-		if updateErr := h.faceRepo.UpdateFields(face.ID, map[string]interface{}{"thumbnail_path": thumbnailPath}); updateErr != nil {
+		// 重新生成人脸缩略图后同步刷新 updated_at，使前端 ?v=updated_at 版本参数变化，
+		// 旧的 immutable 缓存失效，避免长期展示旧人脸图。
+		if updateErr := h.faceRepo.UpdateFields(face.ID, map[string]interface{}{
+			"thumbnail_path": thumbnailPath,
+			"updated_at":     time.Now(),
+		}); updateErr != nil {
 			writePeopleError(c, http.StatusInternalServerError, "UPDATE_FAILED", updateErr.Error())
 			return
 		}
@@ -948,7 +953,10 @@ func (h *PeopleHandler) GetFaceThumbnail(c *gin.Context) {
 	if contentType := mime.TypeByExtension(filepath.Ext(fullPath)); contentType != "" {
 		c.Header("Content-Type", contentType)
 	}
-	c.Header("Cache-Control", "private, max-age=3600")
+	// 人脸缩略图基于 face id + bbox + 原图路径生成稳定文件名（util.GenerateDerivedImagePath），
+	// 内容变化（重新生成、bbox 变更、旋转）时文件路径随之改变。前端通过版本化 URL（face.updated_at）
+	// 区分版本，配合长期私有浏览器缓存，避免对 NAS 重复发起缩略图校验请求。private 防止共享缓存泄露受保护图片。
+	c.Header("Cache-Control", "private, max-age=31536000, immutable")
 	c.File(fullPath)
 }
 
@@ -1065,6 +1073,7 @@ func faceToResponse(face *model.Face) model.FaceResponse {
 		ManualLockedAt:   face.ManualLockedAt,
 		ExclusionReason:  face.ExclusionReason,
 		ExcludedAt:       face.ExcludedAt,
+		UpdatedAt:        face.UpdatedAt,
 	}
 }
 

@@ -21,6 +21,7 @@ export interface Face {
   recluster_generation?: number
   exclusion_reason?: 'non_face' | 'low_quality' | ''
   excluded_at?: string
+  updated_at?: string
 }
 
 export interface Person {

@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "types": ["vite/client", "vitest/globals", "node"],
+    "noEmit": true
+  },
+  "include": ["src/**/*.spec.ts", "src/**/*.test.ts"],
+  "exclude": []
+}

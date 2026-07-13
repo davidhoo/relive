@@ -2,11 +2,16 @@ package handler
 
 import (
 	"errors"
+	"image/color"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/service"
+	"github.com/davidhoo/relive/pkg/config"
+	"github.com/disintegration/imaging"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -181,3 +186,103 @@ func TestPhotoHandler_GetPhotoByID_InvalidID(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
+
+// newPhotoThumbnailHandlerForTest 构造一个可用的 PhotoHandler，用于缩略图缓存头测试。
+// 照片文件使用真实 JPEG，缩略图文件同样真实生成，使 ShouldRefreshThumbnailCacheWithRotation
+// 走稳定分支（不再强制刷新），从而验证长缓存响应头。
+func newPhotoThumbnailHandlerForTest(t *testing.T) (*PhotoHandler, *model.Photo, *config.Config) {
+	t.Helper()
+
+	thumbRoot := t.TempDir()
+	photoDir := t.TempDir()
+	photoPath := filepath.Join(photoDir, "photo.jpg")
+	require.NoError(t, imaging.Save(imaging.New(400, 300, color.NRGBA{R: 10, G: 20, B: 30, A: 255}), photoPath))
+
+	photo := &model.Photo{
+		FilePath:       photoPath,
+		FileName:       "photo.jpg",
+		FileSize:       1,
+		FileHash:       "thumb-cache-test",
+		Width:          400,
+		Height:         300,
+		Status:         model.PhotoStatusActive,
+		ThumbnailPath:  "photos/test-thumb.jpg",
+		ThumbnailStatus: model.ThumbnailStatusReady,
+	}
+
+	svc := &stubPhotoService{
+		getPhotoByIDFunc: func(id uint) (*model.Photo, error) { return photo, nil },
+	}
+
+	cfg := &config.Config{Photos: config.PhotosConfig{ThumbnailPath: thumbRoot}}
+	h := &PhotoHandler{photoService: svc, cfg: cfg}
+
+	// 预生成一个 landscape（与原图 400x300 同方向）缩略图，使稳定缓存分支生效。
+	thumbPath := filepath.Join(thumbRoot, photo.ThumbnailPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(thumbPath), 0o755))
+	require.NoError(t, imaging.Save(imaging.New(120, 90, color.NRGBA{R: 200, G: 200, B: 200, A: 255}), thumbPath))
+
+	return h, photo, cfg
+}
+
+// TestPhotoHandler_GetPhotoThumbnail_StableLongCache 照片缩略图稳定时不再 no-cache，
+// 返回长期私有浏览器缓存，配合前端版本化 URL 避免对 NAS 重复校验。
+func TestPhotoHandler_GetPhotoThumbnail_StableLongCache(t *testing.T) {
+	h, _, _ := newPhotoThumbnailHandlerForTest(t)
+
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/photos/1/thumbnail", nil,
+		gin.Params{{Key: "id", Value: "1"}}, h.GetPhotoThumbnail)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	cacheControl := rec.Header().Get("Cache-Control")
+	assert.Contains(t, cacheControl, "max-age=31536000")
+	assert.Contains(t, cacheControl, "private")
+	assert.Contains(t, cacheControl, "immutable")
+	assert.NotContains(t, cacheControl, "no-cache")
+}
+
+// TestPhotoHandler_GetPhotoThumbnail_CacheIsPrivate 稳定缩略图缓存必须为私有浏览器缓存，
+// 不能进入共享缓存，避免受保护图片被中间代理缓存泄露。
+func TestPhotoHandler_GetPhotoThumbnail_CacheIsPrivate(t *testing.T) {
+	h, _, _ := newPhotoThumbnailHandlerForTest(t)
+
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/photos/1/thumbnail", nil,
+		gin.Params{{Key: "id", Value: "1"}}, h.GetPhotoThumbnail)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	cacheControl := rec.Header().Get("Cache-Control")
+	assert.Contains(t, cacheControl, "private")
+	assert.NotContains(t, cacheControl, "public")
+}
+
+// TestPhotoHandler_GetPhotoThumbnail_UnstableNoCache 没有预生成缩略图（需被动生成）时，
+// 返回原图并使用 no-cache，避免长期缓存可能变化的原图。
+func TestPhotoHandler_GetPhotoThumbnail_UnstableNoCache(t *testing.T) {
+	photoDir := t.TempDir()
+	photoPath := filepath.Join(photoDir, "photo.jpg")
+	require.NoError(t, imaging.Save(imaging.New(400, 300, color.NRGBA{R: 1, G: 2, B: 3, A: 255}), photoPath))
+
+	photo := &model.Photo{
+		FilePath:        photoPath,
+		FileName:        "photo.jpg",
+		FileSize:        1,
+		FileHash:        "thumb-nocache-test",
+		Width:           400,
+		Height:          300,
+		Status:          model.PhotoStatusActive,
+		ThumbnailPath:   "", // 无预生成缩略图
+		ThumbnailStatus: model.ThumbnailStatusNone,
+	}
+	svc := &stubPhotoService{
+		getPhotoByIDFunc: func(id uint) (*model.Photo, error) { return photo, nil },
+	}
+	cfg := &config.Config{Photos: config.PhotosConfig{ThumbnailPath: t.TempDir()}}
+	h := &PhotoHandler{photoService: svc, cfg: cfg}
+
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/photos/1/thumbnail", nil,
+		gin.Params{{Key: "id", Value: "1"}}, h.GetPhotoThumbnail)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "no-cache", rec.Header().Get("Cache-Control"))
+}
+

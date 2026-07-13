@@ -326,6 +326,11 @@ func TestUpdateFaceExclusion_Restore(t *testing.T) {
 	var photo2 model.Photo
 	require.NoError(t, db.First(&photo2, photo.ID).Error)
 	assert.Equal(t, 1, photo2.FaceCount)
+
+	// 排除/恢复后 updated_at 必须推进：前端用 face.updated_at 作为缩略图 URL 版本参数，
+	// 恢复时 excluded_at 置 nil，若 updated_at 不变则版本参数回退到旧值，命中 immutable 长缓存展示旧图。
+	assert.True(t, updatedFace.UpdatedAt.After(face.UpdatedAt),
+		"updated_at must advance after restore for cache invalidation")
 }
 
 func TestUpdateFaceExclusion_InvalidReason(t *testing.T) {

@@ -48,9 +48,10 @@
             <div class="ops-toolbar">
               <div class="ops-toolbar-head">
                 <span class="ops-toolbar-title">纠错操作</span>
-                <el-tag size="small" effect="plain" :type="selectedFaceIds.length > 0 ? 'warning' : 'info'">
-                  已选 {{ selectedFaceIds.length }} 张
+                <el-tag size="small" effect="plain" :type="selectedFaceCount > 0 ? 'warning' : 'info'">
+                  已选 {{ selectedFaceCount }} 张
                 </el-tag>
+                <el-button v-if="selectedFaceCount > 0" size="small" text type="info" @click="clearSelection">清空选择</el-button>
               </div>
               <div class="ops-toolbar-actions">
                 <el-tooltip content="把当前选中的人脸拆成一个新人物" placement="top">
@@ -136,20 +137,33 @@
           </div>
           <el-tabs v-model="activeTab" class="content-tabs">
           <el-tab-pane :label="`照片（${person?.photo_count ?? 0}）`" name="photos">
-            <el-empty v-if="photos.length === 0 && !photosLoading" description="暂无关联照片" />
+            <el-empty v-if="photos.length === 0 && !photosLoading && photosLoadedOnce" description="暂无关联照片" />
 
-            <div v-else class="photo-grid" :class="`is-${photoGridSize}`">
-              <button v-for="photo in photos" :key="photo.id" type="button" class="photo-card" @click="goToPhoto(photo.id)">
-                <img :src="photoThumbnail(photo.id)" :alt="photo.file_name || `photo-${photo.id}`" class="photo-image" />
-                <div class="photo-card-main">
-                  <div class="photo-title">{{ photo.caption || photo.file_name || `Photo #${photo.id}` }}</div>
-                  <div class="photo-subtitle">{{ formatTime(photo.taken_at || photo.created_at) }}</div>
-                </div>
-              </button>
-            </div>
+            <VirtualMediaGrid
+              v-else-if="photos.length > 0 || photosLoading"
+              ref="photosGridRef"
+              :items="photos"
+              :columns="photoColumns"
+              :row-height="photoRowHeight"
+              :gap="14"
+              :size-class="photoGridSize"
+              :has-more="!photosFinished"
+              :loading="photosLoading"
+              @load-more="loadMorePhotos"
+            >
+              <template #item="{ item }">
+                <button type="button" class="photo-card" @click="goToPhoto(item.id)">
+                  <img :src="photoThumbnail(item)" :alt="item.file_name || `photo-${item.id}`" class="photo-image" loading="lazy" decoding="async" />
+                  <div class="photo-card-main">
+                    <div class="photo-title">{{ item.caption || item.file_name || `Photo #${item.id}` }}</div>
+                    <div class="photo-subtitle">{{ formatTime(item.taken_at || item.created_at) }}</div>
+                  </div>
+                </button>
+              </template>
+            </VirtualMediaGrid>
 
             <!-- 无限滚动哨兵 -->
-            <div ref="photosSentinelRef" class="scroll-sentinel">
+            <div class="scroll-sentinel">
               <span v-if="photosLoading" class="sentinel-status">加载中...</span>
               <span v-else-if="photosError" class="sentinel-status sentinel-error">
                 加载失败，<el-button text type="primary" size="small" @click="loadMorePhotos">重试</el-button>
@@ -159,46 +173,59 @@
           </el-tab-pane>
 
           <el-tab-pane :label="`人脸（${person?.face_count ?? 0}）`" name="faces">
-            <el-empty v-if="faces.length === 0 && !facesLoading" description="暂无人脸样本" />
+            <el-empty v-if="faces.length === 0 && !facesLoading && facesLoadedOnce" description="暂无人脸样本" />
 
-            <div v-else class="face-grid" :class="`is-${faceGridSize}`">
-              <div v-for="face in faces" :key="face.id" class="face-card" :class="{ 'is-selected': selectedFaceIds.includes(face.id) }">
-                <div class="face-image-wrap">
-                  <img :src="faceThumbnail(face.id)" alt="face" class="face-image" />
-                  <el-checkbox class="face-checkbox" :model-value="selectedFaceIds.includes(face.id)" @change="toggleFace(face.id, $event as boolean)" />
+            <VirtualMediaGrid
+              v-else-if="faces.length > 0 || facesLoading"
+              ref="facesGridRef"
+              :items="faces"
+              :columns="faceColumns"
+              :row-height="faceRowHeight"
+              :gap="10"
+              :size-class="faceGridSize"
+              :has-more="!facesFinished"
+              :loading="facesLoading"
+              @load-more="loadMoreFaces"
+            >
+              <template #item="{ item }">
+                <div class="face-card" :class="{ 'is-selected': selectedFaceSet.has(item.id) }">
+                  <div class="face-image-wrap">
+                    <img :src="faceThumbnail(item)" alt="face" class="face-image" loading="lazy" decoding="async" />
+                    <el-checkbox class="face-checkbox" :model-value="selectedFaceSet.has(item.id)" @change="toggleFace(item.id, $event as boolean)" />
+                  </div>
+                  <div class="face-info">
+                    <div class="face-info-row">
+                      <span class="face-info-id">{{ `#${item.id}` }}</span>
+                      <el-tag v-if="person?.representative_face_id === item.id" type="success" size="small">头像</el-tag>
+                    </div>
+                    <div class="face-info-row">
+                      <el-tooltip content="人脸图像质量评分" placement="top">
+                        <span class="face-info-quality">{{ `质量 ${(item.quality_score || 0).toFixed(2)}` }}</span>
+                      </el-tooltip>
+                      <el-tooltip v-if="item.manual_locked" content="用户已人工确认归属" placement="top">
+                        <span class="face-info-tag tag-success">人工</span>
+                      </el-tooltip>
+                      <el-tooltip v-else-if="item.cluster_score" :content="`聚类置信度 ${Math.round((item.cluster_score || 0) * 100)}%，越高表示归属越可靠`" placement="top">
+                        <span class="face-info-tag" :class="(item.cluster_score || 0) >= 0.55 ? 'tag-success' : (item.cluster_score || 0) >= 0.45 ? 'tag-warning' : 'tag-danger'">{{ `${Math.round((item.cluster_score || 0) * 100)}%` }}</span>
+                      </el-tooltip>
+                    </div>
+                    <div class="face-info-actions">
+                      <el-tooltip :content="person?.representative_face_id === item.id ? '已是当前头像' : '将此人脸设为人物代表头像'" placement="top">
+                        <el-button size="small" plain :disabled="person?.representative_face_id === item.id || avatarSavingFaceId === item.id" @click="setAvatar(item.id)">
+                          {{ avatarSavingFaceId === item.id ? '设置中' : '头像' }}
+                        </el-button>
+                      </el-tooltip>
+                      <el-tooltip content="查看此人脸所在的原始照片" placement="top">
+                        <el-button size="small" plain @click="goToPhoto(item.photo_id)">照片</el-button>
+                      </el-tooltip>
+                    </div>
+                  </div>
                 </div>
-                <div class="face-info">
-                  <div class="face-info-row">
-                    <span class="face-info-id">{{ `#${face.id}` }}</span>
-                    <el-tag v-if="person.representative_face_id === face.id" type="success" size="small">头像</el-tag>
-                  </div>
-                  <div class="face-info-row">
-                    <el-tooltip content="人脸图像质量评分" placement="top">
-                      <span class="face-info-quality">{{ `质量 ${(face.quality_score || 0).toFixed(2)}` }}</span>
-                    </el-tooltip>
-                    <el-tooltip v-if="face.manual_locked" content="用户已人工确认归属" placement="top">
-                      <span class="face-info-tag tag-success">人工</span>
-                    </el-tooltip>
-                    <el-tooltip v-else-if="face.cluster_score" :content="`聚类置信度 ${Math.round((face.cluster_score || 0) * 100)}%，越高表示归属越可靠`" placement="top">
-                      <span class="face-info-tag" :class="(face.cluster_score || 0) >= 0.55 ? 'tag-success' : (face.cluster_score || 0) >= 0.45 ? 'tag-warning' : 'tag-danger'">{{ `${Math.round((face.cluster_score || 0) * 100)}%` }}</span>
-                    </el-tooltip>
-                  </div>
-                  <div class="face-info-actions">
-                    <el-tooltip :content="person.representative_face_id === face.id ? '已是当前头像' : '将此人脸设为人物代表头像'" placement="top">
-                      <el-button size="small" plain :disabled="person.representative_face_id === face.id || avatarSavingFaceId === face.id" @click="setAvatar(face.id)">
-                        {{ avatarSavingFaceId === face.id ? '设置中' : '头像' }}
-                      </el-button>
-                    </el-tooltip>
-                    <el-tooltip content="查看此人脸所在的原始照片" placement="top">
-                      <el-button size="small" plain @click="goToPhoto(face.photo_id)">照片</el-button>
-                    </el-tooltip>
-                  </div>
-                </div>
-              </div>
-            </div>
+              </template>
+            </VirtualMediaGrid>
 
             <!-- 无限滚动哨兵 -->
-            <div ref="facesSentinelRef" class="scroll-sentinel">
+            <div class="scroll-sentinel">
               <span v-if="facesLoading" class="sentinel-status">加载中...</span>
               <span v-else-if="facesError" class="sentinel-status sentinel-error">
                 加载失败，<el-button text type="primary" size="small" @click="loadMoreFaces">重试</el-button>
@@ -325,12 +352,14 @@ import { Grid, Menu, Monitor, User } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import SectionHeader from '@/components/SectionHeader.vue'
+import VirtualMediaGrid from '@/components/VirtualMediaGrid.vue'
 import PersonEditDialog from './PersonEditDialog.vue'
 import PersonMergeConfirmDialog from './PersonMergeConfirmDialog.vue'
 import { peopleApi } from '@/api/people'
 import type { Face, Person, PersonCategory } from '@/types/people'
 import type { Photo } from '@/types/photo'
 import { getPersonAvatarFallback, getPersonCategoryLabel, sortPeopleForDisplay } from './peopleHelpers'
+import { isAllFacesMoved } from './peopleGridUtils'
 
 const route = useRoute()
 const router = useRouter()
@@ -341,7 +370,11 @@ const person = ref<Person | null>(null)
 const faces = ref<Face[]>([])
 const photos = ref<Photo[]>([])
 const allPeople = ref<Person[]>([])
-const selectedFaceIds = ref<number[]>([])
+// 跨虚拟区域人脸选择：统一使用 Set<number>，卡片卸载不清除选择状态。
+// 仅在刷新页面 / 切换人物 / 操作成功后清空；切换 Tab / 密度不清空。
+const selectedFaceSet = ref<Set<number>>(new Set())
+const selectedFaceCount = computed(() => selectedFaceSet.value.size)
+const selectedFaceIds = computed(() => Array.from(selectedFaceSet.value))
 const avatarSavingFaceId = ref<number | null>(null)
 const splitting = ref(false)
 const excluding = ref(false)
@@ -390,12 +423,63 @@ const readGridSize = (key: string, fallback: GridSize): GridSize => {
 const photoGridSize = ref<GridSize>(readGridSize(PHOTO_GRID_KEY, 'medium'))
 const faceGridSize = ref<GridSize>(readGridSize(FACE_GRID_KEY, 'small'))
 
+// 密度 → 列数与行高。列数响应式跟随容器宽度（与 CSS 媒体查询一致），
+// 避免 virtualizer 按 15 列分组而 CSS 实际渲染 10 列导致的错位与虚拟区间错误。
+// 行高为估算值，与 CSS 卡片样式近似匹配，保证滚动条/区间计算合理。
+const baseColumnsForSize = (size: GridSize): number =>
+  size === 'small' ? 15 : size === 'medium' ? 5 : 3
+
+const rowHeightForSize = (size: GridSize): number =>
+  size === 'small' ? 110 : size === 'medium' ? 260 : 420
+
+// 视口宽度 → 实际列数（与 VirtualMediaGrid/Detail 的 CSS 媒体查询一致）。
+// 宽度变化时（缩放窗口 / 切换密度 / 响应式断点）重新计算列数，保证虚拟分组与真实渲染列数对齐。
+const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1280)
+let resizeRaf = 0
+const onViewportResize = () => {
+  if (resizeRaf) cancelAnimationFrame(resizeRaf)
+  resizeRaf = requestAnimationFrame(() => {
+    viewportWidth.value = window.innerWidth
+  })
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('resize', onViewportResize)
+}
+
+const columnsForSize = (size: GridSize): number => {
+  const base = baseColumnsForSize(size)
+  const w = viewportWidth.value
+  if (w <= 480) {
+    return size === 'small' ? 4 : 2
+  }
+  if (w <= 768) {
+    return size === 'small' ? 6 : size === 'medium' ? 3 : 2
+  }
+  if (w <= 1200) {
+    return size === 'small' ? 10 : size === 'medium' ? 4 : 3
+  }
+  return base
+}
+
+const photoColumns = computed(() => columnsForSize(photoGridSize.value))
+const faceColumns = computed(() => columnsForSize(faceGridSize.value))
+
+const photoRowHeight = computed(() => rowHeightForSize(photoGridSize.value))
+const faceRowHeight = computed(() => rowHeightForSize(faceGridSize.value))
+
 // 当前 tab 对应的密度状态
 const currentGridSize = computed<GridSize>(() =>
   activeTab.value === 'photos' ? photoGridSize.value : faceGridSize.value,
 )
 
 const setGridSize = (size: GridSize) => {
+  // 切换密度：以切换前第一个可见项作为滚动锚点，切换后尽量保持其在视口附近。
+  // 不清空数据、选择状态或分页状态，不重新请求已加载数据。
+  const gridRef = activeTab.value === 'photos' ? photosGridRef.value : facesGridRef.value
+  const anchorIndex = (gridRef && typeof (gridRef as any).getFirstVisibleIndex === 'function')
+    ? (gridRef as any).getFirstVisibleIndex()
+    : 0
+
   if (activeTab.value === 'photos') {
     photoGridSize.value = size
     localStorage.setItem(PHOTO_GRID_KEY, size)
@@ -403,6 +487,13 @@ const setGridSize = (size: GridSize) => {
     faceGridSize.value = size
     localStorage.setItem(FACE_GRID_KEY, size)
   }
+
+  // 等待列数/行高重算后恢复锚点
+  nextTick(() => {
+    if (gridRef && typeof (gridRef as any).scrollToIndex === 'function') {
+      ;(gridRef as any).scrollToIndex(anchorIndex)
+    }
+  })
 }
 
 // 关联照片 - 无限滚动状态
@@ -412,7 +503,16 @@ const photosFinished = ref(false)
 const photosPage = ref(1)
 const photosPageSize = ref(30)
 const photosTotal = ref(0)
-const photosSentinelRef = ref<HTMLElement | null>(null)
+// 首次按需加载标记：进入页面只加载当前默认 Tab“照片”第一页；
+// “人脸” Tab 首次切换时才加载。已访问过的 Tab 再次切回时恢复数据和滚动位置。
+const photosLoadedOnce = ref(false)
+const facesLoadedOnce = ref(false)
+// 虚拟网格 ref
+const photosGridRef = ref<InstanceType<typeof VirtualMediaGrid> | null>(null)
+const facesGridRef = ref<InstanceType<typeof VirtualMediaGrid> | null>(null)
+// 各 Tab 滚动位置记忆
+const photosScrollTop = ref(0)
+const facesScrollTop = ref(0)
 
 // 人脸样本 - 无限滚动状态
 const facesLoading = ref(false)
@@ -421,15 +521,9 @@ const facesFinished = ref(false)
 const facesPage = ref(1)
 const facesPageSize = ref(50)
 const facesTotal = ref(0)
-const facesSentinelRef = ref<HTMLElement | null>(null)
-
-// 滚动观察器
-let photosObserver: IntersectionObserver | null = null
-let facesObserver: IntersectionObserver | null = null
 
 // 候选人物懒加载
 const candidatePeopleLoaded = ref(false)
-
 // ---- 编辑弹窗状态：与人物列表页一致 ----
 const editDialogVisible = ref(false)
 const editingPerson = ref<Person | null>(null)
@@ -448,7 +542,10 @@ const personTitle = computed(() => {
 
 const avatarUrl = computed(() => {
   if (!person.value?.representative_face_id) return ''
-  return `${apiBaseUrl}/faces/${person.value.representative_face_id}/thumbnail?v=${person.value.representative_face_id}`
+  // 头像缩略图也使用 updated_at 版本化，避免人物信息更新后展示旧头像。
+  const ts = person.value.updated_at
+  const v = ts ? String(new Date(ts).getTime()) : String(person.value.representative_face_id)
+  return `${apiBaseUrl}/faces/${person.value.representative_face_id}/thumbnail?v=${v}`
 })
 
 const candidatePeople = computed(() => {
@@ -463,14 +560,37 @@ const formatTime = (value?: string) => {
   return date.toLocaleString('zh-CN')
 }
 
-const photoThumbnail = (photoId: number) => `${apiBaseUrl}/photos/${photoId}/thumbnail?v=${photoId}`
-const faceThumbnail = (faceId: number) => `${apiBaseUrl}/faces/${faceId}/thumbnail?v=${faceId}`
-const candidateAvatarUrl = (item: Person) => item.representative_face_id ? faceThumbnail(item.representative_face_id) : ''
+// 版本化缩略图 URL：使用可反映缩略图变化的版本值（updated_at 时间戳），
+// 没有时间戳时回退到 id。配合后端 immutable 长缓存，缩略图重建/旋转后版本变化使旧缓存失效。
+const photoVersion = (photo: Photo): string => {
+  const ts = photo.updated_at || photo.thumbnail_generated_at
+  return ts ? String(new Date(ts).getTime()) : String(photo.id)
+}
+
+const faceVersion = (face: Face): string => {
+  const ts = face.updated_at || face.excluded_at
+  return ts ? String(new Date(ts).getTime()) : String(face.id)
+}
+
+const photoThumbnail = (photo: Photo) => `${apiBaseUrl}/photos/${photo.id}/thumbnail?v=${photoVersion(photo)}`
+const faceThumbnail = (face: Face) => `${apiBaseUrl}/faces/${face.id}/thumbnail?v=${faceVersion(face)}`
+// 候选人物头像：candidate 来自 peopleApi.getList（精简字段，无 face.updated_at），
+// 用 candidate.updated_at（人物级，SetRepresentativeFace 会刷新人物 updated_at）作为版本参数，
+// 头像变更后版本推进，避免 immutable 长缓存展示旧头像。无 updated_at 时回退到 faceId。
+const candidateAvatarUrl = (item: Person) => {
+  if (!item.representative_face_id) return ''
+  const v = item.updated_at ? String(new Date(item.updated_at).getTime()) : String(item.representative_face_id)
+  return `${apiBaseUrl}/faces/${item.representative_face_id}/thumbnail?v=${v}`
+}
 
 const candidateLabel = (item: Person) => `${item.name?.trim() || `未命名人物 #${item.id}`} · ${getPersonCategoryLabel(item.category)}`
 
+const clearSelection = () => {
+  selectedFaceSet.value = new Set()
+}
+
 const resetSelections = () => {
-  selectedFaceIds.value = []
+  selectedFaceSet.value = new Set()
   moveTargetPersonId.value = undefined
   mergeSourceIds.value = []
   similarityTargetId.value = undefined
@@ -511,6 +631,7 @@ const loadMorePhotos = async () => {
     photos.value = [...photos.value, ...fresh]
     photosTotal.value = totalCount
     photosPage.value += 1
+    photosLoadedOnce.value = true
 
     if (items.length < photosPageSize.value || photos.value.length >= totalCount) {
       photosFinished.value = true
@@ -543,6 +664,7 @@ const loadMoreFaces = async () => {
     faces.value = [...faces.value, ...fresh]
     facesTotal.value = totalCount
     facesPage.value += 1
+    facesLoadedOnce.value = true
 
     if (items.length < facesPageSize.value || faces.value.length >= totalCount) {
       facesFinished.value = true
@@ -552,69 +674,6 @@ const loadMoreFaces = async () => {
     ElMessage.error(error.message || '加载人脸失败')
   } finally {
     facesLoading.value = false
-  }
-}
-
-// --- 滚动容器查找 ---
-
-const getScrollContainer = (): HTMLElement | null => {
-  let el: HTMLElement | null = document.querySelector('.content-card')
-  while (el && el !== document.body) {
-    if (el.scrollHeight > el.clientHeight && getComputedStyle(el).overflowY !== 'visible') {
-      return el
-    }
-    el = el.parentElement
-  }
-  return document.scrollingElement as HTMLElement | null
-}
-
-// --- 滚动观察器管理 ---
-
-const setupPhotosObserver = () => {
-  teardownPhotosObserver()
-  if (!photosSentinelRef.value) return
-  const container = getScrollContainer()
-  photosObserver = new IntersectionObserver(
-    entries => {
-      for (const entry of entries) {
-        if (entry.isIntersecting) {
-          void loadMorePhotos()
-        }
-      }
-    },
-    { root: container, rootMargin: '200px' },
-  )
-  photosObserver.observe(photosSentinelRef.value)
-}
-
-const teardownPhotosObserver = () => {
-  if (photosObserver) {
-    photosObserver.disconnect()
-    photosObserver = null
-  }
-}
-
-const setupFacesObserver = () => {
-  teardownFacesObserver()
-  if (!facesSentinelRef.value) return
-  const container = getScrollContainer()
-  facesObserver = new IntersectionObserver(
-    entries => {
-      for (const entry of entries) {
-        if (entry.isIntersecting) {
-          void loadMoreFaces()
-        }
-      }
-    },
-    { root: container, rootMargin: '200px' },
-  )
-  facesObserver.observe(facesSentinelRef.value)
-}
-
-const teardownFacesObserver = () => {
-  if (facesObserver) {
-    facesObserver.disconnect()
-    facesObserver = null
   }
 }
 
@@ -636,23 +695,20 @@ const loadData = async () => {
   photosError.value = false
   facesTotal.value = 0
   photosTotal.value = 0
+  photosLoadedOnce.value = false
+  facesLoadedOnce.value = false
+  photosScrollTop.value = 0
+  facesScrollTop.value = 0
 
   try {
-    // 进入页面后自动加载人物信息、关联照片与人脸样本
-    const [personRes] = await Promise.all([
-      peopleApi.getById(personId),
-      loadMorePhotos(),
-      loadMoreFaces(),
-    ])
-
+    // 首次进入：只加载人物基本信息 + 当前默认 Tab“照片”第一页。
+    // 人脸 Tab 首次切换时再加载。
+    const personRes = await peopleApi.getById(personId)
     person.value = personRes.data?.data || null
     resetSelections()
     candidatePeopleLoaded.value = false
 
-    // 等待 DOM 渲染后设置滚动观察器
-    await nextTick()
-    setupPhotosObserver()
-    setupFacesObserver()
+    await loadMorePhotos()
   } catch (error: any) {
     ElMessage.error(error.message || '加载人物详情失败')
   } finally {
@@ -683,15 +739,13 @@ const refreshPersonAndFaces = async () => {
     facesFinished.value = false
     facesError.value = false
     facesTotal.value = 0
+    facesLoadedOnce.value = false
 
     const [personRes] = await Promise.all([
       peopleApi.getById(personId),
       loadMoreFaces(),
     ])
     person.value = personRes.data?.data || null
-
-    await nextTick()
-    setupFacesObserver()
   } catch (error: any) {
     ElMessage.error(error.message || '刷新数据失败')
   }
@@ -823,11 +877,14 @@ const setAvatar = async (faceId: number) => {
 }
 
 const toggleFace = (faceId: number, checked: boolean) => {
+  // 选择状态独立于卡片：用 Set 持久化，卡片卸载不清除，重入视口按集合恢复。
+  const next = new Set(selectedFaceSet.value)
   if (checked) {
-    selectedFaceIds.value = [...selectedFaceIds.value, faceId]
-    return
+    next.add(faceId)
+  } else {
+    next.delete(faceId)
   }
-  selectedFaceIds.value = selectedFaceIds.value.filter(id => id !== faceId)
+  selectedFaceSet.value = next
 }
 
 const showReclusterResult = (data: any, baseMessage: string, asyncFollowUp = false) => {
@@ -910,7 +967,8 @@ const excludeSelectedFaces = async () => {
     excluding.value = true
     await peopleApi.updateFaceExclusion(selectedFaceIds.value, true, reason)
     ElMessage.success('已排除选中的人脸样本')
-    selectedFaceIds.value = []
+    // 操作成功后清空选择
+    selectedFaceSet.value = new Set()
     await loadData()
   } catch (error: any) {
     if (isLikelyForegroundStillProcessing(error)) {
@@ -940,7 +998,12 @@ const confirmMoveFaces = async () => {
   if (foregroundBusy.value) return
   try {
     moving.value = true
-    const movedAll = selectedFaceIds.value.length === faces.value.length
+    // 是否移动了“人物全部人脸”：基于人脸总数 facesTotal（即 person.face_count 对应的分页 total）判断，
+    // 不再比较 selectedFaceIds.length === faces.length（已加载），避免仅选中已加载全部时误判人物已被清空。
+    const movedAll = isAllFacesMoved({
+      selectedCount: selectedFaceIds.value.length,
+      facesTotal: facesTotal.value,
+    })
     const res = await peopleApi.moveFaces(selectedFaceIds.value, moveTargetPersonId.value)
     showReclusterResult(res.data?.data, '人脸已移动到目标人物', true)
     if (movedAll) {
@@ -1098,11 +1161,32 @@ const goBack = () => {
   }
 }
 
-// Tab 切换后重新挂载滚动观察器（仅展示切换，不触发首次加载，不清空已选人脸）
-watch(activeTab, async () => {
+// Tab 切换：按需加载 + 恢复各自滚动位置。不清空选择状态、不清空数据。
+watch(activeTab, async (tab, prev) => {
+  // 离开当前 Tab 前记忆滚动位置
+  if (prev === 'photos') {
+    photosScrollTop.value = photosGridRef.value?.scrollRef?.scrollTop ?? 0
+  } else if (prev === 'faces') {
+    facesScrollTop.value = facesGridRef.value?.scrollRef?.scrollTop ?? 0
+  }
+
+  // 首次切到人脸 Tab 才加载第一页
+  if (tab === 'faces' && !facesLoadedOnce.value && !facesLoading.value) {
+    await loadMoreFaces()
+  }
+
   await nextTick()
-  setupPhotosObserver()
-  setupFacesObserver()
+  // 恢复目标 Tab 的滚动位置，并重新测量虚拟网格（隐藏 pane 变可见后需刷新可见区间）
+  const target = tab === 'photos' ? photosGridRef.value : facesGridRef.value
+  const top = tab === 'photos' ? photosScrollTop.value : facesScrollTop.value
+  // target 可能为 stub 或尚未挂载；measure 仅在真实组件上调用
+  if (target && typeof (target as any).measure === 'function') {
+    ;(target as any).measure()
+  }
+  const scrollEl = (target as any)?.scrollRef as HTMLElement | undefined
+  if (scrollEl) {
+    scrollEl.scrollTop = top
+  }
 })
 
 watch(() => route.params.id, async () => {
@@ -1114,8 +1198,12 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  teardownPhotosObserver()
-  teardownFacesObserver()
+  // 响应式列数的 resize 监听在 columnsForSize 注册处自行清理；
+  // 虚拟网格自管理滚动容器与 observer，无需手动 teardown。
+  if (resizeRaf) cancelAnimationFrame(resizeRaf)
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('resize', onViewportResize)
+  }
 })
 </script>
 

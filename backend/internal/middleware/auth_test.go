@@ -389,6 +389,31 @@ func TestPhotoAuth_DisabledDevice_Fails(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, res.recorder.Code)
 }
 
+// TestPhotoAuth_Unauthorized_DoesNotBypassAuth 验证缩略图缓存策略调整后，
+// 未授权请求仍被 PhotoAuth 拦截返回 401，不能通过缓存绕过鉴权。
+// 缓存响应头（Cache-Control）由 handler 写入，与中间件鉴权独立；
+// 此测试确保即使存在长期缓存，未带凭证的请求也拿不到缩略图内容。
+func TestPhotoAuth_Unauthorized_DoesNotBypassAuth(t *testing.T) {
+	auth := &testutil.StubAuthService{
+		ValidateTokenFunc: func(token string) (*service.JWTClaims, error) {
+			return nil, service.ErrInvalidToken
+		},
+	}
+	deviceSvc := &testutil.StubDeviceService{
+		GetByAPIKeyFunc: func(apiKey string) (*model.Device, error) {
+			return nil, testutil.ErrStubNotFound
+		},
+	}
+	// 模拟浏览器带 If-None-Match / 304 场景：缓存不能绕过鉴权
+	req := newGetReq("/api/v1/faces/1/thumbnail")
+	req.Header.Set("If-None-Match", "some-etag")
+
+	res := runMW(t, req, PhotoAuth(auth, deviceSvc))
+
+	assert.False(t, res.passed)
+	assert.Equal(t, http.StatusUnauthorized, res.recorder.Code)
+}
+
 // ===== APIKeyAuth =====
 
 func TestAPIKeyAuth_NoKey(t *testing.T) {

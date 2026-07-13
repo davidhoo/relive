@@ -6,10 +6,15 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:node": "tsx --test tests/*.test.ts",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.app.json && vue-tsc --noEmit -p tsconfig.spec.json"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
+    "@tanstack/vue-virtual": "^3.13.32",
     "@types/leaflet": "^1.9.21",
     "axios": "^1.13.6",
     "dayjs": "^1.11.19",
@@ -23,9 +28,13 @@
   "devDependencies": {
     "@types/node": "^24.10.1",
     "@vitejs/plugin-vue": "^6.0.2",
+    "@vue/test-utils": "^2.4.11",
     "@vue/tsconfig": "^0.8.1",
+    "jsdom": "^29.1.1",
+    "tsx": "^4.23.1",
     "typescript": "~5.9.3",
     "vite": "^7.3.1",
+    "vitest": "^4.1.10",
     "vue-tsc": "^3.1.5"
   }
 }

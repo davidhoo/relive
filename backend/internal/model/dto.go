@@ -550,6 +550,7 @@ type FaceResponse struct {
 	ManualLockedAt   *time.Time `json:"manual_locked_at,omitempty"`
 	ExclusionReason  string     `json:"exclusion_reason,omitempty"`
 	ExcludedAt       *time.Time `json:"excluded_at,omitempty"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 type PersonResponse struct {

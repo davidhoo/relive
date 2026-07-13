@@ -294,6 +294,79 @@ func TestPhotoRepository_BatchCreate(t *testing.T) {
 	assert.Equal(t, int64(100), count)
 }
 
+// TestPhotoRepository_ListPhotoSummariesByPersonID_IncludesVersionFields 验证人物详情页分页查询
+// 返回 updated_at / thumbnail_generated_at / manual_rotation，前端用这些字段构造版本化缩略图 URL。
+// 缺失会导致版本参数固定（Go 零值 time），配合 immutable 长缓存，旋转/重建后长期展示旧图。
+func TestPhotoRepository_ListPhotoSummariesByPersonID_IncludesVersionFields(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	photoRepo := NewPhotoRepository(db)
+	faceRepo := NewFaceRepository(db)
+
+	photo := &model.Photo{
+		FilePath:             "/photos/ver.jpg",
+		FileName:             "ver.jpg",
+		FileSize:             1,
+		FileHash:             "hash-ver",
+		Width:                400,
+		Height:               300,
+		ManualRotation:       90,
+		ThumbnailStatus:      model.ThumbnailStatusReady,
+	}
+	require.NoError(t, photoRepo.Create(photo))
+
+	person := &model.Person{Name: "P", Category: model.PersonCategoryFamily, FaceCount: 1}
+	require.NoError(t, db.Create(person).Error)
+
+	face := &model.Face{PhotoID: photo.ID, PersonID: &person.ID, Confidence: 0.9, QualityScore: 0.8}
+	require.NoError(t, faceRepo.Create(face))
+
+	items, total, err := photoRepo.ListPhotoSummariesByPersonIDPaginated(person.ID, 1, 30)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), total)
+	require.Len(t, items, 1)
+
+	got := items[0]
+	// updated_at 必须为真实时间（非 Go 零值 0001-01-01）
+	assert.False(t, got.UpdatedAt.IsZero(), "updated_at must be selected for version param")
+	assert.Equal(t, 90, got.ManualRotation, "manual_rotation must be selected")
+	// thumbnail_generated_at 可为 nil（未生成时），但字段需可读不报错
+	_ = got.ThumbnailGeneratedAt
+}
+
+// TestPhotoRepository_UpdateManualRotation_BumpsUpdatedAt 验证旋转后 updated_at 刷新，
+// 使前端 ?v=updated_at 版本参数变化，旧的 immutable 缓存失效。
+func TestPhotoRepository_UpdateManualRotation_BumpsUpdatedAt(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	repo := NewPhotoRepository(db)
+	photo := &model.Photo{
+		FilePath:       "/photos/rot.jpg",
+		FileName:       "rot.jpg",
+		FileSize:       1,
+		FileHash:       "hash-rot",
+		Width:          400,
+		Height:         300,
+		ManualRotation: 0,
+	}
+	require.NoError(t, repo.Create(photo))
+	before := photo.UpdatedAt
+
+	// GORM UpdatedAt 在 Create 时自动填充，确保 before 非零
+	require.False(t, before.IsZero())
+
+	// 旋转
+	time.Sleep(10 * time.Millisecond) // 确保 time.Now() 推进
+	require.NoError(t, repo.UpdateManualRotation(photo.ID, 90))
+
+	reloaded, err := repo.GetByID(photo.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 90, reloaded.ManualRotation)
+	assert.True(t, reloaded.UpdatedAt.After(before), "updated_at must advance after rotation for cache invalidation")
+}
+
 func TestPhotoRepository_GetOnThisDayCandidates(t *testing.T) {
 	db := setupTestDB(t)
 	defer teardownTestDB(db)

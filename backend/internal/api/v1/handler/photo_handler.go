@@ -839,8 +839,11 @@ func (h *PhotoHandler) GetPhotoThumbnail(c *gin.Context) {
 		thumbnailFullPath := filepath.Join(h.cfg.Photos.ThumbnailPath, photo.ThumbnailPath)
 		if _, err := os.Stat(thumbnailFullPath); err == nil {
 			if !util.ShouldRefreshThumbnailCacheWithRotation(photo.FilePath, thumbnailFullPath, photo.ManualRotation) {
+				// 缩略图稳定：与原图、旋转状态绑定。前端通过版本化 URL（updated_at + manual_rotation）
+				// 区分不同版本，这里返回长期私有浏览器缓存，避免对 NAS 重复发起缩略图校验请求。
+				// private 防止共享缓存泄露受保护图片。
 				c.Header("Content-Type", "image/jpeg")
-				c.Header("Cache-Control", "no-cache")
+				c.Header("Cache-Control", "private, max-age=31536000, immutable")
 				c.File(thumbnailFullPath)
 				return
 			}
@@ -854,7 +857,8 @@ func (h *PhotoHandler) GetPhotoThumbnail(c *gin.Context) {
 		}
 	}
 
-	// 没有缩略图或缩略图不存在，返回原图
+	// 没有缩略图或缩略图不存在，返回原图。此时内容仍可能变化，使用 no-cache。
+	c.Header("Cache-Control", "no-cache")
 	c.File(photo.FilePath)
 }
 

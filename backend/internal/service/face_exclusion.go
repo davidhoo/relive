@@ -167,6 +167,7 @@ func (s *peopleService) UpdateFaceExclusion(faceIDs []uint, excluded bool, reaso
 						"manual_locked_at":   nil,
 						"exclusion_reason":   reason,
 						"excluded_at":        &now,
+						"updated_at":         now,
 					}).Error; err != nil {
 						return fmt.Errorf("update face %d exclusion: %w", face.ID, err)
 					}
@@ -194,6 +195,7 @@ func (s *peopleService) UpdateFaceExclusion(faceIDs []uint, excluded bool, reaso
 						"excluded_at":       nil,
 						"retry_count":       0,
 						"clustered_at":      nil,
+						"updated_at":        now,
 					}).Error; err != nil {
 						return fmt.Errorf("restore face %d: %w", face.ID, err)
 					}

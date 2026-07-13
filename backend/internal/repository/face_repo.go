@@ -294,6 +294,9 @@ func (r *faceRepository) ReassignFaces(faceIDs []uint, personID uint, reason str
 		return nil
 	}
 	now := time.Now()
+	// 同步刷新 updated_at：前端用 face.updated_at 作为人脸缩略图 URL 的版本参数，
+	// 归属变更后必须使旧 immutable 缓存失效（人脸缩略图内容虽不变，但归属/锁定态变化
+	// 需要版本推进以保证 UI 一致性）。
 	fields := map[string]interface{}{
 		"person_id":          personID,
 		"cluster_status":     model.FaceClusterStatusManual,
@@ -302,6 +305,7 @@ func (r *faceRepository) ReassignFaces(faceIDs []uint, personID uint, reason str
 		"manual_lock_reason": reason,
 		"manual_locked_at":   &now,
 		"clustered_at":       &now,
+		"updated_at":         now,
 	}
 	for _, chunk := range chunkIDs(faceIDs) {
 		if err := r.db.Model(&model.Face{}).Where("id IN ?", chunk).Updates(fields).Error; err != nil {

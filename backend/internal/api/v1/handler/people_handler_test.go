@@ -898,6 +898,25 @@ func TestPeopleHandlerGetFaceThumbnail(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "face-thumb", rec.Body.String())
+	// 人脸缩略图内容稳定（文件名由 face id + bbox + 原图路径派生），返回长期私有浏览器缓存。
+	// private 防止共享缓存泄露受保护图片；immutable 配合前端版本化 URL。
+	assert.Equal(t, "private, max-age=31536000, immutable", rec.Header().Get("Cache-Control"))
+}
+
+// TestPeopleHandlerGetFaceThumbnailCachePrivate 断言人脸缩略图缓存为私有浏览器缓存，
+// 不会进入共享缓存，避免受保护图片被中间代理缓存泄露。
+func TestPeopleHandlerGetFaceThumbnailCachePrivate(t *testing.T) {
+	handler, _, _, db, cfg := newPeopleHandlerForTest(t)
+	fixture := seedPeopleHandlerFixture(t, db)
+	thumbnailPath := filepath.Join(cfg.Photos.ThumbnailPath, fixture.FaceOne.ThumbnailPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(thumbnailPath), 0o755))
+	require.NoError(t, os.WriteFile(thumbnailPath, []byte("face-thumb"), 0o644))
+
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/faces/1/thumbnail", nil, gin.Params{{Key: "id", Value: "1"}}, handler.GetFaceThumbnail)
+	require.Equal(t, http.StatusOK, rec.Code)
+	cacheControl := rec.Header().Get("Cache-Control")
+	assert.Contains(t, cacheControl, "private")
+	assert.NotContains(t, cacheControl, "public")
 }
 
 func TestPeopleHandlerGetFaceThumbnailGeneratesMissingCrop(t *testing.T) {

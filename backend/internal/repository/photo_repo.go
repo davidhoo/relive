@@ -566,8 +566,10 @@ func (r *photoRepository) ListPhotoSummariesByPersonIDPaginated(personID uint, p
 
 	var photos []*model.Photo
 	offset := (page - 1) * pageSize
+	// SELECT 必须包含 updated_at：前端用其作为缩略图 URL 的版本参数（?v=updated_at）。
+	// 缺失会导致版本固定不变，配合后端 immutable 长缓存，旋转/重建后长期展示旧图。
 	err := r.db.Distinct().
-		Select("photos.id, photos.file_name, photos.caption, photos.taken_at, photos.created_at").
+		Select("photos.id, photos.file_name, photos.caption, photos.taken_at, photos.created_at, photos.updated_at, photos.thumbnail_generated_at, photos.manual_rotation").
 		Joins("INNER JOIN faces ON faces.photo_id = photos.id").
 		Where("faces.person_id = ?", personID).
 		Order("photos.taken_at DESC, photos.id DESC").
@@ -1080,8 +1082,13 @@ func (r *photoRepository) RecomputeTopPersonCategory(photoIDs []uint) error {
 }
 
 // UpdateManualRotation 更新照片手动旋转角度
+// 使用 Updates(map) 同时刷新 updated_at，确保前端版本化缩略图 URL（?v=updated_at）失效，
+// 避免旋转后浏览器继续命中 immutable 长缓存的旧图。
 func (r *photoRepository) UpdateManualRotation(id uint, rotation int) error {
-	return r.db.Model(&model.Photo{}).Where("id = ?", id).Update("manual_rotation", rotation).Error
+	return r.db.Model(&model.Photo{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"manual_rotation": rotation,
+		"updated_at":      time.Now(),
+	}).Error
 }
 
 // CountByStatus 按状态统计照片数量（单条 SQL）
