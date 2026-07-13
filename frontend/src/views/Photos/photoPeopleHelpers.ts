@@ -58,7 +58,7 @@ export function getPhotoPeopleSummaryLabel(payload?: Pick<PhotoPeopleResponse, '
  * 照片详情页人物信息统计 tag 文案。与列表/管理页不同，这里只反映“识别状态/人数”，
  * 不展示 top_person_category（详情页条目已直接显示每个人脸的分类）。
  */
-export function getPhotoPeopleCountTag(payload?: Pick<PhotoPeopleResponse, 'face_process_status' | 'face_count' | 'people'> | null): string {
+export function getPhotoPeopleCountTag(payload?: Pick<PhotoPeopleResponse, 'face_process_status' | 'face_count' | 'people' | 'excluded_faces'> | null): string {
   if (!payload) return '未检测'
   switch (payload.face_process_status) {
     case 'none':
@@ -75,6 +75,13 @@ export function getPhotoPeopleCountTag(payload?: Pick<PhotoPeopleResponse, 'face
       break
   }
   const peopleCount = payload.people?.length ?? 0
+  const excludedCount = payload.excluded_faces?.length ?? 0
+  if (peopleCount === 0 && excludedCount === 0) {
+    // face_count > 0 but no recognized people and no excluded faces
+    // means faces are still pending clustering
+    if (payload.face_count && payload.face_count > 0) return '待识别'
+    return '未检测到人脸'
+  }
   if (peopleCount === 0) return '未检测到人脸'
   return `${peopleCount} 人`
 }

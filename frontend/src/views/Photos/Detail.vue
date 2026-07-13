@@ -202,8 +202,47 @@
                   >
                     <el-icon><Edit /></el-icon>
                   </el-button>
+                  <el-button
+                    link
+                    size="small"
+                    class="photo-face-exclude"
+                    :loading="excluding"
+                    @click="handleExcludeFace(entry.faceId)"
+                  >
+                    排除
+                  </el-button>
                </div>
              </div>
+
+             <!-- 已排除样本 -->
+             <el-collapse v-if="excludedFaces.length > 0" class="excluded-faces-collapse">
+               <el-collapse-item :title="`已排除样本（${excludedFaces.length}）`" name="excluded">
+                 <div v-for="face in excludedFaces" :key="face.id" class="excluded-face-item">
+                   <img
+                     :src="getFaceThumbnailUrl(face.id, String(imageVersion))"
+                     :alt="`excluded-face-${face.id}`"
+                     class="excluded-face-thumb"
+                   />
+                   <div class="excluded-face-info">
+                     <el-tag size="small" :type="face.exclusion_reason === 'non_face' ? 'danger' : 'warning'">
+                       {{ face.exclusion_reason === 'non_face' ? '非人脸' : '低质量' }}
+                     </el-tag>
+                     <span class="excluded-face-meta">
+                       置信度 {{ ((face.confidence ?? 0) * 100).toFixed(0) }}% · 质量 {{ ((face.quality_score ?? 0) * 100).toFixed(0) }}%
+                     </span>
+                   </div>
+                   <el-button
+                     link
+                     size="small"
+                     type="primary"
+                     :loading="excluding"
+                     @click="handleRestoreFace(face.id)"
+                   >
+                     恢复
+                   </el-button>
+                 </div>
+               </el-collapse-item>
+             </el-collapse>
             </template>
           </div>
 
@@ -471,6 +510,8 @@ const buildPhotoPeopleFallback = (): Pick<PhotoPeopleResponse, 'face_process_sta
 const photoPeopleStatus = computed(() => photoPeople.value?.face_process_status || buildPhotoPeopleFallback()?.face_process_status || 'none')
 const photoFaceEntries = computed(() => flattenPhotoPeopleFaces(photoPeople.value))
 const photoPeopleCountTag = computed(() => getPhotoPeopleCountTag(photoPeople.value))
+const excludedFaces = computed(() => photoPeople.value?.excluded_faces || [])
+const excluding = ref(false)
 // 统一管理所有轮询定时器，离开页面时清理
 const activeTimers: ReturnType<typeof setInterval | typeof setTimeout>[] = []
 const addTimer = (id: ReturnType<typeof setInterval | typeof setTimeout>) => {
@@ -718,6 +759,74 @@ const loadPhoto = async () => {
     ElMessage.error(error.message || '加载照片详情失败')
   } finally {
     loading.value = false
+  }
+}
+
+// ---- 人脸排除/恢复 ----
+const handleExcludeFace = async (faceId: number) => {
+  try {
+    await ElMessageBox.confirm(
+      '排除后，该样本将不再参与人物识别和聚类。重新检测照片时仍会保持排除。',
+      '选择排除原因',
+      {
+        distinguishCancelAndClose: true,
+        confirmButtonText: '非人脸',
+        cancelButtonText: '低质量人脸',
+        type: 'warning',
+      },
+    )
+    await doExcludeFace(faceId, 'non_face')
+  } catch (action: any) {
+    if (action === 'cancel') {
+      await doExcludeFace(faceId, 'low_quality')
+    }
+  }
+}
+
+const doExcludeFace = async (faceId: number, reason: 'non_face' | 'low_quality') => {
+  if (excluding.value) return
+  excluding.value = true
+  try {
+    await peopleApi.updateFaceExclusion([faceId], true, reason)
+    await loadPhotoPeople(photo.value!.id)
+    imageVersion.value = Date.now()
+    ElMessage.success('已排除该样本')
+  } catch (error: any) {
+    if (!error?.response || [502, 503, 504].includes(error.response.status)) {
+      ElMessage.warning('操作可能仍在后台处理中，请稍后刷新页面查看结果')
+    } else {
+      ElMessage.error(error.response?.data?.error?.message || error.message || '排除失败')
+    }
+  } finally {
+    excluding.value = false
+  }
+}
+
+const handleRestoreFace = async (faceId: number) => {
+  try {
+    await ElMessageBox.confirm(
+      '恢复后，该样本将重新参与聚类。',
+      '恢复样本',
+      { confirmButtonText: '恢复', cancelButtonText: '取消', type: 'info' },
+    )
+  } catch {
+    return
+  }
+  if (excluding.value) return
+  excluding.value = true
+  try {
+    await peopleApi.updateFaceExclusion([faceId], false)
+    await loadPhotoPeople(photo.value!.id)
+    imageVersion.value = Date.now()
+    ElMessage.success('已恢复该样本')
+  } catch (error: any) {
+    if (!error?.response || [502, 503, 504].includes(error.response.status)) {
+      ElMessage.warning('操作可能仍在后台处理中，请稍后刷新页面查看结果')
+    } else {
+      ElMessage.error(error.response?.data?.error?.message || error.message || '恢复失败')
+    }
+  } finally {
+    excluding.value = false
   }
 }
 
@@ -1348,6 +1457,48 @@ h4 {
 .photo-face-edit {
   flex-shrink: 0;
   padding: 2px;
+  color: #9ca3af;
+}
+
+.photo-face-exclude {
+  flex-shrink: 0;
+  padding: 2px;
+  color: #f56c6c;
+}
+
+.excluded-faces-collapse {
+  margin-top: 12px;
+}
+
+.excluded-faces-collapse :deep(.el-collapse-item__header) {
+  font-size: 13px;
+  color: #909399;
+}
+
+.excluded-face-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.excluded-face-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+  object-fit: cover;
+  border: 1px solid #e5e7eb;
+}
+
+.excluded-face-info {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.excluded-face-meta {
+  font-size: 12px;
   color: #9ca3af;
 }
 

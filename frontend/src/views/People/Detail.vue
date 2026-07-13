@@ -63,6 +63,11 @@
                     移动
                   </el-button>
                 </el-tooltip>
+                <el-tooltip content="排除选中的人脸样本（非人脸或低质量）" placement="top">
+                  <el-button size="small" type="danger" plain :disabled="selectedFaceIds.length === 0 || foregroundBusy" :loading="excluding" @click="excludeSelectedFaces">
+                    排除
+                  </el-button>
+                </el-tooltip>
                 <span class="ops-divider" />
                 <el-tooltip content="从其他人物中选择若干个，并入当前人物" placement="top">
                   <el-button size="small" plain :disabled="foregroundBusy" @click="ensureCandidatePeople(); showMergeDialog = true">
@@ -339,6 +344,7 @@ const allPeople = ref<Person[]>([])
 const selectedFaceIds = ref<number[]>([])
 const avatarSavingFaceId = ref<number | null>(null)
 const splitting = ref(false)
+const excluding = ref(false)
 const moving = ref(false)
 const merging = ref(false)
 const dissolving = ref(false)
@@ -353,7 +359,7 @@ const calculatingSimilarity = ref(false)
 // foregroundBusy 统一标记任一前台人物 mutation 进行中。前台操作进行中时，禁用
 // split/move/merge/similarity 等所有前台操作，避免并发重复提交。后台任务治理计划 Task 5。
 const foregroundBusy = computed(
-  () => splitting.value || moving.value || merging.value || dissolving.value || togglingVisibility.value || calculatingSimilarity.value,
+  () => splitting.value || moving.value || merging.value || dissolving.value || togglingVisibility.value || calculatingSimilarity.value || excluding.value,
 )
 
 const similarityResult = ref<{
@@ -872,6 +878,59 @@ const splitSelectedFaces = async () => {
     }
   } finally {
     splitting.value = false
+  }
+}
+
+const excludeSelectedFaces = async () => {
+  if (selectedFaceIds.value.length === 0) return
+  if (foregroundBusy.value) return
+
+  let reason: 'non_face' | 'low_quality'
+  try {
+    const action = await ElMessageBox.confirm(
+      '排除后，选中的样本将不再参与人物识别和聚类。重新检测照片时仍会保持排除。',
+      '选择排除原因',
+      {
+        distinguishCancelAndClose: true,
+        confirmButtonText: '非人脸',
+        cancelButtonText: '低质量人脸',
+        type: 'warning',
+      },
+    )
+    reason = 'non_face'
+  } catch (action: any) {
+    if (action === 'cancel') {
+      reason = 'low_quality'
+    } else {
+      return // 'close' - user closed dialog
+    }
+  }
+
+  try {
+    excluding.value = true
+    await peopleApi.updateFaceExclusion(selectedFaceIds.value, true, reason)
+    ElMessage.success('已排除选中的人脸样本')
+    selectedFaceIds.value = []
+    await loadData()
+  } catch (error: any) {
+    if (isLikelyForegroundStillProcessing(error)) {
+      ElMessage.warning('操作可能仍在后台处理中，请稍后刷新页面查看结果')
+    } else {
+      ElMessage.error(error.response?.data?.error?.message || error.message || '排除人脸失败')
+    }
+    // If person was cleaned up (no more valid faces), navigate back
+    try {
+      const res = await peopleApi.getById(Number(route.params.id))
+      if (!res.data?.data) {
+        ElMessage.info('人物已无有效人脸样本')
+        router.push('/people')
+      }
+    } catch {
+      ElMessage.info('人物已无有效人脸样本')
+      router.push('/people')
+    }
+  } finally {
+    excluding.value = false
   }
 }
 

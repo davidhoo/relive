@@ -134,7 +134,7 @@ func (r *faceRepository) ListByPersonID(personID uint) ([]*model.Face, error) {
 func (r *faceRepository) ListByPersonIDSummary(personID uint) ([]*model.Face, error) {
 	var faces []*model.Face
 	err := r.db.Select("id, created_at, updated_at, photo_id, person_id, b_box_x, b_box_y, b_box_width, b_box_height, confidence, quality_score, thumbnail_path, cluster_status, cluster_score, clustered_at, manual_locked, manual_lock_reason, manual_locked_at, recluster_generation, retry_count").
-		Where("person_id = ?", personID).
+		Where("person_id = ? AND cluster_status != ?", personID, model.FaceClusterStatusExcluded).
 		Order("quality_score DESC, id ASC").
 		Find(&faces).Error
 	return faces, err
@@ -142,14 +142,14 @@ func (r *faceRepository) ListByPersonIDSummary(personID uint) ([]*model.Face, er
 
 func (r *faceRepository) ListByPersonIDPaginated(personID uint, page, pageSize int) ([]*model.Face, int64, error) {
 	var total int64
-	if err := r.db.Model(&model.Face{}).Where("person_id = ?", personID).Count(&total).Error; err != nil {
+	if err := r.db.Model(&model.Face{}).Where("person_id = ? AND cluster_status != ?", personID, model.FaceClusterStatusExcluded).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
 	var faces []*model.Face
 	offset := (page - 1) * pageSize
 	err := r.db.Select("id, created_at, updated_at, photo_id, person_id, b_box_x, b_box_y, b_box_width, b_box_height, confidence, quality_score, thumbnail_path, cluster_status, cluster_score, clustered_at, manual_locked, manual_lock_reason, manual_locked_at, recluster_generation, retry_count").
-		Where("person_id = ?", personID).
+		Where("person_id = ? AND cluster_status != ?", personID, model.FaceClusterStatusExcluded).
 		Order("quality_score DESC, id ASC").
 		Offset(offset).
 		Limit(pageSize).
@@ -174,14 +174,14 @@ func (r *faceRepository) ListByIDs(ids []uint) ([]*model.Face, error) {
 
 func (r *faceRepository) ListAssigned() ([]*model.Face, error) {
 	var faces []*model.Face
-	err := r.db.Where("person_id IS NOT NULL").Order("id ASC").Find(&faces).Error
+	err := r.db.Where("person_id IS NOT NULL AND cluster_status != ?", model.FaceClusterStatusExcluded).Order("id ASC").Find(&faces).Error
 	return faces, err
 }
 
 func (r *faceRepository) ListAssignedPersonIDs() ([]uint, error) {
 	var ids []uint
 	err := r.db.Model(&model.Face{}).
-		Where("person_id IS NOT NULL").
+		Where("person_id IS NOT NULL AND cluster_status != ?", model.FaceClusterStatusExcluded).
 		Distinct("person_id").
 		Pluck("person_id", &ids).Error
 	return ids, err
@@ -197,7 +197,7 @@ func (r *faceRepository) ListAssignedPersonIDsPaged(offset, limit int) ([]uint, 
 	}
 	var ids []uint
 	err := r.db.Model(&model.Face{}).
-		Where("person_id IS NOT NULL").
+		Where("person_id IS NOT NULL AND cluster_status != ?", model.FaceClusterStatusExcluded).
 		Distinct("person_id").
 		Order("person_id ASC").
 		Offset(offset).
@@ -217,7 +217,7 @@ func (r *faceRepository) ListPending(limit int) ([]*model.Face, error) {
 	// retry_count >= 5: 等待 60 分钟
 	// 使用 julianday 计算时间差（单位：天），然后与分钟阈值比较
 	query := r.db.
-		Where("cluster_status = ?", model.FaceClusterStatusPending).
+		Where("cluster_status = ? AND cluster_status != ?", model.FaceClusterStatusPending, model.FaceClusterStatusExcluded).
 		Where("clustered_at IS NULL OR " +
 			"(julianday('now') - julianday(clustered_at)) * 24 * 60 >= " +
 			"CASE retry_count " +
@@ -277,7 +277,7 @@ func (r *faceRepository) ListPrototypeEmbeddings(personIDs []uint, perPerson int
 						ORDER BY manual_locked DESC, quality_score DESC, confidence DESC, id ASC
 					) AS rn
 				FROM faces
-				WHERE person_id IN ?
+				WHERE person_id IN ? AND cluster_status != 'excluded'
 			) sub
 			WHERE rn <= ?
 		`, chunk, perPerson).Scan(&faces).Error
@@ -317,7 +317,7 @@ func (r *faceRepository) ReassignFaces(faceIDs []uint, personID uint, reason str
 func (r *faceRepository) ListProfileFaces(personID uint) ([]*model.Face, error) {
 	var faces []*model.Face
 	err := r.db.Select("id, photo_id, person_id, confidence, quality_score, embedding, cluster_status, cluster_score, manual_locked, manual_lock_reason").
-		Where("person_id = ?", personID).
+		Where("person_id = ? AND cluster_status != ?", personID, model.FaceClusterStatusExcluded).
 		Order("manual_locked DESC, cluster_score DESC, quality_score DESC, confidence DESC, id ASC").
 		Find(&faces).Error
 	return faces, err
@@ -372,7 +372,7 @@ func (r *faceRepository) ListPersonIDsCooccurringWithPhotos(photoIDs []uint, can
 		for _, cchunk := range chunkIDs(persons) {
 			var ids []uint
 			err := r.db.Model(&model.Face{}).
-				Where("photo_id IN ? AND person_id IN ?", pchunk, cchunk).
+				Where("photo_id IN ? AND person_id IN ? AND cluster_status != ?", pchunk, cchunk, model.FaceClusterStatusExcluded).
 				Distinct("person_id").
 				Pluck("person_id", &ids).Error
 			if err != nil {
@@ -413,9 +413,10 @@ func (r *faceRepository) ListPersonIDsSharingPhotos(targetPersonID uint, candida
 	for _, cchunk := range chunkIDs(persons) {
 		var ids []uint
 		err := r.db.Model(&model.Face{}).
-			Where("person_id IN ? AND photo_id IN (?)",
+			Where("person_id IN ? AND photo_id IN (?) AND cluster_status != ?",
 				cchunk,
-				r.db.Model(&model.Face{}).Select("photo_id").Where("person_id = ?", targetPersonID),
+				r.db.Model(&model.Face{}).Select("photo_id").Where("person_id = ? AND cluster_status != ?", targetPersonID, model.FaceClusterStatusExcluded),
+				model.FaceClusterStatusExcluded,
 			).
 			Where("person_id != ?", targetPersonID).
 			Distinct("person_id").

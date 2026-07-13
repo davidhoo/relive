@@ -68,7 +68,37 @@ const (
 	FaceClusterStatusAssigned = "assigned"
 	FaceClusterStatusOutlier  = "outlier"
 	FaceClusterStatusManual   = "manual"
+	FaceClusterStatusExcluded = "excluded"
 )
+
+// 排除原因枚举
+const (
+	ExclusionReasonNonFace    = "non_face"
+	ExclusionReasonLowQuality = "low_quality"
+)
+
+// IsValidExclusionReason 校验排除原因是否合法
+func IsValidExclusionReason(reason string) bool {
+	return reason == ExclusionReasonNonFace || reason == ExclusionReasonLowQuality
+}
+
+// FaceExclusion 持久化的人脸排除记录，跨重新检测保持排除结论
+type FaceExclusion struct {
+	ID           uint      `gorm:"primarykey" json:"id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	PhotoID      uint      `gorm:"not null;index:idx_face_exclusion_photo" json:"photo_id"`
+	SourceFaceID uint      `gorm:"not null" json:"source_face_id"`
+	Reason       string    `gorm:"type:varchar(20);not null" json:"reason"`
+	BBoxX        float64   `gorm:"not null" json:"bbox_x"`
+	BBoxY        float64   `gorm:"not null" json:"bbox_y"`
+	BBoxWidth    float64   `gorm:"not null" json:"bbox_width"`
+	BBoxHeight   float64   `gorm:"not null" json:"bbox_height"`
+}
+
+func (FaceExclusion) TableName() string {
+	return "face_exclusions"
+}
 
 // Face 单张照片中的人脸检测结果
 type Face struct {
@@ -98,6 +128,10 @@ type Face struct {
 
 	ReclusterGeneration int `gorm:"not null;default:0" json:"recluster_generation"`
 	RetryCount          int `gorm:"not null;default:0" json:"retry_count"` // 聚类失败重试次数，用于退避策略
+
+	// 排除相关字段（cluster_status = excluded 时使用）
+	ExclusionReason string     `gorm:"type:varchar(20);default:''" json:"exclusion_reason,omitempty"`
+	ExcludedAt      *time.Time `json:"excluded_at,omitempty"`
 }
 
 func (Face) TableName() string {

@@ -94,6 +94,7 @@ type PeopleService interface {
 	//   - targetPersonID 为空且 name 未命中：拆分创建新人物并命名/分类。
 	// 返回操作涉及的照片 ID（face 所在照片），便于 handler 复用 GetPhotoPeople 重算返回。
 	AssignFacePerson(faceID uint, req model.FacePersonAssignmentRequest) (photoID uint, err error)
+	UpdateFaceExclusion(faceIDs []uint, excluded bool, reason string) (*model.FaceExclusionResult, error)
 	UpdatePersonCategory(personID uint, category string) error
 	UpdatePersonName(personID uint, name string) error
 	UpdatePersonAvatar(personID uint, faceID uint) error
@@ -110,6 +111,7 @@ type peopleService struct {
 	jobRepo           repository.PeopleJobRepository
 	mergeJobRepo      repository.PeopleMergeJobRepository
 	cannotLinkRepo    repository.CannotLinkRepository
+	faceExclusionRepo repository.FaceExclusionRepository
 	feedbackEventRepo repository.PeopleFeedbackEventRepository
 	config            *config.Config
 	client            PeopleMLClient
@@ -373,17 +375,18 @@ func NewPeopleService(db *gorm.DB, photoRepo repository.PhotoRepository, faceRep
 	}
 
 	svc := &peopleService{
-		db:             db,
-		photoRepo:      photoRepo,
-		faceRepo:       faceRepo,
-		personRepo:     personRepo,
-		jobRepo:        jobRepo,
-		mergeJobRepo:   mergeJobRepo,
-		cannotLinkRepo: cannotLinkRepo,
-		config:         cfg,
-		client:         client,
-		runtimeService: runtimeService,
-		writeQueue:     database.GetWriteQueue(),
+		db:                db,
+		photoRepo:         photoRepo,
+		faceRepo:          faceRepo,
+		personRepo:        personRepo,
+		jobRepo:           jobRepo,
+		mergeJobRepo:      mergeJobRepo,
+		cannotLinkRepo:    cannotLinkRepo,
+		faceExclusionRepo: repository.NewFaceExclusionRepository(db),
+		config:            cfg,
+		client:            client,
+		runtimeService:    runtimeService,
+		writeQueue:        database.GetWriteQueue(),
 	}
 	svc.clusteringCoordinator = newPeopleClusteringCoordinator(svc)
 	svc.clusteringCoordinator.start()
@@ -2007,6 +2010,25 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 		return fmt.Errorf("expected %d face thumbnail paths, got %d", len(result.Faces), len(thumbnailPaths))
 	}
 
+	// Load existing exclusion records for this photo to match against new detections
+	var exclusionRecords []*model.FaceExclusion
+	if s.faceExclusionRepo != nil {
+		exclusionRecords, _ = s.faceExclusionRepo.ListByPhotoID(photo.ID)
+	}
+
+	// Build detection candidates for bbox matching
+	detectionCandidates := make([]bboxCandidate, len(result.Faces))
+	for i, detected := range result.Faces {
+		detectionCandidates[i] = bboxCandidate{
+			x: detected.BBox.X,
+			y: detected.BBox.Y,
+			w: detected.BBox.Width,
+			h: detected.BBox.Height,
+		}
+	}
+	exclusionMatches := matchExclusionRecords(detectionCandidates, exclusionRecords)
+
+	faceCountForPhoto := 0
 	for i, detected := range result.Faces {
 		embeddingPayload := model.EncodeEmbedding(detected.Embedding)
 		face := &model.Face{
@@ -2022,6 +2044,20 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 			ClusterStatus: model.FaceClusterStatusPending,
 			ClusterScore:  0,
 			ClusteredAt:   nil,
+		}
+
+		// Apply exclusion if matched
+		if rec, matched := exclusionMatches[i]; matched {
+			face.ClusterStatus = model.FaceClusterStatusExcluded
+			face.ExclusionReason = rec.Reason
+			now := time.Now()
+			face.ExcludedAt = &now
+			// non_face does not count toward face_count; low_quality does
+			if rec.Reason == model.ExclusionReasonLowQuality {
+				faceCountForPhoto++
+			}
+		} else {
+			faceCountForPhoto++
 		}
 		createdFaces = append(createdFaces, face)
 	}
@@ -2041,7 +2077,7 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 
 			if err := tx.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
 				"face_process_status": model.FaceProcessStatusReady,
-				"face_count":          len(createdFaces),
+				"face_count":          faceCountForPhoto,
 				"top_person_category": "",
 			}).Error; err != nil {
 				return err

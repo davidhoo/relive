@@ -806,6 +806,38 @@ func (h *PeopleHandler) AssignFacePerson(c *gin.Context) {
 	})
 }
 
+// UpdateFaceExclusion 标记或恢复人脸排除状态
+func (h *PeopleHandler) UpdateFaceExclusion(c *gin.Context) {
+	var req model.UpdateFaceExclusionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+
+	if req.Excluded && !model.IsValidExclusionReason(req.Reason) {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_REASON",
+			"排除原因必须为 non_face 或 low_quality")
+		return
+	}
+
+	result, err := h.service.UpdateFaceExclusion(req.FaceIDs, req.Excluded, req.Reason)
+	if err != nil {
+		writeServiceFailure(c, err)
+		return
+	}
+
+	message := "人脸已排除"
+	if !req.Excluded {
+		message = "人脸已恢复"
+	}
+
+	c.JSON(http.StatusOK, model.Response{
+		Success: true,
+		Message: message,
+		Data:    result,
+	})
+}
+
 // buildPhotoPeopleResponse 复用 GetPhotoPeople 与 AssignFacePerson 的数据组装逻辑。
 func (h *PeopleHandler) buildPhotoPeopleResponse(photoID uint) (model.PhotoPersonResponse, error) {
 	photo, err := h.photoRepo.GetByID(photoID)
@@ -825,7 +857,12 @@ func (h *PeopleHandler) buildPhotoPeopleResponse(photoID uint) (model.PhotoPerso
 	}
 
 	facesByPerson := make(map[uint][]model.FaceResponse, len(personIDs))
+	var excludedFaces []model.FaceResponse
 	for _, face := range faces {
+		if face.ClusterStatus == model.FaceClusterStatusExcluded {
+			excludedFaces = append(excludedFaces, faceToResponse(face))
+			continue
+		}
 		if face.PersonID == nil || *face.PersonID == 0 {
 			continue
 		}
@@ -850,6 +887,7 @@ func (h *PeopleHandler) buildPhotoPeopleResponse(photoID uint) (model.PhotoPerso
 		FaceCount:         photo.FaceCount,
 		TopPersonCategory: photo.TopPersonCategory,
 		People:            respPeople,
+		ExcludedFaces:     excludedFaces,
 	}, nil
 }
 
@@ -1025,6 +1063,8 @@ func faceToResponse(face *model.Face) model.FaceResponse {
 		ManualLocked:     face.ManualLocked,
 		ManualLockReason: face.ManualLockReason,
 		ManualLockedAt:   face.ManualLockedAt,
+		ExclusionReason:  face.ExclusionReason,
+		ExcludedAt:       face.ExcludedAt,
 	}
 }
 

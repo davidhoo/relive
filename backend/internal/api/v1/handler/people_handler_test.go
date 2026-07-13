@@ -165,6 +165,13 @@ func (s *stubPeopleService) AssignFacePerson(_ uint, _ model.FacePersonAssignmen
 	return 1, nil
 }
 
+func (s *stubPeopleService) UpdateFaceExclusion(_ []uint, _ bool, _ string) (*model.FaceExclusionResult, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &model.FaceExclusionResult{Updated: 0}, nil
+}
+
 // stubIdentityProfileService 是 PersonIdentityProfileService 的最小桩，用于 handler 测试。
 // legacy 模式返回零值运行状态；可注入 err 触发 500。
 type stubIdentityProfileService struct {

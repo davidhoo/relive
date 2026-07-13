@@ -548,6 +548,8 @@ type FaceResponse struct {
 	ManualLocked     bool       `json:"manual_locked"`
 	ManualLockReason string     `json:"manual_lock_reason,omitempty"`
 	ManualLockedAt   *time.Time `json:"manual_locked_at,omitempty"`
+	ExclusionReason  string     `json:"exclusion_reason,omitempty"`
+	ExcludedAt       *time.Time `json:"excluded_at,omitempty"`
 }
 
 type PersonResponse struct {
@@ -571,6 +573,20 @@ type PhotoPersonResponse struct {
 	FaceCount         int              `json:"face_count"`
 	TopPersonCategory string           `json:"top_person_category"`
 	People            []PersonResponse `json:"people"`
+	ExcludedFaces     []FaceResponse   `json:"excluded_faces,omitempty"`
+}
+
+// UpdateFaceExclusionRequest 标记/恢复人脸排除状态
+type UpdateFaceExclusionRequest struct {
+	FaceIDs  []uint `json:"face_ids" binding:"required,min=1"`
+	Excluded bool   `json:"excluded"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+// FaceExclusionResult 排除操作返回的受影响照片摘要
+type FaceExclusionResult struct {
+	Updated int                  `json:"updated"`
+	Photos  []PhotoPersonResponse `json:"photos"`
 }
 
 type UpdatePersonCategoryRequest struct {

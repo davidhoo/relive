@@ -991,12 +991,20 @@ func (r *photoRepository) RecomputeTopPersonCategory(photoIDs []uint) error {
 		err := r.db.Model(&model.Photo{}).
 			Select(`
 				photos.id AS photo_id,
-				COUNT(faces.id) AS face_count,
-				MAX(CASE people.category
-					WHEN 'family' THEN 4
-					WHEN 'friend' THEN 3
-					WHEN 'acquaintance' THEN 2
-					WHEN 'stranger' THEN 1
+				SUM(CASE
+					WHEN faces.id IS NOT NULL
+					AND (faces.cluster_status != 'excluded' OR faces.exclusion_reason = 'low_quality')
+					THEN 1 ELSE 0
+				END) AS face_count,
+				MAX(CASE
+					WHEN faces.cluster_status != 'excluded' AND people.category IS NOT NULL
+					THEN CASE people.category
+						WHEN 'family' THEN 4
+						WHEN 'friend' THEN 3
+						WHEN 'acquaintance' THEN 2
+						WHEN 'stranger' THEN 1
+						ELSE 0
+					END
 					ELSE 0
 				END) AS category_rank
 			`).

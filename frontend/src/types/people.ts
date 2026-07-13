@@ -19,6 +19,8 @@ export interface Face {
   manual_lock_reason?: string
   manual_locked_at?: string
   recluster_generation?: number
+  exclusion_reason?: 'non_face' | 'low_quality' | ''
+  excluded_at?: string
 }
 
 export interface Person {
@@ -90,6 +92,14 @@ export interface PhotoPeopleResponse {
   face_count: number
   top_person_category?: PersonCategory | ''
   people: Person[]
+  excluded_faces?: Face[]
+}
+
+export type ExclusionReason = 'non_face' | 'low_quality'
+
+export interface UpdateFaceExclusionResult {
+  updated: number
+  photos: PhotoPeopleResponse[]
 }
 
 export interface PersonMergeSuggestionTask {

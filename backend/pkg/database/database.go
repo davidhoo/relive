@@ -216,6 +216,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.PersonIdentityCenter{},
 		&model.PersonIdentityCenterMember{},
 		&model.PeopleFeedbackEvent{},
+		&model.FaceExclusion{},
 		&model.PeopleIdentityDecision{},
 	}
 
@@ -289,6 +290,39 @@ func AutoMigrate(db *gorm.DB) error {
 		log.Printf("[database] warning: people jobs cleanup index migration failed: %v", err)
 	}
 
+	if err := migrateFaceExclusionColumns(db); err != nil {
+		log.Printf("[database] warning: face exclusion columns migration failed: %v", err)
+	}
+
+	return nil
+}
+
+// migrateFaceExclusionColumns adds exclusion_reason and excluded_at columns to faces table
+// for existing databases. New databases get these columns via AutoMigrate.
+func migrateFaceExclusionColumns(db *gorm.DB) error {
+	const migrationKey = "migration.face_exclusion_columns_v1"
+
+	var cfg model.AppConfig
+	if err := db.Where("key = ?", migrationKey).First(&cfg).Error; err == nil {
+		return nil
+	}
+
+	log.Printf("[database] adding face exclusion columns...")
+
+	if !db.Migrator().HasColumn(&model.Face{}, "exclusion_reason") {
+		if err := db.Exec("ALTER TABLE faces ADD COLUMN exclusion_reason VARCHAR(20) DEFAULT ''").Error; err != nil {
+			return fmt.Errorf("add exclusion_reason column: %w", err)
+		}
+	}
+
+	if !db.Migrator().HasColumn(&model.Face{}, "excluded_at") {
+		if err := db.Exec("ALTER TABLE faces ADD COLUMN excluded_at DATETIME").Error; err != nil {
+			return fmt.Errorf("add excluded_at column: %w", err)
+		}
+	}
+
+	log.Printf("[database] face exclusion columns added")
+	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
 	return nil
 }
 

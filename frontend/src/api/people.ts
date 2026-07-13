@@ -2,6 +2,7 @@ import http from '@/utils/request'
 import type { ApiResponse, PagedResponse } from '@/types/api'
 import type { Photo } from '@/types/photo'
 import type {
+  ExclusionReason,
   Face,
   PeopleBackgroundLogsResponse,
   PeopleListParams,
@@ -13,6 +14,7 @@ import type {
   PersonMergeSuggestionStats,
   PersonMergeSuggestionTask,
   PhotoPeopleResponse,
+  UpdateFaceExclusionResult,
   UpdateVisibilityResult,
 } from '@/types/people'
 
@@ -80,6 +82,14 @@ export const peopleApi = {
    */
   assignFacePerson(faceId: number, payload: { name: string; category: string; target_person_id?: number }) {
     return http.post<ApiResponse<PhotoPeopleResponse>>(`/people/faces/${faceId}/person-assignment`, payload)
+  },
+
+  updateFaceExclusion(faceIds: number[], excluded: boolean, reason?: ExclusionReason) {
+    return http.patch<ApiResponse<UpdateFaceExclusionResult>>('/people/faces/exclusion', {
+      face_ids: faceIds,
+      excluded,
+      reason: excluded ? reason : undefined,
+    })
   },
 
   getTask() {
