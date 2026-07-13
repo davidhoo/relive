@@ -2061,7 +2061,7 @@ func TestPeopleServiceSplit(t *testing.T) {
 	require.NoError(t, personRepo.RefreshStats(person.ID))
 	require.NoError(t, photoRepo.RecomputeTopPersonCategory([]uint{photoA.ID, photoB.ID}))
 
-	newPerson, _, err := svc.SplitPerson([]uint{faceB.ID})
+	newPerson, _, err := svc.SplitPerson(person.ID, []uint{faceB.ID})
 	require.NoError(t, err)
 	require.NotNil(t, newPerson)
 	assert.NotEqual(t, person.ID, newPerson.ID)
@@ -2490,7 +2490,7 @@ func TestPeopleService_SplitPersonMarksMergeSuggestionsDirty(t *testing.T) {
 	require.NoError(t, faceRepo.Create(faceB))
 	require.NoError(t, personRepo.RefreshStats(person.ID))
 
-	_, _, err := svc.SplitPerson([]uint{faceB.ID})
+	_, _, err := svc.SplitPerson(person.ID, []uint{faceB.ID})
 	require.NoError(t, err)
 	require.Equal(t, []string{"split_person"}, reasons)
 }
@@ -4057,7 +4057,7 @@ func TestPeopleService_Invalidate_SplitPersonDirtySourceAndNew(t *testing.T) {
 	require.NoError(t, faceRepo.Create(faceB))
 	require.NoError(t, personRepo.RefreshStats(person.ID))
 
-	newPerson, _, err := svc.SplitPerson([]uint{faceB.ID})
+	newPerson, _, err := svc.SplitPerson(person.ID, []uint{faceB.ID})
 	require.NoError(t, err)
 	require.NotNil(t, newPerson)
 
@@ -4540,7 +4540,7 @@ func TestPeopleMutationTimingFieldsStable(t *testing.T) {
 func TestPeopleServiceForegroundMutationsEmitTimingNoPanic(t *testing.T) {
 	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
 
-	_, _, err := svc.SplitPerson([]uint{999999})
+	_, _, err := svc.SplitPerson(999999, []uint{999999})
 	require.Error(t, err)
 	assert.Equal(t, 0, svc.clusteringCoordinator.foregroundWaiterCount())
 
@@ -4599,21 +4599,21 @@ func seedSplitIdempotencyDataset(t *testing.T, svc *peopleService) (source *mode
 }
 
 // TestPeopleService_SplitPersonRepeatedFaceSetReturnsExistingPerson 验证重复 split 请求幂等：
-// 第一次 SplitPerson([2,3]) 创建 Person B 并记录 person_split 事件；第二次相同请求应返回
-// 同一个 Person B，不创建新人物、不新增第二条 person_split 事件。
+// 第一次 SplitPerson(source, [faceB,faceC]) 创建 Person B 并记录 person_split 事件；第二次相同
+// 请求应返回同一个 Person B，不创建新人物、不新增第二条 person_split 事件。
 func TestPeopleService_SplitPersonRepeatedFaceSetReturnsExistingPerson(t *testing.T) {
 	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
 	svc.SetFeedbackEventRepo(repository.NewPeopleFeedbackEventRepository(svc.db))
 
-	_, _, faceB, faceC := seedSplitIdempotencyDataset(t, svc)
+	source, _, faceB, faceC := seedSplitIdempotencyDataset(t, svc)
 
 	// 第一次 split：faceB + faceC 拆出新建 Person B。
-	newPerson1, _, err := svc.SplitPerson([]uint{faceB.ID, faceC.ID})
+	newPerson1, _, err := svc.SplitPerson(source.ID, []uint{faceB.ID, faceC.ID})
 	require.NoError(t, err)
 	require.NotNil(t, newPerson1)
 
 	// 第二次相同请求：应返回同一个 Person B，不创建新人物。
-	newPerson2, _, err := svc.SplitPerson([]uint{faceB.ID, faceC.ID})
+	newPerson2, _, err := svc.SplitPerson(source.ID, []uint{faceB.ID, faceC.ID})
 	require.NoError(t, err)
 	require.NotNil(t, newPerson2)
 	assert.Equal(t, newPerson1.ID, newPerson2.ID, "repeated split must return existing person, not create new")
@@ -4635,14 +4635,63 @@ func TestPeopleService_SplitPersonRepeatedFaceSetReturnsExistingPerson(t *testin
 	assert.Len(t, splitEvents, 1, "repeated split must not record a second person_split event")
 }
 
-// TestPeopleService_SplitPersonRepeatedFaceSetRequiresMatchingSplitEvent 验证：
-// 当 faceB/faceC 已通过移动/归属进入另一人物，但没有精确匹配的 person_split 事件时，
-// 再次 SplitPerson([faceB,faceC]) 必须返回 conflict，不创建新人物、不静默复用。
-func TestPeopleService_SplitPersonRepeatedFaceSetRequiresMatchingSplitEvent(t *testing.T) {
+// TestPeopleService_SplitPersonMergeLockedFacesCanSplit 验证 manual_lock_reason='merge' 的人脸
+// 可以从当前人物正常拆分（不再被误判为冲突）。
+func TestPeopleService_SplitPersonMergeLockedFacesCanSplit(t *testing.T) {
 	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
 	svc.SetFeedbackEventRepo(repository.NewPeopleFeedbackEventRepository(svc.db))
 
-	_, _, faceB, faceC := seedSplitIdempotencyDataset(t, svc)
+	source, _, faceB, faceC := seedSplitIdempotencyDataset(t, svc)
+
+	// 模拟这两张人脸来自历史 merge：手动锁定 + reason=merge。
+	faceRepo := repository.NewFaceRepository(svc.db)
+	require.NoError(t, faceRepo.ReassignFaces([]uint{faceB.ID, faceC.ID}, source.ID, "merge"))
+
+	newPerson, _, err := svc.SplitPerson(source.ID, []uint{faceB.ID, faceC.ID})
+	require.NoError(t, err)
+	require.NotNil(t, newPerson)
+	assert.NotEqual(t, source.ID, newPerson.ID)
+
+	// 两张人脸已归属新人物。
+	for _, fid := range []uint{faceB.ID, faceC.ID} {
+		f, err := faceRepo.GetByID(fid)
+		require.NoError(t, err)
+		require.NotNil(t, f.PersonID)
+		assert.Equal(t, newPerson.ID, *f.PersonID)
+	}
+}
+
+// TestPeopleService_SplitPersonMoveLockedFacesCanSplitWhenSourceMatches 验证 manual_lock_reason='move'
+// 的人脸在 source_person_id 与当前归属一致时可以正常拆分。
+func TestPeopleService_SplitPersonMoveLockedFacesCanSplitWhenSourceMatches(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	svc.SetFeedbackEventRepo(repository.NewPeopleFeedbackEventRepository(svc.db))
+
+	source, _, faceB, faceC := seedSplitIdempotencyDataset(t, svc)
+
+	// 模拟这两张人脸来自历史 move：把它们移到 other 再 move 回 source，标记 reason=move。
+	personRepo := repository.NewPersonRepository(svc.db)
+	other := &model.Person{Category: model.PersonCategoryStranger}
+	require.NoError(t, personRepo.Create(other))
+	faceRepo := repository.NewFaceRepository(svc.db)
+	require.NoError(t, faceRepo.ReassignFaces([]uint{faceB.ID, faceC.ID}, other.ID, "move"))
+	// 现在用 move 锁定原因把它们送回 source，模拟 move 形成的人物归属。
+	require.NoError(t, faceRepo.ReassignFaces([]uint{faceB.ID, faceC.ID}, source.ID, "move"))
+
+	// source 与当前归属一致 → 合法首次拆分。
+	newPerson, _, err := svc.SplitPerson(source.ID, []uint{faceB.ID, faceC.ID})
+	require.NoError(t, err)
+	require.NotNil(t, newPerson)
+	assert.NotEqual(t, source.ID, newPerson.ID)
+}
+
+// TestPeopleService_SplitPersonStaleSourceReturnsConflict 验证：当请求 source_person_id 与人脸
+// 当前归属不一致，且没有匹配的 person_split 事件时，返回 errPeopleSplitConflict。
+func TestPeopleService_SplitPersonStaleSourceReturnsConflict(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	svc.SetFeedbackEventRepo(repository.NewPeopleFeedbackEventRepository(svc.db))
+
+	source, _, faceB, faceC := seedSplitIdempotencyDataset(t, svc)
 
 	// 通过 MoveFaces 把 faceB/faceC 移到另一人物（非 split，故不产生 person_split 事件）。
 	personRepo := repository.NewPersonRepository(svc.db)
@@ -4651,9 +4700,9 @@ func TestPeopleService_SplitPersonRepeatedFaceSetRequiresMatchingSplitEvent(t *t
 	_, err := svc.MoveFaces([]uint{faceB.ID, faceC.ID}, other.ID)
 	require.NoError(t, err)
 
-	// 现在 faceB/faceC 属于 other，但没有匹配的 person_split 事件。
-	// 再次 split 必须返回 conflict（errors.Is errPeopleSplitConflict）。
-	_, _, err = svc.SplitPerson([]uint{faceB.ID, faceC.ID})
+	// 现在 faceB/faceC 属于 other，但请求 source 仍是 source（陈旧页面）。
+	// 必须返回 conflict，不创建新人物、不静默复用。
+	_, _, err = svc.SplitPerson(source.ID, []uint{faceB.ID, faceC.ID})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, errPeopleSplitConflict), "expected errPeopleSplitConflict, got %v", err)
 
@@ -4667,6 +4716,138 @@ func TestPeopleService_SplitPersonRepeatedFaceSetRequiresMatchingSplitEvent(t *t
 	for _, ev := range events {
 		assert.NotEqual(t, repository.PeopleFeedbackEventPersonSplit, ev.EventType,
 			"conflicting split must not record a person_split event")
+	}
+}
+
+// TestPeopleService_SplitPersonScatteredFacesReturnConflict 验证：所选人脸分散在多个人物时
+// 返回 errPeopleSplitConflict，不执行部分拆分。
+func TestPeopleService_SplitPersonScatteredFacesReturnConflict(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	svc.SetFeedbackEventRepo(repository.NewPeopleFeedbackEventRepository(svc.db))
+
+	source, _, faceB, faceC := seedSplitIdempotencyDataset(t, svc)
+
+	// 把 faceC 单独 move 到 other，faceB 仍在 source → 人脸分散在两人物。
+	personRepo := repository.NewPersonRepository(svc.db)
+	other := &model.Person{Category: model.PersonCategoryStranger}
+	require.NoError(t, personRepo.Create(other))
+	_, err := svc.MoveFaces([]uint{faceC.ID}, other.ID)
+	require.NoError(t, err)
+
+	_, _, err = svc.SplitPerson(source.ID, []uint{faceB.ID, faceC.ID})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, errPeopleSplitConflict), "expected errPeopleSplitConflict, got %v", err)
+}
+
+// TestPeopleService_SplitPersonHistorySourceMismatchNotReused 验证：存在历史 person_split 事件
+// 但其 source_person_ids 与本次 source 不一致时，不能错误复用，应返回 conflict。
+func TestPeopleService_SplitPersonHistorySourceMismatchNotReused(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	svc.SetFeedbackEventRepo(repository.NewPeopleFeedbackEventRepository(svc.db))
+
+	source, _, faceB, faceC := seedSplitIdempotencyDataset(t, svc)
+
+	// 第一次合法 split：source -> newPerson。
+	newPerson, _, err := svc.SplitPerson(source.ID, []uint{faceB.ID, faceC.ID})
+	require.NoError(t, err)
+	require.NotNil(t, newPerson)
+
+	// 现在 faceB/faceC 属于 newPerson。用错误的 source（other）再次请求同一 face 集合。
+	// 历史事件的 source 是 source，不是 other，且 target=newPerson 与当前归属一致但 source 不匹配 → conflict。
+	personRepo := repository.NewPersonRepository(svc.db)
+	other := &model.Person{Category: model.PersonCategoryStranger}
+	require.NoError(t, personRepo.Create(other))
+
+	_, _, err = svc.SplitPerson(other.ID, []uint{faceB.ID, faceC.ID})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, errPeopleSplitConflict), "expected errPeopleSplitConflict, got %v", err)
+}
+
+// TestPeopleService_SplitPersonHistoryTargetMismatchNotReused 验证：历史 person_split 事件的 target
+// 与人脸当前归属不一致时，不能错误复用，应返回 conflict。
+func TestPeopleService_SplitPersonHistoryTargetMismatchNotReused(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	svc.SetFeedbackEventRepo(repository.NewPeopleFeedbackEventRepository(svc.db))
+
+	source, _, faceB, faceC := seedSplitIdempotencyDataset(t, svc)
+
+	// 第一次合法 split：source -> newPerson（faceB/faceC 现属 newPerson）。
+	_, _, err := svc.SplitPerson(source.ID, []uint{faceB.ID, faceC.ID})
+	require.NoError(t, err)
+
+	// 把 faceB/faceC 从 newPerson 再 move 到 third，制造“历史 target 与当前归属不一致”。
+	personRepo := repository.NewPersonRepository(svc.db)
+	third := &model.Person{Category: model.PersonCategoryStranger}
+	require.NoError(t, personRepo.Create(third))
+	_, err = svc.MoveFaces([]uint{faceB.ID, faceC.ID}, third.ID)
+	require.NoError(t, err)
+
+	// 用原始 source 再次请求：source 匹配历史事件 source，但历史 target(newPerson) != 当前归属(third)。
+	// 也没有以 source 为来源、target=third 的事件 → conflict。
+	_, _, err = svc.SplitPerson(source.ID, []uint{faceB.ID, faceC.ID})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, errPeopleSplitConflict), "expected errPeopleSplitConflict, got %v", err)
+}
+
+// TestPeopleService_SplitPersonPartialMissingFacesFails 验证：部分 face ID 不存在时整体失败，
+// 不执行部分拆分。
+func TestPeopleService_SplitPersonPartialMissingFacesFails(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	svc.SetFeedbackEventRepo(repository.NewPeopleFeedbackEventRepository(svc.db))
+
+	source, _, faceB, _ := seedSplitIdempotencyDataset(t, svc)
+
+	_, _, err := svc.SplitPerson(source.ID, []uint{faceB.ID, 999999})
+	require.Error(t, err)
+
+	// 未创建新人物。
+	personRepo := repository.NewPersonRepository(svc.db)
+	allPersons, err := personRepo.ListAll()
+	require.NoError(t, err)
+	assert.Len(t, allPersons, 1, "partial-missing split must not create a new person")
+}
+
+// TestPeopleService_SplitPersonConflictNoSideEffects 验证：冲突请求不产生数据库写入和后台副作用
+// （不创建新人物、不写 person_split 事件、不改人脸归属）。
+func TestPeopleService_SplitPersonConflictNoSideEffects(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	svc.SetFeedbackEventRepo(repository.NewPeopleFeedbackEventRepository(svc.db))
+
+	source, _, faceB, faceC := seedSplitIdempotencyDataset(t, svc)
+
+	// 把 faceB/faceC move 到 other，制造陈旧 source 冲突。
+	personRepo := repository.NewPersonRepository(svc.db)
+	faceRepo := repository.NewFaceRepository(svc.db)
+	other := &model.Person{Category: model.PersonCategoryStranger}
+	require.NoError(t, personRepo.Create(other))
+	_, err := svc.MoveFaces([]uint{faceB.ID, faceC.ID}, other.ID)
+	require.NoError(t, err)
+
+	personsBefore, err := personRepo.ListAll()
+	require.NoError(t, err)
+	faceBBefore, err := faceRepo.GetByID(faceB.ID)
+	require.NoError(t, err)
+
+	_, _, err = svc.SplitPerson(source.ID, []uint{faceB.ID, faceC.ID})
+	require.Error(t, err)
+
+	// 人物数量不变。
+	personsAfter, err := personRepo.ListAll()
+	require.NoError(t, err)
+	assert.Len(t, personsAfter, len(personsBefore), "conflict must not create a person")
+
+	// 人脸归属不变。
+	faceBAfter, err := faceRepo.GetByID(faceB.ID)
+	require.NoError(t, err)
+	require.NotNil(t, faceBBefore.PersonID)
+	require.NotNil(t, faceBAfter.PersonID)
+	assert.Equal(t, *faceBBefore.PersonID, *faceBAfter.PersonID, "conflict must not change face assignment")
+
+	// 没有 person_split 事件。
+	events := feedbackEventsFromSvc(t, svc)
+	for _, ev := range events {
+		assert.NotEqual(t, repository.PeopleFeedbackEventPersonSplit, ev.EventType,
+			"conflict must not record a person_split event")
 	}
 }
 

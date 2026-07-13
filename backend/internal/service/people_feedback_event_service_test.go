@@ -238,7 +238,7 @@ func TestEmitsFeedbackSplitPersonRecordsSourceNewAndFaceIDs(t *testing.T) {
 	require.NoError(t, faceRepo.Create(splitFace))
 	require.NoError(t, personRepo.RefreshStats(target.ID))
 
-	newPerson, _, err := svc.SplitPerson([]uint{splitFace.ID})
+	newPerson, _, err := svc.SplitPerson(target.ID, []uint{splitFace.ID})
 	require.NoError(t, err)
 	require.NotNil(t, newPerson)
 

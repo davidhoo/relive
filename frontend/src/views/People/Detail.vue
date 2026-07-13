@@ -912,13 +912,22 @@ const isLikelyForegroundStillProcessing = (error: any): boolean => {
   return status === 502 || status === 503 || status === 504
 }
 
+// isSplitAssignmentConflict 判断错误是否为拆分归属冲突（HTTP 409 / SPLIT_ASSIGNMENT_CONFLICT）。
+// 该错误表示页面提交的 source_person_id 已过期，需清空陈旧选择并刷新数据，而非提示后台处理中。
+const isSplitAssignmentConflict = (error: any): boolean => {
+  return error?.response?.status === 409 &&
+    error?.response?.data?.error?.code === 'SPLIT_ASSIGNMENT_CONFLICT'
+}
+
 const splitSelectedFaces = async () => {
   if (selectedFaceIds.value.length === 0) return
   // 双击防重复：若已有前台操作进行中，直接 return，不重复提交。
   if (foregroundBusy.value) return
+  if (!person.value) return
+  const sourcePersonId = person.value.id
   try {
     splitting.value = true
-    const res = await peopleApi.split(selectedFaceIds.value)
+    const res = await peopleApi.split(sourcePersonId, selectedFaceIds.value)
     const data = res.data?.data as any
     const newPerson = data?.person
     showReclusterResult(data, '已拆分为新人物', true)
@@ -928,6 +937,13 @@ const splitSelectedFaces = async () => {
     }
     await loadData()
   } catch (error: any) {
+    if (isSplitAssignmentConflict(error)) {
+      // 409 归属冲突：所选人脸归属已变化，清空陈旧选择并刷新当前数据。
+      selectedFaceSet.value = new Set()
+      await loadData()
+      ElMessage.warning('所选人脸归属已发生变化，请刷新后重新选择')
+      return
+    }
     if (isLikelyForegroundStillProcessing(error)) {
       ElMessage.warning('操作可能仍在后台处理中，请稍后刷新页面查看结果')
     } else {

@@ -65,8 +65,11 @@ export const peopleApi = {
     return http.get<ApiResponse<PeopleMergeJob>>(`/people/merge-jobs/${jobId}`)
   },
 
-  split(faceIds: number[]) {
-    return http.post<ApiResponse<Person>>('/people/split', { face_ids: faceIds })
+  split(sourcePersonId: number, faceIds: number[]) {
+    return http.post<ApiResponse<Person>>('/people/split', {
+      source_person_id: sourcePersonId,
+      face_ids: faceIds,
+    })
   },
 
   moveFaces(faceIds: number[], targetPersonId: number) {

@@ -607,8 +607,12 @@ type MergePeopleRequest struct {
 	TargetPersonID  uint   `json:"target_person_id" binding:"required"`
 }
 
+// SplitPersonRequest 人物拆分请求。
+// SourcePersonID 表示用户发起操作时页面展示的人物归属，用于幂等与归属冲突判定——
+// 它必须是当前 face 共同所属的人物，否则视为陈旧页面提交，后端返回 409。
 type SplitPersonRequest struct {
-	FaceIDs []uint `json:"face_ids" binding:"required,min=1"`
+	SourcePersonID uint   `json:"source_person_id" binding:"required"`
+	FaceIDs        []uint `json:"face_ids" binding:"required,min=1"`
 }
 
 type MoveFacesRequest struct {

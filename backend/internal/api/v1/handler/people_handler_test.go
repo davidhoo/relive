@@ -46,6 +46,7 @@ type stubPeopleService struct {
 	mergeTargetPerson     uint
 	mergeSourcePeople     []uint
 	splitFaceIDs          []uint
+	splitSourcePerson     uint
 	splitResult           *model.Person
 	moveFaceIDs           []uint
 	moveTargetPerson      uint
@@ -94,7 +95,8 @@ func (s *stubPeopleService) MergePeople(targetPersonID uint, sourcePersonIDs []u
 	s.mergeSourcePeople = append([]uint(nil), sourcePersonIDs...)
 	return &model.ReclusterResult{}, nil
 }
-func (s *stubPeopleService) SplitPerson(faceIDs []uint) (*model.Person, *model.ReclusterResult, error) {
+func (s *stubPeopleService) SplitPerson(sourcePersonID uint, faceIDs []uint) (*model.Person, *model.ReclusterResult, error) {
+	s.splitSourcePerson = sourcePersonID
 	if s.err != nil {
 		return nil, nil, s.err
 	}
@@ -719,9 +721,10 @@ func TestPeopleHandlerSplit(t *testing.T) {
 	handler, svc, _, _, _ := newPeopleHandlerForTest(t)
 	svc.splitResult = &model.Person{ID: 55, Category: model.PersonCategoryAcquaintance}
 
-	rec := performJSONRequest(t, http.MethodPost, "/api/v1/people/split", []byte(`{"face_ids":[8,9]}`), nil, handler.SplitPerson)
+	rec := performJSONRequest(t, http.MethodPost, "/api/v1/people/split", []byte(`{"source_person_id":7,"face_ids":[8,9]}`), nil, handler.SplitPerson)
 
 	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, uint(7), svc.splitSourcePerson)
 	assert.Equal(t, []uint{8, 9}, svc.splitFaceIDs)
 	resp := decodeAPIResponse(t, rec)
 	// Split now returns {person: ..., recluster_*: ...}
@@ -731,6 +734,78 @@ func TestPeopleHandlerSplit(t *testing.T) {
 	require.NoError(t, json.Unmarshal(personJSON, &person))
 	assert.Equal(t, uint(55), person.ID)
 	assert.Equal(t, model.PersonCategoryAcquaintance, person.Category)
+}
+
+// TestPeopleHandlerSplit_MissingSourcePersonID 验证缺少 source_person_id 返回 400。
+func TestPeopleHandlerSplit_MissingSourcePersonID(t *testing.T) {
+	handler, _, _, _, _ := newPeopleHandlerForTest(t)
+
+	rec := performJSONRequest(t, http.MethodPost, "/api/v1/people/split", []byte(`{"face_ids":[8,9]}`), nil, handler.SplitPerson)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	assert.False(t, resp.Success)
+	assert.Equal(t, "INVALID_REQUEST", resp.Error.Code)
+}
+
+// TestPeopleHandlerSplit_ZeroSourcePersonID 验证 source_person_id=0 返回 400。
+func TestPeopleHandlerSplit_ZeroSourcePersonID(t *testing.T) {
+	handler, _, _, _, _ := newPeopleHandlerForTest(t)
+
+	rec := performJSONRequest(t, http.MethodPost, "/api/v1/people/split", []byte(`{"source_person_id":0,"face_ids":[8,9]}`), nil, handler.SplitPerson)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	assert.False(t, resp.Success)
+	assert.Equal(t, "INVALID_REQUEST", resp.Error.Code)
+}
+
+// TestPeopleHandlerSplit_ReplayReturnsExistingPerson 验证幂等重放返回 200 且复用已有目标人物。
+// handler 用 stub service，无法区分首次与重放；这里通过让 stub 返回一个固定的已存在目标人物
+// 来验证 handler 对"返回已有人物（而非新建）"路径的响应契约：仍 200、仍按 person 字段返回。
+// 真正的幂等去重逻辑在 service 层（见 people_service_test.go）已充分覆盖。
+func TestPeopleHandlerSplit_ReplayReturnsExistingPerson(t *testing.T) {
+	handler, svc, _, _, _ := newPeopleHandlerForTest(t)
+	// 模拟 service 层幂等命中后返回的已有目标人物。
+	svc.splitResult = &model.Person{ID: 42, Category: model.PersonCategoryFamily}
+
+	rec := performJSONRequest(t, http.MethodPost, "/api/v1/people/split", []byte(`{"source_person_id":7,"face_ids":[8,9]}`), nil, handler.SplitPerson)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	assert.True(t, resp.Success)
+	dataMap := decodeResponseData[map[string]interface{}](t, resp)
+	personJSON, _ := json.Marshal(dataMap["person"])
+	var person model.PersonResponse
+	require.NoError(t, json.Unmarshal(personJSON, &person))
+	assert.Equal(t, uint(42), person.ID, "replay must return the existing target person")
+}
+
+// TestPeopleHandlerSplit_ConflictMapsTo409 验证 errPeopleSplitConflict 返回 409
+// 且 error code 为 SPLIT_ASSIGNMENT_CONFLICT。
+func TestPeopleHandlerSplit_ConflictMapsTo409(t *testing.T) {
+	handler, svc, _, _, _ := newPeopleHandlerForTest(t)
+	svc.err = service.ErrPeopleSplitConflict
+
+	rec := performJSONRequest(t, http.MethodPost, "/api/v1/people/split", []byte(`{"source_person_id":7,"face_ids":[8,9]}`), nil, handler.SplitPerson)
+
+	require.Equal(t, http.StatusConflict, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	assert.False(t, resp.Success)
+	assert.Equal(t, "SPLIT_ASSIGNMENT_CONFLICT", resp.Error.Code)
+}
+
+// TestPeopleHandlerSplit_UnknownErrorMapsTo500 验证未知错误仍返回 500。
+func TestPeopleHandlerSplit_UnknownErrorMapsTo500(t *testing.T) {
+	handler, svc, _, _, _ := newPeopleHandlerForTest(t)
+	svc.err = errors.New("boom")
+
+	rec := performJSONRequest(t, http.MethodPost, "/api/v1/people/split", []byte(`{"source_person_id":7,"face_ids":[8,9]}`), nil, handler.SplitPerson)
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	assert.False(t, resp.Success)
+	assert.Equal(t, "OPERATION_FAILED", resp.Error.Code)
 }
 
 func TestPeopleHandlerMoveFaces(t *testing.T) {

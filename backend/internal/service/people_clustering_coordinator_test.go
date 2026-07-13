@@ -217,7 +217,7 @@ func TestCoordinatorForegroundCountRecoveryOnError(t *testing.T) {
 	assert.Equal(t, 0, svc.clusteringCoordinator.foregroundWaiterCount())
 
 	// SplitPerson with non-existent face IDs.
-	_, _, err = svc.SplitPerson([]uint{999999})
+	_, _, err = svc.SplitPerson(999999, []uint{999999})
 	require.Error(t, err)
 	assert.Equal(t, 0, svc.clusteringCoordinator.foregroundWaiterCount())
 
@@ -988,7 +988,7 @@ func TestPeopleForegroundMutationReleasesCoordinatorScopeOnError(t *testing.T) {
 	assert.False(t, svc.backgroundCoordinator.ForegroundActive(), "merge error must release coordinator scope")
 
 	// SplitPerson 不存在 face → error。
-	_, _, _ = svc.SplitPerson([]uint{999999})
+	_, _, _ = svc.SplitPerson(999999, []uint{999999})
 	assert.False(t, svc.backgroundCoordinator.ForegroundActive(), "split error must release coordinator scope")
 
 	// MoveFaces 不存在 face → error。

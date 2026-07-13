@@ -659,10 +659,12 @@ const handleFaceAssignSplit = async () => {
   // 双击防重复：保存/拆分任一进行中时直接 return。
   if (faceAssignSaving.value || faceAssignSplitting.value) return
   const target = faceAssignTarget.value
+  // 弹窗打开时显示的当前人物归属，作为 source_person_id 提交。若归属已变化后端返回 409。
+  const sourcePersonId = target.person.id
 
   faceAssignSplitting.value = true
   try {
-    const res = await peopleApi.split([target.faceId])
+    const res = await peopleApi.split(sourcePersonId, [target.faceId])
     const data = res.data?.data as any
     const evaluated = data?.recluster_evaluated || 0
     const reassigned = data?.recluster_reassigned || 0
@@ -680,6 +682,15 @@ const handleFaceAssignSplit = async () => {
     await loadPhotoPeople(photo.value.id)
     imageVersion.value = Date.now()
   } catch (error: any) {
+    // 409 归属冲突：弹窗中缓存的人物已过期，关闭编辑状态并重新加载照片人物信息。
+    if (error?.response?.status === 409 && error?.response?.data?.error?.code === 'SPLIT_ASSIGNMENT_CONFLICT') {
+      faceAssignVisible.value = false
+      faceAssignTarget.value = null
+      await loadPhotoPeople(photo.value.id)
+      imageVersion.value = Date.now()
+      ElMessage.warning('所选人脸归属已发生变化，请刷新后重新选择')
+      return
+    }
     if (!error?.response || [502, 503, 504].includes(error.response.status)) {
       ElMessage.warning('操作可能仍在后台处理中，请稍后刷新页面查看结果')
     } else {

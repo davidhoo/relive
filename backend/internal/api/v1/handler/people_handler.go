@@ -463,8 +463,12 @@ func (h *PeopleHandler) SplitPerson(c *gin.Context) {
 		return
 	}
 
-	person, rc, err := h.service.SplitPerson(req.FaceIDs)
+	person, rc, err := h.service.SplitPerson(req.SourcePersonID, req.FaceIDs)
 	if err != nil {
+		if errors.Is(err, service.ErrPeopleSplitConflict) {
+			writePeopleError(c, http.StatusConflict, "SPLIT_ASSIGNMENT_CONFLICT", "所选人脸归属已发生变化，请刷新后重新选择")
+			return
+		}
 		writeServiceFailure(c, err)
 		return
 	}
