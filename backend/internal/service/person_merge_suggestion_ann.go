@@ -77,6 +77,12 @@ func (s *personMergeSuggestionService) buildANNIndex() (*annIndex, error) {
 		personProtos[pid] = decodeFacesWithEmbeddings(faces)
 	}
 
+	// annBuildHook 仅供测试注入“构建期间”的并发 MarkDirty，以确定性验证 generation 协调：
+	// 构建期间推进 annGeneration 后，本 build 完成时应保持 pending。生产中始终为 nil。
+	if s.annBuildHook != nil {
+		s.annBuildHook()
+	}
+
 	g := newHNSWGraph()
 	// Use lower efSearch during construction for speed; graph quality is
 	// primarily determined by M. Use 2*M as efConstruction per HNSW guidelines.
@@ -134,28 +140,72 @@ func (s *personMergeSuggestionService) buildANNIndex() (*annIndex, error) {
 // Rebuild happens when: (1) no index exists yet (first call after restart), or
 // (2) index is dirty (data changed since last build).
 // CPU throttling (annBuildCPUDuty) prevents NAS CPU overload during rebuild.
-// Thread-safe: may be called concurrently with FindCandidates and MarkDirty.
+//
+// 单实例 + generation 协调：
+//   - 同一时刻最多一个 rebuild 在进行（annBuilding）。已有 rebuild 运行时，后续调用者直接
+//     返回当前（可能为旧/stale 的）索引或等待其结果，绝不启动第二个构建，避免重复 DB 读取与 HNSW 建图。
+//   - rebuild 启动时记录 targetGeneration = 当前的 annGeneration。
+//   - 构建成功后，仅当 targetGeneration == annGeneration（构建期间没有新的 MarkDirty）时才清除 dirty；
+//     否则允许发布已完成索引，但保持 dirty（pending），下一次 ensureANNIndex 会再次重建。
+//   - 构建失败：保留旧 annIdx 供查询降级使用，保持 dirty，进入现有后台冷却（不发布半成品）。
+//
+// 状态读取/翻转统一在 annMu 短临界区内完成，避免 check/build/publish 之间丢失更新。
 func (s *personMergeSuggestionService) ensureANNIndex() (*annIndex, error) {
 	s.annMu.Lock()
-	if s.annIdx != nil && !s.annDirty {
+	// Clean & present: 直接返回缓存索引。
+	if s.annIdx != nil && !s.annDirty && !s.annBuilding {
 		idx := s.annIdx
 		s.annMu.Unlock()
 		return idx, nil
 	}
+	// 已有 rebuild 在进行：不启动第二个构建。在条件变量上等待其完成，避免返回 stale/nil。
+	// 重复 DB 读取与建图被抑制；等待者复用第一个调用者的构建结果。
+	if s.annBuilding {
+		for s.annBuilding {
+			s.annBuildCond.Wait()
+		}
+		// 构建已完成（成功或失败）：返回当前缓存的索引与状态。
+		idx := s.annIdx
+		dirty := s.annDirty
+		s.annMu.Unlock()
+		// 若构建失败 dirty 仍为 true，调用方拿到的是旧索引（可能 nil）。保持与首次构建失败
+		// 一致的语义：返回旧索引 + 让调用方按需降级。不在此处重试，避免调用者线程递归构建。
+		if dirty && idx == nil {
+			return nil, nil
+		}
+		return idx, nil
+	}
+	// 没有 build 在跑且索引 dirty（或不存在）：由本调用者启动一次 rebuild。
+	// 记录 target generation 并置位 building，然后释放锁执行耗时构建。
+	targetGen := s.annGeneration
+	s.annBuilding = true
 	s.annMu.Unlock()
 
-	// Build outside the lock — this is a long DB + CPU operation.
-	// Two concurrent callers may both build; the second write is benign.
 	idx, err := s.buildANNIndex()
-	if err != nil {
-		return nil, err
-	}
 
 	s.annMu.Lock()
+	s.annBuilding = false
+	if err != nil {
+		// 构建失败：保留旧 annIdx（继续服务降级查询），保持 dirty，进入现有后台冷却。
+		// 不发布半成品、不清除 dirty。annGeneration 不回退——新的 MarkDirty 仍可推进。
+		oldIdx := s.annIdx
+		// 唤醒所有等待者：它们将复用旧索引（或 nil 降级），不会递归启动新构建。
+		s.annBuildCond.Broadcast()
+		s.annMu.Unlock()
+		s.appendANNBuildFailureLog(err, targetGen)
+		return oldIdx, err
+	}
+	// 构建成功：发布新索引。仅当构建期间没有新的 MarkDirty（targetGen 仍是最新）时清除 dirty。
+	// 否则保持 dirty（pending），下一次 ensureANNIndex 会重建到最新 generation。
+	pending := s.annGeneration != targetGen
 	s.annIdx = idx
-	s.annDirty = false
 	s.annBuiltAt = time.Now()
+	s.annDirty = pending
+	// 唤醒所有等待者：它们拿到刚发布的索引。
+	s.annBuildCond.Broadcast()
 	s.annMu.Unlock()
+
+	s.appendANNBuildGenerationLog(targetGen, s.annGeneration, pending)
 	return idx, nil
 }
 
@@ -184,6 +234,25 @@ func (s *personMergeSuggestionService) appendANNBuildLog(persons, nodes int, ela
 	defer s.mu.Unlock()
 	s.appendBackgroundLogLocked(
 		fmt.Sprintf("ANN 索引重建完成：%d 人物 / %d 面部向量 / 耗时 %s", persons, nodes, elapsed.Round(time.Millisecond)),
+	)
+}
+
+// appendANNBuildGenerationLog 记录带 generation 的构建完成状态。不输出人物 ID 或 embedding。
+// pending=true 表示构建期间又有新的 MarkDirty 推进了 generation，已完成索引已发布但 dirty 保持。
+func (s *personMergeSuggestionService) appendANNBuildGenerationLog(targetGen, currentGen uint64, pending bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.appendBackgroundLogLocked(
+		fmt.Sprintf("ANN rebuild 完成: targetGeneration=%d currentGeneration=%d pending=%t", targetGen, currentGen, pending),
+	)
+}
+
+// appendANNBuildFailureLog 记录构建失败。保留旧索引继续服务，保持 dirty 进入后台冷却。
+func (s *personMergeSuggestionService) appendANNBuildFailureLog(err error, targetGen uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.appendBackgroundLogLocked(
+		fmt.Sprintf("ANN rebuild 失败: targetGeneration=%d 保留旧索引, err=%v", targetGen, err),
 	)
 }
 

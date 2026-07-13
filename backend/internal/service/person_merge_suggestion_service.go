@@ -65,10 +65,22 @@ type personMergeSuggestionService struct {
 	task           *model.PersonMergeSuggestionTask
 	state          personMergeSuggestionState
 	backgroundLogs []string
-	annMu          sync.Mutex // guards annIdx, annDirty, annBuiltAt for concurrent access
-	annIdx         *annIndex
-	annDirty       bool      // index is stale; rebuild on next ensureANNIndex call
-	annBuiltAt     time.Time // when index was last successfully built
+	annMu sync.Mutex // guards all ANN build state below for concurrent access
+	// annBuildCond 在 annMu 上等待 annBuilding 完成通知。ensureANNIndex 的并发等待者用它
+	// 复用第一个调用者的构建结果，避免重复 DB 读取与 HNSW 建图。
+	annBuildCond *sync.Cond
+	annIdx *annIndex
+	// ANN rebuild 单实例与 generation 协调：
+	//   - annGeneration：单调递增，每次 MarkDirty 推进。记录“最新一次被标记 dirty 的 generation”。
+	//   - targetGeneration：当前正在构建（或最近一次启动构建）的目标 generation。
+	//   - annBuilding：是否正有 rebuild 在进行。rebuild 启动时置位，完成后清除。
+	//   - annDirty：是否有未完成构建的 dirty。build 成功且 target==annGeneration 时才清除；
+	//     build 期间若又有 MarkDirty 推进了 annGeneration，则保持 dirty（pending）。
+	annGeneration    uint64
+	targetGeneration uint64
+	annBuilding      bool
+	annDirty         bool      // index is stale; rebuild on next ensureANNIndex call
+	annBuiltAt       time.Time // when index was last successfully built
 
 	// Dedicated background DB pool (separate from the API pool) so that
 	// long-running merge-suggestion work does not starve API connections.
@@ -92,6 +104,10 @@ type personMergeSuggestionService struct {
 	// It handles syncPersonState, cannot-link cleanup, RecomputeTopPersonCategory,
 	// and feedback recluster — mirroring the cleanup that MergePeople does.
 	postMergeFn func(targetPersonID uint, sourcePersonIDs []uint, affectedPhotoIDs []uint)
+
+	// annBuildHook 仅供测试注入“rebuild 期间”的并发 MarkDirty，以验证 generation 协调语义；
+	// 生产中始终为 nil。在 buildANNIndex 完成 DB 读取、即将构建 HNSW 前调用。
+	annBuildHook func()
 }
 
 type mergeSuggestionCandidate struct {
@@ -538,6 +554,7 @@ func NewPersonMergeSuggestionService(
 		},
 		backgroundLogs: make([]string, 0, 32),
 	}
+	svc.annBuildCond = sync.NewCond(&svc.annMu)
 	_ = svc.loadState()
 
 	// Always mark dirty on startup: the in-memory ANN index is lost on restart
@@ -546,7 +563,11 @@ func NewPersonMergeSuggestionService(
 		svc.mu.Lock()
 		svc.state.Dirty = true
 		svc.state.CursorTargetID = 0
+		svc.annMu.Lock()
+		// 启动时推进 generation 并标记 dirty：内存 ANN 索引在重启后丢失，必须重建。
+		svc.annGeneration++
 		svc.annDirty = true
+		svc.annMu.Unlock()
 		_ = svc.saveStateLocked()
 		svc.mu.Unlock()
 	}
@@ -734,7 +755,10 @@ func (s *personMergeSuggestionService) Rebuild() error {
 	s.state.CursorTargetID = 0
 	s.annMu.Lock()
 	s.annIdx = nil
-	s.annDirty = false
+	// Rebuild 推进 generation 并标记 dirty：下一次 ensureANNIndex 必须重新建图。
+	s.annGeneration++
+	s.annDirty = true
+	s.annBuilding = false
 	s.annMu.Unlock()
 	s.task.Status = model.TaskStatusIdle
 	s.task.CurrentMessage = "等待重建巡检"
@@ -751,7 +775,10 @@ func (s *personMergeSuggestionService) MarkDirty(reason string) error {
 	s.state.Dirty = true
 	s.state.CursorTargetID = 0
 	s.state.DirtyGeneration++
+	// 推进 annGeneration 并标记 dirty。即使当前有 rebuild 正在进行，旧 rebuild 完成时
+	// 会发现 targetGeneration != annGeneration 而保持 pending，新 dirty 不会被清除。
 	s.annMu.Lock()
+	s.annGeneration++
 	s.annDirty = true
 	s.annMu.Unlock()
 
@@ -793,6 +820,7 @@ func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 		if !s.state.LastRunAt.IsZero() && time.Since(s.state.LastRunAt) > time.Duration(staleSeconds)*time.Second {
 			s.state.Dirty = true
 			s.annMu.Lock()
+			s.annGeneration++
 			s.annDirty = true
 			s.annMu.Unlock()
 			s.appendBackgroundLogLocked(fmt.Sprintf("自动重跑: 距上次巡检超过 %d 秒", staleSeconds))

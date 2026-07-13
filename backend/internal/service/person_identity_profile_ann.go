@@ -69,6 +69,16 @@ type identityProfileANN struct {
 	unavailable      atomic.Bool
 	rebuildRequested atomic.Bool
 
+	// rebuildRequestGeneration 是单调递增的 request generation。每次 RequestRebuild 推进它，
+	// 并设置 rebuildRequested。Rebuild 启动时记录 startRequestGen，只在 startRequestGen 仍是
+	// 最新 request 时才清除 rebuildRequested；构建期间出现的新 request 使 rebuildRequested 保持。
+	// 这样旧 rebuild 完成后不会清除新 dirty，多次 rebuild 请求合并为 pending。
+	// 用 uint64 + atomic 操作，避免在 deltaMu 之外访问时引入 data race。
+	rebuildRequestGeneration atomic.Uint64
+	// startRequestGen 由 Rebuild 在启动时读取，保存在普通字段（仅在 Rebuild 单线程内使用，
+	// 不跨 goroutine 共享，无需同步）。
+	startRequestGen uint64
+
 	// snapshotGeneration 在每次完整 snapshot 成功发布后加 1。只读 Stats 通过 atomic load 读取，
 	// 用于监控 snapshot 是否推进。以下情况不得增加：构建失败、模型不匹配、输入校验失败、
 	// 只更新 delta、只调用 RequestRebuild、InvalidatePerson、InvalidateAll。
@@ -223,13 +233,16 @@ func (a *identityProfileANN) Rebuild(centers []*model.PersonIdentityCenter, mode
 		return errANNModelMismatch
 	}
 
-	// 完整重建开始时记录 revision（构建在锁外进行，期间 Activate 可能变更 delta）。
+	// 完整重建开始时记录 revision 与 request generation（构建在锁外进行，期间 Activate /
+	// RequestRebuild 可能变更 delta 或推进 request）。
 	a.deltaMu.RLock()
 	startRev := a.revision
 	a.deltaMu.RUnlock()
+	startReq := a.rebuildRequestGeneration.Load()
+	a.startRequestGen = startReq
 
-	// buildHook 仅供测试注入“构建期间”的并发激活，以确定性地验证 preserve 语义；
-	// 生产中始终为 nil。
+	// buildHook 仅供测试注入“构建期间”的并发激活或 RequestRebuild，以确定性地验证 preserve
+	// 与 pending 语义；生产中始终为 nil。
 	if a.buildHook != nil {
 		a.buildHook()
 	}
@@ -238,7 +251,9 @@ func (a *identityProfileANN) Rebuild(centers []*model.PersonIdentityCenter, mode
 	idx, err := a.buildIndex(centers, model)
 	if err != nil {
 		// 构建失败：不发布半成品，标记不可用并请求重建。旧 snapshot 保留但不对外声称可用。
+		// 失败时推进 request generation 并保持 rebuildRequested，确保下次仍会重建。
 		a.unavailable.Store(true)
+		a.rebuildRequestGeneration.Add(1)
 		a.rebuildRequested.Store(true)
 		return err
 	}
@@ -255,8 +270,13 @@ func (a *identityProfileANN) Rebuild(centers []*model.PersonIdentityCenter, mode
 		a.activeGeneration = deriveActiveGeneration(idx)
 	}
 	// 构建期间有 delta 变更：保留 delta/invalid/activeGeneration（含更新数据），下一次干净重建再压缩。
+	// revision 变化但 delta 完整时，保留 snapshot + delta 语义（上面的 if 不执行清空）。
 	a.unavailable.Store(false)
-	a.rebuildRequested.Store(false)
+	// 仅当构建期间没有新 RequestRebuild（startReq 仍是最新 request）时才清除 rebuildRequested。
+	// 否则保持 pending：下一次重建会处理新 request。
+	if a.rebuildRequestGeneration.Load() == startReq {
+		a.rebuildRequested.Store(false)
+	}
 	// 完整 snapshot 成功发布，推进内部 generation（仅在成功发布后增加）。
 	a.snapshotGeneration.Add(1)
 	a.deltaMu.Unlock()
@@ -307,20 +327,31 @@ func (a *identityProfileANN) Activate(personID uint, generation int, centers []*
 	a.deltaMu.Lock()
 	defer a.deltaMu.Unlock()
 
-	// 移除该人物在 delta 中的旧中心（被新 generation 取代，不再需要）。
+	// 先计算替换后的 delta 容量：移除该人物在 delta 中的旧中心后，再加上新中心。
+	// 只在确认可提交后才执行删除与写入，确保 capacity failure 或输入错误不会部分修改 delta、
+	// invalid 或 active generation。
+	removed := 0
+	for _, v := range a.delta {
+		if v.PersonID == personID {
+			removed++
+		}
+	}
+	newLen := len(a.delta) - removed + len(vecs)
+
+	// 容量检查：不允许无界增长。失败时不修改任何状态（delta/invalid/activeGeneration 保持原样）。
+	if newLen > a.deltaMax {
+		a.unavailable.Store(true)
+		a.rebuildRequestGeneration.Add(1)
+		a.rebuildRequested.Store(true)
+		return errANNDeltaFull
+	}
+
+	// 容量充足：提交替换。先删除旧中心，再写入新中心。
 	for id, v := range a.delta {
 		if v.PersonID == personID {
 			delete(a.delta, id)
 		}
 	}
-
-	// 容量检查：不允许无界增长。
-	if len(a.delta)+len(vecs) > a.deltaMax {
-		a.unavailable.Store(true)
-		a.rebuildRequested.Store(true)
-		return errANNDeltaFull
-	}
-
 	for _, v := range vecs {
 		a.delta[v.CenterID] = v
 	}
@@ -368,6 +399,7 @@ func (a *identityProfileANN) InvalidatePerson(personID uint) {
 func (a *identityProfileANN) InvalidateAll() {
 	// 先标记 unavailable，使后续/并发 Search 在 RLock 下读到 unavailable=true 时直接 fail closed。
 	a.unavailable.Store(true)
+	a.rebuildRequestGeneration.Add(1)
 	a.rebuildRequested.Store(true)
 
 	a.deltaMu.Lock()
@@ -378,8 +410,11 @@ func (a *identityProfileANN) InvalidateAll() {
 	a.deltaMu.Unlock()
 }
 
-// RequestRebuild 标记需要完整重建。
+// RequestRebuild 标记需要完整重建，并推进 request generation。
+// 每次 RequestRebuild 推进 generation：即使当前正有 Rebuild 在进行，旧 Rebuild 完成时
+// 会发现 request generation 已推进而保持 pending，新 request 不会被清除。
 func (a *identityProfileANN) RequestRebuild() {
+	a.rebuildRequestGeneration.Add(1)
 	a.rebuildRequested.Store(true)
 }
 
