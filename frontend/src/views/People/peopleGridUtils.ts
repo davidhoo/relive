@@ -53,6 +53,34 @@ export function shouldLoadMore(p: ShouldLoadMoreParams): boolean {
   return p.rowCount - p.visibleLastRowIndex <= p.threshold
 }
 
+// shouldLoadByVisibleRange 是 window-virtualizer 模式下的统一加载判定纯函数。
+// 与 shouldLoadMore 不同，它额外要求 active=true（当前 Tab 可见），并在 error=true 时
+// 禁止自动重试（仅手动重试清除 error）。这是人物详情页防“自动连续翻页”的核心守卫：
+// 只有 active、非 loading、非 error、hasMore 且最后可见行接近数据末尾时返回 true。
+export interface VisibleRangeLoadParams {
+  // 当前 Tab 是否可见（隐藏 Tab 不触发分页）
+  active: boolean
+  loading: boolean
+  error: boolean
+  hasMore: boolean
+  // 已加载数据对应的总行数
+  rowCount: number
+  // 最后一个可见行的索引
+  lastVisibleRowIndex: number
+  // 距末端不足多少行触发
+  thresholdRows: number
+}
+
+export function shouldLoadByVisibleRange(p: VisibleRangeLoadParams): boolean {
+  if (!p.active) return false
+  if (p.loading) return false
+  if (p.error) return false
+  if (!p.hasMore) return false
+  // 尚无可见行（首次进入、rowCount=0 或未测量）且 active+hasMore → 允许首屏加载。
+  if (p.rowCount <= 0 || p.lastVisibleRowIndex < 0) return true
+  return p.rowCount - p.lastVisibleRowIndex <= p.thresholdRows
+}
+
 // 判断“是否移动了人物全部人脸”：基于人脸总数（分页 total）而非已加载长度。
 // selectedCount >= facesTotal 且 facesTotal > 0 才认为全部已移动。
 export function isAllFacesMoved(params: {

@@ -1,5 +1,5 @@
 import http from '@/utils/request'
-import type { ApiResponse, PagedResponse } from '@/types/api'
+import type { ApiResponse, PagedResponse, CursorPagedResponse } from '@/types/api'
 import type { Photo } from '@/types/photo'
 import type {
   ExclusionReason,
@@ -27,12 +27,12 @@ export const peopleApi = {
     return http.get<ApiResponse<Person>>(`/people/${id}`)
   },
 
-  getPhotos(id: number, params?: { page?: number; page_size?: number }) {
-    return http.get<ApiResponse<Photo[] | PagedResponse<Photo>>>(`/people/${id}/photos`, { params })
+  getPhotos(id: number, params?: { page?: number; page_size?: number; pagination?: 'cursor'; cursor?: string }) {
+    return http.get<ApiResponse<Photo[] | PagedResponse<Photo> | CursorPagedResponse<Photo>>>(`/people/${id}/photos`, { params })
   },
 
-  getFaces(id: number, params?: { page?: number; page_size?: number }) {
-    return http.get<ApiResponse<Face[] | PagedResponse<Face>>>(`/people/${id}/faces`, { params })
+  getFaces(id: number, params?: { page?: number; page_size?: number; pagination?: 'cursor'; cursor?: string }) {
+    return http.get<ApiResponse<Face[] | PagedResponse<Face> | CursorPagedResponse<Face>>>(`/people/${id}/faces`, { params })
   },
 
   updateCategory(id: number, category: Person['category']) {

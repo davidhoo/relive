@@ -13,11 +13,10 @@ const mountGrid = (props: Record<string, unknown>) => {
       components: { VirtualMediaGrid },
       template: `<VirtualMediaGrid
         :items="items" :columns="columns" :row-height="rowHeight" :gap="gap"
-        :size-class="sizeClass" :has-more="hasMore" :loading="loading"
-        :load-threshold-rows="loadThresholdRows"
-        @load-more="$emit('load-more')"
+        :size-class="sizeClass"
+        @visible-range-change="$emit('visible-range-change', $event)"
       ><template #item="{ item }"><div class="cell">{{ item.id }}</div></template></VirtualMediaGrid>`,
-      props: ['items', 'columns', 'rowHeight', 'gap', 'sizeClass', 'hasMore', 'loading', 'loadThresholdRows'],
+      props: ['items', 'columns', 'rowHeight', 'gap', 'sizeClass'],
     },
     {
       props: {
@@ -26,17 +25,11 @@ const mountGrid = (props: Record<string, unknown>) => {
         rowHeight: 110,
         gap: 10,
         sizeClass: 'small',
-        hasMore: true,
-        loading: false,
-        loadThresholdRows: 3,
         ...props,
       },
       attachTo: document.body,
     },
   )
-  const el = wrapper.find('.virtual-media-grid').element as HTMLElement
-  Object.defineProperty(el, 'clientHeight', { configurable: true, value: 600 })
-  Object.defineProperty(el, 'scrollHeight', { configurable: true, value: 100000 })
   return wrapper
 }
 

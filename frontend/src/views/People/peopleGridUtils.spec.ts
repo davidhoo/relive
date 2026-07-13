@@ -3,6 +3,7 @@ import {
   partitionRows,
   visibleCardCount,
   shouldLoadMore,
+  shouldLoadByVisibleRange,
   isAllFacesMoved,
   toggleFaceInSet,
   anchorRowIndexAfterDensityChange,
@@ -136,6 +137,46 @@ describe('shouldLoadMore - 接近末端只触发一次 / 失败可重试（测�
         error: true,
       }),
     ).toBe(true)
+  })
+})
+
+describe('shouldLoadByVisibleRange - window 虚拟化加载守卫', () => {
+  const base = {
+    active: true,
+    loading: false,
+    error: false,
+    hasMore: true,
+    rowCount: 200,
+    lastVisibleRowIndex: 198,
+    thresholdRows: 3,
+  }
+
+  it('active 且接近末端时返回 true', () => {
+    expect(shouldLoadByVisibleRange(base)).toBe(true)
+  })
+
+  it('loading 时不再触发（单 in-flight）', () => {
+    expect(shouldLoadByVisibleRange({ ...base, loading: true })).toBe(false)
+  })
+
+  it('error 时禁止自动重试', () => {
+    expect(shouldLoadByVisibleRange({ ...base, error: true })).toBe(false)
+  })
+
+  it('hasMore=false 时不再触发', () => {
+    expect(shouldLoadByVisibleRange({ ...base, hasMore: false })).toBe(false)
+  })
+
+  it('Tab 隐藏（active=false）时不触发', () => {
+    expect(shouldLoadByVisibleRange({ ...base, active: false })).toBe(false)
+  })
+
+  it('未接近末端时不触发', () => {
+    expect(shouldLoadByVisibleRange({ ...base, lastVisibleRowIndex: 10 })).toBe(false)
+  })
+
+  it('首屏尚未测量（lastVisibleRowIndex<0）且 active+hasMore 时允许加载', () => {
+    expect(shouldLoadByVisibleRange({ ...base, rowCount: 0, lastVisibleRowIndex: -1 })).toBe(true)
   })
 })
 

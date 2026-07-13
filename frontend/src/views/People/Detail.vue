@@ -147,9 +147,7 @@
               :row-height="photoRowHeight"
               :gap="14"
               :size-class="photoGridSize"
-              :has-more="!photosFinished"
-              :loading="photosLoading"
-              @load-more="loadMorePhotos"
+              @visible-range-change="onPhotosVisibleRange"
             >
               <template #item="{ item }">
                 <button type="button" class="photo-card" @click="goToPhoto(item.id)">
@@ -166,7 +164,7 @@
             <div class="scroll-sentinel">
               <span v-if="photosLoading" class="sentinel-status">加载中...</span>
               <span v-else-if="photosError" class="sentinel-status sentinel-error">
-                加载失败，<el-button text type="primary" size="small" @click="loadMorePhotos">重试</el-button>
+                加载失败，<el-button text type="primary" size="small" @click="retryLoadPhotos">重试</el-button>
               </span>
               <span v-else-if="photosFinished" class="sentinel-status">已加载全部 {{ photosTotal }} 张照片</span>
             </div>
@@ -183,9 +181,7 @@
               :row-height="faceRowHeight"
               :gap="10"
               :size-class="faceGridSize"
-              :has-more="!facesFinished"
-              :loading="facesLoading"
-              @load-more="loadMoreFaces"
+              @visible-range-change="onFacesVisibleRange"
             >
               <template #item="{ item }">
                 <div class="face-card" :class="{ 'is-selected': selectedFaceSet.has(item.id) }">
@@ -228,7 +224,7 @@
             <div class="scroll-sentinel">
               <span v-if="facesLoading" class="sentinel-status">加载中...</span>
               <span v-else-if="facesError" class="sentinel-status sentinel-error">
-                加载失败，<el-button text type="primary" size="small" @click="loadMoreFaces">重试</el-button>
+                加载失败，<el-button text type="primary" size="small" @click="retryLoadFaces">重试</el-button>
               </span>
               <span v-else-if="facesFinished" class="sentinel-status">已加载全部 {{ facesTotal }} 张人脸</span>
             </div>
@@ -359,7 +355,7 @@ import { peopleApi } from '@/api/people'
 import type { Face, Person, PersonCategory } from '@/types/people'
 import type { Photo } from '@/types/photo'
 import { getPersonAvatarFallback, getPersonCategoryLabel, sortPeopleForDisplay } from './peopleHelpers'
-import { isAllFacesMoved } from './peopleGridUtils'
+import { isAllFacesMoved, shouldLoadByVisibleRange } from './peopleGridUtils'
 
 const route = useRoute()
 const router = useRouter()
@@ -496,13 +492,20 @@ const setGridSize = (size: GridSize) => {
   })
 }
 
-// 关联照片 - 无限滚动状态
+// 关联照片 - 无限滚动状态（cursor 模式）
+// photosLoading 是唯一的 in-flight 请求锁：为 true 期间不再发起任何分页请求。
 const photosLoading = ref(false)
 const photosError = ref(false)
 const photosFinished = ref(false)
 const photosPage = ref(1)
 const photosPageSize = ref(30)
 const photosTotal = ref(0)
+// cursor 模式状态：nextCursor 为空字符串表示无下一页或首屏。hasMore 控制是否继续加载。
+const photosNextCursor = ref<string>('')
+const photosHasMore = ref(true)
+// 记录请求发起时的 personId + cursor，响应回来后核对，丢弃陈旧响应（切换人物后旧请求晚到）。
+const photosInFlightPersonId = ref<number>(0)
+const photosInFlightCursor = ref<string>('')
 // 首次按需加载标记：进入页面只加载当前默认 Tab“照片”第一页；
 // “人脸” Tab 首次切换时才加载。已访问过的 Tab 再次切回时恢复数据和滚动位置。
 const photosLoadedOnce = ref(false)
@@ -510,17 +513,21 @@ const facesLoadedOnce = ref(false)
 // 虚拟网格 ref
 const photosGridRef = ref<InstanceType<typeof VirtualMediaGrid> | null>(null)
 const facesGridRef = ref<InstanceType<typeof VirtualMediaGrid> | null>(null)
-// 各 Tab 滚动位置记忆
+// 各 Tab 滚动锚点：window scroll + 首个可见 item index，用于密度/Tab 切换后恢复位置。
 const photosScrollTop = ref(0)
 const facesScrollTop = ref(0)
 
-// 人脸样本 - 无限滚动状态
+// 人脸样本 - 无限滚动状态（cursor 模式）
 const facesLoading = ref(false)
 const facesError = ref(false)
 const facesFinished = ref(false)
 const facesPage = ref(1)
 const facesPageSize = ref(50)
 const facesTotal = ref(0)
+const facesNextCursor = ref<string>('')
+const facesHasMore = ref(true)
+const facesInFlightPersonId = ref<number>(0)
+const facesInFlightCursor = ref<string>('')
 
 // 候选人物懒加载
 const candidatePeopleLoaded = ref(false)
@@ -611,29 +618,46 @@ const ensureCandidatePeople = async () => {
   }
 }
 
-// --- 无限滚动：关联照片 ---
+// --- 无限滚动：关联照片（cursor 模式，单 in-flight，丢弃陈旧响应）---
 
 const loadMorePhotos = async () => {
+  // 单 in-flight 锁：loading 期间禁止再次发起。失败后保留 error，需手动重试清除。
   if (photosLoading.value || photosFinished.value) return
   const personId = Number(route.params.id)
   if (!personId) return
 
+  // 记录本次请求的 personId + cursor，响应回来后核对，避免切换人物后旧请求污染新人物。
+  const cursor = photosNextCursor.value
+  photosInFlightPersonId.value = personId
+  photosInFlightCursor.value = cursor
   photosLoading.value = true
   photosError.value = false
   try {
-    const res = await peopleApi.getPhotos(personId, { page: photosPage.value, page_size: photosPageSize.value })
+    const res = await peopleApi.getPhotos(personId, {
+      page_size: photosPageSize.value,
+      pagination: 'cursor',
+      cursor: cursor || undefined,
+    })
+    // 丢弃陈旧响应：切换人物或 cursor 已变（手动重试/重复）后晚到的旧响应直接忽略。
+    if (photosInFlightPersonId.value !== personId || photosInFlightCursor.value !== cursor) return
     const data = res.data?.data as any
     const items: Photo[] = (data && 'items' in data ? data.items : data as Photo[]) || []
+    const hasMore: boolean = (data && 'has_more' in data) ? Boolean(data.has_more) : true
+    const nextCursor: string = (data && 'next_cursor' in data) ? String(data.next_cursor ?? '') : ''
+    // 旧 page 模式兼容：若后端返回 total（旧调用），用于“已加载全部”判定。
     const totalCount: number = (data && 'total' in data ? data.total : items.length) || 0
 
     const existing = new Set(photos.value.map(p => p.id))
     const fresh = items.filter(p => !existing.has(p.id))
     photos.value = [...photos.value, ...fresh]
-    photosTotal.value = totalCount
+    if (totalCount) photosTotal.value = totalCount
     photosPage.value += 1
     photosLoadedOnce.value = true
 
-    if (items.length < photosPageSize.value || photos.value.length >= totalCount) {
+    photosHasMore.value = hasMore
+    photosNextCursor.value = nextCursor
+    // has_more=false 或返回不足一页 → 已加载全部。
+    if (!hasMore || items.length < photosPageSize.value) {
       photosFinished.value = true
     }
   } catch (error: any) {
@@ -644,29 +668,41 @@ const loadMorePhotos = async () => {
   }
 }
 
-// --- 无限滚动：人脸样本 ---
+// --- 无限滚动：人脸样本（cursor 模式，单 in-flight，丢弃陈旧响应）---
 
 const loadMoreFaces = async () => {
   if (facesLoading.value || facesFinished.value) return
   const personId = Number(route.params.id)
   if (!personId) return
 
+  const cursor = facesNextCursor.value
+  facesInFlightPersonId.value = personId
+  facesInFlightCursor.value = cursor
   facesLoading.value = true
   facesError.value = false
   try {
-    const res = await peopleApi.getFaces(personId, { page: facesPage.value, page_size: facesPageSize.value })
+    const res = await peopleApi.getFaces(personId, {
+      page_size: facesPageSize.value,
+      pagination: 'cursor',
+      cursor: cursor || undefined,
+    })
+    if (facesInFlightPersonId.value !== personId || facesInFlightCursor.value !== cursor) return
     const data = res.data?.data as any
     const items: Face[] = (data && 'items' in data ? data.items : data as Face[]) || []
+    const hasMore: boolean = (data && 'has_more' in data) ? Boolean(data.has_more) : true
+    const nextCursor: string = (data && 'next_cursor' in data) ? String(data.next_cursor ?? '') : ''
     const totalCount: number = (data && 'total' in data ? data.total : items.length) || 0
 
     const existing = new Set(faces.value.map(f => f.id))
     const fresh = items.filter(f => !existing.has(f.id))
     faces.value = [...faces.value, ...fresh]
-    facesTotal.value = totalCount
+    if (totalCount) facesTotal.value = totalCount
     facesPage.value += 1
     facesLoadedOnce.value = true
 
-    if (items.length < facesPageSize.value || faces.value.length >= totalCount) {
+    facesHasMore.value = hasMore
+    facesNextCursor.value = nextCursor
+    if (!hasMore || items.length < facesPageSize.value) {
       facesFinished.value = true
     }
   } catch (error: any) {
@@ -677,6 +713,52 @@ const loadMoreFaces = async () => {
   }
 }
 
+// --- 可见区间驱动的加载判定（window virtualizer 模式）---
+// 由 VirtualMediaGrid 的 visible-range-change 触发。只有当前 Tab 可见、非 loading、
+// 非 error、hasMore 且最后可见行接近末尾时才加载。隐藏 Tab / 失败态 / in-flight 都不触发。
+const LOAD_THRESHOLD_ROWS = 3
+
+const onPhotosVisibleRange = (payload: { firstRowIndex: number; lastRowIndex: number; rowCount: number }) => {
+  if (activeTab.value !== 'photos') return
+  if (!shouldLoadByVisibleRange({
+    active: true,
+    loading: photosLoading.value,
+    error: photosError.value,
+    hasMore: photosHasMore.value && !photosFinished.value,
+    rowCount: payload.rowCount,
+    lastVisibleRowIndex: payload.lastRowIndex,
+    thresholdRows: LOAD_THRESHOLD_ROWS,
+  })) return
+  loadMorePhotos()
+}
+
+const onFacesVisibleRange = (payload: { firstRowIndex: number; lastRowIndex: number; rowCount: number }) => {
+  if (activeTab.value !== 'faces') return
+  if (!shouldLoadByVisibleRange({
+    active: true,
+    loading: facesLoading.value,
+    error: facesError.value,
+    hasMore: facesHasMore.value && !facesFinished.value,
+    rowCount: payload.rowCount,
+    lastVisibleRowIndex: payload.lastRowIndex,
+    thresholdRows: LOAD_THRESHOLD_ROWS,
+  })) return
+  loadMoreFaces()
+}
+
+// 手动重试：清除 error 后用原 cursor 重发（不推进 cursor，避免跳过失败页）。
+const retryLoadPhotos = () => {
+  if (photosLoading.value) return
+  photosError.value = false
+  loadMorePhotos()
+}
+
+const retryLoadFaces = () => {
+  if (facesLoading.value) return
+  facesError.value = false
+  loadMoreFaces()
+}
+
 // --- 数据加载 ---
 
 const loadData = async () => {
@@ -684,17 +766,25 @@ const loadData = async () => {
   if (!personId) return
 
   loading.value = true
-  // 重置无限滚动状态
+  // 重置无限滚动状态（cursor 模式）
   faces.value = []
   photos.value = []
-  facesPage.value = 1
   photosPage.value = 1
-  facesFinished.value = false
+  facesPage.value = 1
   photosFinished.value = false
-  facesError.value = false
+  facesFinished.value = false
   photosError.value = false
-  facesTotal.value = 0
+  facesError.value = false
   photosTotal.value = 0
+  facesTotal.value = 0
+  photosHasMore.value = true
+  facesHasMore.value = true
+  photosNextCursor.value = ''
+  facesNextCursor.value = ''
+  photosInFlightPersonId.value = personId
+  facesInFlightPersonId.value = personId
+  photosInFlightCursor.value = ''
+  facesInFlightCursor.value = ''
   photosLoadedOnce.value = false
   facesLoadedOnce.value = false
   photosScrollTop.value = 0
@@ -733,12 +823,16 @@ const refreshPersonAndFaces = async () => {
   const personId = Number(route.params.id)
   if (!personId) return
   try {
-    // 重置人脸无限滚动
+    // 重置人脸无限滚动（cursor 模式）
     faces.value = []
     facesPage.value = 1
     facesFinished.value = false
     facesError.value = false
     facesTotal.value = 0
+    facesHasMore.value = true
+    facesNextCursor.value = ''
+    facesInFlightPersonId.value = personId
+    facesInFlightCursor.value = ''
     facesLoadedOnce.value = false
 
     const [personRes] = await Promise.all([
@@ -1177,13 +1271,14 @@ const goBack = () => {
   }
 }
 
-// Tab 切换：按需加载 + 恢复各自滚动位置。不清空选择状态、不清空数据。
+// Tab 切换：按需加载 + 恢复各自滚动锚点。不清空选择状态、不清空数据。
+// window virtualizer 模式下，滚动位置由 window 维护，不再读取组件内部 scrollRef.scrollTop。
 watch(activeTab, async (tab, prev) => {
-  // 离开当前 Tab 前记忆滚动位置
+  // 离开当前 Tab 前记忆 window 滚动位置
   if (prev === 'photos') {
-    photosScrollTop.value = photosGridRef.value?.scrollRef?.scrollTop ?? 0
+    photosScrollTop.value = typeof window !== 'undefined' ? window.scrollY : 0
   } else if (prev === 'faces') {
-    facesScrollTop.value = facesGridRef.value?.scrollRef?.scrollTop ?? 0
+    facesScrollTop.value = typeof window !== 'undefined' ? window.scrollY : 0
   }
 
   // 首次切到人脸 Tab 才加载第一页
@@ -1192,16 +1287,17 @@ watch(activeTab, async (tab, prev) => {
   }
 
   await nextTick()
-  // 恢复目标 Tab 的滚动位置，并重新测量虚拟网格（隐藏 pane 变可见后需刷新可见区间）
+  // 重新测量目标 Tab 的虚拟网格（隐藏 pane 变可见后需刷新可见区间），并恢复 window 滚动锚点。
   const target = tab === 'photos' ? photosGridRef.value : facesGridRef.value
   const top = tab === 'photos' ? photosScrollTop.value : facesScrollTop.value
-  // target 可能为 stub 或尚未挂载；measure 仅在真实组件上调用
   if (target && typeof (target as any).measure === 'function') {
     ;(target as any).measure()
   }
-  const scrollEl = (target as any)?.scrollRef as HTMLElement | undefined
-  if (scrollEl) {
-    scrollEl.scrollTop = top
+  // window 滚动恢复。tab 切换通常不大幅改变页面总高度，直接恢复 scrollY 即可。
+  if (typeof window !== 'undefined') {
+    nextTick(() => {
+      window.scrollTo({ top, behavior: 'instant' as ScrollBehavior })
+    })
   }
 })
 
