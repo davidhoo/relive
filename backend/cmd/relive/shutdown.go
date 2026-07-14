@@ -28,6 +28,9 @@ type aiShutdownService interface {
 type eventShutdownService interface {
 	StopTask() error
 	GetTask() *model.EventClusteringTask
+	// StopAutoWorker 停止自动增量聚类的 pending worker（Phase 3）。nil 安全：接口实现可能
+	// 为 nil 或不支持；shutdown 通过类型断言调用，不强制所有实现提供。
+	StopAutoWorker()
 }
 
 type scanTaskProvider interface {
@@ -80,6 +83,8 @@ func notifyShutdown(
 				logger.Warnf("Failed to request event clustering shutdown: %v", err)
 			}
 		}
+		// Phase 3：停止自动增量聚类的 pending worker，避免 shutdown 期间后台 goroutine 泄漏。
+		event.StopAutoWorker()
 	}
 
 	for _, item := range []struct {

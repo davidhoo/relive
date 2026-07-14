@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
@@ -23,6 +24,9 @@ type EventClusteringService interface {
 	StopTask() error
 	GetTask() *model.EventClusteringTask
 	RunIncremental()
+	// StopAutoWorker 停止自动增量聚类的 pending worker（Phase 3）。供 graceful shutdown 调用，
+	// 不影响用户显式启动的 StartClustering/StartRebuild 任务（那些由 activeTask + StopTask 管理）。
+	StopAutoWorker()
 }
 
 type eventClusteringService struct {
@@ -35,7 +39,38 @@ type eventClusteringService struct {
 
 	activeTask *clusteringRuntime
 	taskMutex  sync.RWMutex
+
+	// backgroundCoordinator 是统一后台任务准入控制器（Phase 3）。nil 时退化为不 gating
+	// （向后兼容测试桩与旧调用方）。扫描完成后自动触发的增量聚类经 coordinator 准入 +
+	// coalescing（DedupeKey=autoIncrementalDedupeKey），foreground active / iowait_high /
+	// cooldown 时保持 pending 不执行。用户显式 StartClustering/StartRebuild 仍走 P1 user。
+	backgroundCoordinator *BackgroundTaskCoordinator
+
+	// autoIncremental 的单槽 pending worker（Phase 3）。所有状态仅由 autoMu 保护，
+	// 全内存态，不写 SQLite。pending=true 表示有一次自动增量聚类待执行；running=true 表示
+	// worker goroutine 正在执行。扫描完成只调 RequestAutomaticIncremental 标记 pending +
+	// wake，不直接无限制启动重工作。worker 在 SetBackgroundCoordinator 时启动，Stop 时退出。
+	autoMu        sync.Mutex
+	autoPending   bool
+	autoRunning   bool
+	autoWake      chan struct{}
+	autoStop      chan struct{}
+	autoWorkerDone chan struct{}
+	autoWorkerStarted bool
 }
+
+// autoIncrementalDedupeKey 是自动增量聚类的固定 DedupeKey。多次扫描完成触发合并：
+// 同一 (class, dedupeKey) 在 running 期间至多保留一个 pending，第二个被 coalesce。
+const autoIncrementalDedupeKey = "scan_auto"
+
+// autoIncrementalBatchSize 是自动增量聚类提交循环的批次大小：每处理这么多 cluster 后
+// 检查一次 foreground / 负载，需要让路时保存下一个 cluster index 并退出本 slice。
+// 测试通过 setAutoIncrementalBatchSize 临时调小以构造可让路窗口；生产默认 20。
+const autoIncrementalBatchSize = 20
+
+// autoBatchSizeOverride 允许测试把批次大小临时调小（如 1），以在少量 cluster 下触发让路。
+// 仅测试使用；生产路径不设置。0 表示用默认常量。
+var autoBatchSizeOverride int32
 
 // clusteringRuntime 运行中的聚类任务
 type clusteringRuntime struct {
@@ -59,14 +94,51 @@ type photoCluster struct {
 
 // NewEventClusteringService 创建事件聚类服务
 func NewEventClusteringService(db *gorm.DB, photoRepo repository.PhotoRepository, eventRepo repository.EventRepository, photoTagRepo repository.PhotoTagRepository) EventClusteringService {
-	return &eventClusteringService{
+	s := &eventClusteringService{
 		db:           db,
 		photoRepo:    photoRepo,
 		eventRepo:    eventRepo,
 		photoTagRepo: photoTagRepo,
 		config:       model.DefaultEventClusteringConfig(),
 		writeQueue:   database.GetWriteQueue(),
+		autoWake:     make(chan struct{}, 1),
+		autoStop:     make(chan struct{}),
+		autoWorkerDone: make(chan struct{}),
 	}
+	return s
+}
+
+// SetBackgroundCoordinator 注入统一后台任务准入控制器并启动自动增量聚类的 pending
+// worker（Phase 3）。nil 时不 gating 也不启动 worker（向后兼容测试桩）。worker 在收到
+// StopAutoWorker 或 autoStop 后退出。
+func (s *eventClusteringService) SetBackgroundCoordinator(c *BackgroundTaskCoordinator) {
+	s.autoMu.Lock()
+	s.backgroundCoordinator = c
+	startWorker := c != nil && s.autoRunning == false && s.autoWorkerStarted == false
+	if c != nil {
+		s.autoWorkerStarted = true
+	}
+	s.autoMu.Unlock()
+	if startWorker {
+		go s.autoIncrementalWorker()
+	}
+}
+
+// StopAutoWorker 停止自动增量聚类的 pending worker（供 graceful shutdown 调用）。
+// 不影响用户显式启动的 StartClustering/StartRebuild 任务（那些由 activeTask 管理）。
+func (s *eventClusteringService) StopAutoWorker() {
+	s.autoMu.Lock()
+	if s.autoStop != nil {
+		select {
+		case <-s.autoStop:
+			// already closed
+		default:
+			close(s.autoStop)
+		}
+	}
+	s.autoMu.Unlock()
+	s.wakeAutoWorker()
+	<-s.autoWorkerDone
 }
 
 // executeWrite runs fn through WriteQueue if available, otherwise directly.
@@ -142,21 +214,237 @@ func (s *eventClusteringService) GetTask() *model.EventClusteringTask {
 	return s.buildTaskDTO(s.activeTask)
 }
 
-// RunIncremental 执行增量聚类（同步，扫描完成后调用）
+// RunIncremental 执行增量聚类（同步，扫描完成后调用）。
+//
+// Phase 3 行为：如果已注入 backgroundCoordinator，RunIncremental 不再直接无限制启动重工作，
+// 而是标记一次 automatic 增量聚类 pending 并唤醒 worker。worker 经 coordinator 准入
+// （foreground active / iowait_high / cooldown 时保持 pending）后，按小批次执行并可在批次
+// 边界让路。多次扫描完成触发经 DedupeKey 合并，至多一 running + 一 pending。
+//
+// 未注入 coordinator 时（测试桩 / 旧调用方）保持旧行为：直接同步执行一次增量聚类。
 func (s *eventClusteringService) RunIncremental() {
 	s.taskMutex.RLock()
 	active := s.activeTask
 	s.taskMutex.RUnlock()
 
-	// 如果已有任务在跑，跳过
+	// 如果已有用户任务在跑，跳过（用户显式任务优先，不与自动增量并发）。
 	if active != nil && (active.status == model.ScanJobStatusRunning || active.status == model.ScanJobStatusStopping) {
 		logger.Infof("[EventClustering] Skipping incremental: task already running")
 		return
 	}
 
-	logger.Infof("[EventClustering] Running incremental clustering after scan")
-	if err := s.runIncremental(context.Background(), nil); err != nil {
-		logger.Warnf("[EventClustering] Incremental clustering failed: %v", err)
+	s.autoMu.Lock()
+	coord := s.backgroundCoordinator
+	s.autoMu.Unlock()
+
+	if coord == nil {
+		// 旧行为：直接同步执行（测试桩 / 未注入 coordinator）。
+		logger.Infof("[EventClustering] Running incremental clustering after scan (no coordinator)")
+		if err := s.runIncremental(context.Background(), nil); err != nil {
+			logger.Warnf("[EventClustering] Incremental clustering failed: %v", err)
+		}
+		return
+	}
+
+	// Phase 3：只标记 pending 并唤醒 worker，不直接启动重工作。
+	s.requestAutomaticIncremental()
+}
+
+// requestAutomaticIncremental 标记一次自动增量聚类 pending 并唤醒 worker。
+// 多次调用合并：pending 已为 true 时只保留一次（coalesce）。
+func (s *eventClusteringService) requestAutomaticIncremental() {
+	s.autoMu.Lock()
+	if s.autoPending {
+		s.autoMu.Unlock()
+		logger.Infof("[EventClustering] Auto incremental already pending (coalesced)")
+		return
+	}
+	s.autoPending = true
+	s.autoMu.Unlock()
+	logger.Infof("[EventClustering] Auto incremental requested (pending)")
+	s.wakeAutoWorker()
+}
+
+// wakeAutoWorker 向 wake channel 发送一个非阻塞信号。
+func (s *eventClusteringService) wakeAutoWorker() {
+	select {
+	case s.autoWake <- struct{}{}:
+	default:
+	}
+}
+
+// autoIncrementalWorker 是自动增量聚类的 pending worker 主循环（Phase 3）。
+// 它从 wake/stop 事件中醒来，在 pending 时请求 coordinator 准入；被拒绝则保持 pending，
+// 短退避后重试；准入成功后按小批次执行增量聚类，批次边界检查 foreground / 负载，需要让路时
+// 保存进度并退出本 slice（保持 pending），由下次 wake 或退避定时器继续。
+func (s *eventClusteringService) autoIncrementalWorker() {
+	defer close(s.autoWorkerDone)
+
+	// retryTimer 在被拒绝/让路后驱动重试（pending 未清空时）；nil 表示当前无挂起重试。
+	// 这样 foreground 释放或退避到期后能自动恢复，无需外部 wake。
+	var retryTimer *time.Timer
+	var retryCh <-chan time.Time
+
+	backoff := retryBackoff
+	if override := atomic.LoadInt64(&autoRetryBackoffOverride); override > 0 {
+		backoff = time.Duration(override)
+	}
+
+	for {
+		select {
+		case <-s.autoStop:
+			if retryTimer != nil {
+				retryTimer.Stop()
+			}
+			return
+		case <-s.autoWake:
+		case <-retryCh:
+			retryTimer = nil
+			retryCh = nil
+		}
+
+		// drain：合并多次 wake。
+		select {
+		case <-s.autoWake:
+		default:
+		}
+
+		for {
+			stopped := s.autoStopped()
+			if stopped {
+				if retryTimer != nil {
+					retryTimer.Stop()
+				}
+				return
+			}
+
+			s.autoMu.Lock()
+			pending := s.autoPending
+			running := s.autoRunning
+			s.autoMu.Unlock()
+			if !pending || running {
+				// 无 pending 或已在执行。若仍有挂起重试定时器，清掉它（已无待办）。
+				if retryTimer != nil {
+					retryTimer.Stop()
+					retryTimer = nil
+					retryCh = nil
+				}
+				break
+			}
+
+			release, decision, ok := s.beginAutoIncremental()
+			if !ok {
+				// 被拒绝：Begin 返回 nil release（无 slot 占用），保持 pending，挂起重试定时器
+				// 后回到外层 select 等待。
+				logger.Infof("[EventClustering] Auto incremental deferred: %s", decision.Reason)
+				if retryTimer == nil {
+					retryTimer = time.NewTimer(backoff)
+					retryCh = retryTimer.C
+				}
+				break
+			}
+
+			// 标记 running 并执行本 slice。
+			s.autoMu.Lock()
+			s.autoRunning = true
+			s.autoPending = false // 消费本次 pending；执行期间新请求会重新置 pending
+			s.autoMu.Unlock()
+
+			yielded, err := s.runAutoIncrementalSlice(release)
+			// release 已在 slice 内部按需释放（让路或完成都会调用）；这里兜底确保释放。
+			release()
+
+			s.autoMu.Lock()
+			s.autoRunning = false
+			if err != nil {
+				// 执行失败：保持 pending 以便重试（若仍 stopped 则不重置）。
+				if !s.autoStoppedLocked() {
+					s.autoPending = true
+				}
+			} else if yielded {
+				// 让路退出：保持 pending，等下次 wake / 退避继续。
+				if !s.autoStoppedLocked() {
+					s.autoPending = true
+				}
+			}
+			s.autoMu.Unlock()
+
+			if err != nil {
+				logger.Warnf("[EventClustering] Auto incremental slice failed: %v", err)
+			}
+
+			// 让路或失败后挂起重试定时器（pending 未清空时），回到外层 select。
+			if yielded || err != nil {
+				if retryTimer == nil {
+					retryTimer = time.NewTimer(backoff)
+					retryCh = retryTimer.C
+				}
+				break
+			}
+			// 成功完成：清掉挂起重试定时器（若有），继续内层循环检查是否还有 pending。
+			if retryTimer != nil {
+				retryTimer.Stop()
+				retryTimer = nil
+				retryCh = nil
+			}
+		}
+	}
+}
+
+const retryBackoff = 30 * time.Second
+
+// autoRetryBackoffOverride 允许测试把被拒/让路后的重试退避调小，以快速验证恢复路径。
+// 0 表示用默认 retryBackoff。仅测试使用；生产路径不设置。
+var autoRetryBackoffOverride int64 // duration in nanoseconds; 0 = default
+
+// beginAutoIncremental 请求 coordinator 准入。返回 release（成功时必须调用）与 decision。
+func (s *eventClusteringService) beginAutoIncremental() (func(), BackgroundTaskDecision, bool) {
+	coord := s.backgroundCoordinator
+	if coord == nil {
+		// 无 coordinator（不应到达此处，RunIncremental 已分流），放行 no-op release。
+		noOp := func() {}
+		return noOp, BackgroundTaskDecision{Allowed: true, Reason: BackgroundDecisionAllowed}, true
+	}
+	return coord.Begin(BackgroundTaskRequest{
+		Class:     BackgroundTaskEventClustering,
+		Priority:  BackgroundPriorityAutomatic,
+		DedupeKey: autoIncrementalDedupeKey,
+	})
+}
+
+// runAutoIncrementalSlice 执行一次自动增量聚类的可暂停小批次（Phase 3）。
+// 返回 (yielded, error)：yielded=true 表示因 foreground/负载让路而中途退出（保持 pending）。
+// release 在本方法内于完成或让路时调用。
+func (s *eventClusteringService) runAutoIncrementalSlice(release func()) (bool, error) {
+	defer release()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 若 worker 收到 stop，取消本 slice。
+	go func() {
+		select {
+		case <-s.autoStop:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	return s.runIncrementalYieldable(ctx, nil)
+}
+
+func (s *eventClusteringService) autoStopped() bool {
+	s.autoMu.Lock()
+	defer s.autoMu.Unlock()
+	return s.autoStoppedLocked()
+}
+
+func (s *eventClusteringService) autoStoppedLocked() bool {
+	select {
+	case <-s.autoStop:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -341,83 +629,197 @@ func (s *eventClusteringService) runIncremental(ctx context.Context, runtime *cl
 		default:
 		}
 
-		clusterStart := *cluster.photos[0].TakenAt
-		clusterEnd := *cluster.photos[len(cluster.photos)-1].TakenAt
-		windowPadding := time.Duration(s.config.TimeGapSameEvent * float64(time.Hour))
+		s.commitCluster(ctx, cluster, runtime)
+	}
 
-		// 查找时间窗口内的已有事件
-		existingEvents, err := s.eventRepo.GetByTimeRange(
-			clusterStart.Add(-windowPadding),
-			clusterEnd.Add(windowPadding),
-		)
-		if err != nil {
-			logger.Warnf("[EventClustering] Failed to query existing events: %v", err)
-			existingEvents = nil
-		}
+	return nil
+}
 
-		photoIDs := make([]uint, len(cluster.photos))
-		for i, p := range cluster.photos {
-			photoIDs[i] = p.ID
-		}
-
-		if len(existingEvents) > 0 {
-			// 归入最近的已有事件
-			bestEvent := s.findBestMatchingEvent(cluster, existingEvents)
-			if bestEvent != nil {
-				// 更新照片的 event_id
-				if err := s.executeWrite(func() error {
-					return s.db.Model(&model.Photo{}).Where("id IN ?", photoIDs).Update("event_id", bestEvent.ID).Error
-				}); err != nil {
-					logger.Warnf("[EventClustering] Failed to update photo event_ids: %v", err)
-					continue
-				}
-				// 重新画像
-				if err := s.reprofileEvent(bestEvent.ID); err != nil {
-					logger.Warnf("[EventClustering] Failed to reprofile event %d: %v", bestEvent.ID, err)
-				}
-				if runtime != nil {
-					runtime.mu.Lock()
-					runtime.progress.EventsUpdated++
-					runtime.progress.ProcessedPhotos += len(cluster.photos)
-					runtime.mu.Unlock()
-				}
-				continue
-			}
-		}
-
-		// 创建新事件（需满足最小照片数）
-		if s.config.MinPhotosPerEvent > 0 && len(cluster.photos) < s.config.MinPhotosPerEvent {
-			// 簇太小，跳过（照片保持 event_id=NULL，由 hidden_gem 兜底）
-			if runtime != nil {
-				runtime.mu.Lock()
-				runtime.progress.PhotosSkipped += len(cluster.photos)
-				runtime.progress.ProcessedPhotos += len(cluster.photos)
-				runtime.mu.Unlock()
-			}
-			continue
-		}
-
-		event, err := s.createEventFromCluster(cluster)
-		if err != nil {
-			logger.Warnf("[EventClustering] Failed to create event: %v", err)
-			continue
-		}
-
-		if err := s.executeWrite(func() error {
-			return s.db.Model(&model.Photo{}).Where("id IN ?", photoIDs).Update("event_id", event.ID).Error
-		}); err != nil {
-			logger.Warnf("[EventClustering] Failed to update photo event_ids: %v", err)
-		}
-
+// runIncrementalYieldable 执行可暂停的增量聚类（Phase 3 自动增量专用）。
+//
+// 与 runIncremental 的差异仅在于提交循环：每处理 autoIncrementalBatchSize 个 cluster 后，
+// 检查 context / coordinator foreground / 负载快照；需要让路时返回 yielded=true（保持 pending，
+// 由 worker 下次 wake 继续）。discovery + clusterPhotos 保持 monolithic —— 它们是 O(n) 线性
+// 单遍且 I/O 极轻，不是 NAS 磁盘争用源，分批会破坏聚类结果等价性（clusterPhotos 可跨任意
+// 时间窗口合并）。结果等价于连续执行：本方法在不禁让路时与 runIncremental 逐 cluster 提交
+// 完全一致；让路退出后，已提交 cluster 的照片 event_id 已落库，剩余未聚类照片下次 re-discovery
+// 重新派生相同 clusters（clusterPhotos 对相同 sorted 输入确定性）。
+func (s *eventClusteringService) runIncrementalYieldable(ctx context.Context, runtime *clusteringRuntime) (bool, error) {
+	setPhase := func(phase string) {
 		if runtime != nil {
 			runtime.mu.Lock()
-			runtime.progress.EventsCreated++
-			runtime.progress.ProcessedPhotos += len(cluster.photos)
+			runtime.progress.Phase = phase
 			runtime.mu.Unlock()
 		}
 	}
 
-	return nil
+	setPhase("discovering")
+	var photos []*model.Photo
+	if err := s.db.Where("event_id IS NULL AND taken_at IS NOT NULL AND status = ?", model.PhotoStatusActive).
+		Order("taken_at ASC").Find(&photos).Error; err != nil {
+		return false, fmt.Errorf("query unclustered photos: %w", err)
+	}
+
+	if len(photos) == 0 {
+		logger.Infof("[EventClustering] Incremental: no unclustered photos found")
+		return false, nil
+	}
+
+	logger.Infof("[EventClustering] Auto incremental: found %d unclustered photos", len(photos))
+
+	if runtime != nil {
+		runtime.mu.Lock()
+		runtime.progress.TotalPhotos = len(photos)
+		runtime.mu.Unlock()
+	}
+
+	setPhase("clustering")
+	clusters := s.clusterPhotos(photos)
+
+	setPhase("profiling")
+	processed := 0
+	batchSize := autoIncrementalBatchSize
+	if override := atomic.LoadInt32(&autoBatchSizeOverride); override > 0 {
+		batchSize = int(override)
+	}
+	for _, cluster := range clusters {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		default:
+		}
+
+		s.commitCluster(ctx, cluster, runtime)
+		processed++
+
+		// 批次边界：每处理 batchSize 个 cluster 检查一次是否让路。用 cluster 计数而非照片计数：
+		// cluster 是提交单位（每个 cluster 一次 createEvent + reprofile + photo UPDATE），是 I/O
+		// 成本粒度。测试通过 autoBatchSizeOverride 调小以构造可让路窗口；生产用默认 20。
+		if batchSize > 0 && processed%batchSize == 0 {
+			yield, err := s.shouldYield(ctx)
+			if err != nil {
+				return false, err
+			}
+			if yield {
+				logger.Infof("[EventClustering] Auto incremental yielding after %d/%d clusters (foreground/load)", processed, len(clusters))
+				return true, nil
+			}
+		}
+	}
+
+	logger.Infof("[EventClustering] Auto incremental slice complete: %d clusters", len(clusters))
+	return false, nil
+}
+
+// shouldYield 判断自动增量聚类是否应在批次边界让路。返回 true 表示应释放 coordinator slot
+// 并保持 pending，由 worker 下次 wake 继续。规则：context 取消 → 返回 error；foreground active
+// → 让路；负载快照 iowait/cpu/mem 超阈值（known）→ 让路。nil coordinator 时只看 context。
+func (s *eventClusteringService) shouldYield(ctx context.Context) (bool, error) {
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	default:
+	}
+
+	coord := s.backgroundCoordinator
+	if coord == nil {
+		return false, nil
+	}
+	if coord.ForegroundActive() {
+		return true, nil
+	}
+	// advisory 负载检查：只看 known 且超阈值的值。unknown 不让路（计划硬约束：负载不能单独拒绝 P2，
+	// 但这里是在已准入的执行中让路，不是准入拒绝；让路比拒绝更温和，仍遵循 advisory 语义）。
+	snap := coord.LoadSnapshot()
+	if isKnown(snap.CPUIOWaitPct) && coord.iowaitPauseThresholdLocked() > 0 && snap.CPUIOWaitPct >= coord.iowaitPauseThresholdLocked() {
+		return true, nil
+	}
+	if isKnown(snap.CPUUserPct) && coord.cpuPauseThresholdLocked() > 0 && snap.CPUUserPct >= coord.cpuPauseThresholdLocked() {
+		return true, nil
+	}
+	if isKnown(snap.MemUsedPct) && coord.memoryPauseThresholdLocked() > 0 && snap.MemUsedPct >= coord.memoryPauseThresholdLocked() {
+		return true, nil
+	}
+	return false, nil
+}
+
+// commitCluster 把单个 cluster 归入已有事件或创建新事件，并更新照片 event_id。
+// 抽自 runIncremental / runIncrementalYieldable 的共享提交逻辑，保证两者逐 cluster 行为一致。
+func (s *eventClusteringService) commitCluster(ctx context.Context, cluster photoCluster, runtime *clusteringRuntime) {
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+
+	clusterStart := *cluster.photos[0].TakenAt
+	clusterEnd := *cluster.photos[len(cluster.photos)-1].TakenAt
+	windowPadding := time.Duration(s.config.TimeGapSameEvent * float64(time.Hour))
+
+	existingEvents, err := s.eventRepo.GetByTimeRange(
+		clusterStart.Add(-windowPadding),
+		clusterEnd.Add(windowPadding),
+	)
+	if err != nil {
+		logger.Warnf("[EventClustering] Failed to query existing events: %v", err)
+		existingEvents = nil
+	}
+
+	photoIDs := make([]uint, len(cluster.photos))
+	for i, p := range cluster.photos {
+		photoIDs[i] = p.ID
+	}
+
+	if len(existingEvents) > 0 {
+		bestEvent := s.findBestMatchingEvent(cluster, existingEvents)
+		if bestEvent != nil {
+			if err := s.executeWrite(func() error {
+				return s.db.Model(&model.Photo{}).Where("id IN ?", photoIDs).Update("event_id", bestEvent.ID).Error
+			}); err != nil {
+				logger.Warnf("[EventClustering] Failed to update photo event_ids: %v", err)
+				return
+			}
+			if err := s.reprofileEvent(bestEvent.ID); err != nil {
+				logger.Warnf("[EventClustering] Failed to reprofile event %d: %v", bestEvent.ID, err)
+			}
+			if runtime != nil {
+				runtime.mu.Lock()
+				runtime.progress.EventsUpdated++
+				runtime.progress.ProcessedPhotos += len(cluster.photos)
+				runtime.mu.Unlock()
+			}
+			return
+		}
+	}
+
+	if s.config.MinPhotosPerEvent > 0 && len(cluster.photos) < s.config.MinPhotosPerEvent {
+		if runtime != nil {
+			runtime.mu.Lock()
+			runtime.progress.PhotosSkipped += len(cluster.photos)
+			runtime.progress.ProcessedPhotos += len(cluster.photos)
+			runtime.mu.Unlock()
+		}
+		return
+	}
+
+	event, err := s.createEventFromCluster(cluster)
+	if err != nil {
+		logger.Warnf("[EventClustering] Failed to create event: %v", err)
+		return
+	}
+
+	if err := s.executeWrite(func() error {
+		return s.db.Model(&model.Photo{}).Where("id IN ?", photoIDs).Update("event_id", event.ID).Error
+	}); err != nil {
+		logger.Warnf("[EventClustering] Failed to update photo event_ids: %v", err)
+	}
+
+	if runtime != nil {
+		runtime.mu.Lock()
+		runtime.progress.EventsCreated++
+		runtime.progress.ProcessedPhotos += len(cluster.photos)
+		runtime.mu.Unlock()
+	}
 }
 
 // clusterPhotos 按时空连续性聚类照片（照片必须已按 taken_at ASC 排序）

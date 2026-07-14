@@ -64,6 +64,8 @@ func (s *fakeEventShutdownService) GetTask() *model.EventClusteringTask {
 	return s.task.Load()
 }
 
+func (s *fakeEventShutdownService) StopAutoWorker() {}
+
 type fakeScanTaskProvider struct {
 	task atomic.Pointer[model.ScanTask]
 }

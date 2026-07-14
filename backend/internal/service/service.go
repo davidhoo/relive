@@ -128,8 +128,12 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	displayService := NewDisplayService(db, repos.Photo, repos.DisplayRecord, repos.Device, repos.Event, configService, cfg)
 
 	// 创建事件聚类服务并注入到 photoService
-	eventClusteringService := NewEventClusteringService(db, repos.Photo, repos.Event, repos.PhotoTag)
-	photoService.SetEventClusteringService(eventClusteringService)
+	eventClustering := NewEventClusteringService(db, repos.Photo, repos.Event, repos.PhotoTag)
+	photoService.SetEventClusteringService(eventClustering)
+	// Phase 3：事件增量聚类接入统一后台任务准入控制器。扫描完成后自动触发的增量聚类经
+	// coordinator 准入 + coalescing，foreground active / iowait_high / cooldown 时保持 pending；
+	// 用户显式 StartClustering/StartRebuild 仍走 P1 user，不被拒绝。
+	eventClustering.(*eventClusteringService).SetBackgroundCoordinator(backgroundCoordinator)
 
 	// 创建身份画像服务。legacy 模式下完全 no-op；shadow/rescue/primary 模式注入专用后台
 	// 数据库连接用于 backfill 与构建，写入仍通过全局 WriteQueue 串行化。
@@ -241,7 +245,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		Auth:                    authService,
 		Analysis:                analysisService,
 		System:                  NewSystemService(db),
-		EventClustering:         eventClusteringService,
+		EventClustering:         eventClustering,
 		Scheduler:               scheduler,
 		ResultQueue:             resultQueue,
 		IdentityProfile:         identityProfileService,

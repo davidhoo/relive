@@ -33,6 +33,10 @@ const (
 	BackgroundTaskIdentityProfileBuild BackgroundTaskClass = "identity_profile_build"
 	BackgroundTaskIdentityANNRebuild   BackgroundTaskClass = "identity_ann_rebuild"
 	BackgroundTaskMergeSuggestion      BackgroundTaskClass = "merge_suggestion_refresh"
+	// BackgroundTaskEventClustering：扫描完成后自动触发的事件增量聚类（P2 automatic）。
+	// 经 coordinator 准入 + coalescing，foreground active / iowait_high / cooldown 时保持
+	// pending 不执行；用户显式 StartClustering/StartRebuild 仍走 P1 user，不被拒绝。
+	BackgroundTaskEventClustering BackgroundTaskClass = "event_clustering"
 )
 
 // BackgroundTaskRequest 描述一次后台任务准入请求。
@@ -216,6 +220,13 @@ func (c *BackgroundTaskCoordinator) LoadSnapshot() BackgroundLoadSnapshot {
 	}
 	return fn()
 }
+
+// iowaitPauseThresholdLocked / cpuPauseThresholdLocked / memoryPauseThresholdLocked 返回对应
+// advisory 阈值（调用方持锁或接受短暂竞态的只读访问）。供已准入的后台任务在批次边界做让路
+// 判定（区别于准入拒绝：让路更温和，仍遵循 advisory 语义，unknown 不让路）。
+func (c *BackgroundTaskCoordinator) iowaitPauseThresholdLocked() float64 { return c.iowaitPauseThreshold }
+func (c *BackgroundTaskCoordinator) cpuPauseThresholdLocked() float64    { return c.cpuPauseThreshold }
+func (c *BackgroundTaskCoordinator) memoryPauseThresholdLocked() float64 { return c.memoryPauseThreshold }
 
 // CanRun 评估一次后台任务请求是否可以运行，不占用 slot。用于调用方在启动重工作前快速
 // 检查。返回的 decision 不改变 coordinator 状态。
