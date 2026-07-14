@@ -135,31 +135,65 @@ func TestEventClustering_AutoIncremental_DeferredWhenForegroundActive(t *testing
 }
 
 // TestEventClustering_AutoIncremental_CoalescesMultipleRequests 验证：多次扫描完成触发
-// 合并 —— running 期间的第二个请求被 coalesce，只保留一个 pending，不并发运行多个 incremental。
+// 合并 —— 至多占用一个 coordinator running slot，绝不并发运行两个 incremental slice。
+// 用 foreground gate 在 admission 处停住 worker，制造一个确定性的 running 观察窗口：
+// 第一次请求 pending 被 gate 挡住；释放 gate 后 worker 进入 running，此时发第二次请求，
+// 断言始终 ≤1 个 running slot。
 func TestEventClustering_AutoIncremental_CoalescesMultipleRequests(t *testing.T) {
 	svc := newEventClusteringSvcForTest(t)
 	coord := NewBackgroundTaskCoordinator()
-	// 用极小 batch + 大量照片制造可观察的 running 窗口。
+	setAutoRetryBackoffForTest(50 * time.Millisecond)
+	defer setAutoRetryBackoffForTest(0)
 	svc.SetBackgroundCoordinator(coord)
 	defer svc.StopAutoWorker()
 
 	start := time.Date(2025, 3, 15, 10, 0, 0, 0, time.UTC)
-	// 每 30 分钟一张，30 张 → 1 个 cluster，但 batch=20 仍只 1 个 batch。改用跨天制造多 cluster。
-	// 制造 50 张跨多天：每 25 小时一张 → 每张独立 cluster（>24h 强制切分）。
-	var ids []uint
-	for i := 0; i < 50; i++ {
-		ts := start.Add(time.Duration(i) * 25 * time.Hour)
-		p := &model.Photo{FilePath: fmt.Sprintf("/p_%d.jpg", i), FileName: fmt.Sprintf("p_%d.jpg", i), FileSize: 1, FileHash: fmt.Sprintf("h_%d", i), TakenAt: &ts, Status: model.PhotoStatusActive}
-		require.NoError(t, svc.db.Create(p).Error)
-		ids = append(ids, p.ID)
-	}
+	insertUnclusteredPhotos(t, svc.db, start, 5)
 
-	// 把 batch size 临时调小，使 running 窗口可观察。直接改常量不可行，故通过制造足够多 cluster
-	// 让首批 20 个 cluster 的提交有可测时间窗。这里用协调器负载高来暂停首次准入制造 running 标记。
-	// 简化：触发一次请求，在 worker 开始前再次触发，验证 coalesce 行为。
+	// 先用 foreground 把 worker 挡在 admission 外，使第一次请求保持 pending 不进入 running。
+	gate := coord.BeginForeground()
 	svc.RunIncremental()
-	// 立即第二次请求：此时 worker 可能已开始或仍 pending。无论哪种，第二个请求都不应产生第二个 running。
-	svc.RunIncremental()
+	// 确认 pending 已置位但未 running（被 foreground 挡住）。
+	require.Eventually(t, func() bool {
+		svc.autoMu.Lock()
+		defer svc.autoMu.Unlock()
+		return svc.autoPending && !svc.autoRunning
+	}, 2*time.Second, 5*time.Millisecond, "first request should be pending, blocked by foreground")
+
+	// 释放 gate，worker 进入 running；在其运行期间发起第二次请求，断言始终 ≤1 running slot。
+	// 用一个短轮询窗口捕获 running 态并在此期间发第二次请求。
+	gateReleased := make(chan struct{})
+	go func() {
+		gate()
+		close(gateReleased)
+	}()
+	<-gateReleased
+
+	// 轮询：一旦观察到 running 立即发第二次请求；若 slice 太快完成，则验证完成路径无第二个 slot。
+	firedSecond := false
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		svc.autoMu.Lock()
+		running := svc.autoRunning
+		svc.autoMu.Unlock()
+		snap := coord.Snapshot()
+		if len(snap.Running) > 1 {
+			t.Fatalf("two concurrent running slots observed: %d", len(snap.Running))
+		}
+		if running && !firedSecond {
+			svc.RunIncremental()
+			firedSecond = true
+		}
+		if running {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if firedSecond {
+		// 第二次请求发出后，再次确认没有第二个 slot 出现。
+		snap := coord.Snapshot()
+		assert.LessOrEqual(t, len(snap.Running), 1, "second request must not start a concurrent slice")
+	}
 
 	// 等待最终完成。
 	require.Eventually(t, func() bool {
@@ -168,12 +202,12 @@ func TestEventClustering_AutoIncremental_CoalescesMultipleRequests(t *testing.T)
 		return !svc.autoRunning && !svc.autoPending
 	}, 5*time.Second, 20*time.Millisecond)
 
-	// running 期间不应超过 1（单 worker）。验证最终结果：50 张照片中 >=3 的 cluster 才建事件。
-	// 50 个单照片 cluster 都 < MinPhotosPerEvent(3)，全部跳过，event_id 保持 NULL。
-	var clustered int64
-	svc.db.Model(&model.Photo{}).Where("event_id IS NOT NULL").Count(&clustered)
-	// 单照片 cluster 全部跳过，应 0 个建事件。
-	assert.Equal(t, int64(0), clustered, "single-photo clusters should be skipped")
+	var n int64
+	svc.db.Model(&model.Photo{}).Where("event_id IS NOT NULL").Count(&n)
+	assert.Equal(t, int64(5), n, "all 5 photos should be clustered")
+
+	snap := coord.Snapshot()
+	assert.Empty(t, snap.Running, "running slot should be released after completion")
 }
 
 // TestEventClustering_AutoIncremental_YieldsAndResumesResultEquivalent 验证：可暂停批次的

@@ -351,8 +351,8 @@ func (s *eventClusteringService) autoIncrementalWorker() {
 			s.autoMu.Unlock()
 
 			yielded, err := s.runAutoIncrementalSlice(release)
-			// release 已在 slice 内部按需释放（让路或完成都会调用）；这里兜底确保释放。
-			release()
+			// runAutoIncrementalSlice 内部 defer release()，已保证 slot 释放（sync.Once 保护，
+			// 即便 panic 也会释放）。这里不再重复调用。
 
 			s.autoMu.Lock()
 			s.autoRunning = false
