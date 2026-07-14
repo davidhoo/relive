@@ -78,12 +78,20 @@ func (h *PeopleHandler) beginForegroundRelease() func() {
 // listPersonPhotosCursor 根据 person_photos 迁移是否完成选择查询路径：
 //   - 迁移完成（ready）→ 走 person_photos 派生表索引，避免 DISTINCT/ORDER BY 临时 B-Tree；
 //   - 迁移未完成 → 走原有 JOIN + DISTINCT + ORDER BY 查询，保证回填期间接口仍可用。
-// ppRepo 为 nil 时也回退到旧查询（如测试未注入）。
+//
+// ppRepo 为 nil 时也回退到旧查询（如测试未注入）。fallback 时记录原因日志，
+// 便于排查“为何索引未启用”（迁移未完成 / 校验失败 / 仓库未注入）。
 func (h *PeopleHandler) listPersonPhotosCursor(personID uint, cursor *repository.PersonPhotoCursor, pageSize int) ([]*model.Photo, bool, *repository.PersonPhotoCursor, error) {
 	if h.personPhotoRepo != nil {
 		ready, err := h.personPhotoRepo.MigrationReady(nil)
-		if err == nil && ready {
+		if err != nil {
+			logger.Warnf("person_photos MigrationReady check error, fallback to JOIN: %v", err)
+		} else if ready {
 			return h.photoRepo.ListPhotoSummariesByPersonIDCursorFromIndex(personID, cursor, pageSize, h.personPhotoRepo)
+		} else {
+			// 记录 fallback 原因：迁移未完成（backfilling/repairing/verifying）。
+			status, _, _ := h.personPhotoRepo.GetMigrationStatus(nil)
+			logger.Debugf("person_photos not ready (status=%q), fallback to JOIN+DISTINCT for person %d", status, personID)
 		}
 	}
 	return h.photoRepo.ListPhotoSummariesByPersonIDCursor(personID, cursor, pageSize)
@@ -218,6 +226,16 @@ func (h *PeopleHandler) GetPersonPhotos(c *gin.Context) {
 		if err != nil {
 			writePeopleError(c, http.StatusInternalServerError, "LIST_FAILED", err.Error())
 			return
+		}
+
+		// Cursor 推进保护：hasMore=true 时 nextCursor 必须严格落在输入 cursor 之后。
+		// 不满足则返回稳定错误 PAGINATION_STALLED，绝不让客户端拿到一个停滞/回退的 cursor
+		// 反复请求同一页（线上曾出现 nextCursor 指回当前页 → 每秒数十次同 URL 请求风暴）。
+		if hasMore {
+			if err := assertCursorAdvanced(repoCursor, nextCursor); err != nil {
+				writePeopleError(c, http.StatusInternalServerError, "PAGINATION_STALLED", err.Error())
+				return
+			}
 		}
 
 		nextCursorStr := ""

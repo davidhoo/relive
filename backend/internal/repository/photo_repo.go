@@ -604,9 +604,11 @@ func (r *photoRepository) ListPhotoSummariesByPersonIDCursor(personID uint, curs
 
 	if cursor != nil {
 		if cursor.TakenAt != nil {
-			// Non-NULL zone: (taken_at < cursor) OR (taken_at = cursor AND id < cursor.id) OR taken_at IS NULL
+			// Non-NULL zone: (taken_at < cursor) OR (taken_at = cursor AND id < cursor.id) OR taken_at IS NULL.
+			// 整组显式加括号：该 WHERE 与 faces.person_id 过滤叠加时，避免 OR 与 AND 的优先级歧义
+			// 导致返回非预期行（曾造成 cursor 不推进 / 重复页）。
 			q = q.Where(
-				"photos.taken_at < ? OR (photos.taken_at = ? AND photos.id < ?) OR photos.taken_at IS NULL",
+				"(photos.taken_at < ? OR (photos.taken_at = ? AND photos.id < ?) OR photos.taken_at IS NULL)",
 				*cursor.TakenAt, *cursor.TakenAt, cursor.ID,
 			)
 		} else {

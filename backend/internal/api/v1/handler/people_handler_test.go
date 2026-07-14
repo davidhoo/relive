@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image/color"
 	"net/http"
 	"net/http/httptest"
@@ -675,6 +676,118 @@ func TestPeopleHandlerGetPersonFaces(t *testing.T) {
 	faces := decodeResponseData[[]model.FaceResponse](t, resp)
 	require.Len(t, faces, 3)
 	assert.ElementsMatch(t, []uint{fixture.FaceOne.ID, fixture.FaceTwo.ID, fixture.FaceThree.ID}, []uint{faces[0].ID, faces[1].ID, faces[2].ID})
+}
+
+// TestPeopleHandler_GetPersonPhotosCursorPagination 验证 cursor 模式连续翻页：
+// 三页无重复、每页 next_cursor 严格推进。回归线上“cursor 不推进、重复请求同一页”。
+func TestPeopleHandler_GetPersonPhotosCursorPagination(t *testing.T) {
+	handler, _, _, db, _ := newPeopleHandlerForTest(t)
+
+	person := &model.Person{Name: "Cursor", Category: model.PersonCategoryFamily}
+	require.NoError(t, db.Create(person).Error)
+
+	// 8 张照片，taken_at 递减，各关联一张有效 face。
+	ids := make([]uint, 0, 8)
+	for i := 0; i < 8; i++ {
+		tt := time.Now().UTC().Add(-time.Duration(i) * time.Hour)
+		p := &model.Photo{
+			FilePath: fmt.Sprintf("/cur_%d.jpg", i), FileName: fmt.Sprintf("cur_%d.jpg", i),
+			FileSize: 1, FileHash: fmt.Sprintf("hcur_%d", i), TakenAt: &tt, Status: model.PhotoStatusActive,
+		}
+		require.NoError(t, db.Create(p).Error)
+		ids = append(ids, p.ID)
+		require.NoError(t, db.Create(&model.Face{PhotoID: p.ID, PersonID: &person.ID, Confidence: 0.9, QualityScore: 0.8}).Error)
+	}
+
+	idStr := strconv.FormatUint(uint64(person.ID), 10)
+	seen := map[uint]bool{}
+	cursor := ""
+	for page := 1; page <= 4; page++ {
+		path := "/api/v1/people/" + idStr + "/photos?pagination=cursor&page_size=3"
+		if cursor != "" {
+			path += "&cursor=" + cursor
+		}
+		rec := performJSONRequest(t, http.MethodGet, path, nil, gin.Params{{Key: "id", Value: idStr}}, handler.GetPersonPhotos)
+		require.Equal(t, http.StatusOK, rec.Code, "page %d status", page)
+		r := decodeAPIResponse(t, rec)
+		require.True(t, r.Success, "page %d success", page)
+		data := decodeResponseData[model.CursorPagedResponse](t, r)
+		items := data.Items.([]any)
+		require.NotEmpty(t, items, "page %d empty", page)
+		for _, raw := range items {
+			m := raw.(map[string]any)
+			pid := uint(m["id"].(float64))
+			assert.False(t, seen[pid], "page %d: photo %d repeated across pages", page, pid)
+			seen[pid] = true
+		}
+		if data.HasMore {
+			require.NotEmpty(t, data.NextCursor, "page %d: hasMore but empty next_cursor", page)
+			assert.NotEqual(t, cursor, data.NextCursor, "page %d: next_cursor did not advance (stall)", page)
+			cursor = data.NextCursor
+		} else {
+			// 最后一页：next_cursor 应为空，且已覆盖全部 8 张。
+			assert.Empty(t, data.NextCursor)
+			break
+		}
+	}
+	assert.Len(t, seen, 8, "all 8 photos covered across pages, no gap")
+}
+
+// TestPeopleHandler_GetPersonPhotosCursorStallRejected 验证后端推进保护：
+// 若 repo 返回停滞 cursor（next == input），handler 返回 PAGINATION_STALLED 而非继续下发。
+// 用一个返回停滞 cursor 的假 repo 注入。
+func TestPeopleHandler_GetPersonPhotosCursorStallRejected(t *testing.T) {
+	handler, _, _, db, _ := newPeopleHandlerForTest(t)
+	person := &model.Person{Name: "Stall", Category: model.PersonCategoryFamily}
+	require.NoError(t, db.Create(person).Error)
+
+	// 至少 4 张照片，保证首页 page_size=3 时 hasMore=true 且能给出真实 cursor。
+	for i := 0; i < 4; i++ {
+		tt := time.Now().UTC().Add(-time.Duration(i) * time.Hour)
+		p := &model.Photo{
+			FilePath: fmt.Sprintf("/stall_%d.jpg", i), FileName: fmt.Sprintf("stall_%d.jpg", i),
+			FileSize: 1, FileHash: fmt.Sprintf("hstall_%d", i), TakenAt: &tt, Status: model.PhotoStatusActive,
+		}
+		require.NoError(t, db.Create(p).Error)
+		require.NoError(t, db.Create(&model.Face{PhotoID: p.ID, PersonID: &person.ID, Confidence: 0.9, QualityScore: 0.8}).Error)
+	}
+
+	// 记录原始 repo，供后续注入 stall stub。
+	orig := handler.photoRepo
+
+	idStr := strconv.FormatUint(uint64(person.ID), 10)
+	rec0 := performJSONRequest(t, http.MethodGet, "/api/v1/people/"+idStr+"/photos?pagination=cursor&page_size=3", nil, gin.Params{{Key: "id", Value: idStr}}, handler.GetPersonPhotos)
+	require.Equal(t, http.StatusOK, rec0.Code)
+	r0 := decodeAPIResponse(t, rec0)
+	require.True(t, r0.Success)
+	data0 := decodeResponseData[model.CursorPagedResponse](t, r0)
+	require.True(t, data0.HasMore, "首页应有下一页")
+	cursor := data0.NextCursor
+	require.NotEmpty(t, cursor)
+
+	// 注入 stall repo：第二页请求时 stub 返回 next==输入 cursor（停滞）。
+	handler.photoRepo = &stallPhotoRepo{PhotoRepository: orig}
+	t.Cleanup(func() { handler.photoRepo = orig })
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/"+idStr+"/photos?pagination=cursor&page_size=3&cursor="+cursor, nil, gin.Params{{Key: "id", Value: idStr}}, handler.GetPersonPhotos)
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	r := decodeAPIResponse(t, rec)
+	require.False(t, r.Success)
+	require.NotNil(t, r.Error)
+	assert.Equal(t, "PAGINATION_STALLED", r.Error.Code)
+}
+
+// stallPhotoRepo 包装真实 PhotoRepository，在 cursor 分页时返回停滞 cursor（next==input）。
+type stallPhotoRepo struct {
+	repository.PhotoRepository
+}
+
+func (s *stallPhotoRepo) ListPhotoSummariesByPersonIDCursor(personID uint, cursor *repository.PersonPhotoCursor, limit int) ([]*model.Photo, bool, *repository.PersonPhotoCursor, error) {
+	photos, _, _, err := s.PhotoRepository.ListPhotoSummariesByPersonIDCursor(personID, cursor, limit)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	// hasMore=true 且 nextCursor 直接返回输入 cursor（停滞）。
+	return photos, true, cursor, nil
 }
 
 func TestPeopleHandlerUpdateCategory(t *testing.T) {
