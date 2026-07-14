@@ -169,8 +169,18 @@ export const peopleApi = {
     return http.get<ApiResponse<PagedResponse<PersonMergeSuggestion>>>('/people/merge-suggestions', { params })
   },
 
-  getMergeSuggestion(id: number) {
-    return http.get<ApiResponse<PersonMergeSuggestion>>(`/people/merge-suggestions/${id}`)
+  /**
+   * 获取合并建议详情。
+   * acceptNotFound: 显式开启时，将 404 视为预期响应（建议已处理完毕），
+   * 通过 validateStatus 放行 2xx 与 404，避免进入 Axios 全局错误拦截器弹出
+   * “Merge suggestion not found”。该行为仅限本次请求，不影响全局 404 处理。
+   * 其他 4xx/5xx 仍按失败处理。
+   */
+  getMergeSuggestion(id: number, options?: { acceptNotFound?: boolean }) {
+    const config = options?.acceptNotFound
+      ? { validateStatus: (status: number) => (status >= 200 && status < 300) || status === 404 }
+      : undefined
+    return http.get<ApiResponse<PersonMergeSuggestion>>(`/people/merge-suggestions/${id}`, config)
   },
 
   excludeMergeSuggestionCandidates(id: number, candidatePersonIds: number[]) {

@@ -900,15 +900,27 @@ const loadTaskData = async () => {
 const loadMergeSuggestionDetail = async (id: number, silent = false) => {
   mergeSuggestionDetailLoading.value = true
   try {
-    const res = await peopleApi.getMergeSuggestion(id)
+    // silent 模式下允许详情接口返回 404：剔除最后一个候选后建议已处理完毕，
+    // GetPendingByID 不再返回该建议。此时 404 是预期状态，不作为错误处理，
+    // 仅清空当前建议状态，由调用方（reloadMergeSuggestionReviewState）关闭弹窗。
+    const res = await peopleApi.getMergeSuggestion(id, { acceptNotFound: silent })
+    // 404 被放行后视作“建议已完成”：清空状态，不提示错误
+    if (res.status === 404) {
+      currentMergeSuggestion.value = null
+      currentMergeSuggestionId.value = null
+      return
+    }
     currentMergeSuggestion.value = res.data?.data || null
     currentMergeSuggestionId.value = currentMergeSuggestion.value?.id || null
   } catch (error: any) {
-    currentMergeSuggestion.value = null
-    currentMergeSuggestionId.value = null
+    // 404 已在 try 块通过 validateStatus 放行，走到 catch 的只有 500/网络错误等非预期异常。
+    // silent 下不清空已有状态（保留弹窗内数据、避免误关弹窗），但仍需提示用户；
+    // 非 silent（初始加载）失败时无数据可展示，清空状态。
     if (!silent) {
-      ElMessage.error(error.response?.data?.error?.message || error.message || '加载建议详情失败')
+      currentMergeSuggestion.value = null
+      currentMergeSuggestionId.value = null
     }
+    ElMessage.error(error.response?.data?.error?.message || error.message || '加载建议详情失败')
   } finally {
     mergeSuggestionDetailLoading.value = false
   }
