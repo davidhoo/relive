@@ -497,6 +497,26 @@ func TestPhotoRepository_ListPhotoSummariesByPersonIDCursor_OldPageModeStillWork
 	assert.Len(t, items, 1)
 }
 
+// TestFacePersonPhotoIndex_ColumnOrder verifies the (person_id, photo_id) composite index
+// exists with person_id as the leading column, so a WHERE faces.person_id = ? predicate on
+// the cursor query seeks the index instead of scanning all faces. Regression guard for the
+// GORM priority-tag ordering (priority values are arbitrary sorting keys, NOT column order —
+// the struct field declaration order determines the index column order).
+func TestFacePersonPhotoIndex_ColumnOrder(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	type idxCol struct {
+		Name string
+		Cid  int
+	}
+	var cols []idxCol
+	require.NoError(t, db.Raw(`SELECT name, cid FROM pragma_index_info('idx_face_person_photo') ORDER BY cid`).Scan(&cols).Error)
+	require.Len(t, cols, 2, "idx_face_person_photo must have exactly 2 columns")
+	assert.Equal(t, "person_id", cols[0].Name, "person_id must be the leading column for person lookups")
+	assert.Equal(t, "photo_id", cols[1].Name, "photo_id must be the second column")
+}
+
 // TestPhotoRepository_UpdateManualRotation_BumpsUpdatedAt 验证旋转后 updated_at 刷新，
 // 使前端 ?v=updated_at 版本参数变化，旧的 immutable 缓存失效。
 func TestPhotoRepository_UpdateManualRotation_BumpsUpdatedAt(t *testing.T) {
