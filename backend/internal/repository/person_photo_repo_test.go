@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -166,10 +167,10 @@ func TestPersonPhotos_BackfillAndConsistency(t *testing.T) {
 	require.NoError(t, db.Table("person_photos").Where("person_id = ?", personID).Count(&cnt).Error)
 	assert.Equal(t, int64(len(photoIDs)), cnt, "backfill restored all 3 associations")
 
-	// 一致性校验通过
-	inc, err := ppRepo.RunConsistencyCheck(db)
+	// 一致性校验通过（结构化报告全部为 0）
+	rep, err := ppRepo.RunConsistencyCheck(db)
 	require.NoError(t, err)
-	assert.Equal(t, 0, inc, "consistency check passes after backfill")
+	assert.True(t, rep.IsClean(), "consistency check passes after backfill: %+v", rep)
 
 	// 标记 ready
 	require.NoError(t, ppRepo.SetMigrationStatus(db, "ready", last2))
@@ -266,9 +267,9 @@ func TestPersonPhotos_BackfillInterruptResume(t *testing.T) {
 	assert.Equal(t, int64(6), cnt, "all 6 associations restored after resume")
 
 	// 一致性校验通过
-	inc, err := ppRepo.RunConsistencyCheck(db)
+	rep, err := ppRepo.RunConsistencyCheck(db)
 	require.NoError(t, err)
-	assert.Equal(t, 0, inc)
+	assert.True(t, rep.IsClean(), "consistency clean after resume: %+v", rep)
 }
 
 // TestPersonPhotos_CursorQueryOrderBy 验证 cursor 查询按 taken_at DESC, photo_id DESC，无重复无遗漏。
@@ -362,3 +363,250 @@ func TestPersonPhotos_ExplainUsesIndex(t *testing.T) {
 	assert.Contains(t, joined, "idx_person_photos_cursor", "must use idx_person_photos_cursor")
 	assert.NotContains(t, joined, "USE TEMP B-TREE", "no temp B-Tree for DISTINCT/ORDER BY")
 }
+
+// TestPersonPhotos_CursorThreePagesNoRepeatNoGap 用真实 SQLite（UTC taken_at）连续读取三页，
+// 断言每页 ID 无重复、每页 next_cursor 不同、且三页并集覆盖全部关联无遗漏。
+// 这是线上“cursor 不推进、重复请求同一页”的回归保护。
+func TestPersonPhotos_CursorThreePagesNoRepeatNoGap(t *testing.T) {
+	db := setupPersonPhotosTestDB(t)
+	person := &model.Person{Name: "ThreePages", Category: model.PersonCategoryFamily}
+	require.NoError(t, db.Create(person).Error)
+
+	// 8 张照片，taken_at 严格递减（便于断言 DESC 无歧义），各关联一张有效 face。
+	const n = 8
+	ids := make([]uint, 0, n)
+	for i := 0; i < n; i++ {
+		tt := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -i) // 每天 -1 天
+		p := &model.Photo{
+			FilePath: fmt.Sprintf("/tp_%d.jpg", i), FileName: fmt.Sprintf("tp_%d.jpg", i),
+			FileSize: 1, FileHash: fmt.Sprintf("htp_%d", i), TakenAt: &tt, Status: model.PhotoStatusActive,
+		}
+		require.NoError(t, db.Create(p).Error)
+		ids = append(ids, p.ID)
+		require.NoError(t, db.Create(&model.Face{
+			PhotoID: p.ID, PersonID: &person.ID,
+			ClusterStatus: model.FaceClusterStatusAssigned, QualityScore: 0.9,
+		}).Error)
+	}
+
+	ppRepo := NewPersonPhotoRepository(db)
+	seen := map[uint]bool{}
+	var cursor *PersonPhotoCursor
+	pageNo := 0
+	for {
+		pageNo++
+		got, hasMore, next, err := ppRepo.ListPhotoIDsByPersonCursor(person.ID, cursor, 3)
+		require.NoError(t, err)
+		require.NotEmpty(t, got, "page %d should not be empty", pageNo)
+		for _, id := range got {
+			assert.False(t, seen[id], "page %d: id %d already seen — cursor repeated a row", pageNo, id)
+			seen[id] = true
+		}
+		if hasMore {
+			require.NotNil(t, next, "hasMore=true but nil nextCursor")
+			assert.NotEqual(t, cursor, next, "nextCursor must differ from input cursor (no stall)")
+			cursor = next
+		} else {
+			break
+		}
+		require.LessOrEqual(t, pageNo, 5, "too many pages — cursor not progressing")
+	}
+
+	// 三页（实际 ceil(8/3)=3）覆盖全部 8 张，无遗漏。
+	assert.Len(t, seen, n, "all %d photos covered, no gap", n)
+	for _, id := range ids {
+		assert.True(t, seen[id], "photo %d missing across pages", id)
+	}
+}
+
+// TestPersonPhotos_IndexMatchesFallbackJOIN 验证 person_photos 派生表 cursor 查询结果
+// 与原 JOIN + DISTINCT + ORDER BY 查询（fallback 路径）一致。
+// 两者必须返回相同的 photo_id 序列（含 NULL taken_at 区），否则迁移切换会改变可见结果。
+func TestPersonPhotos_IndexMatchesFallbackJOIN(t *testing.T) {
+	db := setupPersonPhotosTestDB(t)
+	person := &model.Person{Name: "Cmp", Category: model.PersonCategoryFamily}
+	require.NoError(t, db.Create(person).Error)
+
+	// 构造含同 taken_at、NULL taken_at、多 face 同照片（去重）的混合场景。
+	t1 := time.Date(2025, 5, 1, 0, 0, 0, 0, time.UTC)
+	t2 := time.Date(2025, 5, 1, 0, 0, 0, 0, time.UTC) // 与 t1 相同，触发 id DESC tiebreaker
+	photos := []*model.Photo{
+		{FilePath: "/c1.jpg", FileName: "c1.jpg", FileSize: 1, FileHash: "hc1", TakenAt: &t1, Status: model.PhotoStatusActive},
+		{FilePath: "/c2.jpg", FileName: "c2.jpg", FileSize: 1, FileHash: "hc2", TakenAt: &t2, Status: model.PhotoStatusActive},
+		{FilePath: "/c3.jpg", FileName: "c3.jpg", FileSize: 1, FileHash: "hc3", TakenAt: nil, Status: model.PhotoStatusActive},
+	}
+	for _, p := range photos {
+		require.NoError(t, db.Create(p).Error)
+		// c1 加两张 face 验证去重
+		require.NoError(t, db.Create(&model.Face{PhotoID: p.ID, PersonID: &person.ID, ClusterStatus: model.FaceClusterStatusAssigned, QualityScore: 0.9}).Error)
+	}
+	require.NoError(t, db.Create(&model.Face{PhotoID: photos[0].ID, PersonID: &person.ID, ClusterStatus: model.FaceClusterStatusAssigned, QualityScore: 0.8}).Error)
+
+	ppRepo := NewPersonPhotoRepository(db)
+	photoRepo := NewPhotoRepository(db)
+
+	// 索引路径逐页收集 id 序列。
+	var indexIDs []uint
+	var cur *PersonPhotoCursor
+	for {
+		got, hasMore, next, err := ppRepo.ListPhotoIDsByPersonCursor(person.ID, cur, 2)
+		require.NoError(t, err)
+		indexIDs = append(indexIDs, got...)
+		if !hasMore {
+			break
+		}
+		cur = next
+	}
+
+	// fallback 路径逐页收集 id 序列。
+	var fallbackIDs []uint
+	var fcur *PersonPhotoCursor
+	for {
+		got, hasMore, next, err := photoRepo.ListPhotoSummariesByPersonIDCursor(person.ID, fcur, 2)
+		require.NoError(t, err)
+		for _, p := range got {
+			fallbackIDs = append(fallbackIDs, p.ID)
+		}
+		if !hasMore {
+			break
+		}
+		fcur = next
+	}
+
+	assert.Equal(t, fallbackIDs, indexIDs, "index and fallback cursor paths must return identical id sequences")
+}
+
+// TestPersonPhotos_NullZoneNoRepeatNoGap 验证 NULL taken_at 区间翻页无重复无遗漏。
+func TestPersonPhotos_NullZoneNoRepeatNoGap(t *testing.T) {
+	db := setupPersonPhotosTestDB(t)
+	person := &model.Person{Name: "NullZone", Category: model.PersonCategoryFamily}
+	require.NoError(t, db.Create(person).Error)
+
+	// 5 张全 NULL taken_at，靠 id DESC 排序。
+	const n = 5
+	ids := make([]uint, 0, n)
+	for i := 0; i < n; i++ {
+		p := &model.Photo{
+			FilePath: fmt.Sprintf("/nz_%d.jpg", i), FileName: fmt.Sprintf("nz_%d.jpg", i),
+			FileSize: 1, FileHash: fmt.Sprintf("hnz_%d", i), TakenAt: nil, Status: model.PhotoStatusActive,
+		}
+		require.NoError(t, db.Create(p).Error)
+		ids = append(ids, p.ID)
+		require.NoError(t, db.Create(&model.Face{PhotoID: p.ID, PersonID: &person.ID, ClusterStatus: model.FaceClusterStatusAssigned, QualityScore: 0.9}).Error)
+	}
+
+	ppRepo := NewPersonPhotoRepository(db)
+	seen := map[uint]bool{}
+	var cur *PersonPhotoCursor
+	for {
+		got, hasMore, next, err := ppRepo.ListPhotoIDsByPersonCursor(person.ID, cur, 2)
+		require.NoError(t, err)
+		for _, id := range got {
+			assert.False(t, seen[id], "NULL zone: id %d repeated", id)
+			seen[id] = true
+		}
+		if !hasMore {
+			break
+		}
+		require.NotNil(t, next)
+		cur = next
+	}
+	assert.Len(t, seen, n)
+}
+
+// TestPersonPhotos_ConsistencyReport_Structured 验证结构化报告分别计数各类不一致。
+// 构造 missing / extra / orphan / taken_at 四类不一致，断言报告逐项非零、其余为零。
+func TestPersonPhotos_ConsistencyReport_Structured(t *testing.T) {
+	db := setupPersonPhotosTestDB(t)
+	person := &model.Person{Name: "Report", Category: model.PersonCategoryFamily}
+	require.NoError(t, db.Create(person).Error)
+
+	t1 := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
+	// p1 有效，trigger 自动写入 person_photos。
+	p1 := &model.Photo{FilePath: "/r1.jpg", FileName: "r1.jpg", FileSize: 1, FileHash: "hr1", TakenAt: &t1, Status: model.PhotoStatusActive}
+	require.NoError(t, db.Create(p1).Error)
+	require.NoError(t, db.Create(&model.Face{PhotoID: p1.ID, PersonID: &person.ID, ClusterStatus: model.FaceClusterStatusAssigned, QualityScore: 0.9}).Error)
+
+	// p2 有效但手动删除 person_photos → missing。
+	p2 := &model.Photo{FilePath: "/r2.jpg", FileName: "r2.jpg", FileSize: 1, FileHash: "hr2", TakenAt: &t1, Status: model.PhotoStatusActive}
+	require.NoError(t, db.Create(p2).Error)
+	require.NoError(t, db.Create(&model.Face{PhotoID: p2.ID, PersonID: &person.ID, ClusterStatus: model.FaceClusterStatusAssigned, QualityScore: 0.9}).Error)
+	require.NoError(t, db.Exec("DELETE FROM person_photos WHERE person_id = ? AND photo_id = ?", person.ID, p2.ID).Error)
+
+	// extra：插入一条无有效 face 的 person_photos（虚构 photo_id）。
+	require.NoError(t, db.Exec("INSERT INTO person_photos(person_id, photo_id, taken_at) VALUES(?, ?, ?)", person.ID, 999999, &t1).Error)
+
+	// orphan：插入一条 photo 已删的关联。先建 photo 再删，留 person_photos。
+	pOrphan := &model.Photo{FilePath: "/ro.jpg", FileName: "ro.jpg", FileSize: 1, FileHash: "hro", TakenAt: &t1, Status: model.PhotoStatusActive}
+	require.NoError(t, db.Create(pOrphan).Error)
+	require.NoError(t, db.Exec("INSERT INTO person_photos(person_id, photo_id, taken_at) VALUES(?, ?, ?)", person.ID, pOrphan.ID, &t1).Error)
+	require.NoError(t, db.Unscoped().Delete(&model.Photo{}, pOrphan.ID).Error)
+
+	// taken_at 不一致：p1 的 person_photos.taken_at 改成不同值。
+	t2 := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, db.Exec("UPDATE person_photos SET taken_at = ? WHERE person_id = ? AND photo_id = ?", t2, person.ID, p1.ID).Error)
+
+	ppRepo := NewPersonPhotoRepository(db)
+	rep, err := ppRepo.RunConsistencyCheck(db)
+	require.NoError(t, err)
+
+	assert.Greater(t, rep.MissingAssociations, int64(0), "should detect missing (p2)")
+	assert.Greater(t, rep.ExtraAssociations, int64(0), "should detect extra (999999)")
+	assert.Greater(t, rep.OrphanPhotos, int64(0), "should detect orphan (deleted pOrphan)")
+	assert.Greater(t, rep.TakenAtMismatches, int64(0), "should detect taken_at mismatch (p1)")
+}
+
+// TestPersonPhotos_RepairBatch_FixesInconsistencies 验证 RepairBatch 能修复各类不一致并最终 clean。
+// 这是线上“校验失败后只重试不修复、永远卡在 backfilling”的回归保护。
+func TestPersonPhotos_RepairBatch_FixesInconsistencies(t *testing.T) {
+	db := setupPersonPhotosTestDB(t)
+	person := &model.Person{Name: "Repair", Category: model.PersonCategoryFamily}
+	require.NoError(t, db.Create(person).Error)
+
+	t1 := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
+	// 有效 face 但删除 person_photos → missing。
+	p1 := &model.Photo{FilePath: "/rp1.jpg", FileName: "rp1.jpg", FileSize: 1, FileHash: "hrp1", TakenAt: &t1, Status: model.PhotoStatusActive}
+	require.NoError(t, db.Create(p1).Error)
+	require.NoError(t, db.Create(&model.Face{PhotoID: p1.ID, PersonID: &person.ID, ClusterStatus: model.FaceClusterStatusAssigned, QualityScore: 0.9}).Error)
+	require.NoError(t, db.Exec("DELETE FROM person_photos WHERE person_id = ? AND photo_id = ?", person.ID, p1.ID).Error)
+
+	// 第二张有效照片 + face，保持 person_photos 记录，作为 taken_at 不一致的修复目标。
+	p2 := &model.Photo{FilePath: "/rp2.jpg", FileName: "rp2.jpg", FileSize: 1, FileHash: "hrp2", TakenAt: &t1, Status: model.PhotoStatusActive}
+	require.NoError(t, db.Create(p2).Error)
+	require.NoError(t, db.Create(&model.Face{PhotoID: p2.ID, PersonID: &person.ID, ClusterStatus: model.FaceClusterStatusAssigned, QualityScore: 0.9}).Error)
+	// p2 的 person_photos 已由 trigger 写入，篡改 taken_at 制造不一致。
+	require.NoError(t, db.Exec("UPDATE person_photos SET taken_at = ? WHERE person_id = ? AND photo_id = ?", time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), person.ID, p2.ID).Error)
+
+	// extra：虚构关联。
+	require.NoError(t, db.Exec("INSERT INTO person_photos(person_id, photo_id, taken_at) VALUES(?, ?, ?)", person.ID, 999999, &t1).Error)
+
+	ppRepo := NewPersonPhotoRepository(db)
+
+	// 修复前不 clean。
+	rep0, err := ppRepo.RunConsistencyCheck(db)
+	require.NoError(t, err)
+	require.False(t, rep0.IsClean(), "should be dirty before repair")
+
+	// 跑修复（missing 已被删除，需重新插入；extra 删除；taken_at 同步）。
+	delta, err := ppRepo.RepairBatch(db, 500)
+	require.NoError(t, err)
+	assert.Greater(t, delta.ExtraDeleted, int64(0), "should delete extra")
+	assert.Greater(t, delta.MissingInserted, int64(0), "should insert missing")
+	assert.Greater(t, delta.TakenAtFixed, int64(0), "should fix taken_at")
+
+	// 修复后 clean。
+	rep1, err := ppRepo.RunConsistencyCheck(db)
+	require.NoError(t, err)
+	assert.True(t, rep1.IsClean(), "should be clean after repair: %+v", rep1)
+
+	// p1 关联恢复（missing 补齐）。
+	var cnt int64
+	require.NoError(t, db.Table("person_photos").Where("person_id = ? AND photo_id = ?", person.ID, p1.ID).Count(&cnt).Error)
+	assert.Equal(t, int64(1), cnt, "p1 association restored")
+	// p2 的 taken_at 已同步回正确值。
+	var pp model.PersonPhoto
+	require.NoError(t, db.Where("person_id = ? AND photo_id = ?", person.ID, p2.ID).First(&pp).Error)
+	require.NotNil(t, pp.TakenAt)
+	assert.True(t, pp.TakenAt.Equal(t1), "p2 taken_at synced to photo value")
+}
+

@@ -106,18 +106,10 @@ func (b *PersonPhotosBackfill) runOnce() (bool, error) {
 	}
 
 	if inserted == 0 && newLast == lastFaceID {
-		// 无更多 face：跑一致性校验，通过则标记 ready。
-		if err := b.ppRepo.RunVerification(b.db); err != nil {
-			logger.Warnf("person_photos consistency check failed, will retry: %v", err)
-			// 校验失败：可能是回填期间并发写入临时不一致，退避后重试。
-			time.Sleep(10 * time.Second)
-			return false, nil
-		}
-		if err := b.ppRepo.SetMigrationStatus(b.db, "ready", newLast); err != nil {
-			return false, err
-		}
-		logger.Infof("person_photos backfill complete, status=ready")
-		return true, nil
+		// 回填扫描到末尾。进入 v2 修复流程：先修复，再校验。
+		// 关键修复点：旧版在此直接 RunVerification，校验失败后只 sleep 重试，永远不修复 →
+		// 永远卡在 backfilling。新版改为：校验失败 → 跑修复批次 → 重新校验，全部清零才 ready。
+		return b.finalizeAfterBackfill(newLast)
 	}
 
 	// 保存进度，服务重启可继续。
@@ -128,6 +120,108 @@ func (b *PersonPhotosBackfill) runOnce() (bool, error) {
 	// 批次间让步，避免持续占用磁盘。
 	time.Sleep(b.pauseBetween)
 	return false, nil
+}
+
+// finalizeAfterBackfill 在回填扫描到末尾后执行“修复 → 校验 → ready”收尾。
+//
+// 流程：
+//  1. 先跑一次校验，拿结构化报告。若已 clean → 直接 ready。
+//  2. 不 clean → 标记 repairing，循环跑 RepairBatch 直到无剩余或达到本回合上限。
+//  3. 修复后重新校验；全部为 0 → v1/v2 双标 ready。
+//  4. 仍有剩余 → 退避后下回合继续（不重复全量校验空转：只在修复批次后才校验）。
+//
+// 这样保证：一致性失败后不再每 10s 空转同一全量校验，而是真正修复数据。
+func (b *PersonPhotosBackfill) finalizeAfterBackfill(newLast uint) (bool, error) {
+	rep, err := b.ppRepo.RunConsistencyCheck(b.db)
+	if err != nil {
+		return false, err
+	}
+	logger.Infof("person_photos consistency report: missing=%d extra=%d orphan=%d taken_at=%d person_count=%d",
+		rep.MissingAssociations, rep.ExtraAssociations, rep.OrphanPhotos, rep.TakenAtMismatches, rep.PersonCountMismatch)
+
+	if rep.IsClean() {
+		if err := b.markReady(newLast); err != nil {
+			return false, err
+		}
+		logger.Infof("person_photos backfill complete, status=ready (clean on first check)")
+		return true, nil
+	}
+
+	// 不 clean：进入修复。标记 repairing 防止重启后误判为已完成。
+	if err := b.ppRepo.SetMigrationStatusV2(b.db, "repairing", 0); err != nil {
+		return false, err
+	}
+
+	// 本回合最多修复 maxRounds 轮（每轮受 batchSize 限制），避免单回合占用过久。
+	const maxRounds = 20
+	for i := 0; i < maxRounds; i++ {
+		delta, err := b.ppRepo.RepairBatch(b.db, b.batchSize)
+		if err != nil {
+			logger.Warnf("person_photos repair batch error: %v", err)
+			time.Sleep(10 * time.Second)
+			return false, nil
+		}
+		logger.Infof("person_photos repair batch: deleted_extra=%d deleted_orphan=%d inserted_missing=%d fixed_taken_at=%d (remaining: missing=%d extra=%d orphan=%d taken_at=%d)",
+			delta.ExtraDeleted, delta.OrphanDeleted, delta.MissingInserted, delta.TakenAtFixed,
+			delta.RemainingMissing, delta.RemainingExtra, delta.RemainingOrphan, delta.RemainingTakenAt)
+
+		// 让步，foreground/I/O 高时暂停（修复也属 P2）。
+		if b.shouldYield() {
+			time.Sleep(2 * time.Second)
+		} else {
+			time.Sleep(b.pauseBetween)
+		}
+
+		// 无任何修复动作且无剩余 → 校验通过判定。
+		if delta.ExtraDeleted == 0 && delta.OrphanDeleted == 0 && delta.MissingInserted == 0 && delta.TakenAtFixed == 0 &&
+			delta.RemainingMissing == 0 && delta.RemainingExtra == 0 && delta.RemainingOrphan == 0 && delta.RemainingTakenAt == 0 {
+			break
+		}
+	}
+
+	// 修复后重新校验。
+	rep2, err := b.ppRepo.RunConsistencyCheck(b.db)
+	if err != nil {
+		return false, err
+	}
+	logger.Infof("person_photos post-repair report: missing=%d extra=%d orphan=%d taken_at=%d person_count=%d",
+		rep2.MissingAssociations, rep2.ExtraAssociations, rep2.OrphanPhotos, rep2.TakenAtMismatches, rep2.PersonCountMismatch)
+
+	if rep2.IsClean() {
+		if err := b.markReady(newLast); err != nil {
+			return false, err
+		}
+		logger.Infof("person_photos backfill complete, status=ready (after repair)")
+		return true, nil
+	}
+
+	// 仍有不一致：退避后下回合继续修复（不空转校验）。
+	logger.Warnf("person_photos still inconsistent after repair, will continue next round")
+	time.Sleep(10 * time.Second)
+	return false, nil
+}
+
+// markReady 同时标记 v1/v2 为 ready，并记录进度。handler 的 MigrationReady 检查任一 ready 即放行。
+func (b *PersonPhotosBackfill) markReady(lastFaceID uint) error {
+	if err := b.ppRepo.SetMigrationStatus(b.db, "ready", lastFaceID); err != nil {
+		return err
+	}
+	return b.ppRepo.SetMigrationStatusV2(b.db, "ready", lastFaceID)
+}
+
+// shouldYield 报告修复批次间是否应让步（foreground active 或 I/O 高）。
+func (b *PersonPhotosBackfill) shouldYield() bool {
+	if b.coordinator == nil {
+		return false
+	}
+	if b.coordinator.ForegroundActive() {
+		return true
+	}
+	snap := b.coordinator.LoadSnapshot()
+	if isKnown(snap.CPUIOWaitPct) && b.coordinator.IOWaitPauseThreshold() > 0 && snap.CPUIOWaitPct >= b.coordinator.IOWaitPauseThreshold() {
+		return true
+	}
+	return false
 }
 
 // personPhotosTableExists 检查 person_photos 表是否已创建（避免在迁移失败时对不存在的表写状态）。
