@@ -106,8 +106,10 @@ type Face struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
-	PhotoID    uint    `gorm:"not null;index:idx_face_photo" json:"photo_id"`
-	PersonID   *uint   `gorm:"index:idx_face_person" json:"person_id,omitempty"`
+	PhotoID    uint    `gorm:"not null;index:idx_face_photo;index:idx_face_person_photo,priority:1" json:"photo_id"`
+	PersonID   *uint   `gorm:"index:idx_face_person;index:idx_face_person_photo,priority:2" json:"person_id,omitempty"`
+	// idx_face_person_photo is a composite (person_id, photo_id) index for cursor pagination
+	// queries that deduplicate photos by person association without scanning all faces.
 	BBoxX      float64 `gorm:"not null" json:"bbox_x"`
 	BBoxY      float64 `gorm:"not null" json:"bbox_y"`
 	BBoxWidth  float64 `gorm:"not null" json:"bbox_width"`

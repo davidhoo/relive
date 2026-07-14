@@ -25,6 +25,13 @@ type PagedResponse struct {
 	TotalPages int         `json:"total_pages"`
 }
 
+// CursorPagedResponse 游标分页响应（无 COUNT，无 total/page）
+type CursorPagedResponse struct {
+	Items      interface{} `json:"items"`
+	HasMore    bool        `json:"has_more"`
+	NextCursor string      `json:"next_cursor,omitempty"`
+}
+
 // ScanPhotosRequest 扫描照片请求
 type ScanPhotosRequest struct {
 	Path string `json:"path" binding:"omitempty"` // 扫描路径 (optional, uses config default if empty)

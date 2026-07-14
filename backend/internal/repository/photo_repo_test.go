@@ -335,6 +335,168 @@ func TestPhotoRepository_ListPhotoSummariesByPersonID_IncludesVersionFields(t *t
 	_ = got.ThumbnailGeneratedAt
 }
 
+// TestPhotoRepository_ListPhotoSummariesByPersonIDCursor covers keyset pagination
+// for person photos: dedup, stable ordering, NULL taken_at, has_more, no COUNT.
+func TestPhotoRepository_ListPhotoSummariesByPersonIDCursor(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	photoRepo := NewPhotoRepository(db)
+	faceRepo := NewFaceRepository(db)
+
+	// Create a person
+	person := &model.Person{Name: "Test", Category: model.PersonCategoryFamily, FaceCount: 0}
+	require.NoError(t, db.Create(person).Error)
+
+	// Create photos with varying taken_at, including NULL
+	// Sort order is taken_at DESC, id DESC. NULLs sort last.
+	t1 := time.Date(2025, 3, 15, 10, 0, 0, 0, time.UTC)
+	t2 := time.Date(2025, 3, 10, 10, 0, 0, 0, time.UTC)
+	t3 := time.Date(2025, 3, 5, 10, 0, 0, 0, time.UTC)
+
+	photos := []*model.Photo{
+		{FilePath: "/p1.jpg", FileName: "p1.jpg", FileSize: 1, FileHash: "h1", TakenAt: &t1},
+		{FilePath: "/p2.jpg", FileName: "p2.jpg", FileSize: 1, FileHash: "h2", TakenAt: &t2},
+		{FilePath: "/p3.jpg", FileName: "p3.jpg", FileSize: 1, FileHash: "h3", TakenAt: &t3},
+		{FilePath: "/p4.jpg", FileName: "p4.jpg", FileSize: 1, FileHash: "h4", TakenAt: nil}, // NULL zone
+		{FilePath: "/p5.jpg", FileName: "p5.jpg", FileSize: 1, FileHash: "h5", TakenAt: nil}, // NULL zone
+	}
+	for _, p := range photos {
+		require.NoError(t, photoRepo.Create(p))
+	}
+
+	// Create faces: photo 1 has 2 faces (dedup test), others have 1
+	for i, p := range photos {
+		face1 := &model.Face{PhotoID: p.ID, PersonID: &person.ID, Confidence: 0.9, QualityScore: 0.8}
+		require.NoError(t, faceRepo.Create(face1))
+		if i == 0 {
+			// Second face on same photo — should not produce duplicate photo
+			face2 := &model.Face{PhotoID: p.ID, PersonID: &person.ID, Confidence: 0.8, QualityScore: 0.7}
+			require.NoError(t, faceRepo.Create(face2))
+		}
+	}
+
+	// Page 1: limit=2, should get p1 (t1) and p2 (t2)
+	items, hasMore, nextCursor, err := photoRepo.ListPhotoSummariesByPersonIDCursor(person.ID, nil, 2)
+	require.NoError(t, err)
+	assert.Len(t, items, 2)
+	assert.True(t, hasMore)
+	require.NotNil(t, nextCursor)
+	assert.Equal(t, photos[1].ID, nextCursor.ID) // last item is p2
+
+	// Page 2: cursor from p2, should get p3 (t3) and p4 (NULL)
+	items, hasMore, nextCursor, err = photoRepo.ListPhotoSummariesByPersonIDCursor(person.ID, nextCursor, 2)
+	require.NoError(t, err)
+	assert.Len(t, items, 2)
+	assert.True(t, hasMore)
+	require.NotNil(t, nextCursor)
+	// NULL zone: id DESC means p5 (ID=5) before p4 (ID=4)
+	assert.Nil(t, nextCursor.TakenAt) // p5 has NULL taken_at, so cursor enters NULL zone
+	assert.Equal(t, photos[4].ID, nextCursor.ID)
+
+	// Page 3: cursor from p5 (NULL zone), should get p4 only
+	items, hasMore, nextCursor, err = photoRepo.ListPhotoSummariesByPersonIDCursor(person.ID, nextCursor, 2)
+	require.NoError(t, err)
+	assert.Len(t, items, 1)
+	assert.False(t, hasMore)
+	assert.Nil(t, nextCursor)
+}
+
+// TestPhotoRepository_ListPhotoSummariesByPersonIDCursor_SameTakenAt uses multiple photos
+// with identical taken_at to verify id DESC tiebreaker has no duplicates or gaps.
+func TestPhotoRepository_ListPhotoSummariesByPersonIDCursor_SameTakenAt(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	photoRepo := NewPhotoRepository(db)
+	faceRepo := NewFaceRepository(db)
+
+	person := &model.Person{Name: "T", Category: model.PersonCategoryFamily}
+	require.NoError(t, db.Create(person).Error)
+
+	sameTime := time.Date(2025, 3, 15, 10, 0, 0, 0, time.UTC)
+
+	var photoIDs []uint
+	for i := 0; i < 5; i++ {
+		p := &model.Photo{
+			FilePath: fmt.Sprintf("/same_%d.jpg", i),
+			FileName: fmt.Sprintf("same_%d.jpg", i),
+			FileSize: 1,
+			FileHash: fmt.Sprintf("hash_same_%d", i),
+			TakenAt:  &sameTime,
+		}
+		require.NoError(t, photoRepo.Create(p))
+		photoIDs = append(photoIDs, p.ID)
+		face := &model.Face{PhotoID: p.ID, PersonID: &person.ID, Confidence: 0.9, QualityScore: 0.8}
+		require.NoError(t, faceRepo.Create(face))
+	}
+
+	// Expected order: id DESC (since same taken_at)
+	// Page 1: limit=2 → ids[4], ids[3]
+	items, hasMore, nextCursor, err := photoRepo.ListPhotoSummariesByPersonIDCursor(person.ID, nil, 2)
+	require.NoError(t, err)
+	assert.Len(t, items, 2)
+	assert.True(t, hasMore)
+	assert.Equal(t, photoIDs[4], items[0].ID)
+	assert.Equal(t, photoIDs[3], items[1].ID)
+
+	// Page 2: → ids[2], ids[1]
+	items, hasMore, nextCursor, err = photoRepo.ListPhotoSummariesByPersonIDCursor(person.ID, nextCursor, 2)
+	require.NoError(t, err)
+	assert.Len(t, items, 2)
+	assert.True(t, hasMore)
+	assert.Equal(t, photoIDs[2], items[0].ID)
+	assert.Equal(t, photoIDs[1], items[1].ID)
+
+	// Page 3: → ids[0] only
+	items, hasMore, _, err = photoRepo.ListPhotoSummariesByPersonIDCursor(person.ID, nextCursor, 2)
+	require.NoError(t, err)
+	assert.Len(t, items, 1)
+	assert.False(t, hasMore)
+	assert.Equal(t, photoIDs[0], items[0].ID)
+}
+
+// TestPhotoRepository_ListPhotoSummariesByPersonIDCursor_Empty verifies empty result set.
+func TestPhotoRepository_ListPhotoSummariesByPersonIDCursor_Empty(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	photoRepo := NewPhotoRepository(db)
+	person := &model.Person{Name: "Empty", Category: model.PersonCategoryFamily}
+	require.NoError(t, db.Create(person).Error)
+
+	items, hasMore, nextCursor, err := photoRepo.ListPhotoSummariesByPersonIDCursor(person.ID, nil, 30)
+	require.NoError(t, err)
+	assert.Empty(t, items)
+	assert.False(t, hasMore)
+	assert.Nil(t, nextCursor)
+}
+
+// TestPhotoRepository_ListPhotoSummariesByPersonIDCursor_OldPageModeStillWorks
+// verifies backward compatibility: the old paginated method still returns correct results.
+func TestPhotoRepository_ListPhotoSummariesByPersonIDCursor_OldPageModeStillWorks(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	photoRepo := NewPhotoRepository(db)
+	faceRepo := NewFaceRepository(db)
+
+	person := &model.Person{Name: "Compat", Category: model.PersonCategoryFamily}
+	require.NoError(t, db.Create(person).Error)
+
+	t1 := time.Date(2025, 3, 15, 10, 0, 0, 0, time.UTC)
+	p := &model.Photo{FilePath: "/compat.jpg", FileName: "compat.jpg", FileSize: 1, FileHash: "hc", TakenAt: &t1}
+	require.NoError(t, photoRepo.Create(p))
+	face := &model.Face{PhotoID: p.ID, PersonID: &person.ID, Confidence: 0.9, QualityScore: 0.8}
+	require.NoError(t, faceRepo.Create(face))
+
+	// Old method still works
+	items, total, err := photoRepo.ListPhotoSummariesByPersonIDPaginated(person.ID, 1, 30)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), total)
+	assert.Len(t, items, 1)
+}
+
 // TestPhotoRepository_UpdateManualRotation_BumpsUpdatedAt 验证旋转后 updated_at 刷新，
 // 使前端 ?v=updated_at 版本参数变化，旧的 immutable 缓存失效。
 func TestPhotoRepository_UpdateManualRotation_BumpsUpdatedAt(t *testing.T) {

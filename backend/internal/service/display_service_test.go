@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
+	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/logger"
 	"github.com/stretchr/testify/require"
@@ -120,6 +121,9 @@ func (r *stubPhotoRepo) ListPhotoSummariesByPersonID(personID uint) ([]*model.Ph
 }
 func (r *stubPhotoRepo) ListPhotoSummariesByPersonIDPaginated(personID uint, page, pageSize int) ([]*model.Photo, int64, error) {
 	return nil, 0, nil
+}
+func (r *stubPhotoRepo) ListPhotoSummariesByPersonIDCursor(personID uint, cursor *repository.PersonPhotoCursor, limit int) ([]*model.Photo, bool, *repository.PersonPhotoCursor, error) {
+	return nil, false, nil, nil
 }
 func (r *stubPhotoRepo) ListSummaries(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string, withTotal bool) ([]*model.PhotoSummary, int64, error) {
 	return nil, 0, nil

@@ -10,6 +10,12 @@ import (
 	"github.com/davidhoo/relive/pkg/database"
 	"gorm.io/gorm"
 )
+// PersonPhotoCursor holds the sort-field values from the last item of the previous page.
+// Used for keyset pagination on photos ordered by (taken_at DESC, id DESC).
+type PersonPhotoCursor struct {
+	TakenAt *time.Time // nil means we're in the NULL taken_at zone
+	ID      uint
+}
 
 // activeScope 只查询 active 状态的照片
 func activeScope(db *gorm.DB) *gorm.DB {
@@ -44,6 +50,7 @@ type PhotoRepository interface {
 	ListPhotosByPersonID(personID uint) ([]*model.Photo, error)         // 通过 JOIN 直接获取人物关联照片
 	ListPhotoSummariesByPersonID(personID uint) ([]*model.Photo, error) // 精简列 + SQL 排序
 	ListPhotoSummariesByPersonIDPaginated(personID uint, page, pageSize int) ([]*model.Photo, int64, error)
+	ListPhotoSummariesByPersonIDCursor(personID uint, cursor *PersonPhotoCursor, limit int) ([]*model.Photo, bool, *PersonPhotoCursor, error)
 
 	// AI 分析相关
 	GetUnanalyzed(limit int) ([]*model.Photo, error)
@@ -577,6 +584,55 @@ func (r *photoRepository) ListPhotoSummariesByPersonIDPaginated(personID uint, p
 		Limit(pageSize).
 		Find(&photos).Error
 	return photos, total, err
+}
+
+// ListPhotoSummariesByPersonIDCursor returns one page of photos for a person using keyset
+// pagination (no COUNT). Sort order is taken_at DESC, id DESC — same as the paginated method.
+// NULL taken_at values sort after all non-NULL values (SQLite default for DESC).
+// Returns (items, hasMore, nextCursor, error). nextCursor is nil when hasMore is false.
+func (r *photoRepository) ListPhotoSummariesByPersonIDCursor(personID uint, cursor *PersonPhotoCursor, limit int) ([]*model.Photo, bool, *PersonPhotoCursor, error) {
+	selectCols := "photos.id, photos.file_name, photos.caption, photos.taken_at, photos.created_at, photos.updated_at, photos.thumbnail_generated_at, photos.manual_rotation"
+
+	q := r.db.Distinct().
+		Select(selectCols).
+		Joins("INNER JOIN faces ON faces.photo_id = photos.id").
+		Where("faces.person_id = ?", personID).
+		Order("photos.taken_at DESC, photos.id DESC")
+
+	if cursor != nil {
+		if cursor.TakenAt != nil {
+			// Non-NULL zone: (taken_at < cursor) OR (taken_at = cursor AND id < cursor.id) OR taken_at IS NULL
+			q = q.Where(
+				"photos.taken_at < ? OR (photos.taken_at = ? AND photos.id < ?) OR photos.taken_at IS NULL",
+				*cursor.TakenAt, *cursor.TakenAt, cursor.ID,
+			)
+		} else {
+			// NULL zone: only NULL taken_at with smaller id
+			q = q.Where("photos.taken_at IS NULL AND photos.id < ?", cursor.ID)
+		}
+	}
+
+	// Fetch limit+1 to determine hasMore without a separate COUNT.
+	var photos []*model.Photo
+	if err := q.Limit(limit + 1).Find(&photos).Error; err != nil {
+		return nil, false, nil, err
+	}
+
+	hasMore := len(photos) > limit
+	if hasMore {
+		photos = photos[:limit]
+	}
+
+	var nextCursor *PersonPhotoCursor
+	if hasMore && len(photos) > 0 {
+		last := photos[len(photos)-1]
+		nextCursor = &PersonPhotoCursor{
+			TakenAt: last.TakenAt,
+			ID:      last.ID,
+		}
+	}
+
+	return photos, hasMore, nextCursor, nil
 }
 
 // GetUnanalyzed 获取未分析的照片

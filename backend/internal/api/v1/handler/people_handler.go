@@ -135,6 +135,63 @@ func (h *PeopleHandler) GetPersonPhotos(c *gin.Context) {
 		return
 	}
 
+	// Cursor pagination mode: no COUNT, keyset pagination.
+	if c.Query("pagination") == "cursor" {
+		pageSize := 30
+		if raw := strings.TrimSpace(c.Query("page_size")); raw != "" {
+			value, err := strconv.Atoi(raw)
+			if err != nil || value < 1 {
+				writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", "Invalid page size")
+				return
+			}
+			if value > 200 {
+				value = 200
+			}
+			pageSize = value
+		}
+
+		cp, err := decodeCursor(c.Query("cursor"), cursorKindPhotos)
+		if err != nil {
+			writeCursorError(c, err)
+			return
+		}
+
+		var repoCursor *repository.PersonPhotoCursor
+		if cp != nil {
+			t := millisToTime(cp.TakenAt)
+			repoCursor = &repository.PersonPhotoCursor{
+				TakenAt: t,
+				ID:      cp.ID,
+			}
+		}
+
+		photos, hasMore, nextCursor, err := h.photoRepo.ListPhotoSummariesByPersonIDCursor(personID, repoCursor, pageSize)
+		if err != nil {
+			writePeopleError(c, http.StatusInternalServerError, "LIST_FAILED", err.Error())
+			return
+		}
+
+		nextCursorStr := ""
+		if nextCursor != nil {
+			nextCursorStr = encodeCursor(cursorPayload{
+				Version: cursorVersion,
+				Kind:    cursorKindPhotos,
+				TakenAt: timeToMillis(nextCursor.TakenAt),
+				ID:      nextCursor.ID,
+			})
+		}
+
+		c.JSON(http.StatusOK, model.Response{
+			Success: true,
+			Data: model.CursorPagedResponse{
+				Items:      photos,
+				HasMore:    hasMore,
+				NextCursor: nextCursorStr,
+			},
+		})
+		return
+	}
+
 	// 支持分页（向后兼容：无参数返回全量）
 	if c.Query("page") != "" || c.Query("page_size") != "" {
 		page, pageSize, ok := parsePagination(c)
@@ -179,6 +236,67 @@ func (h *PeopleHandler) GetPersonPhotos(c *gin.Context) {
 func (h *PeopleHandler) GetPersonFaces(c *gin.Context) {
 	personID, ok := parseUintParam(c, "id", "Invalid person ID")
 	if !ok {
+		return
+	}
+
+	// Cursor pagination mode: no COUNT, keyset pagination.
+	if c.Query("pagination") == "cursor" {
+		pageSize := 50
+		if raw := strings.TrimSpace(c.Query("page_size")); raw != "" {
+			value, err := strconv.Atoi(raw)
+			if err != nil || value < 1 {
+				writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", "Invalid page size")
+				return
+			}
+			if value > 200 {
+				value = 200
+			}
+			pageSize = value
+		}
+
+		cp, err := decodeCursor(c.Query("cursor"), cursorKindFaces)
+		if err != nil {
+			writeCursorError(c, err)
+			return
+		}
+
+		var repoCursor *repository.PersonFaceCursor
+		if cp != nil {
+			repoCursor = &repository.PersonFaceCursor{
+				QualityScore: cp.QualityScore,
+				ID:           cp.ID,
+			}
+		}
+
+		faces, hasMore, nextCursor, err := h.faceRepo.ListByPersonIDCursor(personID, repoCursor, pageSize)
+		if err != nil {
+			writePeopleError(c, http.StatusInternalServerError, "LIST_FAILED", err.Error())
+			return
+		}
+
+		resp := make([]model.FaceResponse, 0, len(faces))
+		for _, face := range faces {
+			resp = append(resp, faceToResponse(face))
+		}
+
+		nextCursorStr := ""
+		if nextCursor != nil {
+			nextCursorStr = encodeCursor(cursorPayload{
+				Version:      cursorVersion,
+				Kind:         cursorKindFaces,
+				QualityScore: nextCursor.QualityScore,
+				ID:           nextCursor.ID,
+			})
+		}
+
+		c.JSON(http.StatusOK, model.Response{
+			Success: true,
+			Data: model.CursorPagedResponse{
+				Items:      resp,
+				HasMore:    hasMore,
+				NextCursor: nextCursorStr,
+		},
+		})
 		return
 	}
 

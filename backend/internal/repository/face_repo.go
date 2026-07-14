@@ -7,6 +7,12 @@ import (
 	"github.com/davidhoo/relive/internal/model"
 	"gorm.io/gorm"
 )
+// PersonFaceCursor holds the sort-field values from the last item of the previous page.
+// Used for keyset pagination on faces ordered by (quality_score DESC, id ASC).
+type PersonFaceCursor struct {
+	QualityScore float64
+	ID           uint
+}
 
 // sqliteVarLimit is the maximum number of host parameters per SQLite statement.
 // SQLite default is 999 (older builds) or 32766 (3.32+). Use 500 for safety.
@@ -39,6 +45,7 @@ type FaceRepository interface {
 	ListByPersonID(personID uint) ([]*model.Face, error)
 	ListByPersonIDSummary(personID uint) ([]*model.Face, error) // 排除 embedding，按 quality_score 排序
 	ListByPersonIDPaginated(personID uint, page, pageSize int) ([]*model.Face, int64, error)
+	ListByPersonIDCursor(personID uint, cursor *PersonFaceCursor, limit int) ([]*model.Face, bool, *PersonFaceCursor, error)
 	ListByIDs(ids []uint) ([]*model.Face, error)
 	ListAssigned() ([]*model.Face, error)
 	ListAssignedPersonIDs() ([]uint, error)
@@ -155,6 +162,46 @@ func (r *faceRepository) ListByPersonIDPaginated(personID uint, page, pageSize i
 		Limit(pageSize).
 		Find(&faces).Error
 	return faces, total, err
+}
+
+// ListByPersonIDCursor returns one page of non-excluded faces for a person using keyset
+// pagination (no COUNT). Sort order is quality_score DESC, id ASC — same as the paginated method.
+// Returns (items, hasMore, nextCursor, error). nextCursor is nil when hasMore is false.
+func (r *faceRepository) ListByPersonIDCursor(personID uint, cursor *PersonFaceCursor, limit int) ([]*model.Face, bool, *PersonFaceCursor, error) {
+	selectCols := "id, created_at, updated_at, photo_id, person_id, b_box_x, b_box_y, b_box_width, b_box_height, confidence, quality_score, thumbnail_path, cluster_status, cluster_score, clustered_at, manual_locked, manual_lock_reason, manual_locked_at, recluster_generation, retry_count"
+
+	q := r.db.Select(selectCols).
+		Where("person_id = ? AND cluster_status != ?", personID, model.FaceClusterStatusExcluded).
+		Order("quality_score DESC, id ASC")
+
+	if cursor != nil {
+		// keyset: (quality_score < cursor.score) OR (quality_score = cursor.score AND id > cursor.id)
+		q = q.Where(
+			"quality_score < ? OR (quality_score = ? AND id > ?)",
+			cursor.QualityScore, cursor.QualityScore, cursor.ID,
+		)
+	}
+
+	var faces []*model.Face
+	if err := q.Limit(limit + 1).Find(&faces).Error; err != nil {
+		return nil, false, nil, err
+	}
+
+	hasMore := len(faces) > limit
+	if hasMore {
+		faces = faces[:limit]
+	}
+
+	var nextCursor *PersonFaceCursor
+	if hasMore && len(faces) > 0 {
+		last := faces[len(faces)-1]
+		nextCursor = &PersonFaceCursor{
+			QualityScore: last.QualityScore,
+			ID:           last.ID,
+		}
+	}
+
+	return faces, hasMore, nextCursor, nil
 }
 
 func (r *faceRepository) ListByIDs(ids []uint) ([]*model.Face, error) {
