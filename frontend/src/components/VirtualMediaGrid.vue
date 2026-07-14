@@ -125,14 +125,17 @@ const virtualRows = computed(() => {
 })
 const totalHeight = computed(() => virtualizer.value.getTotalSize())
 
-// 行 transform：virtualizer 给出的 start 已是相对列表顶部的坐标，绝对定位容器起点即列表顶部，
-// 故直接 translateY(start)。scrollMargin 已在 options 中用于把 window scroll 对齐到列表坐标。
+// 行 transform：useWindowVirtualizer 给出的 row.start 已是“相对列表顶部”的坐标，
+// 但它内部为把 window scroll 对齐到列表坐标，已把 scrollMargin 计入 start（即 start 包含
+// 网格顶部到页面顶部的固定偏移）。而本组件内层绝对定位容器起点就在列表顶部（top:0），
+// 若直接 translateY(start)，第一行会被多下移一个 scrollMargin，表现为列表顶部出现一块空白。
+// 因此必须减去 scrollMarginPx，使第一行最终落在列表起点（translate 接近 0）。
 const rowStyle = (row: { start: number }) => ({
   position: 'absolute' as const,
   top: 0,
   left: 0,
   width: '100%',
-  transform: `translateY(${row.start}px)`,
+  transform: `translateY(${row.start - scrollMarginPx.value}px)`,
   display: 'grid',
   gap: `${props.gap}px`,
 })
