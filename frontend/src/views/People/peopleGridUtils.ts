@@ -53,10 +53,10 @@ export function shouldLoadMore(p: ShouldLoadMoreParams): boolean {
   return p.rowCount - p.visibleLastRowIndex <= p.threshold
 }
 
-// shouldLoadByVisibleRange 是 window-virtualizer 模式下的统一加载判定纯函数。
-// 与 shouldLoadMore 不同，它额外要求 active=true（当前 Tab 可见），并在 error=true 时
-// 禁止自动重试（仅手动重试清除 error）。这是人物详情页防“自动连续翻页”的核心守卫：
-// 只有 active、非 loading、非 error、hasMore 且最后可见行接近数据末尾时返回 true。
+// shouldLoadByVisibleRange 是 window-virtualizer 模式下的事件驱动加载判定纯函数。
+// 由 VirtualMediaGrid 的 visible-range-change 事件触发判定。
+// 语义：只有当前 Tab 可见、非 loading、非 error、hasMore 且最后可见行接近数据末尾时返回 true。
+// 首屏（rowCount<=0）允许加载；有数据但 lastVisibleRowIndex<0（尚未测量）不加载，避免风暴。
 export interface VisibleRangeLoadParams {
   // 当前 Tab 是否可见（隐藏 Tab 不触发分页）
   active: boolean
@@ -76,20 +76,31 @@ export function shouldLoadByVisibleRange(p: VisibleRangeLoadParams): boolean {
   if (p.loading) return false
   if (p.error) return false
   if (!p.hasMore) return false
-  // 尚无可见行（首次进入、rowCount=0 或未测量）且 active+hasMore → 允许首屏加载。
-  if (p.rowCount <= 0 || p.lastVisibleRowIndex < 0) return true
+  // 尚无已加载数据（rowCount<=0）→ 首屏，允许加载。
+  if (p.rowCount <= 0) return true
+  // 有数据但尚未测量可见行（lastVisibleRowIndex<0）→ 不加载，避免风暴。
+  if (p.lastVisibleRowIndex < 0) return false
   return p.rowCount - p.lastVisibleRowIndex <= p.thresholdRows
 }
 
 // shouldReevaluateAfterLoad 用于请求完成（loading 恢复 false）后，用“最近一次保存的可见区间”
-// 重新判定是否需要继续加载下一页。与首次判定共用 shouldLoadByVisibleRange 语义，但调用方需
-// 保证传入的是 latest visible range（可能在 loading 期间到达、被忽略的那次事件）。
+// 重新判定是否需要继续加载下一页。
 //
-// 设计要点：若新数据仍不足以填满视口（lastVisibleRowIndex 仍接近或超过 rowCount），返回 true
-// 触发下一页；一旦内容已超出视口（lastVisibleRowIndex 远离 rowCount），返回 false，停止自动
-// 连续加载，等待用户继续滚动。
+// 防风暴核心语义：只在“有可见区间且接近末尾”时才继续加载；无可见区间（stub 未派发 / 尚未测量）
+// 一律不继续，等用户滚动。这与 Detail.vue 内联的 reevaluate 逻辑一致——请求完成后若没有可见区间
+// 事件，说明无法判断视口是否填满，继续加载会形成递归请求风暴。
+//
+// 注意：lastVisibleRowIndex<0 在这里必须返回 false（与 shouldLoadByVisibleRange 一致），
+// 而非 true。早期实现误把“无可见区间”当作“未填满视口→继续”，正是请求风暴的根因。
 export function shouldReevaluateAfterLoad(p: VisibleRangeLoadParams): boolean {
-  return shouldLoadByVisibleRange(p)
+  if (!p.active) return false
+  if (p.loading) return false
+  if (p.error) return false
+  if (!p.hasMore) return false
+  // 无可见区间（rowCount<=0 首屏除外）→ 不继续，避免风暴。
+  if (p.rowCount <= 0) return true
+  if (p.lastVisibleRowIndex < 0) return false
+  return p.rowCount - p.lastVisibleRowIndex <= p.thresholdRows
 }
 
 // 判断“是否移动了人物全部人脸”：基于人脸总数（分页 total）而非已加载长度。

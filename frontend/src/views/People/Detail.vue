@@ -529,10 +529,20 @@ const facesHasMore = ref(true)
 const facesInFlightPersonId = ref<number>(0)
 const facesInFlightCursor = ref<string>('')
 
+// cursor 进度保护：记录本轮人物页面已“成功消费”过的 cursor（即已用其请求并成功追加数据）。
+// 防止同一 cursor 被重复请求（请求风暴根因之一）：响应回来后若 nextCursor 已被消费过、
+// 等于请求 cursor、或返回全重复数据，立即停止自动分页并置 error。
+// 失败请求不加入此集合，保证手动重试仍可用原 cursor。切换人物 / 刷新页面时清空。
+const photosConsumedCursors = ref<Set<string>>(new Set())
+const facesConsumedCursors = ref<Set<string>>(new Set())
+
 // 最近一次可见区间（无论是否 loading 都先保存，供请求完成后重新判定）。
 // 解决“可见区事件发生在 loading 期间被忽略后不再触发”的连续分页中断问题。
-const latestPhotosVisibleRange = ref<{ firstRowIndex: number; lastRowIndex: number; rowCount: number } | null>(null)
-const latestFacesVisibleRange = ref<{ firstRowIndex: number; lastRowIndex: number; rowCount: number } | null>(null)
+// 字段 lastVisibleRowIndex 即事件的 lastRowIndex（最后可见行），重命名仅为语义清晰；
+// 类型沿用事件签名 { firstRowIndex, lastRowIndex, rowCount }。
+type VisibleRange = { firstRowIndex: number; lastRowIndex: number; rowCount: number }
+const latestPhotosVisibleRange = ref<VisibleRange | null>(null)
+const latestFacesVisibleRange = ref<VisibleRange | null>(null)
 
 // 候选人物懒加载
 const candidatePeopleLoaded = ref(false)
@@ -654,15 +664,45 @@ const loadMorePhotos = async () => {
 
     const existing = new Set(photos.value.map(p => p.id))
     const fresh = items.filter(p => !existing.has(p.id))
+
+    // ---- cursor 进度保护（防风暴核心）----
+    // 任一情况都判定为“分页未推进”：停止自动分页、置 error、不更新 cursor、不 reevaluate。
+    // 1) hasMore=true 但 nextCursor 为空；
+    // 2) nextCursor === 请求 cursor（后端回吐同一游标）；
+    // 3) nextCursor 已被成功消费过（重复请求）；
+    // 4) 返回 items 非空但 fresh 全为重复（无新数据）。
+    if (hasMore && nextCursor === '') {
+      markPhotosStalled('分页未推进：has_more=true 但 next_cursor 为空')
+      return
+    }
+    if (nextCursor !== '' && nextCursor === cursor) {
+      markPhotosStalled('分页未推进：next_cursor 等于请求 cursor')
+      return
+    }
+    if (nextCursor !== '' && photosConsumedCursors.value.has(nextCursor)) {
+      markPhotosStalled('分页未推进：next_cursor 已被消费过')
+      return
+    }
+    if (items.length > 0 && fresh.length === 0) {
+      markPhotosStalled('分页未推进：返回数据全部重复')
+      return
+    }
+
     photos.value = [...photos.value, ...fresh]
     if (totalCount) photosTotal.value = totalCount
     photosPage.value += 1
     photosLoadedOnce.value = true
 
+    // 成功消费当前 cursor，加入集合（防同一 cursor 再次请求）。
+    if (cursor !== '') photosConsumedCursors.value.add(cursor)
+
     photosHasMore.value = hasMore
     photosNextCursor.value = nextCursor
-    // has_more=false 或返回不足一页 → 已加载全部。
-    if (!hasMore || items.length < photosPageSize.value) {
+    // 仅 has_more=false 时判定已加载全部。
+    // 旧逻辑“items.length < pageSize 也判 finished”会误判 cursor 最后一页
+    // （最后一页常不足一页但 has_more 仍可能为 true，或真实末页不足一页但应允许 reevaluate 判定），
+    // 导致 reevaluate 被 finished 拦截、无法连续加载。改为只信 has_more。
+    if (!hasMore) {
       photosFinished.value = true
     }
   } catch (error: any) {
@@ -670,11 +710,31 @@ const loadMorePhotos = async () => {
     ElMessage.error(error.message || '加载照片失败')
   } finally {
     photosLoading.value = false
-    // 请求完成后用最近一次可见区间重新判定：若 loading 期间到达的可见区事件被忽略，
-    // 且新数据仍不足以填满视口，则继续加载下一页；一旦超出视口则停止，等待用户滚动。
+    // 请求完成后用“当前行数 + 最新可见区间”重新判定是否继续加载下一页。
+    // 不用旧 range.rowCount（请求发起时的行数），而用当前 photos.value.length 实时计算，
+    // 避免数据追加后仍按旧行数误判“接近末尾”触发递归请求风暴。
+    // 测试桩（无 measure）安全跳过；真实组件在此重测，确保 reevaluate 用最新布局判定。
     await nextTick()
-    reevaluatePhotosLoad()
+    const grid = photosGridRef.value as any
+    if (grid && typeof grid.measure === 'function') {
+      try { grid.measure() } catch { /* 测试桩可能无真实 virtualizer，忽略 */ }
+    }
+    await nextTick()
+    // 仅当本次请求成功追加数据后才 reevaluate（continue chaining）。
+    // 失败 / 停滞分支已设置 error 并提前 return，不应继续自动分页。
+    if (!photosError.value) {
+      reevaluatePhotosLoad()
+    }
   }
+}
+
+// markPhotosStalled：分页未推进时的统一处理——停止自动分页、显示错误、不更新 cursor。
+const markPhotosStalled = (reason: string) => {
+  photosError.value = true
+  photosHasMore.value = false
+  ElMessage.error(`照片分页未推进，请重试（${reason}）`)
+  // 不更新 photosNextCursor，不进入 reevaluate，禁止 tight loop。
+  // 失败请求不加入 consumed 集合，手动重试仍可用原 cursor。
 }
 
 // --- 无限滚动：人脸样本（cursor 模式，单 in-flight，丢弃陈旧响应）---
@@ -704,14 +764,35 @@ const loadMoreFaces = async () => {
 
     const existing = new Set(faces.value.map(f => f.id))
     const fresh = items.filter(f => !existing.has(f.id))
+
+    // ---- cursor 进度保护（与照片对称）----
+    if (hasMore && nextCursor === '') {
+      markFacesStalled('分页未推进：has_more=true 但 next_cursor 为空')
+      return
+    }
+    if (nextCursor !== '' && nextCursor === cursor) {
+      markFacesStalled('分页未推进：next_cursor 等于请求 cursor')
+      return
+    }
+    if (nextCursor !== '' && facesConsumedCursors.value.has(nextCursor)) {
+      markFacesStalled('分页未推进：next_cursor 已被消费过')
+      return
+    }
+    if (items.length > 0 && fresh.length === 0) {
+      markFacesStalled('分页未推进：返回数据全部重复')
+      return
+    }
+
     faces.value = [...faces.value, ...fresh]
     if (totalCount) facesTotal.value = totalCount
     facesPage.value += 1
     facesLoadedOnce.value = true
 
+    if (cursor !== '') facesConsumedCursors.value.add(cursor)
+
     facesHasMore.value = hasMore
     facesNextCursor.value = nextCursor
-    if (!hasMore || items.length < facesPageSize.value) {
+    if (!hasMore) {
       facesFinished.value = true
     }
   } catch (error: any) {
@@ -719,9 +800,24 @@ const loadMoreFaces = async () => {
     ElMessage.error(error.message || '加载人脸失败')
   } finally {
     facesLoading.value = false
+    // 请求完成后用“当前行数 + 最新可见区间”重新判定（与照片对称，不用旧 range.rowCount）。
     await nextTick()
-    reevaluateFacesLoad()
+    const grid = facesGridRef.value as any
+    if (grid && typeof grid.measure === 'function') {
+      try { grid.measure() } catch { /* 测试桩可能无真实 virtualizer，忽略 */ }
+    }
+    await nextTick()
+    if (!facesError.value) {
+      reevaluateFacesLoad()
+    }
   }
+}
+
+// markFacesStalled：人脸分页未推进的统一处理，与照片对称。
+const markFacesStalled = (reason: string) => {
+  facesError.value = true
+  facesHasMore.value = false
+  ElMessage.error(`人脸分页未推进，请重试（${reason}）`)
 }
 
 // --- 可见区间驱动的加载判定（window virtualizer 模式）---
@@ -730,15 +826,20 @@ const loadMoreFaces = async () => {
 const LOAD_THRESHOLD_ROWS = 3
 
 const onPhotosVisibleRange = (payload: { firstRowIndex: number; lastRowIndex: number; rowCount: number }) => {
-  // 无论是否 loading，先保存最新可见区间，供请求完成后重新判定。
-  latestPhotosVisibleRange.value = payload
+  // 保存可见区间供请求完成后重新判定。rowCount 字段不再使用（用 currentPhotoRowCount 实时算），
+  // 但为兼容旧签名仍写入；判定一律基于当前已加载行数。
+  latestPhotosVisibleRange.value = {
+    firstRowIndex: payload.firstRowIndex,
+    lastRowIndex: payload.lastRowIndex,
+    rowCount: currentPhotoRowCount.value,
+  }
   if (activeTab.value !== 'photos') return
   if (!shouldLoadByVisibleRange({
     active: true,
     loading: photosLoading.value,
     error: photosError.value,
     hasMore: photosHasMore.value && !photosFinished.value,
-    rowCount: payload.rowCount,
+    rowCount: currentPhotoRowCount.value,
     lastVisibleRowIndex: payload.lastRowIndex,
     thresholdRows: LOAD_THRESHOLD_ROWS,
   })) return
@@ -746,49 +847,66 @@ const onPhotosVisibleRange = (payload: { firstRowIndex: number; lastRowIndex: nu
 }
 
 const onFacesVisibleRange = (payload: { firstRowIndex: number; lastRowIndex: number; rowCount: number }) => {
-  latestFacesVisibleRange.value = payload
+  latestFacesVisibleRange.value = {
+    firstRowIndex: payload.firstRowIndex,
+    lastRowIndex: payload.lastRowIndex,
+    rowCount: currentFaceRowCount.value,
+  }
   if (activeTab.value !== 'faces') return
   if (!shouldLoadByVisibleRange({
     active: true,
     loading: facesLoading.value,
     error: facesError.value,
     hasMore: facesHasMore.value && !facesFinished.value,
-    rowCount: payload.rowCount,
+    rowCount: currentFaceRowCount.value,
     lastVisibleRowIndex: payload.lastRowIndex,
     thresholdRows: LOAD_THRESHOLD_ROWS,
   })) return
   loadMoreFaces()
 }
 
-// reevaluatePhotosLoad：请求完成后用最近一次可见区间重新判定是否继续加载下一页。
-// nextTick 已由调用方在 finally 中执行，确保虚拟列表已基于新数据重新测量。
+// 当前已加载数据对应的行数（实时计算，不使用事件里的旧 rowCount）。
+// 防请求风暴核心：旧版 reevaluate 用事件保存的 range.rowCount（派发时的行数），
+// 数据追加后 rowCount 已增长，旧行数会让“接近末尾”误判持续成立 → 递归请求。
+// 改为基于当前 photos.value.length 实时计算。
+const currentPhotoRowCount = computed(() =>
+  photos.value.length === 0 ? 0 : Math.ceil(photos.value.length / photoColumns.value),
+)
+const currentFaceRowCount = computed(() =>
+  faces.value.length === 0 ? 0 : Math.ceil(faces.value.length / faceColumns.value),
+)
+
+// reevaluatePhotosLoad：请求完成后用“当前行数 + 最近一次可见行索引”重新判定是否继续加载。
+//
+// 复用 shouldReevaluateAfterLoad 纯函数（防风暴核心：无可见区间不继续），保证判定逻辑单一事实源。
+// 关键：用当前 currentPhotoRowCount（实时）而非事件保存的旧 rowCount 判定。
 const reevaluatePhotosLoad = () => {
-  const range = latestPhotosVisibleRange.value
-  if (!range) return
   if (activeTab.value !== 'photos') return
+  const range = latestPhotosVisibleRange.value
+  const lastVisibleRowIndex = range ? range.lastRowIndex : -1
   if (!shouldReevaluateAfterLoad({
     active: true,
     loading: photosLoading.value,
     error: photosError.value,
     hasMore: photosHasMore.value && !photosFinished.value,
-    rowCount: range.rowCount,
-    lastVisibleRowIndex: range.lastRowIndex,
+    rowCount: currentPhotoRowCount.value,
+    lastVisibleRowIndex,
     thresholdRows: LOAD_THRESHOLD_ROWS,
   })) return
   loadMorePhotos()
 }
 
 const reevaluateFacesLoad = () => {
-  const range = latestFacesVisibleRange.value
-  if (!range) return
   if (activeTab.value !== 'faces') return
+  const range = latestFacesVisibleRange.value
+  const lastVisibleRowIndex = range ? range.lastRowIndex : -1
   if (!shouldReevaluateAfterLoad({
     active: true,
     loading: facesLoading.value,
     error: facesError.value,
     hasMore: facesHasMore.value && !facesFinished.value,
-    rowCount: range.rowCount,
-    lastVisibleRowIndex: range.lastRowIndex,
+    rowCount: currentFaceRowCount.value,
+    lastVisibleRowIndex,
     thresholdRows: LOAD_THRESHOLD_ROWS,
   })) return
   loadMoreFaces()
@@ -837,9 +955,11 @@ const loadData = async () => {
   facesLoadedOnce.value = false
   photosScrollTop.value = 0
   facesScrollTop.value = 0
-  // 重置最近可见区间，避免切人物后用旧区间误触发分页。
+  // 重置最近可见区间与 cursor 进度集合，避免切人物后用旧区间/旧 cursor 误触发分页。
   latestPhotosVisibleRange.value = null
   latestFacesVisibleRange.value = null
+  photosConsumedCursors.value = new Set()
+  facesConsumedCursors.value = new Set()
 
   try {
     // 首次进入：只加载人物基本信息 + 当前默认 Tab“照片”第一页。
@@ -886,6 +1006,7 @@ const refreshPersonAndFaces = async () => {
     facesInFlightCursor.value = ''
     facesLoadedOnce.value = false
     latestFacesVisibleRange.value = null
+    facesConsumedCursors.value = new Set()
 
     const [personRes] = await Promise.all([
       peopleApi.getById(personId),

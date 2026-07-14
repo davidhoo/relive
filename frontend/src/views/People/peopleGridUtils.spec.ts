@@ -4,6 +4,7 @@ import {
   visibleCardCount,
   shouldLoadMore,
   shouldLoadByVisibleRange,
+  shouldReevaluateAfterLoad,
   isAllFacesMoved,
   toggleFaceInSet,
   anchorRowIndexAfterDensityChange,
@@ -175,8 +176,54 @@ describe('shouldLoadByVisibleRange - window 虚拟化加载守卫', () => {
     expect(shouldLoadByVisibleRange({ ...base, lastVisibleRowIndex: 10 })).toBe(false)
   })
 
-  it('首屏尚未测量（lastVisibleRowIndex<0）且 active+hasMore 时允许加载', () => {
+  it('首屏（rowCount=0）允许加载', () => {
     expect(shouldLoadByVisibleRange({ ...base, rowCount: 0, lastVisibleRowIndex: -1 })).toBe(true)
+  })
+
+  it('有数据但尚未测量（lastVisibleRowIndex<0）不加载，避免风暴', () => {
+    expect(shouldLoadByVisibleRange({ ...base, rowCount: 5, lastVisibleRowIndex: -1 })).toBe(false)
+  })
+})
+
+describe('shouldReevaluateAfterLoad - 请求完成后的防风暴重判', () => {
+  const base = {
+    active: true,
+    loading: false,
+    error: false,
+    hasMore: true,
+    rowCount: 200,
+    lastVisibleRowIndex: 198,
+    thresholdRows: 3,
+  }
+
+  it('接近末端时继续加载', () => {
+    expect(shouldReevaluateAfterLoad(base)).toBe(true)
+  })
+
+  it('loading 时不继续', () => {
+    expect(shouldReevaluateAfterLoad({ ...base, loading: true })).toBe(false)
+  })
+
+  it('error 时不继续', () => {
+    expect(shouldReevaluateAfterLoad({ ...base, error: true })).toBe(false)
+  })
+
+  it('hasMore=false 时不继续', () => {
+    expect(shouldReevaluateAfterLoad({ ...base, hasMore: false })).toBe(false)
+  })
+
+  it('内容已超出视口（远离末端）时不继续', () => {
+    expect(shouldReevaluateAfterLoad({ ...base, lastVisibleRowIndex: 10 })).toBe(false)
+  })
+
+  it('首屏（rowCount=0）允许继续', () => {
+    expect(shouldReevaluateAfterLoad({ ...base, rowCount: 0, lastVisibleRowIndex: -1 })).toBe(true)
+  })
+
+  it('有数据但无可见区间（lastVisibleRowIndex<0）不继续——防风暴核心', () => {
+    // 这是规格明确要求：无可见区间不继续，避免请求完成后无脑递归。
+    // 早期错误实现此处返回 true，正是请求风暴根因。
+    expect(shouldReevaluateAfterLoad({ ...base, rowCount: 5, lastVisibleRowIndex: -1 })).toBe(false)
   })
 })
 
