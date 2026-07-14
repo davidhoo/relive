@@ -48,6 +48,10 @@ func NewHandlers(db *gorm.DB, services *service.Services, repos *repository.Repo
 	// AI Handler - 即使 AI 服务未配置也创建，以便配置变更后动态更新
 	handlers.AI = NewAIHandler(services.AI, services.AnalysisRuntime)
 	handlers.People.SetRuntimeService(services.AnalysisRuntime)
+	// 人物详情读请求注册 foreground scope，让 P2 后台任务在用户浏览详情时让路。
+	handlers.People.SetBackgroundCoordinator(services.BackgroundCoordinator)
+	// 注入人物照片派生表仓库，cursor 分页在迁移完成后走 person_photos 索引。
+	handlers.People.SetPersonPhotoRepo(repos.PersonPhoto)
 
 	// 设置 ConfigHandler 对 AIHandler 的引用，用于配置变更后热重载
 	handlers.Config.SetAIHandler(handlers.AI)

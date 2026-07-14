@@ -14,6 +14,7 @@ import (
 	"github.com/davidhoo/relive/internal/factoryreset"
 	"github.com/davidhoo/relive/internal/lifecycle"
 	"github.com/davidhoo/relive/internal/api/v1/router"
+	"github.com/davidhoo/relive/internal/service"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/davidhoo/relive/pkg/database"
 	"github.com/davidhoo/relive/pkg/logger"
@@ -75,6 +76,13 @@ func main() {
 
 	// 初始化路由（同时获取服务集合）
 	r, services := router.Setup(db, cfg, appState)
+
+	// 启动 person_photos 派生表后台回填（P2 automatic：foreground/I/O 高时暂停，
+	// 服务重启从 app_config 进度继续，不阻塞启动）。回填完成一致性校验通过后，
+	// 人物照片 cursor 查询才切换到 person_photos 索引。在 router.Setup 之后启动，
+	// 避免在数据库 schema 尚未稳定的窗口内对同一 db 连接并发写入。
+	personPhotosBackfill := service.NewPersonPhotosBackfill(db, services.PersonPhotoRepo, services.BackgroundCoordinator)
+	personPhotosBackfill.Run()
 
 	// 启动定时任务调度器
 	services.Scheduler.Start()

@@ -51,6 +51,9 @@ type PhotoRepository interface {
 	ListPhotoSummariesByPersonID(personID uint) ([]*model.Photo, error) // 精简列 + SQL 排序
 	ListPhotoSummariesByPersonIDPaginated(personID uint, page, pageSize int) ([]*model.Photo, int64, error)
 	ListPhotoSummariesByPersonIDCursor(personID uint, cursor *PersonPhotoCursor, limit int) ([]*model.Photo, bool, *PersonPhotoCursor, error)
+	// ListPhotoSummariesByPersonIDCursorFromIndex 走 person_photos 派生表（迁移完成后使用）：
+	// 先按 idx_person_photos_cursor 取 limit+1 个 photo_id，再回表读取摘要，保持 taken_at DESC, id DESC 顺序。
+	ListPhotoSummariesByPersonIDCursorFromIndex(personID uint, cursor *PersonPhotoCursor, limit int, ppRepo PersonPhotoRepository) ([]*model.Photo, bool, *PersonPhotoCursor, error)
 
 	// AI 分析相关
 	GetUnanalyzed(limit int) ([]*model.Photo, error)
@@ -633,6 +636,41 @@ func (r *photoRepository) ListPhotoSummariesByPersonIDCursor(personID uint, curs
 	}
 
 	return photos, hasMore, nextCursor, nil
+}
+
+// ListPhotoSummariesByPersonIDCursorFromIndex 走 person_photos 派生表分页（迁移完成后使用）。
+// 先从 person_photos 取 limit+1 个 photo_id（走 idx_person_photos_cursor，无 DISTINCT/ORDER BY 临时树），
+// 再按 id 顺序回表读取摘要列。为保持稳定的 taken_at DESC, id DESC 顺序，回表后按 person_photos 给出的
+// id 顺序（已按 cursor 排序）排列返回。
+func (r *photoRepository) ListPhotoSummariesByPersonIDCursorFromIndex(personID uint, cursor *PersonPhotoCursor, limit int, ppRepo PersonPhotoRepository) ([]*model.Photo, bool, *PersonPhotoCursor, error) {
+	ids, hasMore, nextCursor, err := ppRepo.ListPhotoIDsByPersonCursor(personID, cursor, limit)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	if len(ids) == 0 {
+		return []*model.Photo{}, hasMore, nextCursor, nil
+	}
+
+	// 回表读取摘要列。使用 IN + FIELD 保持 person_photos 给定的顺序。
+	selectCols := "id, file_name, caption, taken_at, created_at, updated_at, thumbnail_generated_at, manual_rotation"
+	var photos []*model.Photo
+	if err := r.db.Select(selectCols).Where("id IN ?", ids).Find(&photos).Error; err != nil {
+		return nil, false, nil, err
+	}
+
+	// 按 ids 顺序重排（Find 不保证顺序）。
+	byID := make(map[uint]*model.Photo, len(photos))
+	for _, p := range photos {
+		byID[p.ID] = p
+	}
+	ordered := make([]*model.Photo, 0, len(ids))
+	for _, id := range ids {
+		if p, ok := byID[id]; ok {
+			ordered = append(ordered, p)
+		}
+	}
+
+	return ordered, hasMore, nextCursor, nil
 }
 
 // GetUnanalyzed 获取未分析的照片

@@ -35,6 +35,8 @@ type Services struct {
 	IdentityProfile       PersonIdentityProfileService
 	BackgroundCoordinator *BackgroundTaskCoordinator // 后台任务治理准入控制器（状态 API 用）
 	BackgroundLoadSampler *BackgroundLoadSampler     // 负载采样器（状态 API 用，advisory）
+	// PersonPhotoRepo 人物照片派生表仓库，供 person_photos 后台回填与 cursor 查询切换使用。
+	PersonPhotoRepo repository.PersonPhotoRepository
 	// ProtoCacheRebuildStatus 返回 protoCache 分批 full rebuild 的只读进度快照（nil 表示无 rebuild）。
 	// 由 peopleService 注入，供后台状态 API 展示 rebuild 运行/暂停/进度/原因与 cold_building。
 	ProtoCacheRebuildStatus func() *model.ProtoCacheRebuildStatusResponse
@@ -251,6 +253,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		IdentityProfile:         identityProfileService,
 		BackgroundCoordinator:   backgroundCoordinator,
 		BackgroundLoadSampler:   loadSampler,
+		PersonPhotoRepo:         repos.PersonPhoto,
 		ProtoCacheRebuildStatus: peopleSvc.(*peopleService).ProtoCacheRebuildStatus,
 	}
 }

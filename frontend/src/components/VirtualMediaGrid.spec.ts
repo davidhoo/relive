@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import VirtualMediaGrid from '@/components/VirtualMediaGrid.vue'
-
 // VirtualMediaGrid 组件级测试。
 // jsdom 无真实布局（clientHeight=0），virtualizer 无法通过滚动事件产出可见区间，
 // 因此组件级行为主要通过注入容器尺寸 + 直接调用暴露的方法验证；
@@ -68,6 +67,36 @@ describe('VirtualMediaGrid - 每行 items 不超过 columns（测试项 1 组件
     for (const row of rows) {
       expect(row.element.childElementCount).toBeLessThanOrEqual(5)
     }
+    wrapper.unmount()
+  })
+})
+
+describe('VirtualMediaGrid - scrollMargin 用页面绝对偏移而非 offsetTop', () => {
+  it('暴露 recomputeScrollMargin 且 measure 不抛错', async () => {
+    const wrapper = mountGrid({ items: Array.from({ length: 50 }, (_, i) => ({ id: i + 1 })) })
+    await flushPromises()
+    const vm = wrapper.findComponent(VirtualMediaGrid).vm as any
+    expect(typeof vm.recomputeScrollMargin).toBe('function')
+
+    // 模拟网格在页面下方（getBoundingClientRect.top=300），重算后 measure 不抛错
+    const grid = wrapper.find('.virtual-media-grid').element as HTMLElement
+    vi.spyOn(grid, 'getBoundingClientRect').mockReturnValue({
+      top: 300, left: 0, right: 0, bottom: 0, width: 1000, height: 10, x: 0, y: 300, toJSON: () => ({}),
+    } as DOMRect)
+    vm.recomputeScrollMargin()
+    expect(() => vm.measure()).not.toThrow()
+    wrapper.unmount()
+  })
+})
+
+describe('VirtualMediaGrid - 数据追加后重新测量（不重置滚动）', () => {
+  it('items 从 0 增长到非 0 后 measure 不抛错', async () => {
+    const wrapper = mountGrid({ items: [] })
+    await flushPromises()
+    const vm = wrapper.findComponent(VirtualMediaGrid).vm as any
+    await wrapper.setProps({ items: Array.from({ length: 40 }, (_, i) => ({ id: i + 1 })) })
+    await flushPromises()
+    expect(() => vm.measure()).not.toThrow()
     wrapper.unmount()
   })
 })

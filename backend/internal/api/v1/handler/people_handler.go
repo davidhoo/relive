@@ -32,7 +32,14 @@ type PeopleHandler struct {
 	runtimeService         service.AnalysisRuntimeService
 	identityProfileService service.PersonIdentityProfileService
 	identityDecisionRepo   repository.PeopleIdentityDecisionRepository
-	cfg                    *config.Config
+	// backgroundCoordinator 让人物详情读请求（GetPerson/GetPersonPhotos/GetPersonFaces）
+	// 注册 foreground scope：执行期间 P2 自动后台任务暂停启动新批次，已运行任务在批次
+	// 边界让步，避免与详情页读请求争抢 NAS 磁盘。nil 时跳过注册（如测试）。
+	backgroundCoordinator *service.BackgroundTaskCoordinator
+	// personPhotoRepo 用于人物照片 cursor 分页在 person_photos 迁移完成后切换到派生表索引。
+	// nil 时回退到原 JOIN 查询（迁移未完成或测试未注入）。
+	personPhotoRepo repository.PersonPhotoRepository
+	cfg             *config.Config
 }
 
 func NewPeopleHandler(service service.PeopleService, mergeSuggestionService service.PersonMergeSuggestionService, personRepo repository.PersonRepository, faceRepo repository.FaceRepository, photoRepo repository.PhotoRepository, jobRepo repository.PeopleJobRepository, identityProfileService service.PersonIdentityProfileService, identityDecisionRepo repository.PeopleIdentityDecisionRepository, cfg *config.Config) *PeopleHandler {
@@ -47,6 +54,39 @@ func NewPeopleHandler(service service.PeopleService, mergeSuggestionService serv
 		identityDecisionRepo:   identityDecisionRepo,
 		cfg:                    cfg,
 	}
+}
+
+// SetBackgroundCoordinator 注入后台任务准入控制器，供人物详情读请求注册 foreground scope。
+func (h *PeopleHandler) SetBackgroundCoordinator(c *service.BackgroundTaskCoordinator) {
+	h.backgroundCoordinator = c
+}
+
+// SetPersonPhotoRepo 注入人物照片派生表仓库，供 cursor 分页在迁移完成后切换到索引查询。
+func (h *PeopleHandler) SetPersonPhotoRepo(r repository.PersonPhotoRepository) {
+	h.personPhotoRepo = r
+}
+
+// beginForegroundRelease 注册一个 foreground scope 并返回 release 函数。
+// coordinator 为 nil 时返回 no-op，保证测试与未注入场景不受影响。
+func (h *PeopleHandler) beginForegroundRelease() func() {
+	if h.backgroundCoordinator == nil {
+		return func() {}
+	}
+	return h.backgroundCoordinator.BeginForeground()
+}
+
+// listPersonPhotosCursor 根据 person_photos 迁移是否完成选择查询路径：
+//   - 迁移完成（ready）→ 走 person_photos 派生表索引，避免 DISTINCT/ORDER BY 临时 B-Tree；
+//   - 迁移未完成 → 走原有 JOIN + DISTINCT + ORDER BY 查询，保证回填期间接口仍可用。
+// ppRepo 为 nil 时也回退到旧查询（如测试未注入）。
+func (h *PeopleHandler) listPersonPhotosCursor(personID uint, cursor *repository.PersonPhotoCursor, pageSize int) ([]*model.Photo, bool, *repository.PersonPhotoCursor, error) {
+	if h.personPhotoRepo != nil {
+		ready, err := h.personPhotoRepo.MigrationReady(nil)
+		if err == nil && ready {
+			return h.photoRepo.ListPhotoSummariesByPersonIDCursorFromIndex(personID, cursor, pageSize, h.personPhotoRepo)
+		}
+	}
+	return h.photoRepo.ListPhotoSummariesByPersonIDCursor(personID, cursor, pageSize)
 }
 
 func (h *PeopleHandler) SetRuntimeService(runtimeService service.AnalysisRuntimeService) {
@@ -113,6 +153,11 @@ func (h *PeopleHandler) GetPerson(c *gin.Context) {
 		return
 	}
 
+	// 人物详情读请求注册 foreground scope：执行期间 P2 自动后台任务暂停启动新批次，
+	// 避免与详情页读请求争抢 NAS 磁盘。defer 确保所有提前返回路径都释放。
+	release := h.beginForegroundRelease()
+	defer release()
+
 	person, err := h.personRepo.GetByID(personID)
 	if err != nil {
 		writePeopleError(c, http.StatusInternalServerError, "GET_FAILED", err.Error())
@@ -134,6 +179,10 @@ func (h *PeopleHandler) GetPersonPhotos(c *gin.Context) {
 	if !ok {
 		return
 	}
+
+	// 详情页照片读请求注册 foreground scope，让后台任务让路。defer 保证释放。
+	release := h.beginForegroundRelease()
+	defer release()
 
 	// Cursor pagination mode: no COUNT, keyset pagination.
 	if c.Query("pagination") == "cursor" {
@@ -165,7 +214,7 @@ func (h *PeopleHandler) GetPersonPhotos(c *gin.Context) {
 			}
 		}
 
-		photos, hasMore, nextCursor, err := h.photoRepo.ListPhotoSummariesByPersonIDCursor(personID, repoCursor, pageSize)
+		photos, hasMore, nextCursor, err := h.listPersonPhotosCursor(personID, repoCursor, pageSize)
 		if err != nil {
 			writePeopleError(c, http.StatusInternalServerError, "LIST_FAILED", err.Error())
 			return
@@ -238,6 +287,10 @@ func (h *PeopleHandler) GetPersonFaces(c *gin.Context) {
 	if !ok {
 		return
 	}
+
+	// 详情页人脸读请求注册 foreground scope，让后台任务让路。defer 保证释放。
+	release := h.beginForegroundRelease()
+	defer release()
 
 	// Cursor pagination mode: no COUNT, keyset pagination.
 	if c.Query("pagination") == "cursor" {

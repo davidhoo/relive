@@ -81,6 +81,17 @@ export function shouldLoadByVisibleRange(p: VisibleRangeLoadParams): boolean {
   return p.rowCount - p.lastVisibleRowIndex <= p.thresholdRows
 }
 
+// shouldReevaluateAfterLoad 用于请求完成（loading 恢复 false）后，用“最近一次保存的可见区间”
+// 重新判定是否需要继续加载下一页。与首次判定共用 shouldLoadByVisibleRange 语义，但调用方需
+// 保证传入的是 latest visible range（可能在 loading 期间到达、被忽略的那次事件）。
+//
+// 设计要点：若新数据仍不足以填满视口（lastVisibleRowIndex 仍接近或超过 rowCount），返回 true
+// 触发下一页；一旦内容已超出视口（lastVisibleRowIndex 远离 rowCount），返回 false，停止自动
+// 连续加载，等待用户继续滚动。
+export function shouldReevaluateAfterLoad(p: VisibleRangeLoadParams): boolean {
+  return shouldLoadByVisibleRange(p)
+}
+
 // 判断“是否移动了人物全部人脸”：基于人脸总数（分页 total）而非已加载长度。
 // selectedCount >= facesTotal 且 facesTotal > 0 才认为全部已移动。
 export function isAllFacesMoved(params: {

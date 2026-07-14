@@ -218,6 +218,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.PeopleFeedbackEvent{},
 		&model.FaceExclusion{},
 		&model.PeopleIdentityDecision{},
+		&model.PersonPhoto{},
 	}
 
 	if err := migrateDeviceLastSeenColumn(db); err != nil {
@@ -292,6 +293,10 @@ func AutoMigrate(db *gorm.DB) error {
 
 	if err := migrateFaceExclusionColumns(db); err != nil {
 		log.Printf("[database] warning: face exclusion columns migration failed: %v", err)
+	}
+
+	if err := migratePersonPhotosTable(db); err != nil {
+		log.Printf("[database] warning: person_photos migration failed: %v", err)
 	}
 
 	return nil
@@ -813,5 +818,117 @@ func migrateFaceEmbeddingBinary(db *gorm.DB) error {
 
 	log.Printf("[database] converted %d face embeddings to binary", total)
 	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
+	return nil
+}
+
+// migratePersonPhotosTable 创建 person_photos 派生表、cursor 索引和增量维护 trigger，
+// 但不在启动阶段同步回填全部历史数据（回填由后台 P2 任务异步进行，进度记在 app_config）。
+//
+// 表与索引幂等创建。trigger 在回填开始前安装，接住回填期间所有 faces/photos 写入路径，
+// 保证派生表与业务写入在同一事务内更新，不存在“人物修改成功但分页索引未更新”窗口。
+// 迁移失败不阻止服务启动（caller 记录 warning）。
+func migratePersonPhotosTable(db *gorm.DB) error {
+	const tableKey = "migration.person_photos_table_v1"
+
+	// 建表（WITHOUT ROWID：主键即聚簇索引）。
+	if err := db.Exec(`CREATE TABLE IF NOT EXISTS person_photos (
+		person_id INTEGER NOT NULL,
+		photo_id  INTEGER NOT NULL,
+		taken_at  DATETIME NULL,
+		PRIMARY KEY (person_id, photo_id)
+	) WITHOUT ROWID`).Error; err != nil {
+		return fmt.Errorf("create person_photos table: %w", err)
+	}
+
+	// cursor 索引：(person_id, taken_at DESC, photo_id DESC)，支撑 keyset 分页。
+	if err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_person_photos_cursor
+		ON person_photos(person_id, taken_at DESC, photo_id DESC)`).Error; err != nil {
+		return fmt.Errorf("create idx_person_photos_cursor: %w", err)
+	}
+
+	// === 增量维护 trigger ===
+	// 只收录 person_id 非空、非 0、cluster_status != 'excluded' 的人脸关联。
+	// 多张脸同照片去重由主键 ON CONFLICT 处理。
+	// 1) Face INSERT
+	if err := db.Exec(`CREATE TRIGGER IF NOT EXISTS person_photos_face_insert
+		AFTER INSERT ON faces
+		WHEN NEW.person_id IS NOT NULL AND NEW.person_id != 0 AND NEW.cluster_status != 'excluded'
+		BEGIN
+			INSERT INTO person_photos(person_id, photo_id, taken_at)
+			SELECT NEW.person_id, NEW.photo_id, p.taken_at
+			FROM photos p WHERE p.id = NEW.photo_id
+			ON CONFLICT(person_id, photo_id) DO NOTHING;
+		END`).Error; err != nil {
+		return fmt.Errorf("create person_photos_face_insert trigger: %w", err)
+	}
+
+	// 2) Face UPDATE：person_id / photo_id / cluster_status 任一变化，都可能需要移除旧关联、
+	//    插入新关联。条件触发仅在这三字段变化时执行，避免无关字段更新（如 retry_count）产生噪音。
+	if err := db.Exec(`CREATE TRIGGER IF NOT EXISTS person_photos_face_update
+		AFTER UPDATE OF person_id, photo_id, cluster_status ON faces
+		BEGIN
+			-- 旧关联：若旧 face 曾有效（person_id 非空非 0 且非 excluded），且同人物同照片
+			-- 不再有其他有效 face，则删除派生记录。
+			DELETE FROM person_photos
+			WHERE person_id = OLD.person_id AND photo_id = OLD.photo_id
+			  AND OLD.person_id IS NOT NULL AND OLD.person_id != 0
+			  AND OLD.cluster_status != 'excluded'
+			  AND NOT EXISTS (
+				SELECT 1 FROM faces f
+				WHERE f.person_id = OLD.person_id AND f.photo_id = OLD.photo_id
+				  AND f.id != OLD.id AND f.cluster_status != 'excluded'
+			  );
+			-- 新关联：若新 face 有效，插入（ON CONFLICT 去重）。
+			INSERT INTO person_photos(person_id, photo_id, taken_at)
+			SELECT NEW.person_id, NEW.photo_id, p.taken_at
+			FROM photos p WHERE p.id = NEW.photo_id
+			  AND NEW.person_id IS NOT NULL AND NEW.person_id != 0
+			  AND NEW.cluster_status != 'excluded'
+			ON CONFLICT(person_id, photo_id) DO NOTHING;
+		END`).Error; err != nil {
+		return fmt.Errorf("create person_photos_face_update trigger: %w", err)
+	}
+
+	// 3) Face DELETE：删除 face 后，若同人物同照片无其他有效 face，移除派生记录。
+	if err := db.Exec(`CREATE TRIGGER IF NOT EXISTS person_photos_face_delete
+		AFTER DELETE ON faces
+		WHEN OLD.person_id IS NOT NULL AND OLD.person_id != 0 AND OLD.cluster_status != 'excluded'
+		BEGIN
+			DELETE FROM person_photos
+			WHERE person_id = OLD.person_id AND photo_id = OLD.photo_id
+			  AND NOT EXISTS (
+				SELECT 1 FROM faces f
+				WHERE f.person_id = OLD.person_id AND f.photo_id = OLD.photo_id
+				  AND f.cluster_status != 'excluded'
+			  );
+		END`).Error; err != nil {
+		return fmt.Errorf("create person_photos_face_delete trigger: %w", err)
+	}
+
+	// 4) Photo taken_at UPDATE：同步刷新 person_photos.taken_at。
+	if err := db.Exec(`CREATE TRIGGER IF NOT EXISTS person_photos_photo_takenat_update
+		AFTER UPDATE OF taken_at ON photos
+		BEGIN
+			UPDATE person_photos SET taken_at = NEW.taken_at
+			WHERE person_photos.photo_id = NEW.id;
+		END`).Error; err != nil {
+		return fmt.Errorf("create person_photos_photo_takenat_update trigger: %w", err)
+	}
+
+	// 5) Photo DELETE：清理对应派生记录。
+	if err := db.Exec(`CREATE TRIGGER IF NOT EXISTS person_photos_photo_delete
+		AFTER DELETE ON photos
+		BEGIN
+			DELETE FROM person_photos WHERE photo_id = OLD.id;
+		END`).Error; err != nil {
+		return fmt.Errorf("create person_photos_photo_delete trigger: %w", err)
+	}
+
+	// 标记表/trigger 已安装（与回填进度 status 分开记录）。
+	var cfg model.AppConfig
+	if err := db.Where("key = ?", tableKey).First(&cfg).Error; err == nil {
+		return nil // 已安装
+	}
+	db.Create(&model.AppConfig{Key: tableKey, Value: "done"})
 	return nil
 }

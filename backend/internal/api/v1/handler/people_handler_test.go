@@ -1366,3 +1366,111 @@ func TestPeopleHandler_ListIdentityProfileDecisions_RepositoryError500(t *testin
 	assert.Equal(t, "IDENTITY_DECISIONS_FAILED", resp.Error.Code)
 	assert.NotContains(t, resp.Error.Message, "repo down")
 }
+
+// TestPeopleHandler_DetailReadsRegisterForegroundScope verifies that the three
+// detail read endpoints (GetPerson / GetPersonPhotos / GetPersonFaces) register a
+// foreground scope for their whole duration and release it exactly once when the
+// handler returns — on both success and not-found (early-return) paths. A leak
+// would leave ForegroundActive() stuck true, blocking all P2 background tasks.
+func TestPeopleHandler_DetailReadsRegisterForegroundScope(t *testing.T) {
+	coord := service.NewBackgroundTaskCoordinator()
+	require.False(t, coord.ForegroundActive(), "no foreground scope at rest")
+
+	db := newTestDB(t)
+
+	// Wrap to capture the scope-active state at the moment the repo is queried.
+	capturingPersonRepo := &foregroundCapturingPersonRepo{
+		PersonRepository: repository.NewPersonRepository(db),
+		coord:            coord,
+		db:               db,
+	}
+
+	handler := NewPeopleHandler(
+		&stubPeopleService{},
+		&stubMergeSuggestionService{},
+		capturingPersonRepo,
+		repository.NewFaceRepository(db),
+		repository.NewPhotoRepository(db),
+		repository.NewPeopleJobRepository(db),
+		&stubIdentityProfileService{},
+		repository.NewPeopleIdentityDecisionRepository(db),
+		&config.Config{Photos: config.PhotosConfig{ThumbnailPath: t.TempDir()}},
+	)
+	handler.SetBackgroundCoordinator(coord)
+
+	// Seed a real person into the capturing repo's DB.
+	person := &model.Person{Name: "FG", Category: model.PersonCategoryFamily}
+	require.NoError(t, db.Create(person).Error)
+	// Seed one photo + face so the cursor photos/faces endpoints have data.
+	photo := &model.Photo{FilePath: "/fg.jpg", FileName: "fg.jpg", FileSize: 1, FileHash: "hfg", Status: model.PhotoStatusActive}
+	require.NoError(t, db.Create(photo).Error)
+	face := &model.Face{PhotoID: photo.ID, PersonID: &person.ID, Confidence: 0.9, QualityScore: 0.8, ClusterStatus: model.FaceClusterStatusAssigned}
+	require.NoError(t, db.Create(face).Error)
+
+	t.Run("GetPerson success path releases scope", func(t *testing.T) {
+		rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/"+strconv.FormatUint(uint64(person.ID), 10), nil,
+			gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(person.ID), 10)}}, handler.GetPerson)
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.True(t, capturingPersonRepo.sawActiveDuringGet, "GetByID must run while foreground scope active")
+		require.False(t, coord.ForegroundActive(), "foreground scope must be released after handler returns")
+	})
+
+	t.Run("GetPerson not-found early-return still releases scope", func(t *testing.T) {
+		capturingPersonRepo.sawActiveDuringGet = false
+		rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/999999", nil,
+			gin.Params{{Key: "id", Value: "999999"}}, handler.GetPerson)
+		// GetByID returns gorm.ErrRecordNotFound (500 in test) or nil→404; either way
+		// the foreground scope must be released on the early-return path.
+		require.True(t, capturingPersonRepo.sawActiveDuringGet, "GetByID runs under scope even on not-found")
+		require.False(t, coord.ForegroundActive(), "scope released on early-return path")
+		_ = rec
+	})
+
+	t.Run("GetPersonPhotos releases scope on success and error", func(t *testing.T) {
+		rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/"+strconv.FormatUint(uint64(person.ID), 10)+"/photos?pagination=cursor", nil,
+			gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(person.ID), 10)}}, handler.GetPersonPhotos)
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.False(t, coord.ForegroundActive())
+
+		// invalid page_size → 400 early return, scope still released
+		rec = performJSONRequest(t, http.MethodGet, "/api/v1/people/1/photos?pagination=cursor&page_size=0", nil,
+			gin.Params{{Key: "id", Value: "1"}}, handler.GetPersonPhotos)
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+		require.False(t, coord.ForegroundActive(), "scope released on 400 early-return")
+	})
+
+	t.Run("GetPersonFaces releases scope on success", func(t *testing.T) {
+		rec := performJSONRequest(t, http.MethodGet, "/api/v1/people/"+strconv.FormatUint(uint64(person.ID), 10)+"/faces?pagination=cursor", nil,
+			gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(person.ID), 10)}}, handler.GetPersonFaces)
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.False(t, coord.ForegroundActive())
+	})
+}
+
+// newTestDB is a small in-memory DB helper for the foreground-scope test (separate
+// from newPeopleHandlerForTest so we can wire our own capturing repo).
+func newTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.Photo{}, &model.Person{}, &model.Face{}, &model.AppConfig{}))
+	return db
+}
+
+// foregroundCapturingPersonRepo wraps a real PersonRepository and records whether the
+// foreground scope was active at the moment GetByID ran.
+type foregroundCapturingPersonRepo struct {
+	repository.PersonRepository
+	coord                *service.BackgroundTaskCoordinator
+	db                   *gorm.DB
+	sawActiveDuringGet   bool
+}
+
+func (r *foregroundCapturingPersonRepo) GetByID(id uint) (*model.Person, error) {
+	r.sawActiveDuringGet = r.coord.ForegroundActive()
+	var person model.Person
+	if err := r.db.First(&person, id).Error; err != nil {
+		return nil, err
+	}
+	return &person, nil
+}

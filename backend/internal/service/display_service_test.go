@@ -125,6 +125,9 @@ func (r *stubPhotoRepo) ListPhotoSummariesByPersonIDPaginated(personID uint, pag
 func (r *stubPhotoRepo) ListPhotoSummariesByPersonIDCursor(personID uint, cursor *repository.PersonPhotoCursor, limit int) ([]*model.Photo, bool, *repository.PersonPhotoCursor, error) {
 	return nil, false, nil, nil
 }
+func (r *stubPhotoRepo) ListPhotoSummariesByPersonIDCursorFromIndex(personID uint, cursor *repository.PersonPhotoCursor, limit int, ppRepo repository.PersonPhotoRepository) ([]*model.Photo, bool, *repository.PersonPhotoCursor, error) {
+	return nil, false, nil, nil
+}
 func (r *stubPhotoRepo) ListSummaries(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string, withTotal bool) ([]*model.PhotoSummary, int64, error) {
 	return nil, 0, nil
 }

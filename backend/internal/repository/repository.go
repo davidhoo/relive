@@ -15,6 +15,7 @@ type Repositories struct {
 	IdentityProfile  PersonIdentityProfileRepository
 	IdentityDecision PeopleIdentityDecisionRepository
 	FeedbackEvent    PeopleFeedbackEventRepository
+	PersonPhoto      PersonPhotoRepository
 	ScanJob          ScanJobRepository
 	ThumbnailJob     ThumbnailJobRepository
 	GeocodeJob       GeocodeJobRepository
@@ -40,6 +41,7 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		IdentityProfile:  NewPersonIdentityProfileRepository(db),
 		IdentityDecision: NewPeopleIdentityDecisionRepository(db),
 		FeedbackEvent:    NewPeopleFeedbackEventRepository(db),
+		PersonPhoto:      NewPersonPhotoRepository(db),
 		ScanJob:          NewScanJobRepository(db),
 		ThumbnailJob:     NewThumbnailJobRepository(db),
 		GeocodeJob:       NewGeocodeJobRepository(db),

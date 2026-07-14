@@ -355,7 +355,7 @@ import { peopleApi } from '@/api/people'
 import type { Face, Person, PersonCategory } from '@/types/people'
 import type { Photo } from '@/types/photo'
 import { getPersonAvatarFallback, getPersonCategoryLabel, sortPeopleForDisplay } from './peopleHelpers'
-import { isAllFacesMoved, shouldLoadByVisibleRange } from './peopleGridUtils'
+import { isAllFacesMoved, shouldLoadByVisibleRange, shouldReevaluateAfterLoad } from './peopleGridUtils'
 
 const route = useRoute()
 const router = useRouter()
@@ -529,6 +529,11 @@ const facesHasMore = ref(true)
 const facesInFlightPersonId = ref<number>(0)
 const facesInFlightCursor = ref<string>('')
 
+// 最近一次可见区间（无论是否 loading 都先保存，供请求完成后重新判定）。
+// 解决“可见区事件发生在 loading 期间被忽略后不再触发”的连续分页中断问题。
+const latestPhotosVisibleRange = ref<{ firstRowIndex: number; lastRowIndex: number; rowCount: number } | null>(null)
+const latestFacesVisibleRange = ref<{ firstRowIndex: number; lastRowIndex: number; rowCount: number } | null>(null)
+
 // 候选人物懒加载
 const candidatePeopleLoaded = ref(false)
 // ---- 编辑弹窗状态：与人物列表页一致 ----
@@ -665,6 +670,10 @@ const loadMorePhotos = async () => {
     ElMessage.error(error.message || '加载照片失败')
   } finally {
     photosLoading.value = false
+    // 请求完成后用最近一次可见区间重新判定：若 loading 期间到达的可见区事件被忽略，
+    // 且新数据仍不足以填满视口，则继续加载下一页；一旦超出视口则停止，等待用户滚动。
+    await nextTick()
+    reevaluatePhotosLoad()
   }
 }
 
@@ -710,6 +719,8 @@ const loadMoreFaces = async () => {
     ElMessage.error(error.message || '加载人脸失败')
   } finally {
     facesLoading.value = false
+    await nextTick()
+    reevaluateFacesLoad()
   }
 }
 
@@ -719,6 +730,8 @@ const loadMoreFaces = async () => {
 const LOAD_THRESHOLD_ROWS = 3
 
 const onPhotosVisibleRange = (payload: { firstRowIndex: number; lastRowIndex: number; rowCount: number }) => {
+  // 无论是否 loading，先保存最新可见区间，供请求完成后重新判定。
+  latestPhotosVisibleRange.value = payload
   if (activeTab.value !== 'photos') return
   if (!shouldLoadByVisibleRange({
     active: true,
@@ -733,6 +746,7 @@ const onPhotosVisibleRange = (payload: { firstRowIndex: number; lastRowIndex: nu
 }
 
 const onFacesVisibleRange = (payload: { firstRowIndex: number; lastRowIndex: number; rowCount: number }) => {
+  latestFacesVisibleRange.value = payload
   if (activeTab.value !== 'faces') return
   if (!shouldLoadByVisibleRange({
     active: true,
@@ -741,6 +755,40 @@ const onFacesVisibleRange = (payload: { firstRowIndex: number; lastRowIndex: num
     hasMore: facesHasMore.value && !facesFinished.value,
     rowCount: payload.rowCount,
     lastVisibleRowIndex: payload.lastRowIndex,
+    thresholdRows: LOAD_THRESHOLD_ROWS,
+  })) return
+  loadMoreFaces()
+}
+
+// reevaluatePhotosLoad：请求完成后用最近一次可见区间重新判定是否继续加载下一页。
+// nextTick 已由调用方在 finally 中执行，确保虚拟列表已基于新数据重新测量。
+const reevaluatePhotosLoad = () => {
+  const range = latestPhotosVisibleRange.value
+  if (!range) return
+  if (activeTab.value !== 'photos') return
+  if (!shouldReevaluateAfterLoad({
+    active: true,
+    loading: photosLoading.value,
+    error: photosError.value,
+    hasMore: photosHasMore.value && !photosFinished.value,
+    rowCount: range.rowCount,
+    lastVisibleRowIndex: range.lastRowIndex,
+    thresholdRows: LOAD_THRESHOLD_ROWS,
+  })) return
+  loadMorePhotos()
+}
+
+const reevaluateFacesLoad = () => {
+  const range = latestFacesVisibleRange.value
+  if (!range) return
+  if (activeTab.value !== 'faces') return
+  if (!shouldReevaluateAfterLoad({
+    active: true,
+    loading: facesLoading.value,
+    error: facesError.value,
+    hasMore: facesHasMore.value && !facesFinished.value,
+    rowCount: range.rowCount,
+    lastVisibleRowIndex: range.lastRowIndex,
     thresholdRows: LOAD_THRESHOLD_ROWS,
   })) return
   loadMoreFaces()
@@ -789,6 +837,9 @@ const loadData = async () => {
   facesLoadedOnce.value = false
   photosScrollTop.value = 0
   facesScrollTop.value = 0
+  // 重置最近可见区间，避免切人物后用旧区间误触发分页。
+  latestPhotosVisibleRange.value = null
+  latestFacesVisibleRange.value = null
 
   try {
     // 首次进入：只加载人物基本信息 + 当前默认 Tab“照片”第一页。
@@ -834,6 +885,7 @@ const refreshPersonAndFaces = async () => {
     facesInFlightPersonId.value = personId
     facesInFlightCursor.value = ''
     facesLoadedOnce.value = false
+    latestFacesVisibleRange.value = null
 
     const [personRes] = await Promise.all([
       peopleApi.getById(personId),

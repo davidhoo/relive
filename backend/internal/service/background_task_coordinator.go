@@ -228,6 +228,14 @@ func (c *BackgroundTaskCoordinator) iowaitPauseThresholdLocked() float64 { retur
 func (c *BackgroundTaskCoordinator) cpuPauseThresholdLocked() float64    { return c.cpuPauseThreshold }
 func (c *BackgroundTaskCoordinator) memoryPauseThresholdLocked() float64 { return c.memoryPauseThreshold }
 
+// IOWaitPauseThreshold 返回 iowait advisory 暂停阈值（线程安全只读）。
+// 供包外后台任务（如 person_photos 回填）在批次边界做让路判定，避免直接调用 *Locked 命名方法。
+func (c *BackgroundTaskCoordinator) IOWaitPauseThreshold() float64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.iowaitPauseThreshold
+}
+
 // CanRun 评估一次后台任务请求是否可以运行，不占用 slot。用于调用方在启动重工作前快速
 // 检查。返回的 decision 不改变 coordinator 状态。
 //

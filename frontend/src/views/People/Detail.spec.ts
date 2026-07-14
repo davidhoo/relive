@@ -253,6 +253,42 @@ describe('Detail - 照片和人脸首次按需加载（测试项 10）', () => {
     await flushPromises()
     expect(mockGetPhotos).toHaveBeenCalledTimes(1)
   })
+
+  it('可见区事件发生在第一页 loading 期间被忽略后，请求完成自动加载第二页', async () => {
+    let resolveFirst: (v: any) => void = () => {}
+    // 第一页只返回 1 条（不足以填满视口），hasMore=true
+    mockGetPhotos.mockReturnValueOnce(new Promise(r => { resolveFirst = r }))
+    await mountDetail()
+    await flushPromises()
+    expect(mockGetPhotos).toHaveBeenCalledTimes(1)
+
+    // 第一页请求 in-flight 期间，派发接近末尾事件（rowCount=1，last=0 → 应触发但被 loading 拦截）
+    gridStub.triggerVisibleRange({ firstRowIndex: 0, lastRowIndex: 0, rowCount: 1 })
+    await flushPromises()
+    expect(mockGetPhotos).toHaveBeenCalledTimes(1)
+
+    // 第一页返回后，finally 重新判定应自动触发第二页，无需再次派发事件
+    resolveFirst(photosPage(1, true))
+    await flushPromises()
+    expect(mockGetPhotos).toHaveBeenCalledTimes(2)
+  })
+
+  it('请求完成后内容已超出视口时不再自动连续加载', async () => {
+    // 第一页返回足够多行（rowCount 大，last 远离末尾），完成后不应自动触发第二页
+    let resolveFirst: (v: any) => void = () => {}
+    mockGetPhotos.mockReturnValueOnce(new Promise(r => { resolveFirst = r }))
+    await mountDetail()
+    await flushPromises()
+
+    // 派发一个远离末尾的可见区间（rowCount=300，last=5）
+    gridStub.triggerVisibleRange({ firstRowIndex: 0, lastRowIndex: 5, rowCount: 300 })
+    await flushPromises()
+
+    resolveFirst(photosPage(300, true))
+    await flushPromises()
+    // 内容已填满视口，finally 重新判定不触发第二页
+    expect(mockGetPhotos).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('Detail - Tab 切换恢复各自滚动位置（测试项 8）', () => {
