@@ -21,6 +21,20 @@ type PersonPhotosBackfill struct {
 	coordinator  *BackgroundTaskCoordinator
 	batchSize    int
 	pauseBetween time.Duration
+	// backoff 是异常/未就绪/修复失败/仍不一致等退避路径的等待时间。
+	// 生产默认 10 秒；测试可在同包内覆盖为极短值。<=0 时回退默认，避免 tight loop。
+	backoff time.Duration
+}
+
+// defaultBackoff 是生产环境的退避等待时间。
+const defaultBackoff = 10 * time.Second
+
+// effectiveBackoff 返回生效退避时间，backoff<=0 时回退默认值。
+func (b *PersonPhotosBackfill) effectiveBackoff() time.Duration {
+	if b.backoff <= 0 {
+		return defaultBackoff
+	}
+	return b.backoff
 }
 
 // NewPersonPhotosBackfill 构造回填服务。db 应为后台只读连接（回填用 WriteQueue 写入）。
@@ -31,6 +45,7 @@ func NewPersonPhotosBackfill(db *gorm.DB, ppRepo repository.PersonPhotoRepositor
 		coordinator:  coordinator,
 		batchSize:    500,
 		pauseBetween: 50 * time.Millisecond,
+		backoff:      defaultBackoff,
 	}
 }
 
@@ -46,7 +61,7 @@ func (b *PersonPhotosBackfill) loop() {
 		if err != nil {
 			logger.Warnf("person_photos backfill error: %v", err)
 			// 出错后退避一段时间再重试，避免 tight loop。
-			time.Sleep(10 * time.Second)
+			time.Sleep(b.effectiveBackoff())
 			continue
 		}
 		if done {
@@ -77,7 +92,7 @@ func (b *PersonPhotosBackfill) runOnce() (bool, error) {
 		return false, err
 	}
 	if !hasTable {
-		time.Sleep(10 * time.Second)
+		time.Sleep(b.effectiveBackoff())
 		return false, nil
 	}
 
@@ -158,7 +173,7 @@ func (b *PersonPhotosBackfill) finalizeAfterBackfill(newLast uint) (bool, error)
 		delta, err := b.ppRepo.RepairBatch(b.db, b.batchSize)
 		if err != nil {
 			logger.Warnf("person_photos repair batch error: %v", err)
-			time.Sleep(10 * time.Second)
+			time.Sleep(b.effectiveBackoff())
 			return false, nil
 		}
 		logger.Infof("person_photos repair batch: deleted_extra=%d deleted_orphan=%d inserted_missing=%d fixed_taken_at=%d (remaining: missing=%d extra=%d orphan=%d taken_at=%d)",
@@ -197,7 +212,7 @@ func (b *PersonPhotosBackfill) finalizeAfterBackfill(newLast uint) (bool, error)
 
 	// 仍有不一致：退避后下回合继续修复（不空转校验）。
 	logger.Warnf("person_photos still inconsistent after repair, will continue next round")
-	time.Sleep(10 * time.Second)
+	time.Sleep(b.effectiveBackoff())
 	return false, nil
 }
 
