@@ -98,3 +98,4 @@ backup/
 *.bak
 
 .worktrees/
+.claude/worktrees/
