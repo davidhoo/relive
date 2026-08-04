@@ -11,6 +11,7 @@ import (
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/pkg/config"
+	"github.com/davidhoo/relive/pkg/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
@@ -519,6 +520,8 @@ func newPhotoServiceForList(t *testing.T) (*photoService, repository.PhotoReposi
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: gormlogger.Discard})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.Photo{}, &model.PhotoTag{}, &model.PhotoTagStats{}, &model.ScanJob{}, &model.AppConfig{}))
+	// deletePhotoAndTags 现在会清理 faces 和同步 person_identity_profiles，需要这些表存在。
+	require.NoError(t, db.AutoMigrate(&model.Person{}, &model.Face{}, &model.PersonIdentityProfile{}))
 	t.Cleanup(func() {
 		sqlDB, _ := db.DB()
 		if sqlDB != nil {
@@ -540,6 +543,7 @@ func newPhotoServicePure(t *testing.T) (PhotoService, repository.PhotoRepository
 		t.Fatalf("open test db: %v", err)
 	}
 	require.NoError(t, db.AutoMigrate(&model.Photo{}, &model.PhotoTag{}, &model.PhotoTagStats{}, &model.ScanJob{}, &model.AppConfig{}))
+	require.NoError(t, db.AutoMigrate(&model.Person{}, &model.Face{}, &model.PersonIdentityProfile{}))
 	t.Cleanup(func() {
 		sqlDB, _ := db.DB()
 		if sqlDB != nil {
@@ -880,4 +884,158 @@ func TestPhotoService_BatchUpdateStatus_InvalidatesCountsCache(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), counts.ActiveCount, "counts cache should be invalidated after batch status update")
 	assert.Equal(t, int64(2), counts.ExcludedCount)
+}
+
+// newPhotoServiceForDeleteTest 创建包含 Face/Person/person_photos/trigger 的测试服务。
+func newPhotoServiceForDeleteTest(t *testing.T) (*photoService, repository.PhotoRepository, *gorm.DB) {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: gormlogger.Discard})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(
+		&model.Photo{}, &model.PhotoTag{}, &model.PhotoTagStats{}, &model.ScanJob{},
+		&model.AppConfig{}, &model.Person{}, &model.Face{}, &model.PersonPhoto{},
+		&model.PersonIdentityProfile{},
+	))
+	require.NoError(t, database.AutoMigrate(db))
+	t.Cleanup(func() {
+		sqlDB, _ := db.DB()
+		if sqlDB != nil {
+			sqlDB.Close()
+		}
+	})
+	photoRepo := repository.NewPhotoRepository(db)
+	configService := NewConfigService(repository.NewConfigRepository(db))
+	scanJobRepo := repository.NewScanJobRepository(db)
+	cfg := &config.Config{Photos: config.PhotosConfig{ThumbnailPath: t.TempDir()}}
+	svc := NewPhotoService(photoRepo, nil, db, scanJobRepo, cfg, configService, nil, nil, nil).(*photoService)
+	return svc, photoRepo, db
+}
+
+// TestPhotoService_DeletePhoto_CleansFaces 验证照片硬删除后不残留 Face。
+func TestPhotoService_DeletePhoto_CleansFaces(t *testing.T) {
+	svc, repo, db := newPhotoServiceForDeleteTest(t)
+
+	person := &model.Person{Name: "Test", Category: model.PersonCategoryFamily}
+	require.NoError(t, db.Create(person).Error)
+	t1 := time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)
+	photo := &model.Photo{FilePath: "/del.jpg", FileName: "del.jpg", FileSize: 1, FileHash: "hdel", TakenAt: &t1, Status: model.PhotoStatusActive}
+	require.NoError(t, repo.Create(photo))
+	require.NoError(t, db.Create(&model.Face{PhotoID: photo.ID, PersonID: &person.ID, ClusterStatus: model.FaceClusterStatusAssigned, QualityScore: 0.9}).Error)
+
+	require.NoError(t, svc.deletePhotoAndTags(photo.ID))
+
+	var faceCount int64
+	require.NoError(t, db.Model(&model.Face{}).Where("photo_id = ?", photo.ID).Count(&faceCount).Error)
+	assert.Equal(t, int64(0), faceCount, "no faces should remain after photo deletion")
+}
+
+// TestPhotoService_DeletePhoto_CleansPersonPhotos 验证删除照片后 person_photos 无残留。
+func TestPhotoService_DeletePhoto_CleansPersonPhotos(t *testing.T) {
+	svc, repo, db := newPhotoServiceForDeleteTest(t)
+
+	person := &model.Person{Name: "PP", Category: model.PersonCategoryFamily}
+	require.NoError(t, db.Create(person).Error)
+	t1 := time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)
+	photo := &model.Photo{FilePath: "/pp.jpg", FileName: "pp.jpg", FileSize: 1, FileHash: "hpp", TakenAt: &t1, Status: model.PhotoStatusActive}
+	require.NoError(t, repo.Create(photo))
+	require.NoError(t, db.Create(&model.Face{PhotoID: photo.ID, PersonID: &person.ID, ClusterStatus: model.FaceClusterStatusAssigned, QualityScore: 0.9}).Error)
+
+	// trigger 应已创建 person_photos
+	var cnt int64
+	require.NoError(t, db.Table("person_photos").Where("photo_id = ?", photo.ID).Count(&cnt).Error)
+	assert.Equal(t, int64(1), cnt)
+
+	require.NoError(t, svc.deletePhotoAndTags(photo.ID))
+
+	require.NoError(t, db.Table("person_photos").Where("photo_id = ?", photo.ID).Count(&cnt).Error)
+	assert.Equal(t, int64(0), cnt, "person_photos should be cleaned after photo deletion")
+}
+
+// TestPhotoService_DeletePhoto_MultipleFacesAllCleaned 验证多张 Face 指向同一照片时全部清理。
+func TestPhotoService_DeletePhoto_MultipleFacesAllCleaned(t *testing.T) {
+	svc, repo, db := newPhotoServiceForDeleteTest(t)
+
+	person := &model.Person{Name: "Multi", Category: model.PersonCategoryFamily}
+	require.NoError(t, db.Create(person).Error)
+	t1 := time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)
+	photo := &model.Photo{FilePath: "/m.jpg", FileName: "m.jpg", FileSize: 1, FileHash: "hm", TakenAt: &t1, Status: model.PhotoStatusActive}
+	require.NoError(t, repo.Create(photo))
+	for i := 0; i < 3; i++ {
+		require.NoError(t, db.Create(&model.Face{PhotoID: photo.ID, PersonID: &person.ID, ClusterStatus: model.FaceClusterStatusAssigned, QualityScore: 0.9}).Error)
+	}
+
+	require.NoError(t, svc.deletePhotoAndTags(photo.ID))
+
+	var faceCount int64
+	require.NoError(t, db.Model(&model.Face{}).Where("photo_id = ?", photo.ID).Count(&faceCount).Error)
+	assert.Equal(t, int64(0), faceCount, "all 3 faces should be deleted")
+}
+
+// TestPhotoService_DeletePhoto_PersonStatsUpdated 验证同一人物还有其他照片时，人物计数和代表人脸正确更新。
+func TestPhotoService_DeletePhoto_PersonStatsUpdated(t *testing.T) {
+	svc, repo, db := newPhotoServiceForDeleteTest(t)
+
+	person := &model.Person{Name: "Stats", Category: model.PersonCategoryFamily}
+	require.NoError(t, db.Create(person).Error)
+	t1 := time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)
+	p1 := &model.Photo{FilePath: "/s1.jpg", FileName: "s1.jpg", FileSize: 1, FileHash: "hs1", TakenAt: &t1, Status: model.PhotoStatusActive}
+	p2 := &model.Photo{FilePath: "/s2.jpg", FileName: "s2.jpg", FileSize: 1, FileHash: "hs2", TakenAt: &t1, Status: model.PhotoStatusActive}
+	require.NoError(t, repo.Create(p1))
+	require.NoError(t, repo.Create(p2))
+	f1 := &model.Face{PhotoID: p1.ID, PersonID: &person.ID, ClusterStatus: model.FaceClusterStatusAssigned, QualityScore: 0.9}
+	f2 := &model.Face{PhotoID: p2.ID, PersonID: &person.ID, ClusterStatus: model.FaceClusterStatusAssigned, QualityScore: 0.8}
+	require.NoError(t, db.Create(f1).Error)
+	require.NoError(t, db.Create(f2).Error)
+	require.NoError(t, db.Model(&model.Person{}).Where("id = ?", person.ID).Update("representative_face_id", f1.ID).Error)
+
+	require.NoError(t, svc.deletePhotoAndTags(p1.ID))
+
+	var person2 model.Person
+	require.NoError(t, db.First(&person2, person.ID).Error)
+	assert.Equal(t, 1, person2.FaceCount, "face_count should be 1")
+	assert.Equal(t, 1, person2.PhotoCount, "photo_count should be 1")
+	require.NotNil(t, person2.RepresentativeFaceID)
+	assert.Equal(t, f2.ID, *person2.RepresentativeFaceID, "representative should be updated to surviving face")
+}
+
+// TestPhotoService_DeletePhoto_LastPhotoPersonStats 验证人物最后一张照片被删除时，计数归零。
+func TestPhotoService_DeletePhoto_LastPhotoPersonStats(t *testing.T) {
+	svc, repo, db := newPhotoServiceForDeleteTest(t)
+
+	person := &model.Person{Name: "Last", Category: model.PersonCategoryFamily}
+	require.NoError(t, db.Create(person).Error)
+	t1 := time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)
+	photo := &model.Photo{FilePath: "/last.jpg", FileName: "last.jpg", FileSize: 1, FileHash: "hlast", TakenAt: &t1, Status: model.PhotoStatusActive}
+	require.NoError(t, repo.Create(photo))
+	face := &model.Face{PhotoID: photo.ID, PersonID: &person.ID, ClusterStatus: model.FaceClusterStatusAssigned, QualityScore: 0.9}
+	require.NoError(t, db.Create(face).Error)
+	require.NoError(t, db.Model(&model.Person{}).Where("id = ?", person.ID).Update("representative_face_id", face.ID).Error)
+
+	require.NoError(t, svc.deletePhotoAndTags(photo.ID))
+
+	var person2 model.Person
+	require.NoError(t, db.First(&person2, person.ID).Error)
+	assert.Equal(t, 0, person2.FaceCount, "face_count should be 0")
+	assert.Equal(t, 0, person2.PhotoCount, "photo_count should be 0")
+	assert.Nil(t, person2.RepresentativeFaceID, "representative_face_id should be NULL")
+}
+
+// TestPhotoService_DeletePhoto_IdentityProfileDirty 验证删除照片后 identity profile 被标记 dirty。
+func TestPhotoService_DeletePhoto_IdentityProfileDirty(t *testing.T) {
+	svc, repo, db := newPhotoServiceForDeleteTest(t)
+
+	person := &model.Person{Name: "Dirty", Category: model.PersonCategoryFamily}
+	require.NoError(t, db.Create(person).Error)
+	t1 := time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)
+	photo := &model.Photo{FilePath: "/d.jpg", FileName: "d.jpg", FileSize: 1, FileHash: "hd", TakenAt: &t1, Status: model.PhotoStatusActive}
+	require.NoError(t, repo.Create(photo))
+	require.NoError(t, db.Create(&model.Face{PhotoID: photo.ID, PersonID: &person.ID, ClusterStatus: model.FaceClusterStatusAssigned, QualityScore: 0.9}).Error)
+
+	require.NoError(t, svc.deletePhotoAndTags(photo.ID))
+
+	var profile model.PersonIdentityProfile
+	err := db.Where("person_id = ?", person.ID).First(&profile).Error
+	require.NoError(t, err)
+	assert.Equal(t, model.PersonIdentityProfileStatusDirty, profile.Status)
+	assert.Equal(t, "photo_deleted", profile.DirtyReason)
 }

@@ -51,6 +51,7 @@ type PersonPhotosConsistencyReport struct {
 	OrphanPhotos        int64 // person_photos 引用的 photo 已被物理删除
 	TakenAtMismatches   int64 // person_photos.taken_at 与 photos.taken_at 不一致
 	PersonCountMismatch int64 // 按人物聚合后，有效 face 的 DISTINCT photo 数与 person_photos 记录数不匹配
+	OrphanFaces         int64 // faces 引用了已物理删除的 photos（悬空 Face）
 }
 
 // IsClean 报告是否所有不一致计数均为 0。
@@ -59,19 +60,23 @@ func (r PersonPhotosConsistencyReport) IsClean() bool {
 		r.ExtraAssociations == 0 &&
 		r.OrphanPhotos == 0 &&
 		r.TakenAtMismatches == 0 &&
-		r.PersonCountMismatch == 0
+		r.PersonCountMismatch == 0 &&
+		r.OrphanFaces == 0
 }
 
 // PersonPhotosRepairDelta 是单轮修复的增量计数。
 type PersonPhotosRepairDelta struct {
-	ExtraDeleted       int64 // 删除的 extra 关联（无有效 face）
-	OrphanDeleted      int64 // 删除的孤儿关联（photo 已删）
-	MissingInserted    int64 // 补齐的 missing 关联
-	TakenAtFixed       int64 // 同步修复的 taken_at
-	RemainingMissing   int64 // 本轮未补齐（受 batchSize 限制），>0 表示需继续修复
-	RemainingExtra     int64
-	RemainingOrphan    int64
-	RemainingTakenAt   int64
+	ExtraDeleted         int64  // 删除的 extra 关联（无有效 face）
+	OrphanDeleted        int64  // 删除的孤儿关联（photo 已删）
+	MissingInserted      int64  // 补齐的 missing 关联
+	TakenAtFixed         int64  // 同步修复的 taken_at
+	OrphanFacesDeleted   int64  // 删除的悬空 Face（face 引用已删 photo）
+	AffectedPersonIDs    []uint // 受 orphan face 清理影响的人物 ID（供调用方做后续同步）
+	RemainingMissing     int64  // 本轮未补齐（受 batchSize 限制），>0 表示需继续修复
+	RemainingExtra       int64
+	RemainingOrphan      int64
+	RemainingTakenAt     int64
+	RemainingOrphanFaces int64 // 剩余悬空 Face 计数
 }
 
 type personPhotoRepository struct {
@@ -269,11 +274,13 @@ func (r *personPhotoRepository) RunConsistencyCheck(tx *gorm.DB) (PersonPhotosCo
 	var rep PersonPhotosConsistencyReport
 
 	// 1. Missing：有效 face 但 person_photos 缺失。
+	//    必须同时要求 photo 存在，否则悬空 Face 会被误计为 missing（线上根因）。
 	if err := db.Raw(`
 		SELECT COUNT(*) FROM (
 			SELECT DISTINCT f.person_id, f.photo_id
 			FROM faces f
 			WHERE f.person_id IS NOT NULL AND f.person_id != 0 AND f.cluster_status != ?
+			  AND EXISTS (SELECT 1 FROM photos p WHERE p.id = f.photo_id)
 			  AND NOT EXISTS (
 				SELECT 1 FROM person_photos pp
 				WHERE pp.person_id = f.person_id AND pp.photo_id = f.photo_id
@@ -314,6 +321,7 @@ func (r *personPhotoRepository) RunConsistencyCheck(tx *gorm.DB) (PersonPhotosCo
 
 	// 5. 按人物聚合：有效 face DISTINCT photo 数 vs person_photos 记录数。
 	//    两段 LEFT JOIN（兼容不支持 FULL OUTER JOIN 的旧 SQLite）。
+	//    只统计 photo 存在的 face，否则悬空 Face 会虚高 face 的 photo 数。
 	var leftDiff, rightDiff int64
 	if err := db.Raw(`
 		SELECT COUNT(*) FROM (
@@ -322,6 +330,7 @@ func (r *personPhotoRepository) RunConsistencyCheck(tx *gorm.DB) (PersonPhotosCo
 				SELECT person_id, COUNT(DISTINCT photo_id) AS cnt
 				FROM faces
 				WHERE person_id IS NOT NULL AND person_id != 0 AND cluster_status != ?
+				  AND EXISTS (SELECT 1 FROM photos p WHERE p.id = faces.photo_id)
 				GROUP BY person_id
 			) fv
 			LEFT JOIN (
@@ -349,6 +358,16 @@ func (r *personPhotoRepository) RunConsistencyCheck(tx *gorm.DB) (PersonPhotosCo
 	}
 	rep.PersonCountMismatch = leftDiff + rightDiff
 
+	// 6. OrphanFaces：faces 引用了已物理删除的 photos（悬空 Face）。
+	//    只统计有效 face（person_id 非空非 0、非 excluded），因为只有这些才会影响 person_photos。
+	if err := db.Raw(`
+		SELECT COUNT(*) FROM faces f
+		WHERE f.person_id IS NOT NULL AND f.person_id != 0 AND f.cluster_status != ?
+		  AND NOT EXISTS (SELECT 1 FROM photos p WHERE p.id = f.photo_id)
+		`, model.FaceClusterStatusExcluded).Scan(&rep.OrphanFaces).Error; err != nil {
+		return rep, err
+	}
+
 	return rep, nil
 }
 
@@ -359,8 +378,8 @@ func (r *personPhotoRepository) RunVerification(tx *gorm.DB) error {
 		return err
 	}
 	if !rep.IsClean() {
-		return fmt.Errorf("person_photos consistency check failed: missing=%d extra=%d orphan=%d taken_at=%d person_count=%d",
-			rep.MissingAssociations, rep.ExtraAssociations, rep.OrphanPhotos, rep.TakenAtMismatches, rep.PersonCountMismatch)
+		return fmt.Errorf("person_photos consistency check failed: missing=%d extra=%d orphan=%d taken_at=%d person_count=%d orphan_faces=%d",
+			rep.MissingAssociations, rep.ExtraAssociations, rep.OrphanPhotos, rep.TakenAtMismatches, rep.PersonCountMismatch, rep.OrphanFaces)
 	}
 	return nil
 }
@@ -386,8 +405,9 @@ func (r *personPhotoRepository) MigrationReady(tx *gorm.DB) (bool, error) {
 // 修复顺序（与一致性报告对应）：
 //  1. 删除 extra 关联（无有效 face）。
 //  2. 删除 orphan 关联（photo 已物理删除）。
-//  3. 补齐 missing 关联（受 batchSize 限制，返回 RemainingMissing）。
-//  4. 同步 taken_at 不一致（受 batchSize 限制）。
+//  3. 清理悬空 Face（face 引用已删 photo）并同步人物状态。
+//  4. 补齐 missing 关联（受 batchSize 限制，返回 RemainingMissing）。
+//  5. 同步 taken_at 不一致（受 batchSize 限制）。
 //
 // 不得删除并重建整个表。修复后调用方应重新校验；只有所有计数为 0 才标记 ready。
 func (r *personPhotoRepository) RepairBatch(tx *gorm.DB, batchSize int) (PersonPhotosRepairDelta, error) {
@@ -430,7 +450,46 @@ func (r *personPhotoRepository) RepairBatch(tx *gorm.DB, batchSize int) (PersonP
 	}
 	delta.OrphanDeleted = res.RowsAffected
 
-	// 3. 补齐 missing：从有效 face 找缺失关联，分批插入（ON CONFLICT 去重）。
+	// 3. 清理悬空 Face：faces 引用已物理删除的 photos。
+	//    这是线上根因修复的核心步骤：删除悬空 Face 后，missing 计数才会归零。
+	//    删除后同步受影响人物的 face_count / photo_count / representative_face_id / identity profile。
+	var affectedPersonIDs []uint
+	if err := db.Raw(`
+		SELECT DISTINCT f.person_id FROM faces f
+		WHERE f.person_id IS NOT NULL AND f.person_id != 0
+		  AND NOT EXISTS (SELECT 1 FROM photos p WHERE p.id = f.photo_id)
+		LIMIT ?`, batchSize).Scan(&affectedPersonIDs).Error; err != nil {
+		return delta, err
+	}
+	if len(affectedPersonIDs) > 0 {
+		res := db.Exec(`
+			DELETE FROM faces
+			WHERE rowid IN (
+				SELECT f.rowid FROM faces f
+				LEFT JOIN photos p ON p.id = f.photo_id
+				WHERE p.id IS NULL
+				LIMIT ?
+			)`, batchSize)
+		if res.Error != nil {
+			return delta, res.Error
+		}
+		delta.OrphanFacesDeleted = res.RowsAffected
+		delta.AffectedPersonIDs = affectedPersonIDs
+
+		for _, pid := range affectedPersonIDs {
+			if err := RefreshPersonStatsRaw(db, pid); err != nil {
+				return delta, err
+			}
+			if err := FixRepresentativeFaceRaw(db, pid); err != nil {
+				return delta, err
+			}
+		}
+		if err := MarkIdentityProfilesDirtyRaw(db, affectedPersonIDs, "orphan_face_cleanup"); err != nil {
+			return delta, err
+		}
+	}
+
+	// 4. 补齐 missing：从有效 face 找缺失关联，分批插入（ON CONFLICT 去重）。
 	type missRow struct {
 		PersonID uint       `gorm:"column:person_id"`
 		PhotoID  uint       `gorm:"column:photo_id"`
@@ -478,7 +537,7 @@ func (r *personPhotoRepository) RepairBatch(tx *gorm.DB, batchSize int) (PersonP
 		delta.MissingInserted = int64(len(missing))
 	}
 
-	// 4. 同步 taken_at 不一致（分批）。
+	// 5. 同步 taken_at 不一致（分批）。
 	res = db.Exec(`
 		UPDATE person_photos
 		SET taken_at = (SELECT p.taken_at FROM photos p WHERE p.id = person_photos.photo_id)
@@ -504,6 +563,7 @@ func (r *personPhotoRepository) RepairBatch(tx *gorm.DB, batchSize int) (PersonP
 	delta.RemainingExtra = rep.ExtraAssociations
 	delta.RemainingOrphan = rep.OrphanPhotos
 	delta.RemainingTakenAt = rep.TakenAtMismatches
+	delta.RemainingOrphanFaces = rep.OrphanFaces
 	return delta, nil
 }
 
@@ -611,4 +671,61 @@ func (r *personPhotoRepository) ListPhotoIDsByPersonCursor(personID uint, cursor
 	}
 
 	return ids, hasMore, nextCursor, nil
+}
+
+// RefreshPersonStatsRaw 更新指定人物的 face_count 和 photo_count。
+// 与 person_repo.go 中的 refreshPersonStats 逻辑一致，但以原生 SQL 实现，
+// 供 person_photo_repo 在 RepairBatch 中直接调用，避免跨 repo 依赖。
+func RefreshPersonStatsRaw(tx *gorm.DB, personID uint) error {
+	return tx.Exec(`
+		UPDATE people SET
+			face_count = (SELECT COUNT(*) FROM faces WHERE person_id = ?),
+			photo_count = (SELECT COUNT(DISTINCT photo_id) FROM faces WHERE person_id = ?)
+		WHERE id = ?`, personID, personID, personID).Error
+}
+
+// FixRepresentativeFaceRaw 检查并修复人物的 representative_face_id。
+// 如果当前 representative_face_id 指向的 face 已不存在（被删除），
+// 则选择该人物下质量最高的一张有效 face 作为新代表，无有效 face 时置 NULL。
+func FixRepresentativeFaceRaw(tx *gorm.DB, personID uint) error {
+	return tx.Exec(`
+		UPDATE people SET representative_face_id = (
+			SELECT f.id FROM faces f
+			WHERE f.person_id = people.id AND f.cluster_status != 'excluded'
+			ORDER BY f.quality_score DESC, f.confidence DESC, f.id ASC
+			LIMIT 1
+		)
+		WHERE id = ?
+		  AND NOT EXISTS (
+			SELECT 1 FROM faces f WHERE f.id = people.representative_face_id
+		  )`, personID).Error
+}
+
+// MarkIdentityProfilesDirtyRaw 将指定人物的 identity profile 标记为 dirty。
+// 使用 INSERT ... ON CONFLICT 模式，确保即使 profile 不存在也会创建。
+func MarkIdentityProfilesDirtyRaw(tx *gorm.DB, personIDs []uint, reason string) error {
+	if len(personIDs) == 0 {
+		return nil
+	}
+	if len(reason) > 50 {
+		reason = reason[:50]
+	}
+	for _, chunk := range chunkIDs(personIDs) {
+		placeholders := make([]string, len(chunk))
+		args := make([]interface{}, 0, len(chunk)+2)
+		args = append(args, reason)
+		for i, id := range chunk {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		args = append(args, reason)
+		sql := `INSERT INTO person_identity_profiles (person_id, status, dirty_reason, created_at, updated_at)
+			SELECT id, 'dirty', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+			FROM people WHERE id IN (` + strings.Join(placeholders, ",") + `)
+			ON CONFLICT(person_id) DO UPDATE SET status = 'dirty', dirty_reason = ?, updated_at = CURRENT_TIMESTAMP`
+		if err := tx.Exec(sql, args...).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -114,8 +114,8 @@ type photoService struct {
 	filteredCountCacheMu sync.RWMutex
 
 	// 按状态计数缓存（/photos/counts：active/excluded 计数，全表聚合，NAS 上较慢）
-	photoStatusCountsCache     *photoCountsCacheEntry
-	photoStatusCountsCacheMu   sync.RWMutex
+	photoStatusCountsCache   *photoCountsCacheEntry
+	photoStatusCountsCacheMu sync.RWMutex
 }
 
 // filteredCountCacheTTL 筛选条件计数缓存存活时间。
@@ -380,23 +380,60 @@ func (s *photoService) DeletePhotosByPathPrefix(pathPrefix string) (int64, error
 }
 
 // deletePhotoAndTags 删除照片及其标签与统计，尽量在同一事务内完成以保证一致性。
+// 同时清理关联 Face，并同步受影响人物的 face_count / photo_count / representative_face_id / identity profile，
+// 避免产生悬空 Face（faces 引用已删 photo）。
 // 当 db 不可用时退化为顺序删除（标签优先，避免统计漂移）。
 func (s *photoService) deletePhotoAndTags(photoID uint) error {
 	if s.db != nil {
 		return s.db.Transaction(func(tx *gorm.DB) error {
+			// 收集受影响人物 ID（删除 Face 前查询）。
+			var affectedPersonIDs []uint
+			if err := tx.Model(&model.Face{}).
+				Where("photo_id = ? AND person_id IS NOT NULL AND person_id != 0", photoID).
+				Distinct("person_id").
+				Pluck("person_id", &affectedPersonIDs).Error; err != nil {
+				return err
+			}
+
+			// 删除关联 Face（防止悬空 Face）。
+			if err := tx.Where("photo_id = ?", photoID).Delete(&model.Face{}).Error; err != nil {
+				return err
+			}
+
 			if s.photoTagRepo != nil {
 				if err := s.photoTagRepo.DeleteTagsByPhotoIDTx(tx, photoID); err != nil {
 					return err
 				}
 			}
-			return s.repo.DeleteTx(tx, photoID)
+			if err := s.repo.DeleteTx(tx, photoID); err != nil {
+				return err
+			}
+
+			// 同步受影响人物状态。
+			for _, pid := range affectedPersonIDs {
+				if err := repository.RefreshPersonStatsRaw(tx, pid); err != nil {
+					return err
+				}
+				if err := repository.FixRepresentativeFaceRaw(tx, pid); err != nil {
+					return err
+				}
+			}
+			if len(affectedPersonIDs) > 0 {
+				if err := repository.MarkIdentityProfilesDirtyRaw(tx, affectedPersonIDs, "photo_deleted"); err != nil {
+					return err
+				}
+			}
+			return nil
 		})
 	}
+
+	// db == nil 退化路径：顺序删除（无事务保护，仅用于极端降级场景）。
 	if s.photoTagRepo != nil {
 		if err := s.photoTagRepo.DeleteTagsByPhotoID(photoID); err != nil {
 			return err
 		}
 	}
+	// 降级路径不清理 Face（无 db 句柄），RepairBatch 的 orphan face 清理作为安全网兜底。
 	return s.repo.Delete(photoID)
 }
 

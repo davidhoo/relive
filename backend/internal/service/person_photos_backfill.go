@@ -24,10 +24,16 @@ type PersonPhotosBackfill struct {
 	// backoff 是异常/未就绪/修复失败/仍不一致等退避路径的等待时间。
 	// 生产默认 10 秒；测试可在同包内覆盖为极短值。<=0 时回退默认，避免 tight loop。
 	backoff time.Duration
+	// stalledBackoff 是零进度退避：修复一轮无修改但仍有不一致时使用更长等待。
+	// 生产默认 50 秒（5x backoff）；测试可覆盖为极短值。<=0 时回退 5x backoff。
+	stalledBackoff time.Duration
 }
 
 // defaultBackoff 是生产环境的退避等待时间。
 const defaultBackoff = 10 * time.Second
+
+// stalledBackoffMultiplier 是零进度退避相对正常 backoff 的倍数。
+const stalledBackoffMultiplier = 5
 
 // effectiveBackoff 返回生效退避时间，backoff<=0 时回退默认值。
 func (b *PersonPhotosBackfill) effectiveBackoff() time.Duration {
@@ -37,15 +43,24 @@ func (b *PersonPhotosBackfill) effectiveBackoff() time.Duration {
 	return b.backoff
 }
 
+// effectiveStalledBackoff 返回零进度退避时间。stalledBackoff<=0 时回退 5x effectiveBackoff。
+func (b *PersonPhotosBackfill) effectiveStalledBackoff() time.Duration {
+	if b.stalledBackoff <= 0 {
+		return time.Duration(stalledBackoffMultiplier) * b.effectiveBackoff()
+	}
+	return b.stalledBackoff
+}
+
 // NewPersonPhotosBackfill 构造回填服务。db 应为后台只读连接（回填用 WriteQueue 写入）。
 func NewPersonPhotosBackfill(db *gorm.DB, ppRepo repository.PersonPhotoRepository, coordinator *BackgroundTaskCoordinator) *PersonPhotosBackfill {
 	return &PersonPhotosBackfill{
-		db:           db,
-		ppRepo:       ppRepo,
-		coordinator:  coordinator,
-		batchSize:    500,
-		pauseBetween: 50 * time.Millisecond,
-		backoff:      defaultBackoff,
+		db:             db,
+		ppRepo:         ppRepo,
+		coordinator:    coordinator,
+		batchSize:      500,
+		pauseBetween:   50 * time.Millisecond,
+		backoff:        defaultBackoff,
+		stalledBackoff: 0, // <=0 → effectiveStalledBackoff 回退 5x backoff
 	}
 }
 
@@ -151,8 +166,8 @@ func (b *PersonPhotosBackfill) finalizeAfterBackfill(newLast uint) (bool, error)
 	if err != nil {
 		return false, err
 	}
-	logger.Infof("person_photos consistency report: missing=%d extra=%d orphan=%d taken_at=%d person_count=%d",
-		rep.MissingAssociations, rep.ExtraAssociations, rep.OrphanPhotos, rep.TakenAtMismatches, rep.PersonCountMismatch)
+	logger.Infof("person_photos consistency report: missing=%d extra=%d orphan=%d taken_at=%d person_count=%d orphan_faces=%d",
+		rep.MissingAssociations, rep.ExtraAssociations, rep.OrphanPhotos, rep.TakenAtMismatches, rep.PersonCountMismatch, rep.OrphanFaces)
 
 	if rep.IsClean() {
 		if err := b.markReady(newLast); err != nil {
@@ -169,6 +184,7 @@ func (b *PersonPhotosBackfill) finalizeAfterBackfill(newLast uint) (bool, error)
 
 	// 本回合最多修复 maxRounds 轮（每轮受 batchSize 限制），避免单回合占用过久。
 	const maxRounds = 20
+	stalled := false
 	for i := 0; i < maxRounds; i++ {
 		delta, err := b.ppRepo.RepairBatch(b.db, b.batchSize)
 		if err != nil {
@@ -176,9 +192,9 @@ func (b *PersonPhotosBackfill) finalizeAfterBackfill(newLast uint) (bool, error)
 			time.Sleep(b.effectiveBackoff())
 			return false, nil
 		}
-		logger.Infof("person_photos repair batch: deleted_extra=%d deleted_orphan=%d inserted_missing=%d fixed_taken_at=%d (remaining: missing=%d extra=%d orphan=%d taken_at=%d)",
-			delta.ExtraDeleted, delta.OrphanDeleted, delta.MissingInserted, delta.TakenAtFixed,
-			delta.RemainingMissing, delta.RemainingExtra, delta.RemainingOrphan, delta.RemainingTakenAt)
+		logger.Infof("person_photos repair batch: deleted_extra=%d deleted_orphan=%d inserted_missing=%d fixed_taken_at=%d deleted_orphan_faces=%d (remaining: missing=%d extra=%d orphan=%d taken_at=%d orphan_faces=%d)",
+			delta.ExtraDeleted, delta.OrphanDeleted, delta.MissingInserted, delta.TakenAtFixed, delta.OrphanFacesDeleted,
+			delta.RemainingMissing, delta.RemainingExtra, delta.RemainingOrphan, delta.RemainingTakenAt, delta.RemainingOrphanFaces)
 
 		// 让步，foreground/I/O 高时暂停（修复也属 P2）。
 		if b.shouldYield() {
@@ -188,19 +204,34 @@ func (b *PersonPhotosBackfill) finalizeAfterBackfill(newLast uint) (bool, error)
 		}
 
 		// 无任何修复动作且无剩余 → 校验通过判定。
-		if delta.ExtraDeleted == 0 && delta.OrphanDeleted == 0 && delta.MissingInserted == 0 && delta.TakenAtFixed == 0 &&
-			delta.RemainingMissing == 0 && delta.RemainingExtra == 0 && delta.RemainingOrphan == 0 && delta.RemainingTakenAt == 0 {
+		if delta.ExtraDeleted == 0 && delta.OrphanDeleted == 0 && delta.MissingInserted == 0 && delta.TakenAtFixed == 0 && delta.OrphanFacesDeleted == 0 &&
+			delta.RemainingMissing == 0 && delta.RemainingExtra == 0 && delta.RemainingOrphan == 0 && delta.RemainingTakenAt == 0 && delta.RemainingOrphanFaces == 0 {
+			break
+		}
+
+		// 零进度检测：本轮无任何修改但仍有不一致计数 → 不可修复数据，终止本轮避免无限重试。
+		if delta.ExtraDeleted == 0 && delta.OrphanDeleted == 0 && delta.MissingInserted == 0 && delta.TakenAtFixed == 0 && delta.OrphanFacesDeleted == 0 &&
+			(delta.RemainingMissing > 0 || delta.RemainingExtra > 0 || delta.RemainingOrphan > 0 || delta.RemainingTakenAt > 0 || delta.RemainingOrphanFaces > 0) {
+			logger.Warnf("person_photos repair stalled: no changes this round but issues remain (missing=%d extra=%d orphan=%d taken_at=%d orphan_faces=%d) — backing off",
+				delta.RemainingMissing, delta.RemainingExtra, delta.RemainingOrphan, delta.RemainingTakenAt, delta.RemainingOrphanFaces)
+			stalled = true
 			break
 		}
 	}
 
 	// 修复后重新校验。
+	// stalled 时跳过冗余全表校验（已知 dirty），直接走更长退避路径。
+	if stalled {
+		logger.Warnf("person_photos repair stalled: using longer backoff (%v), skipping redundant full check", b.effectiveStalledBackoff())
+		time.Sleep(b.effectiveStalledBackoff())
+		return false, nil
+	}
 	rep2, err := b.ppRepo.RunConsistencyCheck(b.db)
 	if err != nil {
 		return false, err
 	}
-	logger.Infof("person_photos post-repair report: missing=%d extra=%d orphan=%d taken_at=%d person_count=%d",
-		rep2.MissingAssociations, rep2.ExtraAssociations, rep2.OrphanPhotos, rep2.TakenAtMismatches, rep2.PersonCountMismatch)
+	logger.Infof("person_photos post-repair report: missing=%d extra=%d orphan=%d taken_at=%d person_count=%d orphan_faces=%d",
+		rep2.MissingAssociations, rep2.ExtraAssociations, rep2.OrphanPhotos, rep2.TakenAtMismatches, rep2.PersonCountMismatch, rep2.OrphanFaces)
 
 	if rep2.IsClean() {
 		if err := b.markReady(newLast); err != nil {
