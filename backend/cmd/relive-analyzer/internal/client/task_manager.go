@@ -33,6 +33,7 @@ type HeartbeatManager struct {
 	analyzerID   string
 	client       *APIClient
 	lockExpiry   time.Time
+	lockVersion  int64
 	stopCh       chan struct{}
 	wg           sync.WaitGroup
 	lastProgress int
@@ -100,6 +101,13 @@ func (tm *TaskManager) GetNextTask() (*model.AnalysisTask, bool) {
 	return &taskCopy, true
 }
 
+// RequeueTask 把任务重新放回队列头部（用于 half-open probe 冲突时退还）。
+func (tm *TaskManager) RequeueTask(task *model.AnalysisTask) {
+	tm.taskMutex.Lock()
+	defer tm.taskMutex.Unlock()
+	tm.tasks = append([]model.AnalysisTask{*task}, tm.tasks...)
+}
+
 // TaskCount 获取剩余任务数
 func (tm *TaskManager) TaskCount() int {
 	tm.taskMutex.RLock()
@@ -108,7 +116,7 @@ func (tm *TaskManager) TaskCount() int {
 }
 
 // StartHeartbeat 启动任务心跳
-func (tm *TaskManager) StartHeartbeat(taskID string, lockExpiry *time.Time) {
+func (tm *TaskManager) StartHeartbeat(taskID string, lockExpiry *time.Time, lockVersion int64) {
 	if lockExpiry == nil {
 		return
 	}
@@ -122,17 +130,18 @@ func (tm *TaskManager) StartHeartbeat(taskID string, lockExpiry *time.Time) {
 	}
 
 	manager := &HeartbeatManager{
-		taskID:     taskID,
-		analyzerID: tm.analyzerID,
-		client:     tm.client,
-		lockExpiry: *lockExpiry,
-		stopCh:     make(chan struct{}),
+		taskID:      taskID,
+		analyzerID:  tm.analyzerID,
+		client:      tm.client,
+		lockExpiry:  *lockExpiry,
+		lockVersion: lockVersion,
+		stopCh:      make(chan struct{}),
 	}
 
 	tm.heartbeats[taskID] = manager
 	manager.Start()
 
-	logger.Debugf("Started heartbeat for task %s (expires at %s)", taskID, lockExpiry.Format("15:04:05"))
+	logger.Debugf("Started heartbeat for task %s (expires at %s, lock_version %d)", taskID, lockExpiry.Format("15:04:05"), lockVersion)
 }
 
 // StopHeartbeat 停止任务心跳
@@ -171,17 +180,18 @@ func (tm *TaskManager) StopAllHeartbeats() {
 }
 
 // ReleaseTask 释放任务
-func (tm *TaskManager) ReleaseTask(ctx context.Context, taskID, reason, errorMsg string, retryLater bool) error {
+func (tm *TaskManager) ReleaseTask(ctx context.Context, taskID string, req model.ReleaseTaskRequest) (*model.ReleaseTaskResult, error) {
 	// 停止心跳
 	tm.StopHeartbeat(taskID)
 
 	// 调用 API 释放任务
-	if err := tm.client.ReleaseTask(ctx, taskID, tm.analyzerID, reason, errorMsg, retryLater); err != nil {
-		return fmt.Errorf("release task: %w", err)
+	result, err := tm.client.ReleaseTask(ctx, taskID, tm.analyzerID, req)
+	if err != nil {
+		return nil, fmt.Errorf("release task: %w", err)
 	}
 
-	logger.Infof("Released task %s (reason: %s)", taskID, reason)
-	return nil
+	logger.Infof("Released task %s (reason: %s, status: %s)", taskID, req.Reason, result.NewStatus)
+	return result, nil
 }
 
 // Start 启动心跳管理器
@@ -240,7 +250,7 @@ func (hb *HeartbeatManager) run() {
 			hb.mu.RUnlock()
 
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			resp, err := hb.client.Heartbeat(ctx, hb.taskID, hb.analyzerID, progress, status)
+			resp, err := hb.client.Heartbeat(ctx, hb.taskID, hb.analyzerID, progress, status, hb.lockVersion)
 			cancel()
 
 			if err != nil {
@@ -250,9 +260,12 @@ func (hb *HeartbeatManager) run() {
 				continue
 			}
 
-			// 更新锁过期时间
+			// 更新锁过期时间与版本。
 			hb.mu.Lock()
 			hb.lockExpiry = resp.LockExpiresAt
+			if resp.LockVersion != 0 {
+				hb.lockVersion = resp.LockVersion
+			}
 			hb.mu.Unlock()
 
 			logger.Debugf("Heartbeat sent for task %s (new expiry: %s)", hb.taskID, resp.LockExpiresAt.Format("15:04:05"))

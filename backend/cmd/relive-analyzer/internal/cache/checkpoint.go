@@ -315,6 +315,10 @@ func (c *Checkpoint) ResetFailed(photoID uint) error {
 
 // ShouldRetry 检查照片是否应该重试
 // 返回 true 如果状态是 failed 且尝试次数未超过 maxAttempts
+//
+// 注意：本地 checkpoint 的 retry 阈值仅作诊断用途，真正的重试调度由服务端
+// analysis_retry_count / analysis_next_retry_at 决定。调用方不应再用本地阈值
+// 覆盖服务端的领取决定。
 func (c *Checkpoint) ShouldRetry(photoID uint, maxAttempts int) (bool, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

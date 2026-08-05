@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -36,6 +35,11 @@ type APIAnalyzer struct {
 	runtimeLeaseAcquired   bool
 	runtimeHeartbeatCancel context.CancelFunc
 
+	// 熔断器与租约暂停
+	circuit      *CircuitBreaker
+	leasePaused  bool
+	leasePauseMu sync.Mutex
+
 	// 工作控制
 	workerPool *analyzer.WorkerPool
 	ctx        context.Context
@@ -49,6 +53,27 @@ type APIAnalyzer struct {
 	// 会话级永久失败记录：记录本次运行中遇到不可恢复错误的照片 ID，不再重试
 	sessionPermanentFailures map[uint]string // photoID → error reason
 	sessionFailMu            sync.Mutex
+}
+
+// circuitConfigFromCfg 把 config 包的镜像结构转换为 CircuitConfig。
+func circuitConfigFromCfg(c analyzerConfig.AnalyzerConfig) CircuitConfig {
+	threshold := c.CircuitFailureThreshold
+	if threshold <= 0 {
+		threshold = 3
+	}
+	initial := time.Duration(c.CircuitInitialBackoff) * time.Second
+	if initial <= 0 {
+		initial = 30 * time.Second
+	}
+	max := time.Duration(c.CircuitMaxBackoff) * time.Second
+	if max <= 0 {
+		max = 10 * time.Minute
+	}
+	return CircuitConfig{
+		FailureThreshold: threshold,
+		InitialBackoff:   initial,
+		MaxBackoff:       max,
+	}
 }
 
 // NewAPIAnalyzer 创建 API 模式分析器
@@ -125,6 +150,7 @@ func NewAPIAnalyzer(cfg *analyzerConfig.Config) (*APIAnalyzer, error) {
 		aiProvider:     aiProvider,
 		imageProcessor: imageProcessor,
 		analyzerID:     analyzerID,
+		circuit:        NewCircuitBreaker(circuitConfigFromCfg(cfg.Analyzer)),
 		workerPool:               workerPool,
 		ctx:                     ctx,
 		cancel:                  cancel,
@@ -254,10 +280,33 @@ func (a *APIAnalyzer) Run() error {
 	// 停止所有组件
 	a.Stop()
 
-	// 打印统计
-	a.stats.Print()
+	// 打印统计与结束摘要
+	a.printSummary()
 
 	return nil
+}
+
+// printSummary 区分全部成功、部分最终失败、Provider 熔断暂停和用户取消。
+func (a *APIAnalyzer) printSummary() {
+	a.stats.Print()
+
+	finalFailures := len(a.sessionPermanentFailures)
+	circuitOpen := a.circuit.State() != CircuitClosed
+	ctxErr := a.ctx.Err()
+
+	switch {
+	case ctxErr != nil && !circuitOpen && finalFailures == 0:
+		// 用户取消或正常停止
+		logger.Info("Analysis run stopped")
+	case finalFailures > 0:
+		logger.Warnf("Analysis run finished with %d permanently failed photo(s)", finalFailures)
+	case circuitOpen:
+		logger.Warn("Analysis run paused due to provider circuit open; will auto-resume on provider recovery")
+	case ctxErr != nil:
+		logger.Info("Analysis run cancelled")
+	default:
+		logger.Info("Analysis completed successfully")
+	}
 }
 
 // restoreUnsubmitted 清理检查点中 analyzed 状态的过期记录
@@ -308,6 +357,7 @@ func (a *APIAnalyzer) Stop() {
 	}
 }
 
+// acquireRuntimeLease 获取全局分析运行租约
 func (a *APIAnalyzer) acquireRuntimeLease() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -320,6 +370,7 @@ func (a *APIAnalyzer) acquireRuntimeLease() error {
 		return fmt.Errorf("acquire analysis runtime: %w", err)
 	}
 
+	a.setLeasePaused(false)
 	a.runtimeLeaseAcquired = true
 	hbCtx, hbCancel := context.WithCancel(context.Background())
 	a.runtimeHeartbeatCancel = hbCancel
@@ -328,11 +379,37 @@ func (a *APIAnalyzer) acquireRuntimeLease() error {
 	return nil
 }
 
+// setLeasePaused 设置租约暂停状态。
+func (a *APIAnalyzer) setLeasePaused(paused bool) {
+	a.leasePauseMu.Lock()
+	defer a.leasePauseMu.Unlock()
+	a.leasePaused = paused
+}
+
+// isLeasePaused 返回租约是否暂停。
+func (a *APIAnalyzer) isLeasePaused() bool {
+	a.leasePauseMu.Lock()
+	defer a.leasePauseMu.Unlock()
+	return a.leasePaused
+}
+
+// tryReacquireLease 在租约丢失时按有界退避重新获取。
+// 此处使用简单的指数退避（1s→2s→4s...，上限 30s），不阻塞 fetchLoop 主循环太久。
+func (a *APIAnalyzer) tryReacquireLease() {
+	if err := a.acquireRuntimeLease(); err != nil {
+		logger.Warnf("Re-acquire runtime lease failed: %v", err)
+		a.setLeasePaused(true)
+		return
+	}
+	logger.Info("Runtime lease re-acquired, resuming fetch")
+}
+
 func (a *APIAnalyzer) runtimeHeartbeatLoop(ctx context.Context) {
 	defer a.wg.Done()
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
+	consecutiveFailures := 0
 	for {
 		select {
 		case <-ticker.C:
@@ -340,7 +417,19 @@ func (a *APIAnalyzer) runtimeHeartbeatLoop(ctx context.Context) {
 			err := a.client.HeartbeatAnalysisRuntime(hbCtx, model.AnalysisOwnerTypeAnalyzer, a.analyzerID)
 			cancel()
 			if err != nil {
+				consecutiveFailures++
 				logger.Warnf("Failed to heartbeat analysis runtime lease: %v", err)
+				// 连续 3 次心跳失败视为租约丢失，进入 lease-paused。
+				if consecutiveFailures >= 3 && !a.isLeasePaused() {
+					logger.Warn("Runtime lease heartbeat failed repeatedly, entering lease-paused")
+					a.setLeasePaused(true)
+				}
+			} else {
+				if consecutiveFailures >= 3 {
+					logger.Info("Runtime lease heartbeat recovered")
+				}
+				consecutiveFailures = 0
+				a.setLeasePaused(false)
 			}
 		case <-ctx.Done():
 			return
@@ -366,6 +455,9 @@ func (a *APIAnalyzer) stopRuntimeLease() {
 }
 
 // fetchLoop 任务获取循环
+//
+// 在 circuit open、probe 已在途、lease 未持有或 context 取消时不得领取。
+// 使用 timer/select，不使用不可取消的长 sleep。
 func (a *APIAnalyzer) fetchLoop() {
 	defer a.wg.Done()
 
@@ -375,8 +467,19 @@ func (a *APIAnalyzer) fetchLoop() {
 	for {
 		select {
 		case <-ticker.C:
+			// lease 丢失时进入 lease-paused，不普通 fetch。
+			if a.isLeasePaused() {
+				logger.Warnf("Runtime lease paused, skipping fetch; attempting re-acquire")
+				a.tryReacquireLease()
+				continue
+			}
+
+			// circuit 禁止领取时跳过（half-open 探测由 processLoop 单独获取）。
+			if !a.circuit.CanFetch() {
+				continue
+			}
+
 			// 计算需要补充的数量：目标是保持本地队列 = workers 数量
-			// 避免取太多任务在本地排队空等（浪费服务器锁时间）
 			current := a.taskManager.TaskCount()
 			target := a.config.Analyzer.Workers
 			if target < a.config.Analyzer.FetchLimit {
@@ -388,13 +491,19 @@ func (a *APIAnalyzer) fetchLoop() {
 			}
 
 			ctx, cancel := context.WithTimeout(a.ctx, 60*time.Second)
-			_, err := a.taskManager.FetchTasks(ctx, need)
+			fetched, err := a.taskManager.FetchTasks(ctx, need)
 			cancel()
 
 			if err != nil {
 				if err.Error() != "no tasks available" {
 					logger.Warnf("Failed to fetch tasks: %v", err)
 				}
+				continue
+			}
+
+			// 成功领取到任务 → 视为 half-open probe 成功，关闭熔断器。
+			if len(fetched) > 0 && a.circuit.State() == CircuitHalfOpen {
+				a.circuit.RecordSuccess()
 			}
 
 		case <-a.ctx.Done():
@@ -420,21 +529,40 @@ func (a *APIAnalyzer) processLoop() {
 			continue
 		}
 
+		// half-open 探测任务：领取后立即占用 probe 许可，处理结果决定熔断器收敛。
+		probe := false
+		if a.circuit.State() == CircuitHalfOpen {
+			if !a.circuit.AcquireProbe() {
+				// 已有 probe 在途；把任务退还到本地队列稍后再处理。
+				a.taskManager.RequeueTask(task)
+				time.Sleep(500 * time.Millisecond)
+				continue
+			}
+			probe = true
+		}
+
 		// 检查本次会话中是否已标记为永久失败（不可恢复错误，如损坏的 JPEG）
 		a.sessionFailMu.Lock()
 		if reason, failed := a.sessionPermanentFailures[task.PhotoID]; failed {
 			a.sessionFailMu.Unlock()
 			logger.Debugf("Photo %d permanently failed in this session (%s), skipping", task.PhotoID, reason)
 			ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
-			a.taskManager.ReleaseTask(ctx, task.ID, "permanent_error", reason, false)
+			a.taskManager.ReleaseTask(ctx, task.ID, model.ReleaseTaskRequest{
+				Reason:       "permanent_error",
+				ErrorMsg:     reason,
+				FailureClass: FailureClassInputPermanent,
+				Provider:     a.aiProvider.Name(),
+				LockVersion:  task.LockVersion,
+			})
 			cancel()
+			if probe {
+				a.circuit.ReleaseProbe()
+			}
 			continue
 		}
 		a.sessionFailMu.Unlock()
 
-		// 检查本地 checkpoint 状态
-		// 核心原则：服务器是 source of truth。如果服务器分配了任务（ai_analyzed=false），
-		// 说明服务器没有收到分析结果，本地 checkpoint 的 analyzed/submitted 状态是过期的。
+		// 服务器是 source of truth；本地 checkpoint 仅做诊断，不再用本地 3 次阈值覆盖服务端决定。
 		processed, err := a.checkpoint.IsProcessed(task.PhotoID)
 		if err != nil {
 			logger.Errorf("Failed to check checkpoint: %v", err)
@@ -443,49 +571,44 @@ func (a *APIAnalyzer) processLoop() {
 			status, _ := a.checkpoint.GetStatus(task.PhotoID)
 			switch status {
 			case string(analyzerCache.StatusAnalyzed), string(analyzerCache.StatusSubmitted), "success":
-				// 本地认为已分析/已提交，但服务器仍然分配了任务，说明提交未成功
-				// 清除本地过期记录，重新分析
 				logger.Infof("Photo %d has stale checkpoint status '%s', server reassigned, will re-process", task.PhotoID, status)
 				a.checkpoint.ResetFailed(task.PhotoID)
 			case string(analyzerCache.StatusFailed):
-				// 本地失败状态，检查是否可以重试
-				shouldRetry, err := a.checkpoint.ShouldRetry(task.PhotoID, 3)
-				if err != nil {
-					logger.Warnf("Failed to check retry status for photo %d: %v", task.PhotoID, err)
-				}
-				if !shouldRetry {
-					logger.Debugf("Photo %d failed too many times locally, skipping", task.PhotoID)
-					// 释放任务并递增服务器 retry_count，避免无限重试
-					ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
-					a.taskManager.ReleaseTask(ctx, task.ID, "local_retry_exhausted", "", false)
-					cancel()
-					continue
-				}
-				logger.Infof("Photo %d will be retried, resetting checkpoint status", task.PhotoID)
+				// 本地失败仅作诊断；是否重试由服务端 attempts/next_retry_at 决定。
 				a.checkpoint.ResetFailed(task.PhotoID)
 			default:
-				// 未知状态，清除后重新处理
 				logger.Warnf("Photo %d has unknown checkpoint status '%s', resetting", task.PhotoID, status)
 				a.checkpoint.ResetFailed(task.PhotoID)
 			}
 		}
 
-		// 通过 checkpoint 检查后才启动心跳（避免对即将跳过的任务创建无用 goroutine）
-		a.taskManager.StartHeartbeat(task.ID, task.LockExpiresAt)
+		// 通过 checkpoint 检查后才启动心跳（带 lock version）
+		a.taskManager.StartHeartbeat(task.ID, task.LockExpiresAt, task.LockVersion)
 
 		// 提交到工作池
 		t := task // 捕获循环变量
+		p := probe
 		if err := a.workerPool.Submit(func(ctx context.Context) error {
-			return a.processTask(ctx, t)
+			return a.processTask(ctx, t, p)
 		}); err != nil {
 			logger.Errorf("Failed to submit task: %v", err)
+			if p {
+				a.circuit.ReleaseProbe()
+			}
 		}
 	}
 }
 
 // processTask 处理单个任务
-func (a *APIAnalyzer) processTask(ctx context.Context, task *model.AnalysisTask) error {
+func (a *APIAnalyzer) processTask(ctx context.Context, task *model.AnalysisTask, probe bool) error {
 	startTime := time.Now()
+
+	// probe 结束时统一释放许可。
+	defer func() {
+		if probe {
+			a.circuit.ReleaseProbe()
+		}
+	}()
 
 	// 标记为处理中
 	if err := a.checkpoint.MarkPending(task.PhotoID); err != nil {
@@ -569,67 +692,83 @@ func (a *APIAnalyzer) processTask(ctx context.Context, task *model.AnalysisTask)
 	duration := time.Since(startTime)
 	a.stats.RecordSuccess(duration, result.Cost)
 
+	// probe 成功 → 关闭熔断器。
+	if probe {
+		a.circuit.RecordSuccess()
+	}
+
 	logger.Debugf("Analyzed photo %d: %s (%.2fs), waiting for submission", task.PhotoID, task.FilePath, duration.Seconds())
 
 	return nil
 }
 
 // handleTaskError 处理任务错误
+//
+// 对错误进行分类，构造带 failure_class/provider/lock_version 的 release 请求，
+// 并按分类更新熔断器。input_permanent 标记会话级跳过；client_cancelled 不计业务失败。
 func (a *APIAnalyzer) handleTaskError(task *model.AnalysisTask, err error, reason string) {
 	logger.Errorf("Task %s failed: %v", task.ID, err)
 
-	// 检测不可恢复的永久错误，标记为会话级永久失败
-	if isPermanentError(err) {
+	class := ClassifyFailure(err)
+
+	// 不可恢复的永久错误，标记会话级跳过。
+	if class == FailureClassInputPermanent {
 		a.sessionFailMu.Lock()
 		a.sessionPermanentFailures[task.PhotoID] = err.Error()
 		a.sessionFailMu.Unlock()
 		logger.Warnf("Photo %d marked as permanent failure for this session: %v", task.PhotoID, err)
 	}
 
-	// 更新检查点
+	// 更新熔断器（input_permanent / client_cancelled 不触发熔断）。
+	if class != FailureClassInputPermanent && class != FailureClassClientCancelled {
+		retryAfter := extractRetryAfter(err)
+		a.circuit.RecordFailure(task.PhotoID, class, retryAfter)
+	}
+
+	// 更新检查点（诊断用）
 	if cpErr := a.checkpoint.MarkFailed(task.PhotoID, err.Error()); cpErr != nil {
 		logger.Warnf("Failed to mark failed: %v", cpErr)
 	}
+
+	// 构造 release 请求
+	retryAfterSecs := 0
+	if ra := extractRetryAfter(err); ra > 0 {
+		retryAfterSecs = int(ra.Seconds())
+	}
+	req := model.ReleaseTaskRequest{
+		Reason:            reason,
+		ErrorMsg:          err.Error(),
+		FailureClass:      class,
+		Provider:          a.aiProvider.Name(),
+		RetryAfterSeconds: retryAfterSecs,
+		LockVersion:       task.LockVersion,
+	}
+	// 旧字段兼容：input_permanent 时 retry_later=false，其余按 transient。
+	req.RetryLater = false
 
 	// 释放任务
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if releaseErr := a.taskManager.ReleaseTask(ctx, task.ID, reason, err.Error(), false); releaseErr != nil {
+	if _, releaseErr := a.taskManager.ReleaseTask(ctx, task.ID, req); releaseErr != nil {
 		logger.Warnf("Failed to release task: %v", releaseErr)
 	}
 
 	// 停止心跳
 	a.taskManager.StopHeartbeat(task.ID)
 
-	// 更新统计
-	a.stats.RecordFailure(reason)
+	// 更新统计（client_cancelled 不计业务失败）
+	if class != FailureClassClientCancelled {
+		a.stats.RecordFailure(reason)
+	}
 }
 
-// isPermanentError 判断是否为不可恢复的永久错误
-// 这些错误重试也不会成功，应在本次会话中跳过
-func isPermanentError(err error) bool {
-	if err == nil {
-		return false
+// extractRetryAfter 从错误中提取 Retry-After 时长（仅 ProviderError 携带）。
+func extractRetryAfter(err error) time.Duration {
+	if pe, ok := provider.IsProviderError(err); ok {
+		return pe.RetryAfter
 	}
-	msg := strings.ToLower(err.Error())
-	permanentPatterns := []string{
-		"invalid jpeg format",
-		"short huffman data",
-		"invalid jpeg",
-		"unknown image format",
-		"unsupported image format",
-		"image: unknown format",
-		"not a valid png",
-		"corrupt",
-		"unexpected eof",
-	}
-	for _, pattern := range permanentPatterns {
-		if strings.Contains(msg, pattern) {
-			return true
-		}
-	}
-	return false
+	return 0
 }
 
 // createAIProvider 创建 AI Provider

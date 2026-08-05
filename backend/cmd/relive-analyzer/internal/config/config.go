@@ -34,6 +34,12 @@ type AnalyzerConfig struct {
 	RetryDelay       int    `yaml:"retry_delay"`       // 重试延迟（秒）
 	CheckpointFile   string `yaml:"checkpoint_file"`   // 断点续传文件
 	AnalyzerID       string `yaml:"analyzer_id"`       // 分析器实例ID（可选，自动生成）
+
+	// 熔断与重试治理（缺省值由 analyzer 包补全）
+	MaxAttempts             int `yaml:"max_attempts"`               // 服务端统一最大尝试次数（仅诊断用，权威值在服务端）
+	CircuitFailureThreshold int `yaml:"circuit_failure_threshold"` // 连续不同照片失败阈值
+	CircuitInitialBackoff   int `yaml:"circuit_initial_backoff"`   // 熔断初始退避（秒）
+	CircuitMaxBackoff       int `yaml:"circuit_max_backoff"`       // 熔断最大退避（秒）
 }
 
 // AIConfig AI 配置

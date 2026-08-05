@@ -202,12 +202,13 @@ func (c *APIClient) GetTasks(ctx context.Context, limit int, analyzerID string) 
 }
 
 // Heartbeat 发送任务心跳
-func (c *APIClient) Heartbeat(ctx context.Context, taskID, analyzerID string, progress int, status string) (*model.HeartbeatResponse, error) {
+func (c *APIClient) Heartbeat(ctx context.Context, taskID, analyzerID string, progress int, status string, lockVersion int64) (*model.HeartbeatResponse, error) {
 	path := fmt.Sprintf("/api/v1/analyzer/tasks/%s/heartbeat", url.PathEscape(taskID))
 
 	req := model.HeartbeatRequest{
-		Progress: progress,
-		Status:   status,
+		Progress:    progress,
+		Status:      status,
+		LockVersion: lockVersion,
 	}
 
 	headers := make(map[string]string)
@@ -243,14 +244,8 @@ func (c *APIClient) Heartbeat(ctx context.Context, taskID, analyzerID string, pr
 }
 
 // ReleaseTask 释放任务
-func (c *APIClient) ReleaseTask(ctx context.Context, taskID, analyzerID, reason, errorMsg string, retryLater bool) error {
+func (c *APIClient) ReleaseTask(ctx context.Context, taskID, analyzerID string, req model.ReleaseTaskRequest) (*model.ReleaseTaskResult, error) {
 	path := fmt.Sprintf("/api/v1/analyzer/tasks/%s/release", url.PathEscape(taskID))
-
-	req := model.ReleaseTaskRequest{
-		Reason:     reason,
-		ErrorMsg:   errorMsg,
-		RetryLater: retryLater,
-	}
 
 	headers := make(map[string]string)
 	if analyzerID != "" {
@@ -259,19 +254,30 @@ func (c *APIClient) ReleaseTask(ctx context.Context, taskID, analyzerID, reason,
 
 	resp, err := c.doRequest(ctx, "POST", path, req, headers)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	var apiResp model.Response
 	if err := parseResponse(resp, &apiResp); err != nil {
-		return err
+		return nil, err
 	}
 
 	if !apiResp.Success {
-		return fmt.Errorf("API error: %s", apiResp.Error.Message)
+		return nil, fmt.Errorf("API error: %s", apiResp.Error.Code)
 	}
 
-	return nil
+	// 幂等/成功都返回 200 + ReleaseTaskResult。
+	dataJSON, err := json.Marshal(apiResp.Data)
+	if err != nil {
+		return nil, fmt.Errorf("marshal data: %w", err)
+	}
+
+	var result model.ReleaseTaskResult
+	if err := json.Unmarshal(dataJSON, &result); err != nil {
+		// 旧服务端可能返回 gin.H，兼容：返回空 result。
+		return &model.ReleaseTaskResult{TaskID: taskID, NewStatus: "pending"}, nil
+	}
+	return &result, nil
 }
 
 // SubmitResults 提交分析结果
