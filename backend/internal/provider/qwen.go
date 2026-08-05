@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -195,13 +194,12 @@ func (p *QwenProvider) analyzePhoto(request *AnalyzeRequest) (*AnalyzeResult, in
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, 0, fmt.Errorf("send request: %w", err)
+		return nil, 0, NewTransportError(p.Name(), isTimeoutErr(err), err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, 0, fmt.Errorf("qwen api error: %s, body: %s", resp.Status, string(body))
+		return nil, 0, NewHTTPError(p.Name(), resp)
 	}
 
 	// 解析响应
@@ -222,11 +220,11 @@ func (p *QwenProvider) analyzePhoto(request *AnalyzeRequest) (*AnalyzeResult, in
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&qwenResp); err != nil {
-		return nil, 0, fmt.Errorf("decode response: %w", err)
+		return nil, 0, NewResponseInvalidError(p.Name(), "decode response: "+err.Error())
 	}
 
 	if len(qwenResp.Output.Choices) == 0 || len(qwenResp.Output.Choices[0].Message.Content) == 0 {
-		return nil, 0, fmt.Errorf("no response from qwen api")
+		return nil, 0, NewResponseInvalidError(p.Name(), "no response from qwen api")
 	}
 
 	responseText := qwenResp.Output.Choices[0].Message.Content[0].Text
@@ -234,7 +232,7 @@ func (p *QwenProvider) analyzePhoto(request *AnalyzeRequest) (*AnalyzeResult, in
 	// 解析 AI 响应
 	result, err := p.parseResponse(responseText)
 	if err != nil {
-		return nil, 0, fmt.Errorf("parse response: %w", err)
+		return nil, 0, NewResponseInvalidError(p.Name(), err.Error())
 	}
 
 	totalTokens := qwenResp.Usage.InputTokens + qwenResp.Usage.OutputTokens
@@ -288,13 +286,12 @@ func (p *QwenProvider) generateCaption(request *AnalyzeRequest) (string, int, er
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return "", 0, fmt.Errorf("send request: %w", err)
+		return "", 0, NewTransportError(p.Name(), isTimeoutErr(err), err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", 0, fmt.Errorf("qwen api error: %s, body: %s", resp.Status, string(body))
+		return "", 0, NewHTTPError(p.Name(), resp)
 	}
 
 	// 解析响应
@@ -315,11 +312,11 @@ func (p *QwenProvider) generateCaption(request *AnalyzeRequest) (string, int, er
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&qwenResp); err != nil {
-		return "", 0, fmt.Errorf("decode response: %w", err)
+		return "", 0, NewResponseInvalidError(p.Name(), "decode response: "+err.Error())
 	}
 
 	if len(qwenResp.Output.Choices) == 0 || len(qwenResp.Output.Choices[0].Message.Content) == 0 {
-		return "", 0, fmt.Errorf("no response from qwen api")
+		return "", 0, NewResponseInvalidError(p.Name(), "no response from qwen api")
 	}
 
 	responseText := qwenResp.Output.Choices[0].Message.Content[0].Text
@@ -327,7 +324,7 @@ func (p *QwenProvider) generateCaption(request *AnalyzeRequest) (string, int, er
 	// 解析文案响应
 	caption, err := p.parseCaptionResponse(responseText)
 	if err != nil {
-		return "", 0, fmt.Errorf("parse caption response: %w", err)
+		return "", 0, NewResponseInvalidError(p.Name(), err.Error())
 	}
 
 	totalTokens := qwenResp.Usage.InputTokens + qwenResp.Usage.OutputTokens
@@ -511,13 +508,12 @@ func (p *QwenProvider) AnalyzeBatch(requests []*AnalyzeRequest) ([]*AnalyzeResul
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
+		return nil, NewTransportError(p.Name(), isTimeoutErr(err), err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("qwen api error: %s, body: %s", resp.Status, string(body))
+		return nil, NewHTTPError(p.Name(), resp)
 	}
 
 	// 解析响应
@@ -538,11 +534,11 @@ func (p *QwenProvider) AnalyzeBatch(requests []*AnalyzeRequest) ([]*AnalyzeResul
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&qwenResp); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+		return nil, NewResponseInvalidError(p.Name(), "decode response: "+err.Error())
 	}
 
 	if len(qwenResp.Output.Choices) == 0 || len(qwenResp.Output.Choices[0].Message.Content) == 0 {
-		return nil, fmt.Errorf("no response from qwen api")
+		return nil, NewResponseInvalidError(p.Name(), "no response from qwen api")
 	}
 
 	responseText := qwenResp.Output.Choices[0].Message.Content[0].Text
@@ -550,7 +546,7 @@ func (p *QwenProvider) AnalyzeBatch(requests []*AnalyzeRequest) ([]*AnalyzeResul
 	// 解析批量响应
 	results, err := p.parseBatchResponse(responseText, len(requests))
 	if err != nil {
-		return nil, fmt.Errorf("parse batch response: %w", err)
+		return nil, NewResponseInvalidError(p.Name(), err.Error())
 	}
 
 	// 计算实际成本（批量有折扣）

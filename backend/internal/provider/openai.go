@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -163,13 +162,12 @@ func (p *OpenAIProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
+		return nil, NewTransportError(p.Name(), isTimeoutErr(err), err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("openai api error: %s, body: %s", resp.Status, string(body))
+		return nil, NewHTTPError(p.Name(), resp)
 	}
 
 	// 解析响应
@@ -188,11 +186,11 @@ func (p *OpenAIProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&openaiResp); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+		return nil, NewResponseInvalidError(p.Name(), "decode response: "+err.Error())
 	}
 
 	if len(openaiResp.Choices) == 0 {
-		return nil, fmt.Errorf("no response from openai api")
+		return nil, NewResponseInvalidError(p.Name(), "no response from openai api")
 	}
 
 	responseText := openaiResp.Choices[0].Message.Content
@@ -200,7 +198,7 @@ func (p *OpenAIProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error
 	// 解析 AI 响应
 	result, err := p.parseResponse(responseText)
 	if err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
+		return nil, NewResponseInvalidError(p.Name(), err.Error())
 	}
 
 	// 计算实际成本
@@ -312,13 +310,12 @@ func (p *OpenAIProvider) GenerateCaption(request *AnalyzeRequest) (string, error
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return "", fmt.Errorf("send request: %w", err)
+		return "", NewTransportError(p.Name(), isTimeoutErr(err), err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("openai api error: %s, body: %s", resp.Status, string(body))
+		return "", NewHTTPError(p.Name(), resp)
 	}
 
 	var openaiResp struct {
@@ -330,11 +327,11 @@ func (p *OpenAIProvider) GenerateCaption(request *AnalyzeRequest) (string, error
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&openaiResp); err != nil {
-		return "", fmt.Errorf("decode response: %w", err)
+		return "", NewResponseInvalidError(p.Name(), "decode response: "+err.Error())
 	}
 
 	if len(openaiResp.Choices) == 0 {
-		return "", fmt.Errorf("no response from openai api")
+		return "", NewResponseInvalidError(p.Name(), "no response from openai api")
 	}
 
 	caption := strings.TrimSpace(openaiResp.Choices[0].Message.Content)

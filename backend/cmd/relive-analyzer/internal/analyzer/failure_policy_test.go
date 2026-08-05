@@ -33,6 +33,7 @@ func TestClassifyFailure_TableDriven(t *testing.T) {
 		{"jpeg corrupt", errors.New("invalid jpeg format: short huffman data"), FailureClassInputPermanent},
 		{"unsupported format", errors.New("image: unknown format"), FailureClassInputPermanent},
 		{"client cancelled", NewClientCancelledError(), FailureClassClientCancelled},
+		{"download failed", NewDownloadFailedError(errors.New("connection reset")), FailureClassDownloadFailed},
 		{"unknown plain error", errors.New("something weird happened"), FailureClassProviderTransient},
 		{"nil", nil, ""},
 	}
@@ -63,4 +64,33 @@ func TestIsInputPermanent(t *testing.T) {
 func TestIsClientCancelled(t *testing.T) {
 	assert.True(t, IsClientCancelled(NewClientCancelledError()))
 	assert.False(t, IsClientCancelled(errors.New("nope")))
+}
+
+func TestIsDownloadFailed(t *testing.T) {
+	assert.True(t, IsDownloadFailed(NewDownloadFailedError(errors.New("timeout"))))
+	assert.False(t, IsDownloadFailed(errors.New("nope")))
+}
+
+// TestClassifyFailure_ProviderBodyCorruptNotInputPermanent
+// Provider 响应 body 里碰巧含 "corrupt" 不应被误判为 input_permanent。
+func TestClassifyFailure_ProviderBodyCorruptNotInputPermanent(t *testing.T) {
+	pe := &provider.ProviderError{
+		Provider:    "vllm",
+		StatusCode:  502,
+		BodySummary: "model corrupt state",
+	}
+	assert.Equal(t, FailureClassProviderTransient, ClassifyFailure(pe))
+}
+
+// TestCircuitBreaker_DownloadFailedDoesNotOpen
+// download_failed 不应触发 Provider 熔断。
+func TestCircuitBreaker_DownloadFailedDoesNotOpen(t *testing.T) {
+	clk := newFakeClock(time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC))
+	cb := NewCircuitBreaker(DefaultCircuitConfig())
+	cb.SetNowFunc(clk.now)
+
+	for i := 1; i <= 10; i++ {
+		cb.RecordFailure(uint(i), FailureClassDownloadFailed, 0)
+	}
+	assert.Equal(t, CircuitClosed, cb.State(), "download_failed 不应熔断 Provider")
 }

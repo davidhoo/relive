@@ -14,6 +14,9 @@ const (
 	FailureClassInputPermanent = "input_permanent"
 	// FailureClassClientCancelled: 用户取消、进程退出
 	FailureClassClientCancelled = "client_cancelled"
+	// FailureClassDownloadFailed: 照片下载失败（Analyzer→Server 网络问题，非 Provider 问题）。
+	// 计入退避（避免立即重领热循环），但不触发 Provider 熔断。
+	FailureClassDownloadFailed = "download_failed"
 )
 
 // AnalysisMaxAttempts 统一最大尝试次数，替代本地 3 次、服务端 10 次、统计 3 次三套口径。
@@ -80,7 +83,8 @@ func nextAnalysisRetry(attempt int, class string, retryAfter time.Duration, now 
 		}
 	}
 
-	// 可重试分类：provider_transient / rate_limited / response_invalid
+	// 可重试分类：provider_transient / rate_limited / response_invalid / download_failed
+	// download_failed 与 provider_transient 走相同退避表，但由熔断器区分是否计数（不计 Provider 熔断）。
 	newAttempts := attempt + 1
 	if newAttempts >= AnalysisMaxAttempts {
 		return RetryDecision{

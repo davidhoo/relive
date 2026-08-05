@@ -616,13 +616,14 @@ func parseTaskID(taskID string) (uint, bool) {
 
 // classifyLegacyReason 在旧 Analyzer 未发送 failure_class 时按 reason 保守映射。
 // 保守原则：不可识别的 reason 一律视为 provider_transient（计退避，可熔断），避免热循环。
+// 下载失败单独归类为 download_failed：计入退避但不触发 Provider 熔断。
 func classifyLegacyReason(reason string, retryLater bool) string {
 	switch reason {
 	case model.ReleaseReasonFileCorrupted, model.ReleaseReasonUnsupportedFormat:
 		return FailureClassInputPermanent
 	case model.ReleaseReasonDownloadFailed:
-		// 下载失败多为临时网络问题，按 transient 处理。
-		return FailureClassProviderTransient
+		// 下载失败是 Analyzer→Server 的网络问题，不应触发 Provider 熔断。
+		return FailureClassDownloadFailed
 	default:
 		return FailureClassProviderTransient
 	}

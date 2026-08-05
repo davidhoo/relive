@@ -205,25 +205,36 @@ func (p *OpenAIResponsesProvider) generateText(prompt string, imageData []byte) 
 
 	httpResp, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
+		return nil, NewTransportError(p.Name(), isTimeoutErr(err), err)
 	}
 	defer httpResp.Body.Close()
 
 	body, err := io.ReadAll(httpResp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return nil, NewTransportError(p.Name(), false, err)
 	}
 
 	if httpResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("openai responses api error: %s, body: %s", httpResp.Status, string(body))
+		// NewHTTPError 期望读取 resp.Body，这里已读出 body，构造时重新包装。
+		pe := &ProviderError{
+			Provider:   p.Name(),
+			StatusCode: httpResp.StatusCode,
+			BodySummary: sanitizeBody(string(body), 500),
+		}
+		if ra := httpResp.Header.Get("Retry-After"); ra != "" {
+			if d, ok := parseRetryAfter(ra); ok {
+				pe.RetryAfter = d
+			}
+		}
+		return nil, pe
 	}
 
 	resp, err := parseOpenAIResponsesBody(body, httpResp.Header.Get("Content-Type"))
 	if err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+		return nil, NewResponseInvalidError(p.Name(), "decode response: "+err.Error())
 	}
 	if resp.text() == "" {
-		return nil, fmt.Errorf("no response from openai responses api")
+		return nil, NewResponseInvalidError(p.Name(), "no response from openai responses api")
 	}
 	return resp, nil
 }

@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/davidhoo/relive/internal/provider"
@@ -14,16 +15,18 @@ const (
 	FailureClassResponseInvalid   = "response_invalid"
 	FailureClassInputPermanent    = "input_permanent"
 	FailureClassClientCancelled   = "client_cancelled"
+	FailureClassDownloadFailed    = "download_failed"
 )
 
 // ClassifyFailure 把任意 error 映射为失败分类。
 //
 // 规则（基于结构化类型与状态码，禁止只靠字符串包含）：
+//   - 客户端取消 → client_cancelled
+//   - 下载失败（Downloader 包装）→ download_failed（计退避，不熔断 Provider）
 //   - ProviderError.ResponseInvalid → response_invalid
 //   - ProviderError.StatusCode == 429 → rate_limited
 //   - ProviderError.StatusCode in {502,503,504} 或 Transport/Timeout → provider_transient
 //   - 输入永久错误（JPEG 损坏、不支持格式）→ input_permanent
-//   - 客户端取消 → client_cancelled
 //   - 其余未知 → provider_transient（保守，可触发熔断，避免热循环）
 func ClassifyFailure(err error) string {
 	if err == nil {
@@ -35,9 +38,17 @@ func ClassifyFailure(err error) string {
 		return FailureClassClientCancelled
 	}
 
-	// 输入永久错误（图像解码失败等）。
-	if isInputPermanentErr(err) {
-		return FailureClassInputPermanent
+	// 下载失败（Analyzer→Server 网络问题，不应触发 Provider 熔断）。
+	if errors.Is(err, errDownloadFailed) {
+		return FailureClassDownloadFailed
+	}
+
+	// 输入永久错误（图像解码失败等）。仅对非 ProviderError 作用，
+	// 避免把 Provider 响应 body 里碰巧含 "corrupt" 的消息误判为永久输入错误。
+	if _, isProvider := provider.IsProviderError(err); !isProvider {
+		if isInputPermanentErr(err) {
+			return FailureClassInputPermanent
+		}
 	}
 
 	// 结构化 ProviderError。
@@ -63,6 +74,17 @@ func ClassifyFailure(err error) string {
 	// 兜底：未知错误按 transient。
 	return FailureClassProviderTransient
 }
+
+// errDownloadFailed 标记下载失败（由 Downloader 包装）。
+var errDownloadFailed = errors.New("download failed")
+
+// NewDownloadFailedError 包装一个下载错误，使其可被 ClassifyFailure 识别为 download_failed。
+func NewDownloadFailedError(err error) error {
+	return fmt.Errorf("%w: %v", errDownloadFailed, err)
+}
+
+// IsDownloadFailed 判断是否为下载失败。
+func IsDownloadFailed(err error) bool { return errors.Is(err, errDownloadFailed) }
 
 // errClientCancelled 标记客户端主动取消。
 var errClientCancelled = errors.New("client cancelled")

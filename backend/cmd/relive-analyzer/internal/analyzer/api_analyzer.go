@@ -393,8 +393,10 @@ func (a *APIAnalyzer) isLeasePaused() bool {
 	return a.leasePaused
 }
 
-// tryReacquireLease 在租约丢失时按有界退避重新获取。
-// 此处使用简单的指数退避（1s→2s→4s...，上限 30s），不阻塞 fetchLoop 主循环太久。
+// tryReacquireLease 在租约丢失时立即尝试一次重新获取。
+// 不在这里做退避：fetchLoop 每 5 秒 tick 一次，lease-paused 期间每个 tick 调用一次
+// 本函数，本身就是有界的重试节奏（最坏 5s 一次）。真正恢复后由 setLeasePaused(false)
+// 解除暂停，普通 fetch 恢复。
 func (a *APIAnalyzer) tryReacquireLease() {
 	if err := a.acquireRuntimeLease(); err != nil {
 		logger.Warnf("Re-acquire runtime lease failed: %v", err)
@@ -491,7 +493,7 @@ func (a *APIAnalyzer) fetchLoop() {
 			}
 
 			ctx, cancel := context.WithTimeout(a.ctx, 60*time.Second)
-			fetched, err := a.taskManager.FetchTasks(ctx, need)
+			_, err := a.taskManager.FetchTasks(ctx, need)
 			cancel()
 
 			if err != nil {
@@ -501,10 +503,10 @@ func (a *APIAnalyzer) fetchLoop() {
 				continue
 			}
 
-			// 成功领取到任务 → 视为 half-open probe 成功，关闭熔断器。
-			if len(fetched) > 0 && a.circuit.State() == CircuitHalfOpen {
-				a.circuit.RecordSuccess()
-			}
+			// 注意：half-open 探测的成功/失败由 processLoop 通过 AcquireProbe + processTask
+			// 的 AI 分析结果决定（fetch 成功只代表服务端可通信，不代表 Provider 健康）。
+			// 这里不基于 fetch 结果调用 RecordSuccess——fetchLoop 在 half-open 时
+			// CanFetch() 返回 false，本分支不会在 half-open 状态下执行。
 
 		case <-a.ctx.Done():
 			return
@@ -619,7 +621,8 @@ func (a *APIAnalyzer) processTask(ctx context.Context, task *model.AnalysisTask,
 	a.taskManager.UpdateHeartbeatProgress(task.ID, 10, "downloading")
 	tempFile, err := a.downloader.Download(ctx, task.PhotoID, task.DownloadURL)
 	if err != nil {
-		a.handleTaskError(task, err, "download_failed")
+		// 下载失败包装为 download_failed 分类（计退避，不触发 Provider 熔断）。
+		a.handleTaskError(task, NewDownloadFailedError(err), "download_failed")
 		return err
 	}
 	defer a.downloader.Delete(tempFile)

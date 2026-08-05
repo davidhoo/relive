@@ -609,27 +609,49 @@ func migrateFTS5ConditionalTrigger(db *gorm.DB) error {
 }
 
 // migrateAnalysisPendingIndex 为待分析查询添加复合索引
-// 加速 GetPendingTasks 中按 status + ai_analyzed + thumbnail_status 的过滤查询
+// 加速 GetPendingTasks 中按 status + ai_analyzed + thumbnail_status 的过滤查询。
+// v2 增补 analysis_next_retry_at 与 analysis_retry_count 列，覆盖 retry_wait / max-attempt 谓词。
 func migrateAnalysisPendingIndex(db *gorm.DB) error {
 	const migrationKey = "migration.analysis_pending_index_v1"
+	const migrationKeyV2 = "migration.analysis_pending_index_v2"
 
+	// v1 索引（旧库可能已存在）。
 	var cfg model.AppConfig
 	if err := db.Where("key = ?", migrationKey).First(&cfg).Error; err == nil {
+		// 落到 v2 检查。
+	} else {
+		log.Printf("[database] creating analysis pending compound index...")
+		indexSQL := `CREATE INDEX IF NOT EXISTS idx_photos_analysis_pending
+			ON photos(status, ai_analyzed, thumbnail_status, analysis_lock_expired_at)
+			WHERE deleted_at IS NULL`
+		if err := db.Exec(indexSQL).Error; err != nil {
+			return fmt.Errorf("create analysis pending index: %w", err)
+		}
+		log.Printf("[database] analysis pending index created")
+		db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
+	}
+
+	// v2：重建为覆盖 next_retry_at + retry_count 的更宽复合索引。
+	var cfgV2 model.AppConfig
+	if err := db.Where("key = ?", migrationKeyV2).First(&cfgV2).Error; err == nil {
 		return nil
 	}
 
-	log.Printf("[database] creating analysis pending compound index...")
+	log.Printf("[database] rebuilding analysis pending index to cover retry columns...")
 
-	indexSQL := `CREATE INDEX IF NOT EXISTS idx_photos_analysis_pending
-		ON photos(status, ai_analyzed, thumbnail_status, analysis_lock_expired_at)
+	// 删除旧索引再建新索引。SQLite 不支持 DROP IF EXISTS on index 直接重建，
+	// 用 DROP INDEX IF EXISTS 安全幂等。
+	db.Exec("DROP INDEX IF EXISTS idx_photos_analysis_pending")
+
+	indexSQLV2 := `CREATE INDEX IF NOT EXISTS idx_photos_analysis_pending
+		ON photos(status, ai_analyzed, thumbnail_status, analysis_next_retry_at, analysis_retry_count, analysis_lock_expired_at)
 		WHERE deleted_at IS NULL`
-
-	if err := db.Exec(indexSQL).Error; err != nil {
-		return fmt.Errorf("create analysis pending index: %w", err)
+	if err := db.Exec(indexSQLV2).Error; err != nil {
+		return fmt.Errorf("create analysis pending index v2: %w", err)
 	}
 
-	log.Printf("[database] analysis pending index created")
-	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
+	log.Printf("[database] analysis pending index v2 created")
+	db.Create(&model.AppConfig{Key: migrationKeyV2, Value: "done"})
 	return nil
 }
 

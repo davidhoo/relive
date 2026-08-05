@@ -98,6 +98,8 @@ type Photo struct {
 	// AnalysisLockVersion 单调递增的锁版本，避免同一 Analyzer 的迟到 heartbeat/release 影响新任务。
 	AnalysisLockVersion int64 `gorm:"not null;default:0" json:"-"`
 	// AnalysisNextRetryAt 下次可重试时间；非空且晚于 now 时不得被领取。
+	// 注：领取查询的覆盖索引由 migrateAnalysisPendingIndex v2 维护
+	// （status, ai_analyzed, thumbnail_status, analysis_next_retry_at, analysis_retry_count, analysis_lock_expired_at）。
 	AnalysisNextRetryAt *time.Time `gorm:"index:idx_analysis_retry_ready" json:"-"`
 	// AnalysisLastErrorCode / AnalysisLastError / AnalysisLastFailedAt 最近一次失败分类与脱敏摘要。
 	AnalysisLastErrorCode string     `gorm:"type:varchar(50)" json:"-"`

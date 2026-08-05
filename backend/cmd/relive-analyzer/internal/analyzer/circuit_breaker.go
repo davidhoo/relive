@@ -194,8 +194,9 @@ func (cb *CircuitBreaker) RecordFailure(photoID uint, class string, retryAfter t
 	}
 
 	// closed 状态累计连续失败（不同 photo ID）。
+	// download_failed 不计入 Provider 熔断（它是 Analyzer→Server 网络问题，不是 Provider 故障）。
 	if class != FailureClassProviderTransient && class != FailureClassResponseInvalid {
-		// input_permanent / client_cancelled 不计入 Provider 熔断。
+		// input_permanent / client_cancelled / download_failed 不计入 Provider 熔断。
 		return
 	}
 
