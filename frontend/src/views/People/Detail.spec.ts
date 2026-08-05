@@ -846,3 +846,117 @@ describe('Detail - 停止滚动后请求稳定（无 reevaluate 闭环）', () =
     void vm
   })
 })
+
+// ===== P0 自动滚动回归（Detail 侧）：finally 不再 measure，无用户滚动不续页 =====
+//
+// 线上根因：loadMorePhotos/loadMoreFaces 的 finally 调用 grid.measure()，触发虚拟器滚动补偿，
+// 推进可见区间 → 再次分页的无限闭环。修复后 finally 只释放 loading / 更新 items+cursor+hasMore。
+//
+// 这组测试用真实分页数据 + 显式可见区间事件验证：
+//   - 一次接近末端事件最多触发一次分页；响应追加后不得自动请求第三页。
+//   - 照片与人脸分别验证。
+//   - 用户再次真实滚动到新末端时，可以正常加载下一页。
+// 真实行高差异由父组件驱动（Detail 不直接控制行高），这里通过“追加后不再派发新事件”
+// 间接验证 finally 不再触发重测/续页。
+describe('Detail - P0 自动滚动回归（finally 不重测，无滚动不续页）', () => {
+  const photosOf = (count: number, start: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      id: start + i + 1,
+      file_name: `p${start + i}.jpg`,
+      updated_at: '2026-01-01T00:00:00Z',
+    }))
+  const facesOf = (count: number, start: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      id: start + i + 1, photo_id: 1, updated_at: '2026-01-01T00:00:00Z', quality_score: 0.9,
+    }))
+
+  beforeEach(() => {
+    mockGetById.mockReset()
+    mockGetPhotos.mockReset()
+    mockGetFaces.mockReset()
+    mockGetList.mockReset()
+    mockGetById.mockResolvedValue(makePerson())
+  })
+
+  it('照片：一次接近末端事件最多一页，追加后不得自动请求第三页', async () => {
+    // 第一页 30 张 / 4 列 = 8 行；last=6 → 8-6=2 <= threshold(3) → 触发第二页。
+    mockGetPhotos.mockResolvedValueOnce(cursor(photosOf(30, 0), true, 'c2'))
+    const wrapper = await mountDetail()
+    await flushPromises()
+    const vm = wrapper.findComponent(Detail).vm as any
+    expect(mockGetPhotos).toHaveBeenCalledTimes(1)
+
+    // 第二页 30 张（追加后 60 张 / 4 = 15 行），next=c3，hasMore=true。
+    mockGetPhotos.mockResolvedValueOnce(cursor(photosOf(30, 30), true, 'c3'))
+    gridStub.triggerVisibleRange({ firstRowIndex: 0, lastRowIndex: 6, rowCount: 8 })
+    await flushPromises()
+    expect(mockGetPhotos).toHaveBeenCalledTimes(2)
+    expect(vm.photos.length).toBe(60)
+
+    // 关键：第二页追加后，无新的可见区间事件 → finally 不再重测/续页 → 不得自动请求第三页。
+    const callsAfterSettled = mockGetPhotos.mock.calls.length
+    await flushPromises()
+    await flushPromises()
+    await flushPromises()
+    expect(mockGetPhotos.mock.calls.length).toBe(callsAfterSettled)
+
+    // 用户再次真实滚动到新末端（last=13 → 15-13=2 <= threshold）才触发第三页。
+    mockGetPhotos.mockResolvedValueOnce(cursor(photosOf(30, 60), true, 'c4'))
+    gridStub.triggerVisibleRange({ firstRowIndex: 0, lastRowIndex: 13, rowCount: 15 })
+    await flushPromises()
+    expect(mockGetPhotos).toHaveBeenCalledTimes(3)
+  })
+
+  it('人脸：一次接近末端事件最多一页，追加后不得自动请求第三页', async () => {
+    mockGetFaces.mockResolvedValueOnce(cursor(facesOf(50, 0), true, 'fc2'))
+    const wrapper = await mountDetail()
+    await flushPromises()
+    const vm = wrapper.findComponent(Detail).vm as any
+    vm.activeTab = 'faces'
+    await flushPromises()
+    expect(mockGetFaces).toHaveBeenCalledTimes(1)
+
+    // 50 张 / 10 列 = 5 行；last=3 → 5-3=2 <= threshold → 触发第二页。
+    mockGetFaces.mockResolvedValueOnce(cursor(facesOf(50, 50), true, 'fc3'))
+    gridStub.triggerVisibleRange({ firstRowIndex: 0, lastRowIndex: 3, rowCount: 5 })
+    await flushPromises()
+    expect(mockGetFaces).toHaveBeenCalledTimes(2)
+    expect(vm.faces.length).toBe(100)
+
+    // 追加后无新事件 → 不得自动请求第三页。
+    const callsAfterSettled = mockGetFaces.mock.calls.length
+    await flushPromises()
+    await flushPromises()
+    await flushPromises()
+    expect(mockGetFaces.mock.calls.length).toBe(callsAfterSettled)
+
+    // 用户再次真实滚动到新末端（100 张 / 10 = 10 行，last=8 → 10-8=2 <= threshold）才触发第三页。
+    mockGetFaces.mockResolvedValueOnce(cursor(facesOf(50, 100), true, 'fc4'))
+    gridStub.triggerVisibleRange({ firstRowIndex: 0, lastRowIndex: 8, rowCount: 10 })
+    await flushPromises()
+    expect(mockGetFaces).toHaveBeenCalledTimes(3)
+  })
+
+  it('照片：用户设置非零 scrollTop 后追加一页，无新事件不续页', async () => {
+    // 验证 finally 删除 measure 后，追加数据不会因滚动补偿而自发产生续页请求。
+    mockGetPhotos.mockResolvedValueOnce(cursor(photosOf(30, 0), true, 'c2'))
+    const wrapper = await mountDetail()
+    await flushPromises()
+    const vm = wrapper.findComponent(Detail).vm as any
+    expect(mockGetPhotos).toHaveBeenCalledTimes(1)
+
+    // 模拟用户已滚动到中段（桩网格 offset 非零），派发的可见区间远离末尾 → 不触发第二页。
+    // 30 张 / 4 列 = 8 行；last=2 → 8-2=6 > threshold(3) → 远离末尾，不触发。
+    gridStub.setScrollOffset(500)
+    gridStub.triggerVisibleRange({ firstRowIndex: 0, lastRowIndex: 2, rowCount: 8 })
+    await flushPromises()
+    expect(mockGetPhotos).toHaveBeenCalledTimes(1)
+
+    // 即便后续追加（这里无新事件），无接近末端事件就不应续页。
+    const callsAfterSettled = mockGetPhotos.mock.calls.length
+    await flushPromises()
+    await flushPromises()
+    expect(mockGetPhotos.mock.calls.length).toBe(callsAfterSettled)
+    void vm
+  })
+})

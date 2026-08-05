@@ -10,6 +10,44 @@ import VirtualMediaGrid from '@/components/VirtualMediaGrid.vue'
 // 因此测试必须在挂载前就把 .main-content 的 offsetHeight/offsetWidth/scrollTop/rect 桩好：
 // 预建 .main-content DOM 节点 → 桩属性 → 用 attachTo 挂载组件到该节点内。
 // 行高通过桩 HTMLElement.prototype.offsetHeight 给定（measureElement 读 offsetHeight）。
+//
+// 自动滚动回归（P0）：旧实现在分页追加后调用全量 measure()，清空 itemSizeCache，
+// virtualizer 对视口上方行的 estimate→actual 差值做 applyScrollAdjustment 改写 scrollTop，
+// 推进真实可见区间 → visible-range-change → 父组件再次分页 → 无限闭环。
+// 回归测试用真实行高（160）≠ 估算行高（110）复现，修复后 scrollTop 不得自动增加、
+// 无用户滚动时不得重复派发推进后的可见区间。
+
+// jsdom 不提供 ResizeObserver。需要两类桩：
+//  1. virtual-core 内部 observer（measureElement 注册节点用）——空实现即可，让注册路径不抛错；
+//  2. 组件自身的 ResizeObserver（监听网格容器布局变化）——可控实现，测试可手动派发回调，
+//     用于验证“纯高度变化不触发 measure / 不改写 scrollTop”。
+// 这里导出可控实现：observe 记录 target，trigger(entry) 手动派发回调。组件 RO 与
+// virtual-core 内部 RO 共用同一个全局类，因此都能被测试驱动。
+class ControllableResizeObserver {
+  callback: ResizeObserverCallback
+  targets = new Set<Element>()
+  static instances: ControllableResizeObserver[] = []
+  constructor(cb: ResizeObserverCallback) {
+    this.callback = cb
+    ControllableResizeObserver.instances.push(this)
+  }
+  observe(t: Element) { this.targets.add(t) }
+  unobserve(t: Element) { this.targets.delete(t) }
+  disconnect() { this.targets.clear() }
+  // 测试用：手动派发一次 resize 回调，模拟浏览器在尺寸变化时通知 observer。
+  trigger(entry: { target: Element; borderBoxSize?: { inlineSize: number; blockSize: number }[]; contentRect?: DOMRectReadOnly }) {
+    this.callback([entry as any], this)
+  }
+}
+;(globalThis as any).ResizeObserver = ControllableResizeObserver
+;(window as any).ResizeObserver = ControllableResizeObserver
+
+// 每个用例前清空实例记录，避免跨用例污染。
+const resetROInstances = () => { ControllableResizeObserver.instances = [] }
+// 取监听指定元素的 RO 实例（组件 RO observe 的是网格容器 .virtual-media-grid）。
+const roFor = (el: Element) =>
+  ControllableResizeObserver.instances.find(ro => ro.targets.has(el))
+
 
 // 预建 .main-content 滚动容器 DOM，桩尺寸/偏移/rect。返回容器与 setTop。
 const buildScroller = (opts: {
@@ -29,11 +67,20 @@ const buildScroller = (opts: {
   Object.defineProperty(scroller, 'offsetHeight', { configurable: true, get: () => scrollerHeight })
   Object.defineProperty(scroller, 'offsetWidth', { configurable: true, get: () => scrollerWidth })
   let top = scrollTop
+  // 记录通过 scrollTo 写入的 scrollTop（virtualizer 滚动补偿走 scrollToFn → element.scrollTo）。
+  // 自动滚动回归据此断言“追加数据是否改写了滚动位置”。
+  const scrollToCalls: number[] = []
   Object.defineProperty(scroller, 'scrollTop', {
     configurable: true,
     get() { return top },
     set(v: number) { top = v },
   })
+  // virtual-core elementScroll 调用 scrollElement.scrollTo({ top })。jsdom 不提供，桩之并记录。
+  ;(scroller as any).scrollTo = (v: number | { top?: number }) => {
+    const t = typeof v === 'number' ? v : (v && typeof v.top === 'number' ? v.top : top)
+    scrollToCalls.push(t)
+    top = t
+  }
   Object.defineProperty(scroller, 'clientHeight', { configurable: true, get: () => scrollerHeight })
   Object.defineProperty(scroller, 'clientWidth', { configurable: true, get: () => scrollerWidth })
   vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue({
@@ -41,12 +88,14 @@ const buildScroller = (opts: {
     width: scrollerWidth, height: scrollerHeight, x: 0, y: scrollerTop, toJSON: () => ({}),
   } as DOMRect)
   const setTop = (v: number) => { top = v }
-  return { scroller, setTop }
+  const getTop = () => top
+  return { scroller, setTop, getTop, scrollToCalls }
 }
 
 // 把网格挂载到预建的 .main-content 内。
 const mountInScroller = (props: Record<string, unknown>, scrollerOpts: Parameters<typeof buildScroller>[0] = {}) => {
-  const { scroller, setTop } = buildScroller(scrollerOpts)
+  const built = buildScroller(scrollerOpts)
+  const { scroller, setTop } = built
   document.body.appendChild(scroller)
   const wrapper = mount(
     {
@@ -70,7 +119,7 @@ const mountInScroller = (props: Record<string, unknown>, scrollerOpts: Parameter
       attachTo: scroller,
     },
   )
-  return { wrapper, scroller, setTop }
+  return { wrapper, scroller, setTop, ...built }
 }
 
 // 简化挂载：用默认 800px 高 .main-content。
@@ -645,6 +694,389 @@ describe('VirtualMediaGrid - .main-content 滚动驱动可见区间（集成，�
       expect(events.length).toBeGreaterThan(0)
       const ev = events[events.length - 1]!
       expect(ev.firstRowIndex).toBeGreaterThan(0)
+      wrapper.unmount()
+    } finally {
+      restore()
+    }
+  })
+})
+
+// ===== P0 自动滚动回归：真实行高 ≠ 估算行高 =====
+//
+// 线上根因：分页追加数据后调用 virtualizer.measure()（清空 itemSizeCache），virtualizer 对
+// 视口上方行的 estimate→actual 差值做 applyScrollAdjustment，主动改写 scrollTop；scrollTop 变化
+// 推进真实可见区间 → visible-range-change → 父组件判定接近末端 → 请求下一页 → 无限闭环。
+//
+// 这组测试用真实行高 160 ≠ 估算 110 复现：修复前，追加一页会让 scrollTop 自动增加、
+// 可见区间被推进、并再次派发事件；修复后，scrollTop 不变、无重复派发、用户真实滚动到末端仍能加载。
+// 真实行高通过桩 HTMLElement.prototype.offsetHeight = 160（measureElement 读 offsetHeight）给定。
+describe('VirtualMediaGrid - 分页追加不自动滚动（P0，真实行高 160 ≠ 估算 110）', () => {
+  // 估算行高固定 110，真实行高通过 stubRowOffsetHeight(160) 给定。
+  const ESTIMATE = 110
+  const REAL = 160
+
+  beforeEach(() => {
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 })
+    resetROInstances()
+  })
+
+  it('设置非零 scrollTop 后追加一页：scrollTop 不得自动增加', async () => {
+    const restore = stubRowOffsetHeight(REAL)
+    try {
+      const events: { firstRowIndex: number; lastRowIndex: number; rowCount: number }[] = []
+      const { scroller, getTop, scrollToCalls } = buildScroller({ scrollerHeight: 800, scrollTop: 0 })
+      document.body.appendChild(scroller)
+      // 300 项 / 15 = 20 行；真实行高 160 + gap 10 = 170/行，总高 3400。
+      const wrapper = mount(
+        {
+          components: { VirtualMediaGrid },
+          template: `<VirtualMediaGrid :items="items" :columns="15" :row-height="${ESTIMATE}" :gap="10" size-class="small" @visible-range-change="onRange"><template #item="{ item }"><div class="cell">{{ item.id }}</div></template></VirtualMediaGrid>`,
+          data: () => ({ items: Array.from({ length: 300 }, (_, i) => ({ id: i + 1 })) }),
+          methods: { onRange(p: any) { events.push(p) } },
+        },
+        { attachTo: scroller },
+      )
+      await flushPromises()
+      // 用户滚动到 500px 并派发 scroll，让 virtualizer 把该位置的行测出真实高度（写入缓存）。
+      ;(scroller as any).scrollTop = 500
+      scroller.dispatchEvent(new Event('scroll'))
+      await flushPromises()
+      await flushPromises()
+
+      const beforeTop = getTop()
+      const rangeBefore = (wrapper.findComponent(VirtualMediaGrid).vm as any).virtualizer?.range
+      const keyBefore = rangeBefore ? `${rangeBefore.startIndex}-${rangeBefore.endIndex}` : ''
+      // 清空记录，只观察“追加后”是否被补偿写回 / 区间是否被推进。
+      scrollToCalls.length = 0
+      events.length = 0
+
+      // 追加一页（不模拟任何用户滚动）：父组件 items 增长，等价于分页追加。
+      await wrapper.setData({ items: Array.from({ length: 600 }, (_, i) => ({ id: i + 1 })) })
+      await flushPromises()
+      await flushPromises()
+      await flushPromises()
+
+      const afterTop = getTop()
+      // 核心断言：追加数据不得改写用户滚动位置（允许浏览器取整误差 1px）。
+      expect(Math.abs(afterTop - beforeTop)).toBeLessThanOrEqual(1)
+      // 补偿若发生会走 scrollTo；修复后追加不应触发任何 scrollTo 补偿写回。
+      expect(scrollToCalls.length).toBe(0)
+      // 真实可见区间不得被推进。
+      const rangeAfter = (wrapper.findComponent(VirtualMediaGrid).vm as any).virtualizer?.range
+      const keyAfter = rangeAfter ? `${rangeAfter.startIndex}-${rangeAfter.endIndex}` : ''
+      expect(keyAfter).toBe(keyBefore)
+      // 不得因追加而派发新的可见区间事件。
+      expect(events.length).toBe(0)
+      wrapper.unmount()
+    } finally {
+      restore()
+    }
+  })
+
+  it('追加数据但用户未继续滚动：不得再次派发推进后的可见区间', async () => {
+    const restore = stubRowOffsetHeight(REAL)
+    try {
+      const events: { firstRowIndex: number; lastRowIndex: number; rowCount: number }[] = []
+      const { scroller } = buildScroller({ scrollerHeight: 800, scrollTop: 0 })
+      document.body.appendChild(scroller)
+      const wrapper = mount(
+        {
+          components: { VirtualMediaGrid },
+          template: `<VirtualMediaGrid
+            :items="items" :columns="15" :row-height="${ESTIMATE}" :gap="10" :size-class="'small'"
+            @visible-range-change="onRange"
+          ><template #item="{ item }"><div class="cell">{{ item.id }}</div></template></VirtualMediaGrid>`,
+          data: () => ({ items: Array.from({ length: 300 }, (_, i) => ({ id: i + 1 })) }),
+          methods: { onRange(p: any) { events.push(p) } },
+        },
+        { attachTo: scroller },
+      )
+      await flushPromises()
+      const vm = wrapper.findComponent(VirtualMediaGrid).vm as any
+      // 用户滚动到中段并稳定。
+      ;(scroller as any).scrollTop = 500
+      scroller.dispatchEvent(new Event('scroll'))
+      await flushPromises()
+      await flushPromises()
+      vm.recomputeScrollMargin()
+      await flushPromises()
+      // 记录稳定后的真实可见区间。
+      const rangeBefore = vm.virtualizer?.range
+      const keyBefore = rangeBefore ? `${rangeBefore.startIndex}-${rangeBefore.endIndex}` : ''
+      events.length = 0
+
+      // 追加一页，用户不再滚动。
+      await wrapper.setData({ items: Array.from({ length: 600 }, (_, i) => ({ id: i + 1 })) })
+      await flushPromises()
+      await flushPromises()
+      await flushPromises()
+
+      const rangeAfter = vm.virtualizer?.range
+      const keyAfter = rangeAfter ? `${rangeAfter.startIndex}-${rangeAfter.endIndex}` : ''
+      // 真实可见区间不得被推进。
+      expect(keyAfter).toBe(keyBefore)
+      // 不得因追加而派发“区间被推进”的事件：去重 key 未变，但 rowCount 变化可能触发一次
+      // startIndex/endIndex 不变的事件（旧实现的残留）。这里只断言没有“推进后的”事件——
+      // 即没有事件 whose (startIndex,endIndex) 与稳定区间不同。
+      const advanced = events.filter(e => `${e.firstRowIndex}-${e.lastRowIndex}` !== keyBefore)
+      expect(advanced.length).toBe(0)
+      wrapper.unmount()
+    } finally {
+      restore()
+    }
+  })
+
+  it('一次接近末端事件最多触发一次分页：响应追加后不得自动请求第三页', async () => {
+    // 组件级验证：接近末端 → 派发一次事件 → 追加一页 → 追加后真实区间不推进 → 不再派发新事件。
+    // 父组件（Detail）侧的“最多一次”由 in-flight 锁与“无新事件不续页”共同保证，这里验证组件侧
+    // 不会因追加而自发产生第二次“接近末端”事件。
+    //
+    // 关键陷阱：数据从 2 行追加到 4 行时，虚拟器会“就地测量”新挂载行（measureElement），
+    // 这些行在视口内（首屏），其 estimate→actual 差值使它们进入真实视口区间，
+    // virtualizer.range.endIndex 因此从 1 扩到 3——这是“新数据自身进入视口”，而非滚动补偿推进。
+    // 这正是首屏“为填满视口而补页”的合法路径。要复现“追加不得推进”，必须在追加前数据已超过视口、
+    // 用户已滚动到中段，使追加的行落在视口之外（不在可见区），此时 range 才应保持不变。
+    const restore = stubRowOffsetHeight(REAL)
+    try {
+      const events: { firstRowIndex: number; lastRowIndex: number; rowCount: number }[] = []
+      const { scroller } = buildScroller({ scrollerHeight: 800, scrollTop: 0 })
+      document.body.appendChild(scroller)
+      // 600 项 / 15 = 40 行，真实行高 160+gap10=170/行，总高 6800，远超视口。
+      const wrapper = mount(
+        {
+          components: { VirtualMediaGrid },
+          template: `<VirtualMediaGrid
+            :items="items" :columns="15" :row-height="${ESTIMATE}" :gap="10" :size-class="'small'"
+            @visible-range-change="onRange"
+          ><template #item="{ item }"><div class="cell">{{ item.id }}</div></template></VirtualMediaGrid>`,
+          data: () => ({ items: Array.from({ length: 600 }, (_, i) => ({ id: i + 1 })) }),
+          methods: { onRange(p: any) { events.push(p) } },
+        },
+        { attachTo: scroller },
+      )
+      await flushPromises()
+      const vm = wrapper.findComponent(VirtualMediaGrid).vm as any
+      // 用户滚动到中段并稳定：使可见区间落在数据中部，追加的行落在视口之外。
+      ;(scroller as any).scrollTop = 2000
+      scroller.dispatchEvent(new Event('scroll'))
+      await flushPromises()
+      await flushPromises()
+      vm.recomputeScrollMargin()
+      await flushPromises()
+      const range0 = vm.virtualizer?.range
+      const key0 = range0 ? `${range0.startIndex}-${range0.endIndex}` : ''
+      events.length = 0
+
+      // 追加一页（900 项 / 15 = 60 行），用户不滚动。新行落在已加载末尾之后，不在当前视口。
+      await wrapper.setData({ items: Array.from({ length: 900 }, (_, i) => ({ id: i + 1 })) })
+      await flushPromises()
+      await flushPromises()
+      await flushPromises()
+      // 真实区间不得被推进（追加的行不在视口内，不应改变可见区间）。
+      const range1 = vm.virtualizer?.range
+      const key1 = range1 ? `${range1.startIndex}-${range1.endIndex}` : ''
+      expect(key1).toBe(key0)
+      // 不得派发“区间被推进”的事件。
+      const advanced = events.filter(e => `${e.firstRowIndex}-${e.lastRowIndex}` !== key0)
+      expect(advanced.length).toBe(0)
+      wrapper.unmount()
+    } finally {
+      restore()
+    }
+  })
+
+  it('用户真实滚动到新末端：可见区间推进并派发事件', async () => {
+    const restore = stubRowOffsetHeight(REAL)
+    try {
+      const events: { firstRowIndex: number; lastRowIndex: number; rowCount: number }[] = []
+      const { scroller } = buildScroller({ scrollerHeight: 800, scrollTop: 0 })
+      document.body.appendChild(scroller)
+      const wrapper = mount(
+        {
+          components: { VirtualMediaGrid },
+          template: `<VirtualMediaGrid
+            :items="items" :columns="15" :row-height="${ESTIMATE}" :gap="10" :size-class="'small'"
+            @visible-range-change="onRange"
+          ><template #item="{ item }"><div class="cell">{{ item.id }}</div></template></VirtualMediaGrid>`,
+          data: () => ({ items: Array.from({ length: 600 }, (_, i) => ({ id: i + 1 })) }),
+          methods: { onRange(p: any) { events.push(p) } },
+        },
+        { attachTo: scroller },
+      )
+      await flushPromises()
+      const vm = wrapper.findComponent(VirtualMediaGrid).vm as any
+      vm.recomputeScrollMargin()
+      await flushPromises()
+      const firstBefore = vm.getFirstVisibleIndex()
+      events.length = 0
+
+      // 用户真实向下滚动到接近末端。
+      ;(scroller as any).scrollTop = 6000
+      scroller.dispatchEvent(new Event('scroll'))
+      await flushPromises()
+      await flushPromises()
+
+      const firstAfter = vm.getFirstVisibleIndex()
+      expect(firstAfter).toBeGreaterThan(firstBefore)
+      // 真实滚动应派发可见区间事件。
+      expect(events.length).toBeGreaterThan(0)
+      const last = events[events.length - 1]!
+      expect(last.firstRowIndex).toBeGreaterThan(0)
+      wrapper.unmount()
+    } finally {
+      restore()
+    }
+  })
+
+  it('人脸密度（5 列）同样不因追加自动滚动', async () => {
+    const restore = stubRowOffsetHeight(REAL)
+    try {
+      const { scroller, getTop, scrollToCalls } = buildScroller({ scrollerHeight: 800, scrollTop: 0 })
+      document.body.appendChild(scroller)
+      const wrapper = mount(
+        {
+          components: { VirtualMediaGrid },
+          template: `<VirtualMediaGrid :items="items" :columns="5" :row-height="${ESTIMATE}" :gap="10" size-class="medium"><template #item="{ item }"><div class="cell">{{ item.id }}</div></template></VirtualMediaGrid>`,
+          data: () => ({ items: Array.from({ length: 100 }, (_, i) => ({ id: i + 1 })) }),
+        },
+        { attachTo: scroller },
+      )
+      await flushPromises()
+      ;(scroller as any).scrollTop = 400
+      scroller.dispatchEvent(new Event('scroll'))
+      await flushPromises()
+      await flushPromises()
+      const beforeTop = getTop()
+      scrollToCalls.length = 0
+
+      await wrapper.setData({ items: Array.from({ length: 200 }, (_, i) => ({ id: i + 1 })) })
+      await flushPromises()
+      await flushPromises()
+      await flushPromises()
+      const afterTop = getTop()
+      expect(Math.abs(afterTop - beforeTop)).toBeLessThanOrEqual(1)
+      expect(scrollToCalls.length).toBe(0)
+      wrapper.unmount()
+    } finally {
+      restore()
+    }
+  })
+
+  it('ResizeObserver 报告纯高度变化（宽度不变）：新代码不触发 measure / 区间推进（行为验证，非回归）', async () => {
+    // ⚠️ 重要诚实声明：此用例是“新代码行为验证”，不是“旧 bug 回归测试”。
+    //
+    // jsdom 不做真实布局，RO 回调里调 measure() 清缓存后，measureElement 重新读 offsetHeight
+    // 仍是 160，且 applyScrollAdjustment 在 jsdom 里不产生真实滚动事件链——因此 OLD 代码下
+    // RO 无条件 measure 也无法让 range 在“已被 prime 过”后继续推进（prime 已把 range 推到
+    // 真实视口），第二条纯高度回调在 OLD/NEW 下表现相同。本用例在 OLD 上也通过。
+    //
+    // 因此本用例不能证明“RO 修复断开了旧 bug 闭环”——它只验证：新代码在纯高度变化时
+    // 不崩、不推进 range、不写 scrollTop。RO 修复的正确性最终依赖 NAS 实机验收（真浏览器
+    // 会做真实布局，measure 清缓存→滚动补偿→range 推进的闭环在真机上才存在）。
+    //
+    // 真正能复现旧 bug 的是主闭环用例（watch(items.length) → measure），见上方 describe。
+    const restore = stubRowOffsetHeight(REAL)
+    try {
+      const { scroller, getTop, scrollToCalls } = buildScroller({ scrollerHeight: 800, scrollTop: 0 })
+      document.body.appendChild(scroller)
+      const wrapper = mount(
+        {
+          components: { VirtualMediaGrid },
+          template: `<VirtualMediaGrid :items="items" :columns="15" :row-height="${ESTIMATE}" :gap="10" size-class="small"><template #item="{ item }"><div class="cell">{{ item.id }}</div></template></VirtualMediaGrid>`,
+          data: () => ({ items: Array.from({ length: 600 }, (_, i) => ({ id: i + 1 })) }),
+        },
+        { attachTo: scroller },
+      )
+      await flushPromises()
+      // 用户滚动到中段并稳定。
+      ;(scroller as any).scrollTop = 2000
+      scroller.dispatchEvent(new Event('scroll'))
+      await flushPromises()
+      await flushPromises()
+      const vm = wrapper.findComponent(VirtualMediaGrid).vm as any
+      vm.recomputeScrollMargin()
+      await flushPromises()
+
+      const gridEl = wrapper.find('.virtual-media-grid').element
+      const gridRO = roFor(gridEl)
+      expect(gridRO).toBeTruthy()
+      // 先用一次 width=1000 的回调建立宽度基准（模拟浏览器首帧 RO 派发真实宽度），
+      // 否则 lastGridWidth 基准为 0，第一次 height 回调会被误判为 width 变化。
+      gridRO!.trigger({ target: gridEl, borderBoxSize: [{ inlineSize: 1000, blockSize: 100 }] })
+      await flushPromises()
+      await flushPromises()
+      // 重新读取稳定后的 range（prime 回调可能因 width 0→1000 触发一次 measure，区间已稳定）。
+      const rangeBefore = vm.virtualizer?.range
+      const keyBefore = rangeBefore ? `${rangeBefore.startIndex}-${rangeBefore.endIndex}` : ''
+      const beforeTop = getTop()
+      scrollToCalls.length = 0
+
+      // 派发纯高度变化：inlineSize（宽度）保持 1000，blockSize（高度）变大。
+      // 新代码：宽度未变 → 跳过 measure → range 保持、scrollTop 不变。
+      gridRO!.trigger({
+        target: gridEl,
+        borderBoxSize: [{ inlineSize: 1000, blockSize: 9999 }],
+      })
+      await flushPromises()
+      await flushPromises()
+      await flushPromises()
+
+      const rangeAfter = vm.virtualizer?.range
+      const keyAfter = rangeAfter ? `${rangeAfter.startIndex}-${rangeAfter.endIndex}` : ''
+      // 行为验证：新代码纯高度变化时区间不推进、scrollTop 不被改写。
+      // （注意：OLD 代码此断言也通过——见上方诚实声明，jsdom 无法复现 RO 闭环。）
+      expect(keyAfter).toBe(keyBefore)
+      expect(Math.abs(getTop() - beforeTop)).toBeLessThanOrEqual(1)
+      expect(scrollToCalls.length).toBe(0)
+      wrapper.unmount()
+    } finally {
+      restore()
+    }
+  })
+
+  it('ResizeObserver 报告宽度变化（结构性）：允许重测，不推进 scrollTop（行为验证）', async () => {
+    // 同上：行为验证用例，非旧 bug 回归测试。验证宽度变化时新代码不崩、组件仍可用、
+    // 不因重测本身推进 scrollTop。RO 路径的旧 bug 复现依赖 NAS 实机（见上个用例声明）。
+    const restore = stubRowOffsetHeight(REAL)
+    try {
+      const { scroller, getTop } = buildScroller({ scrollerHeight: 800, scrollTop: 0 })
+      document.body.appendChild(scroller)
+      const wrapper = mount(
+        {
+          components: { VirtualMediaGrid },
+          template: `<VirtualMediaGrid :items="items" :columns="15" :row-height="${ESTIMATE}" :gap="10" size-class="small"><template #item="{ item }"><div class="cell">{{ item.id }}</div></template></VirtualMediaGrid>`,
+          data: () => ({ items: Array.from({ length: 300 }, (_, i) => ({ id: i + 1 })) }),
+        },
+        { attachTo: scroller },
+      )
+      await flushPromises()
+      const vm = wrapper.findComponent(VirtualMediaGrid).vm as any
+      vm.recomputeScrollMargin()
+      await flushPromises()
+
+      const gridEl = wrapper.find('.virtual-media-grid').element
+      const gridRO = roFor(gridEl)
+      expect(gridRO).toBeTruthy()
+      // 先用 width=1000 建立基准，再发 width=800 才能构成“宽度变化”。
+      gridRO!.trigger({ target: gridEl, borderBoxSize: [{ inlineSize: 1000, blockSize: 100 }] })
+      await flushPromises()
+      await flushPromises()
+      const beforeTop = getTop()
+
+      // 宽度从 1000 变到 800（结构性变化）。
+      expect(() => {
+        gridRO!.trigger({
+          target: gridEl,
+          borderBoxSize: [{ inlineSize: 800, blockSize: 9999 }],
+        })
+      }).not.toThrow()
+      await flushPromises()
+      await flushPromises()
+      // 结构性重测后组件仍可用：能取到 range。
+      const range = vm.virtualizer?.range
+      expect(range).toBeTruthy()
+      // scrollTop 不应因重测本身被推进（重测不是滚动补偿）。
+      expect(Math.abs(getTop() - beforeTop)).toBeLessThanOrEqual(1)
       wrapper.unmount()
     } finally {
       restore()

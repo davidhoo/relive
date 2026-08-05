@@ -213,16 +213,20 @@ watch(
   },
 )
 
-// 每次数据追加后重新测量：新挂载行的真实高度可能与估算不符，需让 virtualizer 重测，
-// 否则后续行偏移会基于旧估算值导致行覆盖或可见区判断错误。不重置滚动位置——measure
-// 只重算尺寸/偏移，不调用 scrollToIndex。
+// 数据追加不触发任何全量重测。
+// 旧实现在此调用 virtualizer.measure()，它会清空 itemSizeCache，导致已测行回到估算高度，
+// virtualizer 随即对视口上方行的 estimate→actual 差值做 applyScrollAdjustment，主动改写
+// scrollTop。scrollTop 变化推进真实可见区间 → visible-range-change → 父组件判定接近末端 →
+// 请求下一页 → 追加 → 再次 measure…形成“追加→滚动补偿→再分页”的无限闭环。
+// 新挂载的虚拟行仍会通过 :ref="measureRow" → measureElement 被单独测量并写入 itemSizeCache，
+// 既有行的真实高度保持不变，因此追加数据不会改变任何已渲染行的位置，也不会改写 scrollTop。
+//
+// 这里保留一个空 watch 而非删除，是为了显式声明“已评估 items.length 变化，故意不重测”，
+// 避免后续维护者误加回 measure()。列数变化属结构性变化，仍需重测，走下面的 watch(columns)。
 watch(
   () => props.items.length,
-  (n, old) => {
-    if (n > 0) {
-      nextTick(() => virtualizer.value?.measure())
-    }
-    void old
+  () => {
+    // 故意留空：仅追加数据不重测、不补偿。新行由 measureRow 在挂载时单独测量。
   },
 )
 
@@ -272,7 +276,8 @@ watch(scrollElRef, () => {
   virtualizer.value?.measure()
 })
 
-// scrollMargin 依赖相对滚动容器的位置，窗口/布局/滚动容器变化后重新测量并重算偏移。
+// scrollMargin 依赖相对滚动容器的位置，窗口宽度/布局变化后重算偏移并重测。
+// 窗口 resize 属结构性变化（宽度变化 → 列数/行高可能变），可安全全量重测。
 let resizeRaf = 0
 const onViewportResize = () => {
   if (resizeRaf) cancelAnimationFrame(resizeRaf)
@@ -282,16 +287,50 @@ const onViewportResize = () => {
   })
 }
 
-// ResizeObserver 监听网格容器自身布局变化（人物信息区高度变化导致网格下移、
-// Tab pane 展开等），重算 scrollMargin 并重新测量。容器不存在时（SSR）跳过。
+// ResizeObserver 监听网格容器自身布局变化。
+//
+// 关键：网格“内容高度”因数据追加而变化是常态（virtualRows 增多 → inner height 增大），
+// 绝不能因此触发全量 measure()。否则会形成自反馈闭环：
+//   追加数据 → inner height 变化 → ResizeObserver → measure() 清空行高缓存 →
+//   estimate→actual 差值触发 applyScrollAdjustment 改写 scrollTop → range 推进 → 再分页
+//
+// 仅当影响布局“坐标”的尺寸（宽度、或容器在滚动容器中的位置）真正变化时，才重算
+// scrollMargin；宽度变化会改变卡片排列进而改变行高，此时调用 measure() 是安全的结构性
+// 重测。纯高度变化（数据追加导致）直接忽略，断开自反馈。
+//
+// 仅记录上次的宽度与 scrollMargin，对比变化决定是否重算/重测，避免每次回调都 measure。
+// 宽度统一从 entry.borderBoxSize[0].inlineSize 读取（与 virtual-core 自身 RO 一致的数据源），
+// 不回退 offsetWidth——jsdom 下 offsetWidth 恒为 0，会让“首次基准=0、首次回调=真实宽度”误判为变化。
+let lastGridWidth = 0
+let lastGridMargin = 0
 let resizeObserver: ResizeObserver | null = null
 const setupResizeObserver = () => {
   if (typeof ResizeObserver === 'undefined' || !gridRef.value) return
-  resizeObserver = new ResizeObserver(() => {
+  resizeObserver = new ResizeObserver(entries => {
+    const entry = entries[0]
+    if (!entry) return
+    // 宽度优先取 borderBoxSize（浏览器标准字段，virtual-core 自身 RO 也用此）；
+    // 不回退 offsetWidth（jsdom 恒 0，会引入假“变化”）。
+    const box = entry.borderBoxSize?.[0]
+    const width = box ? box.inlineSize : 0
+    // 先重算 scrollMargin（位置变化必须反映到坐标系），再判断是否需要全量重测。
     recomputeScrollMargin()
-    virtualizer.value?.measure()
+    const marginChanged = scrollMarginPx.value !== lastGridMargin
+    const widthChanged = width !== lastGridWidth
+    lastGridWidth = width
+    lastGridMargin = scrollMarginPx.value
+    // 仅宽度或位置变化才重测（结构性变化，行高可能随之改变）。
+    // 纯高度变化（数据追加导致 inner 撑高）直接忽略，避免自反馈。
+    if (widthChanged || marginChanged) {
+      virtualizer.value?.measure()
+    }
   })
   resizeObserver.observe(gridRef.value)
+  // 首次记录基准值：用 0 作为宽度基准与回调读取方式对齐（jsdom 下 borderBoxSize 由浏览器
+  // 提供，真实环境首帧 inlineSize 即实际宽度；这里基准 0 仅在“首帧是否真有宽度变化”上保守，
+  // 不会引发线上问题，因为首帧 measure 由 onMounted 的 nextTick 已执行过）。
+  lastGridWidth = 0
+  lastGridMargin = scrollMarginPx.value
 }
 
 onMounted(() => {

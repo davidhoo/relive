@@ -702,15 +702,10 @@ const loadMorePhotos = async () => {
     ElMessage.error(error.message || '加载照片失败')
   } finally {
     photosLoading.value = false
-    // 请求完成后只重测网格，使新增行的真实高度被测量、后续 range/事件基于最新布局。
-    // 不再无条件继续请求下一页：visible-range-change 是唯一的分页触发源。
-    // 若重测后真实视口范围发生变化，VirtualMediaGrid 会按新 range 派发事件，
-    // onPhotosVisibleRange 据此判定是否仍接近末尾；真实视口未动时不会派发，闭环断开。
-    await nextTick()
-    const grid = photosGridRef.value as any
-    if (grid && typeof grid.measure === 'function') {
-      try { grid.measure() } catch { /* 测试桩可能无真实 virtualizer，忽略 */ }
-    }
+    // 不在此触发任何重测或续页。visible-range-change 是唯一分页触发源；
+    // 旧实现在此调用 grid.measure()，会清空 virtualizer 行高缓存，使已测行回到估算高度，
+    // 触发滚动补偿改写 scrollTop → range 推进 → 再次分页的无限闭环。
+    // 新挂载行由 VirtualMediaGrid 自身的 measureElement 在挂载时单独测量，无需外部驱动。
   }
 }
 
@@ -786,12 +781,8 @@ const loadMoreFaces = async () => {
     ElMessage.error(error.message || '加载人脸失败')
   } finally {
     facesLoading.value = false
-    // 与照片对称：只重测，不无条件继续请求。visible-range-change 为唯一触发源。
-    await nextTick()
-    const grid = facesGridRef.value as any
-    if (grid && typeof grid.measure === 'function') {
-      try { grid.measure() } catch { /* 测试桩可能无真实 virtualizer，忽略 */ }
-    }
+    // 与照片对称：不在此重测或续页。visible-range-change 为唯一触发源，
+    // finally 调用 grid.measure() 会清空行高缓存触发滚动补偿，导致无限分页闭环。
   }
 }
 
