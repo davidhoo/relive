@@ -180,24 +180,34 @@ const itemKey = (item: any) => (item && item.id != null ? item.id : itemIndex(it
 
 // 可见区间变化 → 通知父组件。父组件据此 + active/loading/error/hasMore 决定是否加载。
 // 这是唯一的加载触发源，删除旧版 watch(items.length) 隐式翻页。
+//
+// 严格分离两类范围：
+//   - getVirtualItems()：含 overscan 预渲染行，仅供 virtualRows 渲染 DOM；
+//   - virtualizer.range：真实视口范围（startIndex/endIndex，不含 overscan），用于事件派发与分页触发。
+//
+// 旧实现用 getVirtualItems() 末行作为 lastVisibleRowIndex，又把 rowCount 计入去重 key：
+//   请求完成 → items/rowCount 增长 → watch 重新派发同一范围（因 rowCount 变了）→
+//   overscan 末行被误判为真实可见末行 → Detail 认为“仍接近底部” → 再次请求下一页。
+// 改用 virtualizer.range 的真实 startIndex/endIndex，去重 key 仅含 startIndex-endIndex，
+// 数据追加导致 rowCount 变化但真实视口未动时不再派发，闭环断开。
 let lastEmitted = ''
 watch(
   () => {
-    const items = virtualizer.value.getVirtualItems()
-    if (items.length === 0) return ''
-    return `${items[0]!.index}-${items[items.length - 1]!.index}-${rowCount.value}`
+    const range = virtualizer.value.range
+    if (!range) return ''
+    return `${range.startIndex}-${range.endIndex}`
   },
   key => {
     if (key === lastEmitted) return
     lastEmitted = key
-    const items = virtualizer.value.getVirtualItems()
-    if (items.length === 0) {
+    const range = virtualizer.value.range
+    if (!range) {
       emit('visible-range-change', { firstRowIndex: 0, lastRowIndex: 0, rowCount: rowCount.value })
       return
     }
     emit('visible-range-change', {
-      firstRowIndex: items[0]!.index,
-      lastRowIndex: items[items.length - 1]!.index,
+      firstRowIndex: range.startIndex,
+      lastRowIndex: range.endIndex,
       rowCount: rowCount.value,
     })
   },

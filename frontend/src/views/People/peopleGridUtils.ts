@@ -57,6 +57,10 @@ export function shouldLoadMore(p: ShouldLoadMoreParams): boolean {
 // 由 VirtualMediaGrid 的 visible-range-change 事件触发判定。
 // 语义：只有当前 Tab 可见、非 loading、非 error、hasMore 且最后可见行接近数据末尾时返回 true。
 // 首屏（rowCount<=0）允许加载；有数据但 lastVisibleRowIndex<0（尚未测量）不加载，避免风暴。
+//
+// lastVisibleRowIndex 必须是“真实视口可见末行”（virtualizer.range.endIndex），
+// 不含 overscan 预渲染行。若误用 getVirtualItems() 末行（含 overscan），overscan 行会被
+// 当作真实可见行，每次追加数据都让“接近末尾”误判成立 → 请求风暴。
 export interface VisibleRangeLoadParams {
   // 当前 Tab 是否可见（隐藏 Tab 不触发分页）
   active: boolean
@@ -65,7 +69,7 @@ export interface VisibleRangeLoadParams {
   hasMore: boolean
   // 已加载数据对应的总行数
   rowCount: number
-  // 最后一个可见行的索引
+  // 最后一个真实可见行的索引（不含 overscan）
   lastVisibleRowIndex: number
   // 距末端不足多少行触发
   thresholdRows: number
@@ -79,26 +83,6 @@ export function shouldLoadByVisibleRange(p: VisibleRangeLoadParams): boolean {
   // 尚无已加载数据（rowCount<=0）→ 首屏，允许加载。
   if (p.rowCount <= 0) return true
   // 有数据但尚未测量可见行（lastVisibleRowIndex<0）→ 不加载，避免风暴。
-  if (p.lastVisibleRowIndex < 0) return false
-  return p.rowCount - p.lastVisibleRowIndex <= p.thresholdRows
-}
-
-// shouldReevaluateAfterLoad 用于请求完成（loading 恢复 false）后，用“最近一次保存的可见区间”
-// 重新判定是否需要继续加载下一页。
-//
-// 防风暴核心语义：只在“有可见区间且接近末尾”时才继续加载；无可见区间（stub 未派发 / 尚未测量）
-// 一律不继续，等用户滚动。这与 Detail.vue 内联的 reevaluate 逻辑一致——请求完成后若没有可见区间
-// 事件，说明无法判断视口是否填满，继续加载会形成递归请求风暴。
-//
-// 注意：lastVisibleRowIndex<0 在这里必须返回 false（与 shouldLoadByVisibleRange 一致），
-// 而非 true。早期实现误把“无可见区间”当作“未填满视口→继续”，正是请求风暴的根因。
-export function shouldReevaluateAfterLoad(p: VisibleRangeLoadParams): boolean {
-  if (!p.active) return false
-  if (p.loading) return false
-  if (p.error) return false
-  if (!p.hasMore) return false
-  // 无可见区间（rowCount<=0 首屏除外）→ 不继续，避免风暴。
-  if (p.rowCount <= 0) return true
   if (p.lastVisibleRowIndex < 0) return false
   return p.rowCount - p.lastVisibleRowIndex <= p.thresholdRows
 }

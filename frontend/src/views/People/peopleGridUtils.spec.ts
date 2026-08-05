@@ -4,7 +4,6 @@ import {
   visibleCardCount,
   shouldLoadMore,
   shouldLoadByVisibleRange,
-  shouldReevaluateAfterLoad,
   isAllFacesMoved,
   toggleFaceInSet,
   anchorRowIndexAfterDensityChange,
@@ -141,7 +140,7 @@ describe('shouldLoadMore - 接近末端只触发一次 / 失败可重试（测�
   })
 })
 
-describe('shouldLoadByVisibleRange - window 虚拟化加载守卫', () => {
+describe('shouldLoadByVisibleRange - 真实视口范围加载守卫', () => {
   const base = {
     active: true,
     loading: false,
@@ -183,47 +182,12 @@ describe('shouldLoadByVisibleRange - window 虚拟化加载守卫', () => {
   it('有数据但尚未测量（lastVisibleRowIndex<0）不加载，避免风暴', () => {
     expect(shouldLoadByVisibleRange({ ...base, rowCount: 5, lastVisibleRowIndex: -1 })).toBe(false)
   })
-})
 
-describe('shouldReevaluateAfterLoad - 请求完成后的防风暴重判', () => {
-  const base = {
-    active: true,
-    loading: false,
-    error: false,
-    hasMore: true,
-    rowCount: 200,
-    lastVisibleRowIndex: 198,
-    thresholdRows: 3,
-  }
-
-  it('接近末端时继续加载', () => {
-    expect(shouldReevaluateAfterLoad(base)).toBe(true)
-  })
-
-  it('loading 时不继续', () => {
-    expect(shouldReevaluateAfterLoad({ ...base, loading: true })).toBe(false)
-  })
-
-  it('error 时不继续', () => {
-    expect(shouldReevaluateAfterLoad({ ...base, error: true })).toBe(false)
-  })
-
-  it('hasMore=false 时不继续', () => {
-    expect(shouldReevaluateAfterLoad({ ...base, hasMore: false })).toBe(false)
-  })
-
-  it('内容已超出视口（远离末端）时不继续', () => {
-    expect(shouldReevaluateAfterLoad({ ...base, lastVisibleRowIndex: 10 })).toBe(false)
-  })
-
-  it('首屏（rowCount=0）允许继续', () => {
-    expect(shouldReevaluateAfterLoad({ ...base, rowCount: 0, lastVisibleRowIndex: -1 })).toBe(true)
-  })
-
-  it('有数据但无可见区间（lastVisibleRowIndex<0）不继续——防风暴核心', () => {
-    // 这是规格明确要求：无可见区间不继续，避免请求完成后无脑递归。
-    // 早期错误实现此处返回 true，正是请求风暴根因。
-    expect(shouldReevaluateAfterLoad({ ...base, rowCount: 5, lastVisibleRowIndex: -1 })).toBe(false)
+  it('lastVisibleRowIndex 表示真实可见末行，而非渲染末行（不含 overscan）', () => {
+    // 200 行数据，真实视口可见末行=196（接近末尾）→ 触发；overscan 渲染末行=199（更靠后）。
+    // 若误用渲染末行，196 也会被判接近末端，掩盖“真实视口已稳定”的事实。
+    // 这里直接断言：真实末行=196（200-196=4 > threshold 3）→ 不应触发。
+    expect(shouldLoadByVisibleRange({ ...base, lastVisibleRowIndex: 196 })).toBe(false)
   })
 })
 

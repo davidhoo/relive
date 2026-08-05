@@ -511,4 +511,143 @@ describe('VirtualMediaGrid - .main-content 滚动驱动可见区间（集成，�
       restore()
     }
   })
+
+  // ===== 真实视口范围（virtualizer.range）派发回归 =====
+  //
+  // 旧实现用 getVirtualItems() 末行派发事件，导致：
+  //   1) 事件 lastRowIndex 含 overscan 行，被父组件误判为真实可见末行；
+  //   2) 去重 key 含 rowCount，数据追加导致同一视口重复派发，触发请求风暴。
+  // 改用 virtualizer.range.startIndex/endIndex 派发、去重 key 仅 startIndex-endIndex 后：
+  //   - 事件范围严格等于真实视口（不含 overscan）；
+  //   - 实际挂载末行可大于事件 lastRowIndex（因 overscan 预渲染）；
+  //   - 仅追加一页、scrollTop 不变时不重复派发；scrollTop 变化才派发。
+
+  it('事件范围与 virtualizer.range 一致，实际挂载最后一行可大于事件 lastRowIndex', async () => {
+    const restore = stubRowOffsetHeight(110)
+    try {
+      const events: { firstRowIndex: number; lastRowIndex: number; rowCount: number }[] = []
+      const { scroller } = buildScroller({ scrollerHeight: 800, scrollTop: 0 })
+      document.body.appendChild(scroller)
+      const wrapper = mount(
+        {
+          components: { VirtualMediaGrid },
+          template: `<VirtualMediaGrid
+            :items="items" :columns="15" :row-height="110" :gap="10" :size-class="'small'"
+            @visible-range-change="onRange"
+          ><template #item="{ item }"><div class="cell">{{ item.id }}</div></template></VirtualMediaGrid>`,
+          data: () => ({ items: Array.from({ length: 600 }, (_, i) => ({ id: i + 1 })) }),
+          methods: { onRange(p: any) { events.push(p) } },
+        },
+        { attachTo: scroller },
+      )
+      await flushPromises()
+      const vm = wrapper.findComponent(VirtualMediaGrid).vm as any
+      vm.recomputeScrollMargin()
+      vm.measure()
+      await flushPromises()
+      await flushPromises()
+      // measure() 是重测尺寸/偏移；range 未变不应派发新事件。
+      vm.measure()
+      await flushPromises()
+      await flushPromises()
+
+      const rows = wrapper.findAll('.virtual-media-grid-row')
+      const mountedIdx = rows.map(r => Number((r.element as HTMLElement).dataset.index))
+      const maxMounted = Math.max(...mountedIdx)
+
+      // 至少有一条事件，且事件 lastRowIndex 严格小于挂载末行（overscan 预渲染超出真实视口）。
+      // 当数据足够长（600 项 / 40 行，视口只覆盖前 ~7 行）时，overscan 必然使挂载末行 > 真实末行。
+      const ev = events[events.length - 1]
+      expect(ev).toBeTruthy()
+      expect(ev!.lastRowIndex).toBeLessThanOrEqual(maxMounted)
+      // 严格小于：scrollTop=0 时真实可见末行约 6，挂载末行约 11（+overscan 5）。
+      expect(maxMounted).toBeGreaterThan(ev!.lastRowIndex)
+      wrapper.unmount()
+    } finally {
+      restore()
+    }
+  })
+
+  it('仅追加一页数据、保持 scrollTop 不变：不因 rowCount 增长重复派发同一范围', async () => {
+    const restore = stubRowOffsetHeight(110)
+    try {
+      const events: { firstRowIndex: number; lastRowIndex: number; rowCount: number }[] = []
+      const { scroller } = buildScroller({ scrollerHeight: 800, scrollTop: 0 })
+      document.body.appendChild(scroller)
+      const wrapper = mount(
+        {
+          components: { VirtualMediaGrid },
+          template: `<VirtualMediaGrid
+            :items="items" :columns="15" :row-height="110" :gap="10" :size-class="'small'"
+            @visible-range-change="onRange"
+          ><template #item="{ item }"><div class="cell">{{ item.id }}</div></template></VirtualMediaGrid>`,
+          data: () => ({ items: Array.from({ length: 600 }, (_, i) => ({ id: i + 1 })) }),
+          methods: { onRange(p: any) { events.push(p) } },
+        },
+        { attachTo: scroller },
+      )
+      await flushPromises()
+      const vm = wrapper.findComponent(VirtualMediaGrid).vm as any
+      vm.recomputeScrollMargin()
+      vm.measure()
+      await flushPromises()
+      await flushPromises()
+      // 排空初始派发。
+      const initialCount = events.length
+      void initialCount
+      events.length = 0
+
+      // 仅追加一页数据，scrollTop 不变：真实视口范围未动，不应派发新事件。
+      await wrapper.setData({ items: Array.from({ length: 900 }, (_, i) => ({ id: i + 1 })) })
+      await flushPromises()
+      vm.measure()
+      await flushPromises()
+      await flushPromises()
+      expect(events.length).toBe(0)
+
+      wrapper.unmount()
+    } finally {
+      restore()
+    }
+  })
+
+  it('用户真实滚动导致 range 改变时正常派发事件', async () => {
+    const restore = stubRowOffsetHeight(110)
+    try {
+      const events: { firstRowIndex: number; lastRowIndex: number; rowCount: number }[] = []
+      const { scroller } = buildScroller({ scrollerHeight: 800, scrollTop: 0 })
+      document.body.appendChild(scroller)
+      const wrapper = mount(
+        {
+          components: { VirtualMediaGrid },
+          template: `<VirtualMediaGrid
+            :items="items" :columns="15" :row-height="110" :gap="10" :size-class="'small'"
+            @visible-range-change="onRange"
+          ><template #item="{ item }"><div class="cell">{{ item.id }}</div></template></VirtualMediaGrid>`,
+          data: () => ({ items: Array.from({ length: 600 }, (_, i) => ({ id: i + 1 })) }),
+          methods: { onRange(p: any) { events.push(p) } },
+        },
+        { attachTo: scroller },
+      )
+      await flushPromises()
+      const vm = wrapper.findComponent(VirtualMediaGrid).vm as any
+      vm.recomputeScrollMargin()
+      vm.measure()
+      await flushPromises()
+      await flushPromises()
+      events.length = 0
+
+      // 滚动一段距离 → 真实 range 改变 → 应派发事件。
+      ;(scroller as any).scrollTop = 2000
+      scroller.dispatchEvent(new Event('scroll'))
+      await flushPromises()
+      await flushPromises()
+      expect(events.length).toBeGreaterThan(0)
+      const ev = events[events.length - 1]!
+      expect(ev.firstRowIndex).toBeGreaterThan(0)
+      wrapper.unmount()
+    } finally {
+      restore()
+    }
+  })
 })

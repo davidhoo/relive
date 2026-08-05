@@ -201,7 +201,7 @@ describe('Detail - 照片和人脸首次按需加载（测试项 10）', () => {
     expect(mockGetPhotos).toHaveBeenCalledTimes(1)
 
     // 完全不派发任何可见区间事件 → 不应请求第二页。
-    // （旧实现 reevaluate 用旧 rowCount 会在无事件时也递归；新实现无可见区间不 reevaluate。）
+    // 规格变更：finally 不再 reevaluate，无事件即不触发下一页。
     await flushPromises()
     expect(mockGetPhotos).toHaveBeenCalledTimes(1)
   })
@@ -283,7 +283,10 @@ describe('Detail - 照片和人脸首次按需加载（测试项 10）', () => {
     expect(mockGetPhotos).toHaveBeenCalledTimes(1)
   })
 
-  it('可见区事件发生在第一页 loading 期间被忽略后，请求完成自动加载第二页', async () => {
+  it('请求完成后无新可见区间事件时不自动加载第二页（无 reevaluate 链）', async () => {
+    // 规格变更：visible-range-change 是唯一分页触发源，请求完成后不再 reevaluate。
+    // 第一页 in-flight 期间派发的“接近末尾”事件被 loading 拦截，resolve 后不再因
+    // finally 中的 reevaluate 自动续页；只有新的真实可见区间事件才触发下一页。
     let resolveFirst: (v: any) => void = () => {}
     // 第一页只返回 1 条，hasMore=true，next_cursor 非空（避免被“不足一页”判为 finished）。
     mockGetPhotos.mockReturnValueOnce(new Promise(r => { resolveFirst = r }))
@@ -292,33 +295,30 @@ describe('Detail - 照片和人脸首次按需加载（测试项 10）', () => {
     expect(mockGetPhotos).toHaveBeenCalledTimes(1)
 
     // 第一页请求 in-flight 期间，派发接近末尾事件（last=0 → 接近末尾，但被 loading 拦截）。
-    // 关键：这次派发会保存 latestPhotosVisibleRange，供第一页 resolve 后 reevaluate 使用。
     gridStub.triggerVisibleRange({ firstRowIndex: 0, lastRowIndex: 0, rowCount: 1 })
     await flushPromises()
     expect(mockGetPhotos).toHaveBeenCalledTimes(1)
 
-    // 第一页返回 1 条，hasMore=true，next_cursor=next1（非空 → 不触发 finished）。
-    // resolve 后 rowCount=1，reevaluate 用 lastVisibleRowIndex=0：1-0=1 <= threshold → 触发第二页。
+    // 第一页返回 1 条。resolve 后 finally 只重测网格（桩为空操作），不再 reevaluate。
+    // 没有新的可见区间事件 → 不应触发第二页。
     resolveFirst(cursor(
       [{ id: 1, file_name: 'p0.jpg', updated_at: '2026-01-01T00:00:00Z' }],
       true,
       'next1',
     ))
     await flushPromises()
-    // 第二页触发后，加载 1 条且 hasMore=true，rowCount 仍=1（去重后无新增），
-    // 但 fresh=0 会触发停滞保护（返回数据全部重复）→ 停止。所以第二页之后不会再有第三页。
-    // 断言：至少触发了第二页（calls >= 2），且不会无限递归（最终稳定，flush 后 calls 有界）。
+    await flushPromises()
+    expect(mockGetPhotos).toHaveBeenCalledTimes(1) // 无第二页
+
+    // 用户真实滚动后派发新的“接近末尾”事件 → 才触发第二页。
+    gridStub.triggerVisibleRange({ firstRowIndex: 0, lastRowIndex: 0, rowCount: 1 })
+    await flushPromises()
     expect(mockGetPhotos.mock.calls.length).toBeGreaterThanOrEqual(2)
-    await flushPromises()
-    const bounded = mockGetPhotos.mock.calls.length
-    await flushPromises()
-    expect(mockGetPhotos.mock.calls.length).toBe(bounded) // 不再增长（无风暴）
   })
 
   it('请求完成后内容已超出视口时不再自动连续加载', async () => {
     // 第一页返回足够多行（rowCount 大），完成后不应自动触发第二页。
-    // 关键：第一页 resolve 后 latestPhotosVisibleRange 仍为 null（stub 未派发过事件），
-    // reevaluate 无可见区间 → 不触发，避免“无事件也递归”的风暴。
+    // 规格变更：finally 不再 reevaluate，无 visible-range-change 事件即不触发下一页。
     let resolveFirst: (v: any) => void = () => {}
     mockGetPhotos.mockReturnValueOnce(new Promise(r => { resolveFirst = r }))
     await mountDetail()
@@ -326,7 +326,8 @@ describe('Detail - 照片和人脸首次按需加载（测试项 10）', () => {
 
     resolveFirst(photosPage(300, true))
     await flushPromises()
-    // 内容已填满视口且无可见区间事件，finally 重新判定不触发第二页
+    await flushPromises()
+    // 内容已填满视口且无可见区间事件，finally 只重测网格，不触发第二页
     expect(mockGetPhotos).toHaveBeenCalledTimes(1)
   })
 
@@ -673,5 +674,175 @@ describe('Detail - 120+ 照片 / 160+ 人脸端到端分页回归（Task 5）', 
     expect(vm.photos.length).toBe(photoCountAfterFirstLoad)
     // 人脸分页状态也保留。
     expect(vm.faces.length).toBe(150)
+  })
+})
+
+// ===== 停止滚动后请求稳定回归（规格核心）=====
+//
+// 规格要求：内容超过视口、用户停止滚动后，分页请求必须稳定停止；不再有
+// “请求完成 → 自动派发范围 → 误判接近底部 → 再次请求”的闭环。
+// 验证方式：用真实分页数据 + 显式可见区间事件，断言 settle 后多次 flush 请求计数不变。
+
+describe('Detail - 停止滚动后请求稳定（无 reevaluate 闭环）', () => {
+  const photosOf = (count: number, start: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      id: start + i + 1,
+      file_name: `p${start + i}.jpg`,
+      updated_at: '2026-01-01T00:00:00Z',
+    }))
+
+  beforeEach(() => {
+    mockGetById.mockReset()
+    mockGetPhotos.mockReset()
+    mockGetFaces.mockReset()
+    mockGetList.mockReset()
+    mockGetById.mockResolvedValue(makePerson())
+  })
+
+  it('照片：内容超过视口、不滚动时请求稳定不增长', async () => {
+    // 第一页 300 张 / 4 列 = 75 行，远超视口；lastVisibleRowIndex=10 远离末尾 → 不接近。
+    mockGetPhotos.mockResolvedValueOnce(cursor(photosOf(300, 0), true, 'c2'))
+    const wrapper = await mountDetail()
+    await flushPromises()
+    const vm = wrapper.findComponent(Detail).vm as any
+    expect(mockGetPhotos).toHaveBeenCalledTimes(1)
+
+    // 派发一次“远离末尾”的真实可见区间事件 → 不应触发第二页。
+    gridStub.triggerVisibleRange({ firstRowIndex: 0, lastRowIndex: 10, rowCount: 75 })
+    await flushPromises()
+    expect(mockGetPhotos).toHaveBeenCalledTimes(1)
+
+    // 多次 flush 模拟“停止滚动后等待”：请求计数必须保持不变。
+    const callsAfterSettled = mockGetPhotos.mock.calls.length
+    await flushPromises()
+    await flushPromises()
+    await flushPromises()
+    expect(mockGetPhotos.mock.calls.length).toBe(callsAfterSettled)
+    void vm
+  })
+
+  it('照片：滚到接近底部触发下一页，追加后 scrollTop 不变不再持续请求', async () => {
+    // 第一页 30 张 / 4 列 = 8 行；last=6 → 8-6=2 <= threshold(3) → 触发第二页。
+    mockGetPhotos.mockResolvedValueOnce(cursor(photosOf(30, 0), true, 'c2'))
+    const wrapper = await mountDetail()
+    await flushPromises()
+    const vm = wrapper.findComponent(Detail).vm as any
+    expect(mockGetPhotos).toHaveBeenCalledTimes(1)
+
+    // 第二页 30 张（追加后 60 张 / 4 = 15 行），next=c3，hasMore=true。
+    mockGetPhotos.mockResolvedValueOnce(cursor(photosOf(30, 30), true, 'c3'))
+    gridStub.triggerVisibleRange({ firstRowIndex: 0, lastRowIndex: 6, rowCount: 8 })
+    await flushPromises()
+    expect(mockGetPhotos).toHaveBeenCalledTimes(2)
+    expect(vm.photos.length).toBe(60)
+
+    // 第二页追加后，scrollTop 未变（用户停止滚动）。新 rowCount=15，
+    // 但不再有新的可见区间事件 → 不应触发第三页。
+    const callsAfterSettled = mockGetPhotos.mock.calls.length
+    await flushPromises()
+    await flushPromises()
+    expect(mockGetPhotos.mock.calls.length).toBe(callsAfterSettled)
+
+    // 用户再次滚动到接近新末尾（last=13 → 15-13=2 <= threshold）才触发第三页。
+    mockGetPhotos.mockResolvedValueOnce(cursor(photosOf(30, 60), true, 'c4'))
+    gridStub.triggerVisibleRange({ firstRowIndex: 0, lastRowIndex: 13, rowCount: 15 })
+    await flushPromises()
+    expect(mockGetPhotos).toHaveBeenCalledTimes(3)
+  })
+
+  it('照片：cursor 单调推进，数据无重复无遗漏', async () => {
+    const pages = [
+      cursor(photosOf(30, 0), true, 'c2'),
+      cursor(photosOf(30, 30), true, 'c3'),
+      cursor(photosOf(30, 60), false, ''),
+    ]
+    mockGetPhotos.mockResolvedValueOnce(pages[0]!)
+    const wrapper = await mountDetail()
+    await flushPromises()
+    const vm = wrapper.findComponent(Detail).vm as any
+
+    mockGetPhotos.mockResolvedValueOnce(pages[1]!)
+    gridStub.triggerVisibleRange({ firstRowIndex: 0, lastRowIndex: 6, rowCount: 8 })
+    await flushPromises()
+
+    mockGetPhotos.mockResolvedValueOnce(pages[2]!)
+    gridStub.triggerVisibleRange({ firstRowIndex: 0, lastRowIndex: 13, rowCount: 15 })
+    await flushPromises()
+
+    const ids = (vm.photos as any[]).map(p => p.id)
+    expect(new Set(ids).size).toBe(90)
+    for (let i = 1; i <= 90; i++) expect(ids).toContain(i)
+    // cursor 严格推进：c2、c3 已消费，最后 hasMore=false。
+    expect(vm.photosConsumedCursors.has('c2')).toBe(true)
+    expect(vm.photosConsumedCursors.has('c3')).toBe(true)
+    expect(vm.photosFinished).toBe(true)
+  })
+
+  it('人脸：内容超过视口、不滚动时请求稳定不增长', async () => {
+    const facesOf = (count: number, start: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        id: start + i + 1, photo_id: 1, updated_at: '2026-01-01T00:00:00Z', quality_score: 0.9,
+      }))
+    mockGetFaces.mockResolvedValueOnce(cursor(facesOf(300, 0), true, 'fc2'))
+    const wrapper = await mountDetail()
+    await flushPromises()
+    const vm = wrapper.findComponent(Detail).vm as any
+    vm.activeTab = 'faces'
+    await flushPromises()
+    expect(mockGetFaces).toHaveBeenCalledTimes(1)
+
+    // 远离末尾 → 不触发第二页，且 settle 后稳定。
+    gridStub.triggerVisibleRange({ firstRowIndex: 0, lastRowIndex: 10, rowCount: 75 })
+    await flushPromises()
+    expect(mockGetFaces).toHaveBeenCalledTimes(1)
+    const callsAfterSettled = mockGetFaces.mock.calls.length
+    await flushPromises()
+    await flushPromises()
+    expect(mockGetFaces.mock.calls.length).toBe(callsAfterSettled)
+  })
+
+  it('照片与人脸 Tab 相互不触发对方分页', async () => {
+    mockGetPhotos.mockResolvedValueOnce(cursor(photosOf(30, 0), true, 'c2'))
+    mockGetFaces.mockResolvedValueOnce(cursor(
+      Array.from({ length: 50 }, (_, i) => ({ id: i + 1, photo_id: 1, updated_at: '2026-01-01T00:00:00Z', quality_score: 0.9 })),
+      true, 'fc2',
+    ))
+    const wrapper = await mountDetail()
+    await flushPromises()
+    const vm = wrapper.findComponent(Detail).vm as any
+    const photoCallsAfterFirst = mockGetPhotos.mock.calls.length
+    expect(photoCallsAfterFirst).toBe(1)
+
+    // 切到人脸 Tab 并派发接近末尾 → 触发人脸第二页，但不应触发照片分页。
+    vm.activeTab = 'faces'
+    await flushPromises()
+    gridStub.triggerVisibleRange({ firstRowIndex: 0, lastRowIndex: 3, rowCount: 5 })
+    await flushPromises()
+    expect(mockGetFaces.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(mockGetPhotos.mock.calls.length).toBe(photoCallsAfterFirst)
+  })
+
+  it('首屏内容不足以填满视口时允许有限自动补页；超过视口后停止', async () => {
+    // 首屏只返回 1 条（rowCount=1，1 行），lastVisibleRowIndex=0 → 1-0=1 <= threshold → 接近末尾。
+    // 在真实组件中，首屏未填满视口时 virtualizer.range 末行即数据末行，会派发“接近末尾”事件，
+    // 允许有限补页。这里用桩模拟该事件序列：第一页 1 条 → 事件 → 第二页；第二页返回大量数据使
+    // rowCount 远超视口，此后停止派发“接近末尾”事件 → 请求稳定。
+    mockGetPhotos.mockResolvedValueOnce(cursor(photosOf(1, 0), true, 'c2'))
+    const wrapper = await mountDetail()
+    await flushPromises()
+    const vm = wrapper.findComponent(Detail).vm as any
+    expect(mockGetPhotos).toHaveBeenCalledTimes(1)
+
+    // 首屏未填满 → 派发接近末尾事件 → 触发第二页（有限补页）。
+    mockGetPhotos.mockResolvedValueOnce(cursor(photosOf(300, 1), true, 'c3'))
+    gridStub.triggerVisibleRange({ firstRowIndex: 0, lastRowIndex: 0, rowCount: 1 })
+    await flushPromises()
+    expect(mockGetPhotos).toHaveBeenCalledTimes(2)
+    // 第二页追加后内容已超过视口（rowCount 大）；不再派发接近末尾事件 → 稳定。
+    const callsAfterSettled = mockGetPhotos.mock.calls.length
+    await flushPromises()
+    await flushPromises()
+    expect(mockGetPhotos.mock.calls.length).toBe(callsAfterSettled)
+    void vm
   })
 })
