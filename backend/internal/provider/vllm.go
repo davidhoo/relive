@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -257,13 +256,14 @@ func (p *VLLMProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error) 
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
+		// 传输层错误：区分超时与连接失败。
+		timeout := isTimeoutErr(err)
+		return nil, NewTransportError(p.Name(), timeout, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("vllm api error: %s, body: %s", resp.Status, string(body))
+		return nil, NewHTTPError(p.Name(), resp)
 	}
 
 	// 解析响应
@@ -282,11 +282,11 @@ func (p *VLLMProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error) 
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&vllmResp); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+		return nil, NewResponseInvalidError(p.Name(), "decode response: "+err.Error())
 	}
 
 	if len(vllmResp.Choices) == 0 {
-		return nil, fmt.Errorf("no choices in response")
+		return nil, NewResponseInvalidError(p.Name(), "no choices in response")
 	}
 
 	// 解析 AI 响应
@@ -298,7 +298,7 @@ func (p *VLLMProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error) 
 			content = content[:1000] + "... (truncated)"
 		}
 		logger.Warnf("VLLM parse response failed: %v. Content: %s", err, content)
-		return nil, fmt.Errorf("parse response: %w", err)
+		return nil, NewResponseInvalidError(p.Name(), err.Error())
 	}
 
 	// 填充元数据
@@ -312,6 +312,17 @@ func (p *VLLMProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error) 
 		result.ModelName, vllmResp.Usage.TotalTokens, result.Duration)
 
 	return result, nil
+}
+
+// isTimeoutErr 判断是否为超时类错误。
+func isTimeoutErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "deadline exceeded") ||
+		strings.Contains(msg, "deadlineexceeded")
 }
 
 // buildPrompt 构建提示词（第一次会话，不含caption）
@@ -412,13 +423,13 @@ func (p *VLLMProvider) GenerateCaption(request *AnalyzeRequest) (string, error) 
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return "", fmt.Errorf("send request: %w", err)
+		timeout := isTimeoutErr(err)
+		return "", NewTransportError(p.Name(), timeout, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("vllm api error: %s, body: %s", resp.Status, string(body))
+		return "", NewHTTPError(p.Name(), resp)
 	}
 
 	var vllmResp struct {
@@ -430,11 +441,11 @@ func (p *VLLMProvider) GenerateCaption(request *AnalyzeRequest) (string, error) 
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&vllmResp); err != nil {
-		return "", fmt.Errorf("decode response: %w", err)
+		return "", NewResponseInvalidError(p.Name(), "decode response: "+err.Error())
 	}
 
 	if len(vllmResp.Choices) == 0 {
-		return "", fmt.Errorf("no choices in response")
+		return "", NewResponseInvalidError(p.Name(), "no choices in response")
 	}
 
 	caption := strings.TrimSpace(vllmResp.Choices[0].Message.Content)

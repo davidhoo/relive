@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -153,13 +152,13 @@ func (p *OllamaProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
+		timeout := isTimeoutErr(err)
+		return nil, NewTransportError(p.Name(), timeout, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("ollama api error: %s, body: %s", resp.Status, string(body))
+		return nil, NewHTTPError(p.Name(), resp)
 	}
 
 	// 解析响应
@@ -170,13 +169,13 @@ func (p *OllamaProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+		return nil, NewResponseInvalidError(p.Name(), "decode response: "+err.Error())
 	}
 
 	// 解析 AI 响应
 	result, err := p.parseResponse(ollamaResp.Response)
 	if err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
+		return nil, NewResponseInvalidError(p.Name(), err.Error())
 	}
 
 	// 填充元数据
@@ -265,13 +264,13 @@ func (p *OllamaProvider) GenerateCaption(request *AnalyzeRequest) (string, error
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return "", fmt.Errorf("send request: %w", err)
+		timeout := isTimeoutErr(err)
+		return "", NewTransportError(p.Name(), timeout, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("ollama api error: %s, body: %s", resp.Status, string(body))
+		return "", NewHTTPError(p.Name(), resp)
 	}
 
 	var ollamaResp struct {
@@ -279,7 +278,7 @@ func (p *OllamaProvider) GenerateCaption(request *AnalyzeRequest) (string, error
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
-		return "", fmt.Errorf("decode response: %w", err)
+		return "", NewResponseInvalidError(p.Name(), "decode response: "+err.Error())
 	}
 
 	caption := strings.TrimSpace(ollamaResp.Response)
