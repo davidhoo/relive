@@ -337,19 +337,26 @@ func TestPhotoAnalysisFieldsMigrated(t *testing.T) {
 		}
 	}
 
-	// 复合索引 idx_analysis_retry_ready 应存在（GORM tag 创建）。
+	// 复合索引 idx_photos_analysis_pending 应存在（v2 migration 创建），
+	// 覆盖 analysis_next_retry_at；单列 idx_analysis_retry_ready 应被删除。
 	indexes, err := db.Migrator().GetIndexes(&model.Photo{})
 	if err != nil {
 		t.Fatalf("get indexes: %v", err)
 	}
-	found := false
+	compoundFound := false
+	singleFound := false
 	for _, idx := range indexes {
+		if idx.Name() == "idx_photos_analysis_pending" {
+			compoundFound = true
+		}
 		if idx.Name() == "idx_analysis_retry_ready" {
-			found = true
-			break
+			singleFound = true
 		}
 	}
-	if !found {
-		t.Fatal("expected idx_analysis_retry_ready index after migration")
+	if !compoundFound {
+		t.Fatal("expected idx_photos_analysis_pending compound index after migration")
+	}
+	if singleFound {
+		t.Fatal("idx_analysis_retry_ready should be dropped (covered by compound index)")
 	}
 }

@@ -642,6 +642,8 @@ func migrateAnalysisPendingIndex(db *gorm.DB) error {
 	// 删除旧索引再建新索引。SQLite 不支持 DROP IF EXISTS on index 直接重建，
 	// 用 DROP INDEX IF EXISTS 安全幂等。
 	db.Exec("DROP INDEX IF EXISTS idx_photos_analysis_pending")
+	// 删除 GORM tag 历史遗留的单列索引 idx_analysis_retry_ready（v2 复合索引已覆盖该列）。
+	db.Exec("DROP INDEX IF EXISTS idx_analysis_retry_ready")
 
 	indexSQLV2 := `CREATE INDEX IF NOT EXISTS idx_photos_analysis_pending
 		ON photos(status, ai_analyzed, thumbnail_status, analysis_next_retry_at, analysis_retry_count, analysis_lock_expired_at)

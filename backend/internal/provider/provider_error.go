@@ -160,3 +160,15 @@ func sanitizeBody(s string, max int) string {
 	}
 	return s
 }
+
+// isTimeoutErr 判断是否为超时类错误（连接超时 / context deadline）。
+// 供各 Provider 在包装 NewTransportError 时统一调用。
+func isTimeoutErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "deadline exceeded") ||
+		strings.Contains(msg, "deadlineexceeded")
+}

@@ -314,17 +314,6 @@ func (p *VLLMProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error) 
 	return result, nil
 }
 
-// isTimeoutErr 判断是否为超时类错误。
-func isTimeoutErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "timeout") ||
-		strings.Contains(msg, "deadline exceeded") ||
-		strings.Contains(msg, "deadlineexceeded")
-}
-
 // buildPrompt 构建提示词（第一次会话，不含caption）
 func (p *VLLMProvider) buildPrompt(request *AnalyzeRequest) string {
 	// 使用配置的提示词，如果没有则使用默认提示词

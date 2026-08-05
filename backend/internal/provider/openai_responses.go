@@ -215,11 +215,12 @@ func (p *OpenAIResponsesProvider) generateText(prompt string, imageData []byte) 
 	}
 
 	if httpResp.StatusCode != http.StatusOK {
-		// NewHTTPError 期望读取 resp.Body，这里已读出 body，构造时重新包装。
+		// 已读出 body，手动构造 ProviderError（NewHTTPError 期望读 resp.Body）。
 		pe := &ProviderError{
-			Provider:   p.Name(),
-			StatusCode: httpResp.StatusCode,
+			Provider:    p.Name(),
+			StatusCode:  httpResp.StatusCode,
 			BodySummary: sanitizeBody(string(body), 500),
+			Err:         fmt.Errorf("openai responses api error: %s", httpResp.Status),
 		}
 		if ra := httpResp.Header.Get("Retry-After"); ra != "" {
 			if d, ok := parseRetryAfter(ra); ok {
