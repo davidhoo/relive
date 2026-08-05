@@ -250,7 +250,7 @@ func (p *VLLMProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error) 
 	// 发送请求到 VLLM 的 OpenAI 兼容端点
 	httpReq, err := http.NewRequest("POST", p.config.Endpoint+"/v1/chat/completions", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, NewTransportError(p.Name(), false, fmt.Errorf("create request: %w", err))
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
@@ -406,7 +406,7 @@ func (p *VLLMProvider) GenerateCaption(request *AnalyzeRequest) (string, error) 
 
 	httpReq, err := http.NewRequest("POST", p.config.Endpoint+"/v1/chat/completions", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return "", fmt.Errorf("create request: %w", err)
+		return "", NewTransportError(p.Name(), false, fmt.Errorf("create request: %w", err))
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 

@@ -198,7 +198,7 @@ func (p *OpenAIResponsesProvider) generateText(prompt string, imageData []byte) 
 
 	httpReq, err := http.NewRequest("POST", p.config.Endpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, NewTransportError(p.Name(), false, fmt.Errorf("create request: %w", err))
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)

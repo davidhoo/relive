@@ -146,7 +146,7 @@ func (p *OllamaProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error
 	// 发送请求
 	httpReq, err := http.NewRequest("POST", p.config.Endpoint+"/api/generate", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, NewTransportError(p.Name(), false, fmt.Errorf("create request: %w", err))
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
@@ -258,7 +258,7 @@ func (p *OllamaProvider) GenerateCaption(request *AnalyzeRequest) (string, error
 
 	httpReq, err := http.NewRequest("POST", p.config.Endpoint+"/api/generate", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return "", fmt.Errorf("create request: %w", err)
+		return "", NewTransportError(p.Name(), false, fmt.Errorf("create request: %w", err))
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 

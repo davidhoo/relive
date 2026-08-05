@@ -155,7 +155,7 @@ func (p *OpenAIProvider) Analyze(request *AnalyzeRequest) (*AnalyzeResult, error
 	// 发送请求
 	httpReq, err := http.NewRequest("POST", p.config.Endpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, NewTransportError(p.Name(), false, fmt.Errorf("create request: %w", err))
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)
@@ -303,7 +303,7 @@ func (p *OpenAIProvider) GenerateCaption(request *AnalyzeRequest) (string, error
 
 	httpReq, err := http.NewRequest("POST", p.config.Endpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return "", fmt.Errorf("create request: %w", err)
+		return "", NewTransportError(p.Name(), false, fmt.Errorf("create request: %w", err))
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)

@@ -187,7 +187,7 @@ func (p *QwenProvider) analyzePhoto(request *AnalyzeRequest) (*AnalyzeResult, in
 	// 发送请求
 	httpReq, err := http.NewRequest("POST", p.config.Endpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return nil, 0, fmt.Errorf("create request: %w", err)
+		return nil, 0, NewTransportError(p.Name(), false, fmt.Errorf("create request: %w", err))
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)
@@ -279,7 +279,7 @@ func (p *QwenProvider) generateCaption(request *AnalyzeRequest) (string, int, er
 	// 发送请求
 	httpReq, err := http.NewRequest("POST", p.config.Endpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return "", 0, fmt.Errorf("create request: %w", err)
+		return "", 0, NewTransportError(p.Name(), false, fmt.Errorf("create request: %w", err))
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)
@@ -501,7 +501,7 @@ func (p *QwenProvider) AnalyzeBatch(requests []*AnalyzeRequest) ([]*AnalyzeResul
 	// 发送请求
 	httpReq, err := http.NewRequest("POST", p.config.Endpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, NewTransportError(p.Name(), false, fmt.Errorf("create request: %w", err))
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)
