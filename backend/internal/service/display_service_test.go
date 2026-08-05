@@ -131,6 +131,9 @@ func (r *stubPhotoRepo) ListPhotoSummariesByPersonIDCursorFromIndex(personID uin
 func (r *stubPhotoRepo) ListSummaries(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string, withTotal bool) ([]*model.PhotoSummary, int64, error) {
 	return nil, 0, nil
 }
+func (r *stubPhotoRepo) ListSummariesCursor(analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, enabledPaths []string, status string, cursor *repository.PhotoCursor, limit int) ([]*model.PhotoSummary, bool, *repository.PhotoCursor, error) {
+	return nil, false, nil, nil
+}
 
 func (r *stubPhotoRepo) CountWithFilters(analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, enabledPaths []string, status string) (int64, error) {
 	return 0, nil

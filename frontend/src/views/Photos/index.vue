@@ -273,6 +273,10 @@
               <el-radio-button label="true">有位置</el-radio-button>
               <el-radio-button label="false">无位置</el-radio-button>
             </el-radio-group>
+            <el-radio-group v-model="browseMode" @change="handleBrowseModeChange" size="default" class="browse-mode-group">
+              <el-radio-button label="pagination">翻页</el-radio-button>
+              <el-radio-button label="continuous">连续浏览</el-radio-button>
+            </el-radio-group>
           </div>
         </template>
       </SectionHeader>
@@ -297,8 +301,7 @@
 
       <!-- 照片网格 -->
       <div v-else>
-        <div class="photos-toolbar">
-        <!-- 搜索区域 -->
+        <div class="photos-toolbar">        <!-- 搜索区域 -->
         <div class="search-section">
           <el-input
             v-model="searchQuery"
@@ -402,98 +405,61 @@
         </div>
         </div>
 
-        <div class="photo-grid" :class="{ 'batch-mode': batchSelectMode }">
+        <div class="photo-grid" :class="{ 'batch-mode': batchSelectMode }" v-if="browseMode === 'pagination'">
           <div
             v-for="(photo, index) in photos"
             :key="photo.id"
             class="photo-col"
           >
-            <div
-              class="photo-card photo-card-parallax animate-scale-in"
-              :style="{ animationDelay: `${index * 30}ms` }"
-              :class="{ 'is-selected': selectedPhotos.has(photo.id) }"
-              @click="selectedPhotos.size > 0 ? toggleSelectPhoto(photo.id, $event) : gotoDetail(photo.id)"
-            >
-              <div class="photo-image-wrapper">
-                <!-- 选择按钮 -->
-                <div
-                  class="photo-select-btn"
-                  :class="{ selected: selectedPhotos.has(photo.id) }"
-                  @click.stop="toggleSelectPhoto(photo.id, $event)"
-                >
-                  <el-icon v-if="selectedPhotos.has(photo.id)"><Select /></el-icon>
-                </div>
-                <el-image
-                    :src="getPhotoThumbnailUrl(photo.id, photo.updated_at)"
-                  :preview-src-list="[]"
-                  fit="cover"
-                  class="photo-image"
-                  loading="lazy"
-                >
-                  <template #error>
-                    <div class="image-error">
-                      <el-icon><PictureFilled /></el-icon>
-                      <span>加载失败</span>
-                    </div>
-                  </template>
-                  <template #placeholder>
-                    <div class="image-loading">
-                      <el-icon class="is-loading"><Loading /></el-icon>
-                    </div>
-                  </template>
-                </el-image>
-
-                <!-- 分析状态徽章 -->
-                <div class="photo-badge" v-if="photo.ai_analyzed" :class="getScoreClass(photo.overall_score)">
-                  <el-icon><Star /></el-icon>
-                  <span>{{ photo.overall_score?.toFixed(1) }}</span>
-                </div>
-
-                <div class="photo-status-icons">
-                  <span
-                    class="photo-status-icon"
-                    :class="photo.ai_analyzed ? 'is-ready' : 'is-idle'"
-                    title="AI 分析状态"
-                  >
-                    <el-icon><MagicStick /></el-icon>
-                  </span>
-                  <span class="photo-status-icon" :class="photo.thumbnail_status === 'ready' ? 'is-ready' : 'is-idle'" title="缩略图状态">
-                    <el-icon><Files /></el-icon>
-                  </span>
-                  <span
-                    class="photo-status-icon"
-                    :class="photo.location ? 'is-ready' : 'is-idle'"
-                    :title="photo.gps_latitude && photo.gps_longitude ? 'GPS 位置状态' : '无 GPS 信息'"
-                  >
-                    <el-icon><Location /></el-icon>
-                  </span>
-                </div>
-
-                <!-- 悬停信息 -->
-                <div class="photo-overlay">
-                  <div class="photo-info">
-                    <div class="photo-name" :title="getFileName(photo.file_path)">
-                      {{ getFileName(photo.file_path) }}
-                    </div>
-                    <div class="photo-meta">
-                      <span v-if="photo.taken_at" class="meta-item">
-                        <el-icon><Clock /></el-icon>
-                        {{ formatDate(photo.taken_at) }}
-                      </span>
-                      <span v-if="photo.width && photo.height" class="meta-item">
-                        <el-icon><FullScreen /></el-icon>
-                        {{ photo.width }}×{{ photo.height }}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <PhotoCard
+              :photo="photo"
+              :index="index"
+              :selected="selectedPhotos.has(photo.id)"
+              :selected-count="selectedPhotos.size"
+              :card-class="batchSelectMode ? 'batch-mode' : ''"
+              @toggle="toggleSelectPhoto"
+              @detail="gotoDetail"
+            />
           </div>
         </div>
 
-        <!-- 分页 -->
-        <div class="pagination-wrapper">
+        <!-- 连续浏览：虚拟网格 -->
+        <div v-else class="photo-grid-continuous" :class="{ 'batch-mode': batchSelectMode }">
+          <VirtualMediaGrid
+            ref="continuousGridRef"
+            :items="continuousPhotos"
+            :columns="continuousColumns"
+            :row-height="160"
+            :gap="16"
+            size-class="photos"
+            @visible-range-change="onContinuousVisibleRange"
+          >
+            <template #item="{ item, index }">
+              <PhotoCard
+                :photo="item"
+                :index="index"
+                :selected="selectedPhotos.has(item.id)"
+                :selected-count="selectedPhotos.size"
+                :virtual="true"
+                :card-class="batchSelectMode ? 'batch-mode' : ''"
+                @toggle="toggleSelectPhoto"
+                @detail="gotoDetailContinuous"
+              />
+            </template>
+          </VirtualMediaGrid>
+
+          <!-- 连续浏览哨兵 -->
+          <div class="scroll-sentinel">
+            <span v-if="continuousLoading" class="sentinel-status">加载中...</span>
+            <span v-else-if="continuousError" class="sentinel-status sentinel-error">
+              加载失败，<el-button text type="primary" size="small" @click="retryContinuous">重试</el-button>
+            </span>
+            <span v-else-if="continuousFinished" class="sentinel-status">已加载全部 {{ total }} 张照片</span>
+          </div>
+        </div>
+
+        <!-- 分页（仅翻页模式） -->
+        <div class="pagination-wrapper" v-if="browseMode === 'pagination'">
           <el-pagination
             v-model:current-page="currentPage"
             v-model:page-size="pageSize"
@@ -519,7 +485,7 @@
           title="取消选择"
         />
         <span class="selection-count">已选中 {{ selectedPhotos.size }} 张照片</span>
-        <el-tooltip content="全选当前页" placement="top">
+        <el-tooltip :content="browseMode === 'continuous' ? '全选已加载' : '全选当前页'" placement="top">
           <el-button
             :icon="Files"
             circle
@@ -619,13 +585,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ArrowUp, Check, CircleCheck, CircleClose, Clock, Close, Collection, Delete, Files, Filter, Folder, FolderOpened, FullScreen, Loading, Location, MagicStick, Picture, PictureFilled, Plus, PriceTag, QuestionFilled, Refresh, RefreshLeft, RefreshRight, Search, Select, Star, SwitchButton, Timer } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SectionHeader from '@/components/SectionHeader.vue'
 import PathBrowser from '@/components/PathBrowser.vue'
 import LocationPicker from '@/components/LocationPicker.vue'
+import VirtualMediaGrid from '@/components/VirtualMediaGrid.vue'
+import PhotoCard from './PhotoCard.vue'
 import { photoApi } from '@/api/photo'
 import { peopleApi } from '@/api/people'
 import { configApi, type ScanPathConfig, type AutoScanConfig } from '@/api/config'
@@ -637,6 +605,21 @@ import {
   isStaleRequest,
   nextReqId,
 } from './loadOrchestration'
+import {
+  BROWSE_MODE_STORAGE_KEY,
+  readBrowseMode,
+  shouldLoadByVisibleRange,
+  appendDedup,
+  isCursorStalled,
+  columnsForViewport,
+  type BrowseMode,
+} from './photoGridUtils'
+import {
+  savePhotoListSnapshot,
+  consumePhotoListSnapshot,
+  clearPhotoListSnapshot,
+  type PhotoListFilterFingerprint,
+} from './photoListViewState'
 import { v4 as uuidv4 } from 'uuid'
 
 const router = useRouter()
@@ -676,16 +659,211 @@ const batchRotating = ref(false)
 const showBatchLocationPicker = ref(false)
 const batchLocationLoading = ref(false)
 
+// 浏览模式：翻页 | 连续浏览。持久化到 localStorage，仅保存模式（不保存照片数组）。
+const browseMode = ref<BrowseMode>(readBrowseMode(localStorage.getItem(BROWSE_MODE_STORAGE_KEY)))
+const handleBrowseModeChange = (val: BrowseMode) => {
+  browseMode.value = val
+  localStorage.setItem(BROWSE_MODE_STORAGE_KEY, val)
+  // 切换模式不清空 selectedPhotos，但清除 Shift 连选锚点。
+  lastSelectedIndex.value = -1
+  clearPhotoListSnapshot()
+  if (val === 'continuous') {
+    // 进入连续浏览：从第一批开始加载。
+    resetContinuousState()
+    void loadContinuousPhotos()
+  } else {
+    // 切回翻页：恢复原来的 currentPage/pageSize，重新加载当前页。
+    loading.value = false
+    refreshListAndTotal()
+  }
+}
+
+// === 连续浏览状态 ===
+const continuousPhotos = ref<Photo[]>([])
+const continuousCursor = ref<string>('')
+const continuousHasMore = ref<boolean>(true)
+const continuousFinished = ref<boolean>(false)
+const continuousLoading = ref<boolean>(false)
+const continuousError = ref<boolean>(false)
+// 请求代际：筛选/搜索变化时自增，旧请求返回时若代际已变则丢弃。
+const continuousRequestEpoch = ref<number>(0)
+// 已成功消费的 cursor 集合，防止同一 cursor 被重复请求（防风暴）。
+const continuousConsumedCursors = ref<Set<string>>(new Set())
+const continuousPageSize = ref<number>(50)
+const continuousGridRef = ref<InstanceType<typeof VirtualMediaGrid> | null>(null)
+const continuousColumns = ref<number>(columnsForViewport(typeof window !== 'undefined' ? window.innerWidth : 1280))
+
+let continuousResizeRaf = 0
+const onContinuousResize = () => {
+  if (continuousResizeRaf) cancelAnimationFrame(continuousResizeRaf)
+  continuousResizeRaf = requestAnimationFrame(() => {
+    continuousColumns.value = columnsForViewport(window.innerWidth)
+  })
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('resize', onContinuousResize)
+}
+
+// 连续浏览筛选指纹：用于快照匹配与代际判定。
+const continuousFilterFingerprint = computed<PhotoListFilterFingerprint>(() => ({
+  search: searchQuery.value,
+  category: filterCategory.value,
+  tag: filterTag.value,
+  analyzed: filterAnalyzed.value,
+  has_thumbnail: filterThumbnail.value,
+  has_gps: filterGPS.value,
+  status: filterStatus.value,
+}))
+
+const resetContinuousState = () => {
+  continuousPhotos.value = []
+  continuousCursor.value = ''
+  continuousHasMore.value = true
+  continuousFinished.value = false
+  continuousLoading.value = false
+  continuousError.value = false
+  continuousRequestEpoch.value++
+  continuousConsumedCursors.value = new Set()
+}
+
+// 连续浏览：构建筛选参数。
+const buildContinuousParams = () => {
+  const params: Record<string, string | boolean | number> = {
+    page_size: continuousPageSize.value,
+  }
+  if (searchQuery.value) params.search = searchQuery.value
+  if (filterCategory.value) params.category = filterCategory.value
+  if (filterTag.value) params.tag = filterTag.value
+  if (filterAnalyzed.value) params.analyzed = filterAnalyzed.value
+  if (filterThumbnail.value) params.has_thumbnail = filterThumbnail.value
+  if (filterGPS.value) params.has_gps = filterGPS.value
+  if (filterStatus.value) params.status = filterStatus.value
+  return params
+}
+
+// 加载连续浏览下一批。
+const loadContinuousPhotos = async () => {
+  if (continuousLoading.value || continuousFinished.value) return
+  const epoch = continuousRequestEpoch.value
+  const requestCursor = continuousCursor.value
+  continuousLoading.value = true
+  continuousError.value = false
+  try {
+    const params = buildContinuousParams()
+    if (requestCursor) params.cursor = requestCursor
+    const res = await photoApi.getCursorList(params)
+    // 代际已变：丢弃旧请求结果。
+    if (epoch !== continuousRequestEpoch.value) return
+    const data = res.data?.data as any
+    const items: Photo[] = (data && 'items' in data ? data.items : []) || []
+    const hasMore: boolean = (data && 'has_more' in data) ? Boolean(data.has_more) : false
+    const nextCursor: string = (data && 'next_cursor' in data) ? String(data.next_cursor ?? '') : ''
+
+    // 停滞保护：hasMore=true 但游标为空/相同/已消费 → 停止自动加载，允许手动重试。
+    if (isCursorStalled({
+      hasMore,
+      nextCursor,
+      requestCursor,
+      consumedCursors: continuousConsumedCursors.value,
+    })) {
+      continuousError.value = true
+      continuousHasMore.value = false
+      ElMessage.error('照片分页未推进，请重试')
+      return
+    }
+
+    // ID 去重追加。
+    const { items: merged } = appendDedup(continuousPhotos.value, items)
+    continuousPhotos.value = merged
+
+    if (requestCursor) continuousConsumedCursors.value.add(requestCursor)
+    continuousHasMore.value = hasMore
+    continuousCursor.value = nextCursor
+    if (!hasMore) continuousFinished.value = true
+  } catch (error: any) {
+    if (epoch !== continuousRequestEpoch.value) return
+    continuousError.value = true
+    ElMessage.error(error.message || '加载照片失败')
+  } finally {
+    if (epoch === continuousRequestEpoch.value) continuousLoading.value = false
+  }
+}
+
+// 连续浏览：可见区间驱动的加载判定。
+const LOAD_THRESHOLD_ROWS = 3
+const onContinuousVisibleRange = (payload: { firstRowIndex: number; lastRowIndex: number; rowCount: number }) => {
+  const rowCount = continuousPhotos.value.length === 0
+    ? 0
+    : Math.ceil(continuousPhotos.value.length / continuousColumns.value)
+  if (!shouldLoadByVisibleRange({
+    active: browseMode.value === 'continuous',
+    loading: continuousLoading.value,
+    error: continuousError.value,
+    hasMore: continuousHasMore.value && !continuousFinished.value,
+    rowCount,
+    lastVisibleRowIndex: payload.lastRowIndex,
+    thresholdRows: LOAD_THRESHOLD_ROWS,
+  })) return
+  void loadContinuousPhotos()
+}
+
+// 连续浏览：手动重试（用失败前的 cursor，不越过失败批次）。
+const retryContinuous = () => {
+  if (continuousLoading.value) return
+  continuousError.value = false
+  continuousHasMore.value = !continuousFinished.value
+  void loadContinuousPhotos()
+}
+
+// 连续浏览：筛选/搜索/分类/标签/回收站变化 → 作废旧请求、清空、从第一批重新加载。
+const refreshContinuousList = () => {
+  if (browseMode.value !== 'continuous') return
+  resetContinuousState()
+  void loadContinuousPhotos()
+}
+
+// 连续浏览进入详情前保存快照；返回时恢复。
+const gotoDetailContinuous = (photoId: number) => {
+  if (browseMode.value === 'continuous') {
+    const firstVisibleId = (continuousGridRef.value && typeof (continuousGridRef.value as any).getFirstVisibleIndex === 'function')
+      ? (() => {
+          const idx = (continuousGridRef.value as any).getFirstVisibleIndex() as number
+          const p = continuousPhotos.value[idx]
+          return p ? p.id : null
+        })()
+      : null
+    const scrollTop = (continuousGridRef.value && typeof (continuousGridRef.value as any).getScrollOffset === 'function')
+      ? (continuousGridRef.value as any).getScrollOffset() as number
+      : 0
+    savePhotoListSnapshot({
+      photos: continuousPhotos.value,
+      nextCursor: continuousCursor.value,
+      hasMore: continuousHasMore.value,
+      finished: continuousFinished.value,
+      filter: { ...continuousFilterFingerprint.value },
+      total: total.value,
+      scrollTop,
+      firstVisiblePhotoId: firstVisibleId,
+    })
+  }
+  gotoDetail(photoId)
+}
+
+// 当前活动列表：连续浏览用 continuousPhotos，翻页用 photos。Shift 连选基于该数组索引。
+const activeList = computed<Photo[]>(() =>
+  browseMode.value === 'continuous' ? continuousPhotos.value : photos.value,
+)
+
 const toggleSelectPhoto = (id: number, event?: MouseEvent) => {
-  const currentIndex = photos.value.findIndex(p => p.id === id)
+  const currentIndex = activeList.value.findIndex(p => p.id === id)
   const next = new Set(selectedPhotos.value)
 
   if (event?.shiftKey && lastSelectedIndex.value >= 0 && currentIndex >= 0) {
-    // Shift+点击：范围选择
+    // Shift+点击：范围选择（基于已加载照片数组索引）
     const start = Math.min(lastSelectedIndex.value, currentIndex)
     const end = Math.max(lastSelectedIndex.value, currentIndex)
     for (let i = start; i <= end; i++) {
-      const p = photos.value[i]
+      const p = activeList.value[i]
       if (p) next.add(p.id)
     }
   } else {
@@ -703,17 +881,19 @@ const toggleSelectPhoto = (id: number, event?: MouseEvent) => {
   selectedPhotos.value = next
 }
 
+// 全选：连续浏览为“全选已加载”，翻页为“全选当前页”。
 const selectAll = () => {
   const next = new Set(selectedPhotos.value)
-  for (const photo of photos.value) {
+  for (const photo of activeList.value) {
     next.add(photo.id)
   }
   selectedPhotos.value = next
 }
 
+// 反选：范围为当前已加载数据。
 const invertSelection = () => {
   const next = new Set<number>()
-  for (const photo of photos.value) {
+  for (const photo of activeList.value) {
     if (!selectedPhotos.value.has(photo.id)) {
       next.add(photo.id)
     }
@@ -738,7 +918,10 @@ const handleExcludeSelected = async () => {
     await photoApi.batchUpdateStatus({ photo_ids: ids, status: 'excluded' })
     ElMessage.success(`已移除 ${ids.length} 张照片`)
     selectedPhotos.value = new Set()
-    loadPhotos()
+    lastSelectedIndex.value = -1
+    // 排除会改变筛选结果：从第一批刷新连续列表，避免旧游标产生遗漏。
+    refreshListAndTotal()
+    if (browseMode.value === 'continuous') refreshContinuousList()
     loadPhotoCounts()
     void refreshPathDerivedStatusWhenVisible()
   } catch (error: any) {
@@ -755,7 +938,9 @@ const handleRestoreSelected = async () => {
     await photoApi.batchUpdateStatus({ photo_ids: ids, status: 'active' })
     ElMessage.success(`已恢复 ${ids.length} 张照片`)
     selectedPhotos.value = new Set()
-    loadPhotos()
+    lastSelectedIndex.value = -1
+    refreshListAndTotal()
+    if (browseMode.value === 'continuous') refreshContinuousList()
     loadPhotoCounts()
     void refreshPathDerivedStatusWhenVisible()
   } catch (error: any) {
@@ -772,7 +957,9 @@ const handleBatchRotate = async (direction: 'left' | 'right') => {
     await photoApi.batchRotate({ photo_ids: ids, direction })
     ElMessage.success(`已旋转 ${ids.length} 张照片`)
     selectedPhotos.value = new Set()
-    loadPhotos()
+    lastSelectedIndex.value = -1
+    refreshListAndTotal()
+    if (browseMode.value === 'continuous') refreshContinuousList()
   } catch (error: any) {
     ElMessage.error(error.message || '旋转失败')
   } finally {
@@ -800,7 +987,9 @@ const handleBatchLocationConfirm = async (coords: { latitude: number; longitude:
     ElMessage.warning(`成功 ${success} 张，失败 ${failed} 张`)
   }
   selectedPhotos.value = new Set()
-  loadPhotos()
+  lastSelectedIndex.value = -1
+  refreshListAndTotal()
+  if (browseMode.value === 'continuous') refreshContinuousList()
   void refreshPathDerivedStatusWhenVisible()
 }
 
@@ -1182,8 +1371,14 @@ const resetSearch = () => {
   filterGPS.value = ''
   filterStatus.value = ''
   currentPage.value = 1
+  lastSelectedIndex.value = -1
   syncStateToURL()
-  refreshListAndTotal()
+  if (browseMode.value === 'continuous') {
+    refreshContinuousList()
+    loadFilteredTotal()
+  } else {
+    refreshListAndTotal()
+  }
 }
 
 // 请求序号：快速切换筛选/分页时丢弃过期结果，避免旧请求覆盖新状态
@@ -1252,8 +1447,14 @@ const refreshListAndTotal = () => {
 // 搜索处理
 const handleSearch = () => {
   currentPage.value = 1
+  lastSelectedIndex.value = -1
   syncStateToURL()
-  refreshListAndTotal()
+  if (browseMode.value === 'continuous') {
+    refreshContinuousList()
+    loadFilteredTotal()
+  } else {
+    refreshListAndTotal()
+  }
 }
 
 // 分页处理
@@ -1378,8 +1579,14 @@ const handleCategoryClick = (value: string) => {
     filterCategory.value = value
   }
   currentPage.value = 1
+  lastSelectedIndex.value = -1
   syncStateToURL()
-  refreshListAndTotal()
+  if (browseMode.value === 'continuous') {
+    refreshContinuousList()
+    loadFilteredTotal()
+  } else {
+    refreshListAndTotal()
+  }
 }
 
 // 点击标签筛选
@@ -1391,8 +1598,14 @@ const handleTagClick = (value: string) => {
     filterTag.value = value
   }
   currentPage.value = 1
+  lastSelectedIndex.value = -1
   syncStateToURL()
-  refreshListAndTotal()
+  if (browseMode.value === 'continuous') {
+    refreshContinuousList()
+    loadFilteredTotal()
+  } else {
+    refreshListAndTotal()
+  }
 }
 
 // 折叠/展开扫描路径
@@ -1414,8 +1627,14 @@ const handlePathClick = (row: ScanPathConfig) => {
     searchQuery.value = row.path
   }
   currentPage.value = 1
+  lastSelectedIndex.value = -1
   syncStateToURL()
-  refreshListAndTotal()
+  if (browseMode.value === 'continuous') {
+    refreshContinuousList()
+    loadFilteredTotal()
+  } else {
+    refreshListAndTotal()
+  }
 }
 
 const handleRecycleBinClick = () => {
@@ -1429,8 +1648,15 @@ const handleRecycleBinClick = () => {
     filterTag.value = ''
   }
   currentPage.value = 1
+  lastSelectedIndex.value = -1
   syncStateToURL()
-  loadPhotos()
+  if (browseMode.value === 'continuous') {
+    refreshContinuousList()
+    loadFilteredTotal()
+  } else {
+    loadPhotos()
+    loadFilteredTotal()
+  }
 }
 
 // 扫描指定路径
@@ -1602,7 +1828,12 @@ const startPollingScanProgress = (pathName: string) => {
         // 刷新数据
         clearPathPhotoCountDelta(task.path || currentScanPath.value)
         photoStore.invalidateAll()
-        refreshListAndTotal()
+        if (browseMode.value === 'continuous') {
+          refreshContinuousList()
+          loadFilteredTotal()
+        } else {
+          refreshListAndTotal()
+        }
         await loadScanPaths()
         await Promise.all([loadPathPhotoCounts(), refreshPathDerivedStatusWhenVisible()])
       }
@@ -1643,7 +1874,10 @@ const handleCleanup = async () => {
 const gotoDetail = (photoId: number) => {
   const query: any = {
     page: currentPage.value,
-    pageSize: pageSize.value
+    pageSize: pageSize.value,
+  }
+  if (browseMode.value === 'continuous') {
+    query.browse = 'continuous'
   }
 
   // 保存筛选条件
@@ -1779,6 +2013,64 @@ onMounted(async () => {
 
   syncStateToURL()
 
+  // 连续浏览模式：优先尝试从详情返回快照恢复；恢复失败则从第一批加载。
+  if (browseMode.value === 'continuous') {
+    const snap = consumePhotoListSnapshot(continuousFilterFingerprint.value)
+    if (snap) {
+      continuousPhotos.value = snap.photos
+      continuousCursor.value = snap.nextCursor
+      continuousHasMore.value = snap.hasMore
+      continuousFinished.value = snap.finished
+      total.value = snap.total
+      continuousRequestEpoch.value++
+      continuousConsumedCursors.value = new Set()
+      continuousLoading.value = false
+      continuousError.value = false
+      statsReady.value = true
+      initialized.value = true
+      // 恢复滚动位置与锚点：等虚拟网格挂载后由 nextTick 处理。
+      nextTick(() => {
+        const grid = continuousGridRef.value as any
+        if (grid) {
+          if (typeof grid.measure === 'function') grid.measure()
+          if (typeof grid.recomputeScrollMargin === 'function') grid.recomputeScrollMargin()
+          // 先按锚点 ID 滚到对应行，再用保存的 scrollTop 精确恢复。
+          if (snap.firstVisiblePhotoId != null) {
+            const idx = snap.photos.findIndex(p => p.id === snap.firstVisiblePhotoId)
+            if (idx >= 0 && typeof grid.scrollToIndex === 'function') {
+              grid.scrollToIndex(idx)
+            }
+          }
+          if (typeof grid.scrollToOffset === 'function') {
+            grid.scrollToOffset(snap.scrollTop)
+          }
+        }
+      })
+      // 仍异步补齐统计类请求。
+      loadFilteredTotal()
+      loadPhotoCounts()
+      loadCategoriesAndTags()
+      loadScanPaths()
+      loadAutoScanConfig()
+      checkOngoingScanTask()
+      void loadPathDerivedStatusWhenVisible()
+      return
+    }
+    // 无快照或筛选不匹配：从第一批加载。
+    resetContinuousState()
+    statsReady.value = true
+    initialized.value = true
+    void loadContinuousPhotos()
+    loadFilteredTotal()
+    loadPhotoCounts()
+    loadCategoriesAndTags()
+    loadScanPaths()
+    loadAutoScanConfig()
+    checkOngoingScanTask()
+    void loadPathDerivedStatusWhenVisible()
+    return
+  }
+
   // 分阶段加载：照片网格优先可用，统计类接口低优先级延后，避免首屏集中打满 SQLite 读负载。
   //
   // 第一阶段：照片列表（no_total=true，毫秒级）。网格可用前不等待任何统计。
@@ -1853,11 +2145,23 @@ onBeforeUnmount(() => {
     clearTimeout(tagCloudSearchTimer)
     tagCloudSearchTimer = null
   }
+  if (continuousResizeRaf) {
+    cancelAnimationFrame(continuousResizeRaf)
+  }
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('resize', onContinuousResize)
+  }
 })
 
 // 暴露刷新方法供外部调用
 defineExpose({
-  refresh: loadPhotos
+  refresh: () => {
+    if (browseMode.value === 'continuous') {
+      refreshContinuousList()
+    } else {
+      loadPhotos()
+    }
+  },
 })
 </script>
 
@@ -2347,6 +2651,60 @@ defineExpose({
   display: grid;
   grid-template-columns: repeat(10, 1fr);
   gap: var(--spacing-md);
+}
+
+.photo-grid-continuous {
+  margin-top: var(--spacing-lg);
+}
+
+.photo-grid-continuous :deep(.virtual-media-grid) {
+  width: 100%;
+}
+
+.scroll-sentinel {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 40px;
+  margin-top: 16px;
+}
+
+.sentinel-status {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.sentinel-error {
+  color: var(--color-danger, #f56c6c);
+}
+
+.browse-mode-group {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+}
+
+.browse-mode-group :deep(.el-radio-button__inner) {
+  min-width: 72px;
+  height: 32px;
+  padding: 0 16px;
+  border: none !important;
+  border-radius: 10px !important;
+  background: transparent;
+  color: var(--color-text-secondary);
+  box-shadow: none !important;
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+  line-height: 32px;
+}
+
+.browse-mode-group :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
+  background: var(--color-primary);
+  color: #fff;
+  box-shadow: 0 8px 18px rgba(0, 184, 148, 0.18) !important;
 }
 
 .photo-col {

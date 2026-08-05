@@ -36,6 +36,10 @@ type PhotoService interface {
 	GetPhotoByID(id uint) (*model.Photo, error)
 	GetPhotos(req *model.GetPhotosRequest) ([]*model.Photo, int64, error)
 	GetPhotosSummary(req *model.GetPhotosRequest) ([]*model.PhotoSummary, int64, error)
+	// GetPhotosSummaryCursor 游标分页获取照片摘要（连续浏览）。
+	// 固定排序 taken_at DESC, id DESC，无 COUNT。cursor 由 handler 解析自 opaque 字符串，
+	// 返回值 nextCursor 由 handler 编码为 opaque 字符串回传前端。
+	GetPhotosSummaryCursor(req *model.GetPhotosRequest, cursor *repository.PhotoCursor, limit int) ([]*model.PhotoSummary, bool, *repository.PhotoCursor, error)
 	GetAdjacentPhotos(id uint, req *model.GetPhotosRequest) (*model.AdjacentPhotosResponse, error)
 
 	// 统计
@@ -270,6 +274,41 @@ func cacheLabel(hit bool) string {
 		return "hit"
 	}
 	return "miss"
+}
+
+// GetPhotosSummaryCursor 游标分页获取照片摘要（连续浏览模式）。
+//
+// 固定排序 taken_at DESC, id DESC（keyset 稳定排序），不执行 COUNT。
+// cursor 由 handler 从 opaque 字符串解析得到；nextCursor 返回给 handler 编码。
+// 复用与普通列表相同的筛选条件（enabledPaths 等），并回填标签。
+func (s *photoService) GetPhotosSummaryCursor(req *model.GetPhotosRequest, cursor *repository.PhotoCursor, limit int) ([]*model.PhotoSummary, bool, *repository.PhotoCursor, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	enabledPaths, err := s.getEnabledScanPaths()
+	if err != nil {
+		logger.Warnf("Failed to get enabled scan paths: %v", err)
+		enabledPaths = nil
+	}
+
+	start := time.Now()
+	summaries, hasMore, nextCursor, err := s.repo.ListSummariesCursor(
+		req.Analyzed, req.HasThumbnail, req.HasGPS, req.Location, req.Search,
+		req.Category, req.Tag, enabledPaths, req.Status, cursor, limit,
+	)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	s.enrichPhotoSummariesTags(summaries)
+
+	logger.Infof("[photos] cursor list limit=%d items=%d has_more=%v elapsed=%dms filters=%s",
+		limit, len(summaries), hasMore, time.Since(start).Milliseconds(), buildFilteredCountKey(req, enabledPaths))
+
+	return summaries, hasMore, nextCursor, nil
 }
 
 // GetAdjacentPhotos 获取相邻照片 ID

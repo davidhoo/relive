@@ -1,11 +1,19 @@
 import http from '@/utils/request'
-import type { Photo, PhotoListParams, PhotoStats, ScanPhotosRequest, RebuildPhotosRequest, CleanupPhotosResponse, CountPhotosByPathsRequest, CountPhotosByPathsResponse, CountDerivedStatusByPathsRequest, CountDerivedStatusByPathsResponse, PhotoCountsResponse, TagsResponse, AdjacentPhotosResponse } from '@/types/photo'
-import type { ApiResponse, PagedResponse } from '@/types/api'
+import type { Photo, PhotoListParams, PhotoCursorListParams, PhotoStats, ScanPhotosRequest, RebuildPhotosRequest, CleanupPhotosResponse, CountPhotosByPathsRequest, CountPhotosByPathsResponse, CountDerivedStatusByPathsRequest, CountDerivedStatusByPathsResponse, PhotoCountsResponse, TagsResponse, AdjacentPhotosResponse } from '@/types/photo'
+import type { ApiResponse, PagedResponse, CursorPagedResponse } from '@/types/api'
 
 export const photoApi = {
   // 获取照片列表
   getList(params?: PhotoListParams) {
     return http.get<ApiResponse<PagedResponse<Photo>>>('/photos', { params })
+  },
+
+  // 获取照片游标分页列表（连续浏览）。固定排序 taken_at DESC, id DESC，无 COUNT。
+  // 不与 getList 复用同一返回类型，避免 union 造成调用方歧义。
+  getCursorList(params?: PhotoCursorListParams) {
+    return http.get<ApiResponse<CursorPagedResponse<Photo>>>('/photos', {
+      params: { pagination: 'cursor', ...(params || {}) },
+    })
   },
 
   // 获取照片详情

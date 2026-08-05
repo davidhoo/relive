@@ -10,12 +10,17 @@ import (
 	"github.com/davidhoo/relive/pkg/database"
 	"gorm.io/gorm"
 )
-// PersonPhotoCursor holds the sort-field values from the last item of the previous page.
+
+// PhotoCursor holds the sort-field values from the last item of the previous page.
 // Used for keyset pagination on photos ordered by (taken_at DESC, id DESC).
-type PersonPhotoCursor struct {
+type PhotoCursor struct {
 	TakenAt *time.Time // nil means we're in the NULL taken_at zone
 	ID      uint
 }
+
+// PersonPhotoCursor 是 PhotoCursor 的历史别名，保留以兼容人物详情现有接口与调用点。
+// 新代码应直接使用 PhotoCursor。
+type PersonPhotoCursor = PhotoCursor
 
 // activeScope 只查询 active 状态的照片
 func activeScope(db *gorm.DB) *gorm.DB {
@@ -40,6 +45,10 @@ type PhotoRepository interface {
 	// 列表查询
 	List(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string) ([]*model.Photo, int64, error)
 	ListSummaries(page, pageSize int, analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, sortBy string, sortDesc bool, enabledPaths []string, status string, withTotal bool) ([]*model.PhotoSummary, int64, error)
+	// ListSummariesCursor 游标分页（无 COUNT）。固定排序 taken_at DESC, id DESC。
+	// cursor 为 nil 表示首页。NULL taken_at 排在所有非空之后并按 id DESC。
+	// 返回 (items, hasMore, nextCursor, error)；hasMore=false 时 nextCursor 为 nil。
+	ListSummariesCursor(analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, enabledPaths []string, status string, cursor *PhotoCursor, limit int) ([]*model.PhotoSummary, bool, *PhotoCursor, error)
 	// CountWithFilters 按筛选条件统计照片总数（独立 COUNT 查询，供服务层缓存）
 	CountWithFilters(analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, enabledPaths []string, status string) (int64, error)
 	// GetPhotoStats 一次聚合查询返回活跃照片总数、已分析数与总占用（供共享缓存使用）
@@ -370,6 +379,74 @@ func (r *photoRepository) ListSummaries(page, pageSize int, analyzed *bool, hasT
 	return summaries, total, nil
 }
 
+// ListSummariesCursor 游标分页查询照片摘要（无 COUNT，固定排序 taken_at DESC, id DESC）。
+//
+// 设计要点：
+//   - 排序固定，不暴露 sortBy/sortDesc，避免 keyset 在非稳定排序下退化为重复/遗漏。
+//   - NULL taken_at 排在所有非空之后并按 id DESC（与人物详情 cursor 行为一致）。
+//   - limit+1 判定 hasMore，避免独立 COUNT。
+//   - 复用 applyPhotoFilters，所有筛选条件（analyzed/has_thumbnail/has_gps/search/category/tag/
+//     enabledPaths/status）在游标模式下同等生效。
+//   - 不带 DISTINCT：照片主表查询本身无重复行，无需 DISTINCT。
+//
+// cursor 谓词：
+//   - 非空区：(taken_at < cursor) OR (taken_at = cursor AND id < cursor) OR taken_at IS NULL
+//   - NULL 区：taken_at IS NULL AND id < cursor
+//
+// 整组显式加括号，避免与其它 AND 过滤叠加时 OR/AND 优先级歧义导致 cursor 不推进（曾出现在人物详情）。
+func (r *photoRepository) ListSummariesCursor(analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, enabledPaths []string, status string, cursor *PhotoCursor, limit int) ([]*model.PhotoSummary, bool, *PhotoCursor, error) {
+	if enabledPaths != nil && len(enabledPaths) == 0 {
+		return []*model.PhotoSummary{}, false, nil, nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+
+	query := r.db.Model(&model.Photo{})
+	query = r.applyPhotoFilters(query, analyzed, hasThumbnail, hasGPS, location, search, category, tag, enabledPaths, status)
+
+	if cursor != nil {
+		if cursor.TakenAt != nil {
+			query = query.Where(
+				"(taken_at < ? OR (taken_at = ? AND id < ?) OR taken_at IS NULL)",
+				*cursor.TakenAt, *cursor.TakenAt, cursor.ID,
+			)
+		} else {
+			query = query.Where("taken_at IS NULL AND id < ?", cursor.ID)
+		}
+	}
+
+	query = query.Order("taken_at DESC, id DESC")
+
+	var results []model.PhotoSummary
+	if err := query.Select("id, file_path, ai_analyzed, overall_score, thumbnail_status, location, gps_latitude, gps_longitude, taken_at, width, height, updated_at").
+		Limit(limit + 1).
+		Find(&results).Error; err != nil {
+		return nil, false, nil, err
+	}
+
+	hasMore := len(results) > limit
+	if hasMore {
+		results = results[:limit]
+	}
+
+	summaries := make([]*model.PhotoSummary, len(results))
+	for i := range results {
+		summaries[i] = &results[i]
+	}
+
+	var nextCursor *PhotoCursor
+	if hasMore && len(summaries) > 0 {
+		last := summaries[len(summaries)-1]
+		nextCursor = &PhotoCursor{
+			TakenAt: last.TakenAt,
+			ID:      last.ID,
+		}
+	}
+
+	return summaries, hasMore, nextCursor, nil
+}
+
 // CountWithFilters 按筛选条件统计照片总数（独立 COUNT 查询，供服务层按筛选条件缓存）。
 func (r *photoRepository) CountWithFilters(analyzed *bool, hasThumbnail *bool, hasGPS *bool, location string, search string, category string, tag string, enabledPaths []string, status string) (int64, error) {
 	if enabledPaths != nil && len(enabledPaths) == 0 {
@@ -640,7 +717,7 @@ func (r *photoRepository) ListPhotoSummariesByPersonIDCursor(personID uint, curs
 	return photos, hasMore, nextCursor, nil
 }
 
-// ListPhotoSummariesByPersonIDCursorFromIndex 走 person_photos 派生表分页（迁移完成后使用）。
+// ListSummariesByPersonIDCursorFromIndex 走 person_photos 派生表分页（迁移完成后使用）。
 // 先从 person_photos 取 limit+1 个 photo_id（走 idx_person_photos_cursor，无 DISTINCT/ORDER BY 临时树），
 // 再按 id 顺序回表读取摘要列。为保持稳定的 taken_at DESC, id DESC 顺序，回表后按 person_photos 给出的
 // id 顺序（已按 cursor 排序）排列返回。

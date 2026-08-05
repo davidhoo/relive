@@ -299,6 +299,10 @@ func AutoMigrate(db *gorm.DB) error {
 		log.Printf("[database] warning: person_photos migration failed: %v", err)
 	}
 
+	if err := migratePhotosCursorIndex(db); err != nil {
+		log.Printf("[database] warning: photos cursor index migration failed: %v", err)
+	}
+
 	return nil
 }
 
@@ -954,5 +958,38 @@ func migratePersonPhotosTable(db *gorm.DB) error {
 		return nil // 已安装
 	}
 	db.Create(&model.AppConfig{Key: tableKey, Value: "done"})
+	return nil
+}
+
+// migratePhotosCursorIndex 为照片管理页连续浏览的 keyset 分页查询创建复合索引。
+//
+// 连续浏览固定排序 (taken_at DESC, id DESC)，并按 status / deleted_at 过滤。
+// 该索引覆盖过滤谓词 + 排序键，避免 ORDER BY 产生临时排序树（EXPLAIN QUERY PLAN
+// 应出现 idx_photos_cursor）。
+//
+// 索引为全量（不含 WHERE 子句）：active 与 excluded（回收站）照片都纳入，
+// 这样回收站连续浏览同样命中该索引，不会退化为全表扫描。
+//
+// 用 CREATE INDEX IF NOT EXISTS 幂等创建，不重建业务数据、不阻塞启动。失败仅 warning。
+func migratePhotosCursorIndex(db *gorm.DB) error {
+	const migrationKey = "migration.photos_cursor_index_v1"
+
+	var cfg model.AppConfig
+	if err := db.Where("key = ?", migrationKey).First(&cfg).Error; err == nil {
+		return nil
+	}
+
+	log.Printf("[database] creating photos cursor index (status, deleted_at, taken_at DESC, id DESC)...")
+
+	// 全量索引：active 与 excluded 照片均收录。连续浏览既覆盖默认 active，也覆盖
+	// 回收站 excluded 筛选，两者都能命中该索引。
+	indexSQL := `CREATE INDEX IF NOT EXISTS idx_photos_cursor
+		ON photos(status, deleted_at, taken_at DESC, id DESC)`
+	if err := db.Exec(indexSQL).Error; err != nil {
+		return fmt.Errorf("create photos cursor index: %w", err)
+	}
+
+	log.Printf("[database] photos cursor index created")
+	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
 	return nil
 }

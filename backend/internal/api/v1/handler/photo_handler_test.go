@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/davidhoo/relive/internal/model"
+	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/internal/service"
 	"github.com/davidhoo/relive/pkg/config"
 	"github.com/disintegration/imaging"
@@ -19,12 +20,13 @@ import (
 
 // stubPhotoService implements the minimal PhotoService methods needed for handler tests.
 type stubPhotoService struct {
-	getPhotosFunc        func(req *model.GetPhotosRequest) ([]*model.Photo, int64, error)
-	getPhotosSummaryFunc func(req *model.GetPhotosRequest) ([]*model.PhotoSummary, int64, error)
-	getPhotoByIDFunc     func(id uint) (*model.Photo, error)
-	countAllFunc         func() (int64, error)
-	countAnalyzedFunc    func() (int64, error)
-	countUnanalyzedFunc  func() (int64, error)
+	getPhotosFunc              func(req *model.GetPhotosRequest) ([]*model.Photo, int64, error)
+	getPhotosSummaryFunc       func(req *model.GetPhotosRequest) ([]*model.PhotoSummary, int64, error)
+	getPhotosSummaryCursorFunc func(req *model.GetPhotosRequest, cursor *repository.PhotoCursor, limit int) ([]*model.PhotoSummary, bool, *repository.PhotoCursor, error)
+	getPhotoByIDFunc           func(id uint) (*model.Photo, error)
+	countAllFunc               func() (int64, error)
+	countAnalyzedFunc          func() (int64, error)
+	countUnanalyzedFunc        func() (int64, error)
 }
 
 func (s *stubPhotoService) GetPhotos(req *model.GetPhotosRequest) ([]*model.Photo, int64, error) {
@@ -107,6 +109,12 @@ func (s *stubPhotoService) GetPhotosSummary(req *model.GetPhotosRequest) ([]*mod
 	}
 	return nil, 0, nil
 }
+func (s *stubPhotoService) GetPhotosSummaryCursor(req *model.GetPhotosRequest, cursor *repository.PhotoCursor, limit int) ([]*model.PhotoSummary, bool, *repository.PhotoCursor, error) {
+	if s.getPhotosSummaryCursorFunc != nil {
+		return s.getPhotosSummaryCursorFunc(req, cursor, limit)
+	}
+	return nil, false, nil, nil
+}
 
 func TestPhotoHandler_GetPhotoStats_Success(t *testing.T) {
 	svc := &stubPhotoService{
@@ -164,6 +172,65 @@ func TestPhotoHandler_GetPhotos_Error(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
 
+// TestPhotoHandler_GetPhotos_Cursor_RejectsNonDefaultSort 游标模式收到非默认排序返回 400。
+func TestPhotoHandler_GetPhotos_Cursor_RejectsNonDefaultSort(t *testing.T) {
+	h := &PhotoHandler{photoService: &stubPhotoService{}}
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/photos?pagination=cursor&sort_by=overall_score", nil, nil, h.GetPhotos)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, "INVALID_CURSOR", resp.Error.Code)
+}
+
+// TestPhotoHandler_GetPhotos_Cursor_RejectsAsc 游标模式 sort_desc=false 返回 400。
+func TestPhotoHandler_GetPhotos_Cursor_RejectsAsc(t *testing.T) {
+	h := &PhotoHandler{photoService: &stubPhotoService{}}
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/photos?pagination=cursor&sort_desc=false", nil, nil, h.GetPhotos)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// TestPhotoHandler_GetPhotos_Cursor_RejectsMalformedCursor 非法游标返回 400 INVALID_CURSOR。
+func TestPhotoHandler_GetPhotos_Cursor_RejectsMalformedCursor(t *testing.T) {
+	h := &PhotoHandler{photoService: &stubPhotoService{}}
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/photos?pagination=cursor&cursor=!!!not-base64!!!", nil, nil, h.GetPhotos)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, "INVALID_CURSOR", resp.Error.Code)
+}
+
+// TestPhotoHandler_GetPhotos_Cursor_RejectsKindMismatch 错误 kind 游标返回 400。
+func TestPhotoHandler_GetPhotos_Cursor_RejectsKindMismatch(t *testing.T) {
+	// 用 photos kind（人物详情）编码一个 cursor，照片列表应拒绝。
+	other := encodeCursor(cursorPayload{Version: cursorVersion, Kind: cursorKindPhotos, ID: 5})
+	h := &PhotoHandler{photoService: &stubPhotoService{}}
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/photos?pagination=cursor&cursor="+other, nil, nil, h.GetPhotos)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// TestPhotoHandler_GetPhotos_Cursor_RejectsUnknownVersion 错误版本游标返回 400。
+func TestPhotoHandler_GetPhotos_Cursor_RejectsUnknownVersion(t *testing.T) {
+	bad := encodeCursor(cursorPayload{Version: 999, Kind: cursorKindPhotoList, ID: 5})
+	h := &PhotoHandler{photoService: &stubPhotoService{}}
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/photos?pagination=cursor&cursor="+bad, nil, nil, h.GetPhotos)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// TestPhotoHandler_GetPhotos_Cursor_StalledEmptyNextCursor hasMore=true 但 nextCursor 空 → 500 PAGINATION_STALLED。
+func TestPhotoHandler_GetPhotos_Cursor_StalledEmptyNextCursor(t *testing.T) {
+	svc := &stubPhotoService{}
+	svc.getPhotosSummaryCursorFunc = func(_ *model.GetPhotosRequest, _ *repository.PhotoCursor, _ int) ([]*model.PhotoSummary, bool, *repository.PhotoCursor, error) {
+		// hasMore=true 但 nextCursor=nil → 停滞。
+		return []*model.PhotoSummary{{ID: 1}}, true, nil, nil
+	}
+	h := &PhotoHandler{photoService: svc}
+	rec := performJSONRequest(t, http.MethodGet, "/api/v1/photos?pagination=cursor&page_size=10", nil, nil, h.GetPhotos)
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, "PAGINATION_STALLED", resp.Error.Code)
+}
+
 func TestPhotoHandler_GetPhotoByID_NotFound(t *testing.T) {
 	svc := &stubPhotoService{
 		getPhotoByIDFunc: func(id uint) (*model.Photo, error) {
@@ -199,14 +266,14 @@ func newPhotoThumbnailHandlerForTest(t *testing.T) (*PhotoHandler, *model.Photo,
 	require.NoError(t, imaging.Save(imaging.New(400, 300, color.NRGBA{R: 10, G: 20, B: 30, A: 255}), photoPath))
 
 	photo := &model.Photo{
-		FilePath:       photoPath,
-		FileName:       "photo.jpg",
-		FileSize:       1,
-		FileHash:       "thumb-cache-test",
-		Width:          400,
-		Height:         300,
-		Status:         model.PhotoStatusActive,
-		ThumbnailPath:  "photos/test-thumb.jpg",
+		FilePath:        photoPath,
+		FileName:        "photo.jpg",
+		FileSize:        1,
+		FileHash:        "thumb-cache-test",
+		Width:           400,
+		Height:          300,
+		Status:          model.PhotoStatusActive,
+		ThumbnailPath:   "photos/test-thumb.jpg",
 		ThumbnailStatus: model.ThumbnailStatusReady,
 	}
 
@@ -285,4 +352,3 @@ func TestPhotoHandler_GetPhotoThumbnail_UnstableNoCache(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "no-cache", rec.Header().Get("Cache-Control"))
 }
-

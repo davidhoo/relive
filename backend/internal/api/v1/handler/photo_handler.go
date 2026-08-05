@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
+	"github.com/davidhoo/relive/internal/repository"
 	"github.com/davidhoo/relive/internal/service"
 	"github.com/davidhoo/relive/internal/util"
 	"github.com/davidhoo/relive/pkg/config"
@@ -386,6 +387,103 @@ func (h *PhotoHandler) GetPhotos(c *gin.Context) {
 		SortDesc:     sortDesc,
 		Status:       status,
 		NoTotal:      noTotal,
+		Pagination:   c.Query("pagination"),
+		Cursor:       c.Query("cursor"),
+	}
+
+	// 连续浏览（游标分页）：固定排序 taken_at DESC, id DESC，无 COUNT。
+	// 收到非默认排序时拒绝（游标模式不支持动态排序，否则 keyset 会退化为重复/遗漏）。
+	if req.Pagination == "cursor" {
+		if (sortBy != "" && sortBy != "taken_at") || !sortDesc {
+			c.JSON(http.StatusBadRequest, model.Response{
+				Success: false,
+				Error: &model.ErrorInfo{
+					Code:    "INVALID_CURSOR",
+					Message: "cursor pagination requires default sort (taken_at DESC, id DESC)",
+				},
+			})
+			return
+		}
+
+		cursorLimit := pageSize
+		if cursorLimit <= 0 {
+			cursorLimit = 50
+		}
+		if cursorLimit > 200 {
+			cursorLimit = 200
+		}
+
+		cp, err := decodeCursor(req.Cursor, cursorKindPhotoList)
+		if err != nil {
+			writeCursorError(c, err)
+			return
+		}
+		var repoCursor *repository.PhotoCursor
+		if cp != nil {
+			t := millisToTime(cp.TakenAt)
+			repoCursor = &repository.PhotoCursor{
+				TakenAt: t,
+				ID:      cp.ID,
+			}
+		}
+
+		summaries, hasMore, nextCursor, err := h.photoService.GetPhotosSummaryCursor(req, repoCursor, cursorLimit)
+		if err != nil {
+			logger.Errorf("Get photos cursor failed: %v", err)
+			c.JSON(http.StatusInternalServerError, model.Response{
+				Success: false,
+				Error: &model.ErrorInfo{
+					Code:    "QUERY_FAILED",
+					Message: "Failed to get photos: " + err.Error(),
+				},
+			})
+			return
+		}
+
+		nextCursorStr := ""
+		if hasMore && nextCursor != nil {
+			nextCursorStr = encodeCursor(cursorPayload{
+				Version: cursorVersion,
+				Kind:    cursorKindPhotoList,
+				TakenAt: timeToMillis(nextCursor.TakenAt),
+				ID:      nextCursor.ID,
+			})
+		}
+		// hasMore=true 但 nextCursor 为空/与输入相同 → 停滞保护，绝不回吐停滞 cursor。
+		if hasMore && nextCursorStr == "" {
+			logger.Warnf("[photos] cursor stalled: has_more=true but empty next_cursor")
+			c.JSON(http.StatusInternalServerError, model.Response{
+				Success: false,
+				Error: &model.ErrorInfo{
+					Code:    "PAGINATION_STALLED",
+					Message: "cursor pagination stalled: empty next_cursor",
+				},
+			})
+			return
+		}
+		if hasMore && cp != nil && nextCursor != nil &&
+			cp.TakenAt == nil && nextCursor.TakenAt == nil && cp.ID == nextCursor.ID {
+			logger.Warnf("[photos] cursor stalled: next_cursor equals input cursor")
+			c.JSON(http.StatusInternalServerError, model.Response{
+				Success: false,
+				Error: &model.ErrorInfo{
+					Code:    "PAGINATION_STALLED",
+					Message: "cursor pagination stalled: next_cursor equals input cursor",
+				},
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, model.Response{
+			Success: true,
+			Message: "Success",
+			Data: model.CursorPagedResponse{
+				Items:      summaries,
+				HasMore:    hasMore,
+				NextCursor: nextCursorStr,
+			},
+		})
+		return
 	}
 
 	var items interface{}

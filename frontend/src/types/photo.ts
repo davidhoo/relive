@@ -69,6 +69,20 @@ export interface PhotoListParams {
   no_total?: boolean
 }
 
+// 照片游标分页请求参数（连续浏览）。固定排序 taken_at DESC, id DESC，无 COUNT。
+export interface PhotoCursorListParams {
+  page_size?: number
+  cursor?: string
+  analyzed?: boolean
+  has_thumbnail?: boolean
+  has_gps?: boolean
+  location?: string
+  search?: string
+  category?: string
+  tag?: string
+  status?: string
+}
+
 // 照片统计
 export interface PhotoStats {
   total: number

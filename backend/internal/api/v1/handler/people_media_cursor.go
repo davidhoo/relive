@@ -17,8 +17,9 @@ import (
 const cursorVersion = 1
 
 const (
-	cursorKindPhotos = "photos"
-	cursorKindFaces  = "faces"
+	cursorKindPhotos    = "photos"
+	cursorKindFaces     = "faces"
+	cursorKindPhotoList = "photo_list" // 照片管理页连续浏览
 )
 
 // cursorPayload is the internal structure encoded into the opaque cursor string.
@@ -26,9 +27,9 @@ const (
 type cursorPayload struct {
 	Version      int     `json:"v"`
 	Kind         string  `json:"k"`
-	TakenAt      *int64  `json:"t,omitempty"`  // unix millis, photos only (nil = NULL zone)
-	ID           uint    `json:"i"`            // last item id from previous page
-	QualityScore float64 `json:"q,omitempty"`  // faces only
+	TakenAt      *int64  `json:"t,omitempty"` // unix millis, photos only (nil = NULL zone)
+	ID           uint    `json:"i"`           // last item id from previous page
+	QualityScore float64 `json:"q,omitempty"` // faces only
 }
 
 // encodeCursor serializes a cursorPayload into a URL-safe base64 string.
@@ -38,7 +39,7 @@ func encodeCursor(p cursorPayload) string {
 }
 
 // decodeCursor decodes and validates an opaque cursor string.
-// kind must be cursorKindPhotos or cursorKindFaces.
+// kind must be one of cursorKindPhotos / cursorKindFaces / cursorKindPhotoList.
 // Returns INVALID_CURSOR error for malformed, wrong-version, or kind-mismatched cursors.
 func decodeCursor(raw, kind string) (*cursorPayload, error) {
 	if raw == "" {

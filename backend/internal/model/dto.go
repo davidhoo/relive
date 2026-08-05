@@ -59,6 +59,11 @@ type GetPhotosRequest struct {
 	SortDesc     bool   `form:"sort_desc"`     // 是否降序
 	Status       string `form:"status"`        // 状态筛选：active(默认)/excluded/all
 	NoTotal      bool   `form:"no_total"`      // 不统计总数（Dashboard 最近照片等场景，跳过 COUNT 查询）
+
+	// 连续浏览（游标分页）参数。Pagination=cursor 时启用，固定排序 taken_at DESC, id DESC，
+	// 不执行 COUNT。Cursor 为上一页返回的 next_cursor，空表示首页。
+	Pagination string `form:"pagination"` // "cursor" 启用游标分页；其它值/空走普通分页
+	Cursor     string `form:"cursor"`     // 游标字符串（opaque base64）
 }
 
 // AdjacentPhotosResponse 相邻照片响应
@@ -593,7 +598,7 @@ type UpdateFaceExclusionRequest struct {
 
 // FaceExclusionResult 排除操作返回的受影响照片摘要
 type FaceExclusionResult struct {
-	Updated int                  `json:"updated"`
+	Updated int                   `json:"updated"`
 	Photos  []PhotoPersonResponse `json:"photos"`
 }
 
@@ -848,8 +853,8 @@ type IdentityCoordinatorStats struct {
 	MaxBuildDurationMs  int64 `json:"max_build_duration_ms"`
 	LastWriteDurationMs int64 `json:"last_write_duration_ms"`
 
-	LastAnnActivated   int    `json:"last_ann_activated"`
-	LastAnnRebuild     bool   `json:"last_ann_rebuild"`
+	LastAnnActivated     int    `json:"last_ann_activated"`
+	LastAnnRebuild       bool   `json:"last_ann_rebuild"`
 	LastAnnRebuildReason string `json:"last_ann_rebuild_reason,omitempty"`
 }
 

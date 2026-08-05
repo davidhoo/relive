@@ -92,9 +92,9 @@ type Photo struct {
 	AIProvider string     `gorm:"column:ai_provider;type:varchar(50)" json:"ai_provider"` // AI 提供商（qwen/openai/ollama等）
 
 	// 离线分析任务锁定（用于多分析器并发控制）
-	AnalysisLockID        *string    `gorm:"type:varchar(64);index:idx_analysis_lock" json:"-"`      // 分析器实例ID（UUID）
-	AnalysisLockExpiredAt *time.Time `json:"-"`                                                      // 锁过期时间
-	AnalysisRetryCount    int        `gorm:"default:0" json:"-"`                                     // 分析重试次数
+	AnalysisLockID        *string    `gorm:"type:varchar(64);index:idx_analysis_lock" json:"-"` // 分析器实例ID（UUID）
+	AnalysisLockExpiredAt *time.Time `json:"-"`                                                 // 锁过期时间
+	AnalysisRetryCount    int        `gorm:"default:0" json:"-"`                                // 分析重试次数
 	// AnalysisLockVersion 单调递增的锁版本，避免同一 Analyzer 的迟到 heartbeat/release 影响新任务。
 	AnalysisLockVersion int64 `gorm:"not null;default:0" json:"-"`
 	// AnalysisNextRetryAt 下次可重试时间；非空且晚于 now 时不得被领取。

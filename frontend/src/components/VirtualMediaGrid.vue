@@ -155,6 +155,11 @@ const totalHeight = computed(() => virtualizer.value.getTotalSize())
 // 网格顶部到滚动容器内容顶部的固定偏移）。而本组件内层绝对定位容器起点就在列表顶部（top:0），
 // 若直接 translateY(start)，第一行会被多下移一个 scrollMargin，表现为列表顶部出现一块空白。
 // 因此必须减去 scrollMarginPx，使第一行最终落在列表起点（translate 接近 0）。
+//
+// 列数单一来源：grid-template-columns 直接由 columns prop 内联决定，不再依赖 sizeClass 的
+// CSS 媒体查询。父组件（人物详情 / 照片管理页）已按视口宽度计算好真实列数传入，组件不再自行
+// 用媒体查询覆盖，避免“虚拟分组列数 ≠ CSS 展示列数”导致行错位与可见区间计算错误。
+// sizeClass 仍保留作为卡片密度样式标识（如卡片内信息显隐），但不决定列数。
 const rowStyle = (row: { start: number }) => ({
   position: 'absolute' as const,
   top: 0,
@@ -162,6 +167,7 @@ const rowStyle = (row: { start: number }) => ({
   width: '100%',
   transform: `translateY(${row.start - scrollMarginPx.value}px)`,
   display: 'grid',
+  'grid-template-columns': `repeat(${props.columns}, minmax(0, 1fr))`,
   gap: `${props.gap}px`,
 })
 
@@ -384,46 +390,11 @@ defineExpose({
   width: 100%;
 }
 
-.virtual-media-grid-row.is-small {
-  grid-template-columns: repeat(15, minmax(0, 1fr));
-}
-
-.virtual-media-grid-row.is-medium {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-}
-
+/* 列数由 columns prop 内联决定（grid-template-columns），不再用 sizeClass 媒体查询。
+   sizeClass 仅保留作卡片密度样式标识（卡片内信息显隐），不参与列数计算。 */
+.virtual-media-grid-row.is-small,
+.virtual-media-grid-row.is-medium,
 .virtual-media-grid-row.is-large {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-@media (max-width: 1200px) {
-  .virtual-media-grid-row.is-small {
-    grid-template-columns: repeat(10, minmax(0, 1fr));
-  }
-  .virtual-media-grid-row.is-medium {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 768px) {
-  .virtual-media-grid-row.is-small {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-  }
-  .virtual-media-grid-row.is-medium {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  .virtual-media-grid-row.is-large {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 480px) {
-  .virtual-media-grid-row.is-small {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-  .virtual-media-grid-row.is-medium,
-  .virtual-media-grid-row.is-large {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+  /* no grid-template-columns here; set inline by rowStyle */
 }
 </style>

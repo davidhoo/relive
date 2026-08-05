@@ -2,6 +2,7 @@ package repository
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -978,4 +979,212 @@ func TestPhotoRepository_GetPhotoStats(t *testing.T) {
 	assert.Equal(t, int64(6), total)
 	assert.Equal(t, int64(2), analyzed)
 	assert.Equal(t, int64(6000), size)
+}
+
+// === 连续浏览游标分页测试 ===
+
+// makePhotosForCursor 构造一组照片：3 张非空 taken_at（其中两张相同以测 id DESC 平局）+ 2 张 NULL taken_at。
+// 返回的照片按 (taken_at DESC, id DESC) 期望顺序排列。
+func makePhotosForCursor(t *testing.T, repo PhotoRepository) []*model.Photo {
+	t.Helper()
+	t1 := time.Date(2025, 3, 15, 10, 0, 0, 0, time.UTC)
+	t2 := time.Date(2025, 3, 10, 10, 0, 0, 0, time.UTC) // 与 t3 相同日期不同时刻？这里 t2/t3 故意相同
+	t3 := t2
+	photos := []*model.Photo{
+		{FilePath: "/c1.jpg", FileName: "c1.jpg", FileSize: 1, FileHash: "hc1", TakenAt: &t1, AIAnalyzed: true},
+		{FilePath: "/c2.jpg", FileName: "c2.jpg", FileSize: 1, FileHash: "hc2", TakenAt: &t2, AIAnalyzed: false},
+		{FilePath: "/c3.jpg", FileName: "c3.jpg", FileSize: 1, FileHash: "hc3", TakenAt: &t3, AIAnalyzed: true},
+		{FilePath: "/c4.jpg", FileName: "c4.jpg", FileSize: 1, FileHash: "hc4", TakenAt: nil, AIAnalyzed: false},
+		{FilePath: "/c5.jpg", FileName: "c5.jpg", FileSize: 1, FileHash: "hc5", TakenAt: nil, AIAnalyzed: true},
+	}
+	for _, p := range photos {
+		require.NoError(t, repo.Create(p))
+	}
+	return photos
+}
+
+// TestPhotoRepository_ListSummariesCursor_SameTakenAtIdDesc 相同 taken_at 下按 id DESC 稳定翻页。
+func TestPhotoRepository_ListSummariesCursor_SameTakenAtIdDesc(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewPhotoRepository(db)
+
+	photos := makePhotosForCursor(t, repo)
+	// c2 与 c3 taken_at 相同（t2=t3），id DESC → c3 在 c2 前。
+	// 期望全局顺序：c1(t1) > c3(t2,id3) > c2(t2,id2) > c5(NULL,id5) > c4(NULL,id4)
+	expected := []uint{photos[0].ID, photos[2].ID, photos[1].ID, photos[4].ID, photos[3].ID}
+
+	// limit=2 三页翻完
+	var cursor *PhotoCursor
+	var got []uint
+	for {
+		items, hasMore, next, err := repo.ListSummariesCursor(nil, nil, nil, "", "", "", "", nil, "", cursor, 2)
+		require.NoError(t, err)
+		for _, it := range items {
+			got = append(got, it.ID)
+		}
+		if !hasMore {
+			require.Nil(t, next)
+			break
+		}
+		require.NotNil(t, next)
+		// 游标严格推进：next 不能等于 cursor
+		if cursor != nil {
+			require.False(t, cursor.TakenAt == nil && next.TakenAt == nil && cursor.ID == next.ID, "cursor stalled")
+		}
+		cursor = next
+	}
+	assert.Equal(t, expected, got)
+}
+
+// TestPhotoRepository_ListSummariesCursor_NullZone 跨越 NULL taken_at 区域无重复无遗漏。
+func TestPhotoRepository_ListSummariesCursor_NullZone(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewPhotoRepository(db)
+
+	photos := makePhotosForCursor(t, repo)
+	expected := []uint{photos[0].ID, photos[2].ID, photos[1].ID, photos[4].ID, photos[3].ID}
+
+	// limit=3 → 第一页 c1,c3,c2（非空区），第二页 c5,c4（NULL 区）
+	items, hasMore, next, err := repo.ListSummariesCursor(nil, nil, nil, "", "", "", "", nil, "", nil, 3)
+	require.NoError(t, err)
+	assert.Equal(t, []uint{expected[0], expected[1], expected[2]}, []uint{items[0].ID, items[1].ID, items[2].ID})
+	assert.True(t, hasMore)
+	require.NotNil(t, next)
+
+	items2, hasMore2, next2, err := repo.ListSummariesCursor(nil, nil, nil, "", "", "", "", nil, "", next, 3)
+	require.NoError(t, err)
+	assert.Equal(t, []uint{expected[3], expected[4]}, []uint{items2[0].ID, items2[1].ID})
+	assert.False(t, hasMore2)
+	assert.Nil(t, next2)
+}
+
+// TestPhotoRepository_ListSummariesCursor_ThreePagesStrictlyAdvance 三页游标严格推进，无重复。
+func TestPhotoRepository_ListSummariesCursor_ThreePagesStrictlyAdvance(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewPhotoRepository(db)
+
+	photos := makePhotosForCursor(t, repo)
+	seen := map[uint]bool{}
+	var cursor *PhotoCursor
+	pages := 0
+	for {
+		items, hasMore, next, err := repo.ListSummariesCursor(nil, nil, nil, "", "", "", "", nil, "", cursor, 2)
+		require.NoError(t, err)
+		for _, it := range items {
+			require.False(t, seen[it.ID], "duplicate id %d", it.ID)
+			seen[it.ID] = true
+		}
+		pages++
+		if !hasMore {
+			break
+		}
+		require.NotNil(t, next)
+		cursor = next
+		require.Less(t, pages, 10, "too many pages, cursor not advancing")
+	}
+	assert.Equal(t, len(photos), len(seen))
+}
+
+// TestPhotoRepository_ListSummariesCursor_UnionMatchesPaged 游标分页与普通分页并集一致。
+func TestPhotoRepository_ListSummariesCursor_UnionMatchesPaged(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewPhotoRepository(db)
+
+	photos := makePhotosForCursor(t, repo)
+
+	// 收集游标分页全部 ID
+	var cursor *PhotoCursor
+	cursorIDs := map[uint]bool{}
+	for {
+		items, hasMore, next, err := repo.ListSummariesCursor(nil, nil, nil, "", "", "", "", nil, "", cursor, 2)
+		require.NoError(t, err)
+		for _, it := range items {
+			cursorIDs[it.ID] = true
+		}
+		if !hasMore {
+			break
+		}
+		cursor = next
+	}
+
+	// 普通分页 taken_at DESC 排序，取全部
+	pagedSummaries, _, err := repo.ListSummaries(1, 100, nil, nil, nil, "", "", "", "", "taken_at", true, nil, "", true)
+	require.NoError(t, err)
+	pagedIDs := map[uint]bool{}
+	for _, p := range pagedSummaries {
+		pagedIDs[p.ID] = true
+	}
+	assert.Equal(t, len(photos), len(pagedIDs))
+	assert.Equal(t, pagedIDs, cursorIDs)
+}
+
+// TestPhotoRepository_ListSummariesCursor_Filters 各筛选条件在游标模式下生效。
+func TestPhotoRepository_ListSummariesCursor_Filters(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewPhotoRepository(db)
+
+	photos := makePhotosForCursor(t, repo)
+	analyzed := true
+	items, _, _, err := repo.ListSummariesCursor(&analyzed, nil, nil, "", "", "", "", nil, "", nil, 100)
+	require.NoError(t, err)
+	got := map[uint]bool{}
+	for _, it := range items {
+		got[it.ID] = true
+	}
+	// 已分析：c1,c3,c5
+	assert.True(t, got[photos[0].ID])
+	assert.True(t, got[photos[2].ID])
+	assert.True(t, got[photos[4].ID])
+	assert.False(t, got[photos[1].ID])
+	assert.False(t, got[photos[3].ID])
+}
+
+// TestPhotoRepository_ListSummariesCursor_EmptyEnabledPaths enabledPaths 为空数组返回空。
+func TestPhotoRepository_ListSummariesCursor_EmptyEnabledPaths(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewPhotoRepository(db)
+	makePhotosForCursor(t, repo)
+
+	empty := []string{}
+	items, hasMore, next, err := repo.ListSummariesCursor(nil, nil, nil, "", "", "", "", empty, "", nil, 10)
+	require.NoError(t, err)
+	assert.Empty(t, items)
+	assert.False(t, hasMore)
+	assert.Nil(t, next)
+}
+
+// TestPhotoRepository_ListSummariesCursor_ExplainUsesIndex EXPLAIN QUERY PLAN 验证默认连续查询使用照片游标索引。
+func TestPhotoRepository_ListSummariesCursor_ExplainUsesIndex(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewPhotoRepository(db)
+	makePhotosForCursor(t, repo)
+
+	// 显式建索引（test_helper 走 AutoMigrate，未跑 migratePhotosCursorIndex）。
+	require.NoError(t, db.Exec(`CREATE INDEX IF NOT EXISTS idx_photos_cursor ON photos(status, deleted_at, taken_at DESC, id DESC)`).Error)
+
+	// 模拟首页查询的 SQL：status=active + ORDER BY taken_at DESC, id DESC LIMIT 11
+	// 复用 applyPhotoFilters 的 status=active 默认分支。
+	rows, err := db.Raw(`EXPLAIN QUERY PLAN SELECT id, file_path, taken_at FROM photos WHERE status = 'active' AND deleted_at IS NULL ORDER BY taken_at DESC, id DESC LIMIT 11`).Rows()
+	require.NoError(t, err)
+	defer rows.Close()
+	var plan string
+	hasIndex := false
+	for rows.Next() {
+		var id int
+		var parent, child, detail string
+		_ = rows.Scan(&id, &parent, &child, &detail)
+		plan += detail + "\n"
+		if strings.Contains(detail, "idx_photos_cursor") {
+			hasIndex = true
+		}
+	}
+	t.Logf("EXPLAIN plan:\n%s", plan)
+	assert.True(t, hasIndex, "expected idx_photos_cursor in plan, got:\n%s", plan)
 }

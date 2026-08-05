@@ -1,0 +1,244 @@
+/* PhotoCard 样式（从 Photos/index.vue 抽出，翻页与连续浏览复用）。
+   变量与全局 CSS 变量保持一致。 */
+
+.photo-card {
+  cursor: pointer;
+  transition: all var(--transition-base);
+}
+
+.photo-card-parallax {
+  transition: all var(--transition-base);
+}
+
+.photo-image-wrapper {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--color-bg-secondary);
+  box-shadow: var(--shadow-sm);
+  transition: all var(--transition-base);
+  border: 1px solid var(--color-border);
+}
+
+.photo-card:hover .photo-image-wrapper {
+  box-shadow: var(--shadow-lg);
+  border-color: var(--color-primary);
+}
+
+/* ============ 照片选择按钮 ============ */
+.photo-select-btn {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 10;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.7);
+  background: rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s, background 0.2s, border-color 0.2s;
+}
+
+.photo-card:hover .photo-select-btn {
+  opacity: 1;
+}
+
+.batch-mode .photo-select-btn {
+  opacity: 1;
+}
+
+.photo-select-btn.selected {
+  opacity: 1;
+  background: #e05a3a;
+  border-color: #e05a3a;
+  color: #fff;
+}
+
+.photo-select-btn.selected .el-icon {
+  font-size: 14px;
+}
+
+.photo-select-btn:hover:not(.selected) {
+  background: rgba(0, 0, 0, 0.4);
+  border-color: #fff;
+}
+
+.photo-card.is-selected .photo-image-wrapper {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+.photo-card.is-selected .photo-image-wrapper::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 5;
+  pointer-events: none;
+}
+
+.photo-image {
+  width: 100%;
+  height: 100%;
+  transition: transform var(--transition-base);
+}
+
+.photo-card:hover .photo-image {
+  transform: scale(1.05);
+}
+
+/* 图片加载状态 */
+.image-loading,
+.image-error {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+  color: var(--color-text-tertiary);
+  background: var(--color-bg-secondary);
+}
+
+.image-loading .el-icon,
+.image-error .el-icon {
+  font-size: 48px;
+}
+
+/* 分析状态徽章 */
+.photo-status-icons {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.photo-status-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.32);
+  color: rgba(255, 255, 255, 0.7);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
+  backdrop-filter: blur(8px);
+}
+
+.photo-status-icon.is-ready {
+  background: rgba(103, 194, 58, 0.92);
+  color: #fff;
+}
+
+.photo-status-icon.is-idle {
+  background: rgba(80, 80, 80, 0.72);
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.photo-status-icon :deep(.el-icon) {
+  font-size: 10px;
+}
+
+.photo-badge {
+  position: absolute;
+  top: var(--spacing-sm);
+  right: var(--spacing-sm);
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  z-index: 2;
+  transition: transform var(--transition-base);
+  box-shadow: var(--shadow-sm);
+}
+
+.photo-card:hover .photo-badge {
+  transform: scale(1.05);
+}
+
+.badge-excellent {
+  background: var(--color-primary);
+  color: white;
+}
+
+.badge-good {
+  background: var(--color-success);
+  color: white;
+}
+
+.badge-medium {
+  background: var(--color-warning);
+  color: white;
+}
+
+.badge-low {
+  background: var(--color-error);
+  color: white;
+}
+
+.badge-unanalyzed {
+  background: var(--color-info);
+  color: white;
+}
+
+/* 悬停信息遮罩 */
+.photo-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.7), transparent);
+  padding: var(--spacing-md);
+  transform: translateY(100%);
+  transition: transform var(--transition-base);
+  z-index: 1;
+}
+
+.photo-card:hover .photo-overlay {
+  transform: translateY(0);
+}
+
+.photo-info {
+  color: white;
+}
+
+.photo-name {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  margin-bottom: var(--spacing-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.photo-meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  font-size: var(--font-size-xs);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.meta-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
