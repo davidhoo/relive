@@ -280,10 +280,10 @@ func (h *AnalyzerHandler) Heartbeat(c *gin.Context) {
 	}
 
 	// 续期任务锁
-	lockExpiresAt, err := h.analysisService.ExtendTaskLock(taskID, analyzerID)
+	lockExpiresAt, lockVersion, err := h.analysisService.ExtendTaskLock(taskID, analyzerID, req.LockVersion)
 	if err != nil {
-		switch err {
-		case service.ErrTaskNotFound:
+		switch {
+		case errors.Is(err, service.ErrTaskNotFound):
 			c.JSON(http.StatusNotFound, model.Response{
 				Success: false,
 				Error: &model.ErrorInfo{
@@ -291,7 +291,15 @@ func (h *AnalyzerHandler) Heartbeat(c *gin.Context) {
 					Message: "Task not found or expired",
 				},
 			})
-		case service.ErrTaskLockedByOther:
+		case errors.Is(err, service.ErrTaskLockStale):
+			c.JSON(http.StatusConflict, model.Response{
+				Success: false,
+				Error: &model.ErrorInfo{
+					Code:    "TASK_LOCK_STALE",
+					Message: "Task lock version mismatch",
+				},
+			})
+		case errors.Is(err, service.ErrTaskLockedByOther):
 			c.JSON(http.StatusConflict, model.Response{
 				Success: false,
 				Error: &model.ErrorInfo{
@@ -318,6 +326,7 @@ func (h *AnalyzerHandler) Heartbeat(c *gin.Context) {
 		Data: model.HeartbeatResponse{
 			LockExpiresAt: lockExpiresAt,
 			LockDuration:  300,
+			LockVersion:   lockVersion,
 		},
 	})
 }
@@ -349,15 +358,23 @@ func (h *AnalyzerHandler) ReleaseTask(c *gin.Context) {
 		return
 	}
 
-	err := h.analysisService.ReleaseTask(taskID, analyzerID, req.Reason, req.ErrorMsg, req.RetryLater)
+	result, err := h.analysisService.ReleaseTask(taskID, analyzerID, req)
 	if err != nil {
-		switch err {
-		case service.ErrTaskNotFound:
+		switch {
+		case errors.Is(err, service.ErrTaskNotFound):
 			c.JSON(http.StatusNotFound, model.Response{
 				Success: false,
 				Error: &model.ErrorInfo{
 					Code:    "TASK_NOT_FOUND",
 					Message: "Task not found",
+				},
+			})
+		case errors.Is(err, service.ErrTaskLockStale):
+			c.JSON(http.StatusConflict, model.Response{
+				Success: false,
+				Error: &model.ErrorInfo{
+					Code:    "TASK_LOCK_STALE",
+					Message: "Task lock version mismatch or held by another analyzer",
 				},
 			})
 		default:
@@ -373,13 +390,11 @@ func (h *AnalyzerHandler) ReleaseTask(c *gin.Context) {
 		return
 	}
 
+	// 幂等重复释放返回 200，但 data 标记 idempotent。
 	c.JSON(http.StatusOK, model.Response{
 		Success: true,
 		Message: "Task released successfully",
-		Data: gin.H{
-			"task_id":    taskID,
-			"new_status": "pending",
-		},
+		Data:    result,
 	})
 }
 
@@ -540,8 +555,8 @@ func (h *AnalyzerHandler) CleanExpiredLocks(c *gin.Context) {
 // 实际实现在 service/analysis_service.go
 type AnalysisService interface {
 	GetPendingTasks(limit int, analyzerID string) ([]model.AnalysisTask, int64, error)
-	ExtendTaskLock(taskID, analyzerID string) (time.Time, error)
-	ReleaseTask(taskID, analyzerID, reason, errorMsg string, retryLater bool) error
+	ExtendTaskLock(taskID, analyzerID string, lockVersion int64) (time.Time, int64, error)
+	ReleaseTask(taskID, analyzerID string, req model.ReleaseTaskRequest) (*model.ReleaseTaskResult, error)
 	SubmitResults(results []model.AnalysisResult, deviceID uint) (*model.SubmitResultsResponse, error)
 	GetStats(deviceID uint) (*model.AnalyzerStatsResponse, error)
 	CleanExpiredLocks() (int64, error)

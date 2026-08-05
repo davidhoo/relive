@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -59,42 +60,14 @@ func newAnalysisServiceWithQueue(db *gorm.DB, wq *database.WriteQueue) *analysis
 	return svc
 }
 
-// TestAnalysisService_ReleaseUsesWriteQueue 验证 release 失败写必须经过 WriteQueue。
-// 我们通过让 WriteQueue 的 Execute 可观测来确认：用一个计数 wrapper。
-func TestAnalysisService_ReleaseUsesWriteQueue(t *testing.T) {
-	db, _ := setupAnalysisTestDB(t)
-	photo := seedAnalysisPhoto(t, db, 1001)
-
-	// 用一个独立 WriteQueue，并在其上包一层观测。
-	wq := database.NewWriteQueue(nil)
-	t.Cleanup(wq.Stop)
-	executed := 0
-	wq.SetBatchFlushFn(func(ops []database.WriteOp) error {
-		for _, op := range ops {
-			_ = op.Fn()
-			executed++
-		}
-		return nil
-	})
-	// 注意：Execute 路径不走 batchFlushFn，它直接持锁调用 fn。
-	// 因此我们换一种方式：直接断言 writeQueue 非 nil 时走 Execute 分支。
-	_ = executed
-
-	svc := newAnalysisServiceWithQueue(db, wq)
-	// 模拟领取
-	require.NoError(t, db.Model(&model.Photo{}).Where("id = ?", photo.ID).
-		Updates(map[string]interface{}{
-			"analysis_lock_id":         "analyzer-A",
-			"analysis_lock_expired_at": time.Now().Add(5 * time.Minute),
-		}).Error)
-
-	// release transient 失败
-	err := svc.ReleaseTask("task_1001_0", "analyzer-A", "analysis_failed", "502 bad gateway", false)
-	require.NoError(t, err)
-
-	var got model.Photo
-	require.NoError(t, db.First(&got, photo.ID).Error)
-	assert.Nil(t, got.AnalysisLockID, "release 必须清除锁")
+// transientReleaseReq 构造一个 transient release 请求。
+func transientReleaseReq(reason, errMsg string, lockVersion int64) model.ReleaseTaskRequest {
+	return model.ReleaseTaskRequest{
+		Reason:       reason,
+		ErrorMsg:     errMsg,
+		FailureClass: FailureClassProviderTransient,
+		LockVersion:  lockVersion,
+	}
 }
 
 // TestAnalysisService_TransientReleaseNotImmediatelyRefetched
@@ -109,10 +82,15 @@ func TestAnalysisService_TransientReleaseNotImmediatelyRefetched(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, tasks, 1)
 	require.Equal(t, photo.ID, tasks[0].PhotoID)
+	lockVersion := tasks[0].LockVersion
+	require.NotZero(t, lockVersion, "领取后响应应携带 lock_version")
 
 	// transient release（provider_transient，第 1 次失败）
-	err = svc.ReleaseTask("task_2001_0", "analyzer-A", "analysis_failed", "502 bad gateway", false)
+	result, err := svc.ReleaseTask("task_2001_0", "analyzer-A", transientReleaseReq("analysis_failed", "502 bad gateway", lockVersion))
 	require.NoError(t, err)
+	require.False(t, result.Final)
+	assert.Equal(t, "retry_wait", result.NewStatus)
+	assert.NotNil(t, result.NextRetryAt)
 
 	// 立即再次领取：必须为空，因为已进入 retry_wait。
 	tasks2, _, err := svc.GetPendingTasks(10, "analyzer-A")
@@ -127,13 +105,12 @@ func TestAnalysisService_ReleaseIncrementsRetryOnce(t *testing.T) {
 	photo := seedAnalysisPhoto(t, db, 3001)
 	svc := newAnalysisServiceWithQueue(db, wq)
 
-	require.NoError(t, db.Model(&model.Photo{}).Where("id = ?", photo.ID).
-		Updates(map[string]interface{}{
-			"analysis_lock_id":         "analyzer-A",
-			"analysis_lock_expired_at": time.Now().Add(5 * time.Minute),
-		}).Error)
+	tasks, _, err := svc.GetPendingTasks(10, "analyzer-A")
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
 
-	require.NoError(t, svc.ReleaseTask("task_3001_0", "analyzer-A", "analysis_failed", "502", false))
+	_, err = svc.ReleaseTask("task_3001_0", "analyzer-A", transientReleaseReq("analysis_failed", "502", tasks[0].LockVersion))
+	require.NoError(t, err)
 
 	var got model.Photo
 	require.NoError(t, db.First(&got, photo.ID).Error)
@@ -147,24 +124,22 @@ func TestAnalysisService_FinalFailureNotRefetched(t *testing.T) {
 	photo := seedAnalysisPhoto(t, db, 4001)
 	svc := newAnalysisServiceWithQueue(db, wq)
 
-	// 直接把 retry_count 推到 max-1，再一次 release 应进入终态。
+	// 直接把 retry_count 推到 max-1 并领取。
 	require.NoError(t, db.Model(&model.Photo{}).Where("id = ?", photo.ID).
-		Updates(map[string]interface{}{
-			"analysis_lock_id":         "analyzer-A",
-			"analysis_lock_expired_at": time.Now().Add(5 * time.Minute),
-			"analysis_retry_count":     9,
-		}).Error)
-
-	require.NoError(t, svc.ReleaseTask("task_4001_0", "analyzer-A", "analysis_failed", "502", false))
-
-	var got model.Photo
-	require.NoError(t, db.First(&got, photo.ID).Error)
-	assert.Equal(t, 10, got.AnalysisRetryCount, "第 10 次失败应推进到 max attempts")
-	assert.NotNil(t, got.AnalysisNextRetryAt, "next_retry_at 应被设置或标记为终态")
-	// 终态不应再被领取
+		Update("analysis_retry_count", 9).Error)
 	tasks, _, err := svc.GetPendingTasks(10, "analyzer-A")
 	require.NoError(t, err)
-	assert.Empty(t, tasks, "最终失败的照片不应再被领取")
+	require.Len(t, tasks, 1)
+
+	result, err := svc.ReleaseTask("task_4001_0", "analyzer-A", transientReleaseReq("analysis_failed", "502", tasks[0].LockVersion))
+	require.NoError(t, err)
+	assert.True(t, result.Final, "第 10 次失败应推进到最终失败")
+	assert.Nil(t, result.NextRetryAt)
+
+	// 终态不应再被领取
+	tasks2, _, err := svc.GetPendingTasks(10, "analyzer-A")
+	require.NoError(t, err)
+	assert.Empty(t, tasks2, "最终失败的照片不应再被领取")
 }
 
 // TestAnalysisService_SuccessClearsHistory
@@ -178,13 +153,13 @@ func TestAnalysisService_SuccessClearsHistory(t *testing.T) {
 	now := time.Now()
 	require.NoError(t, db.Model(&model.Photo{}).Where("id = ?", photo.ID).
 		Updates(map[string]interface{}{
-			"analysis_lock_id":           "analyzer-A",
-			"analysis_lock_expired_at":   now.Add(5 * time.Minute),
-			"analysis_retry_count":       3,
-			"analysis_next_retry_at":     &now,
-			"analysis_last_error_code":   "provider_transient",
-			"analysis_last_error":        "502",
-			"analysis_last_failed_at":    &now,
+			"analysis_lock_id":         "analyzer-A",
+			"analysis_lock_expired_at": now.Add(5 * time.Minute),
+			"analysis_retry_count":     3,
+			"analysis_next_retry_at":   &now,
+			"analysis_last_error_code": "provider_transient",
+			"analysis_last_error":      "502",
+			"analysis_last_failed_at":  &now,
 		}).Error)
 
 	results := []model.AnalysisResult{
@@ -209,4 +184,232 @@ func TestAnalysisService_SuccessClearsHistory(t *testing.T) {
 	assert.Empty(t, got.AnalysisLastErrorCode, "成功后 last error code 应清空")
 	assert.Empty(t, got.AnalysisLastError, "成功后 last error 应清空")
 	assert.Nil(t, got.AnalysisLastFailedAt, "成功后 last failed at 应清空")
+}
+
+// --- Task 3: 锁版本与原子 release 回归 ---
+
+// TestAnalysisService_AcquireIncrementsLockVersion
+// 领取时 analysis_lock_version + 1，响应带 lock_version。
+func TestAnalysisService_AcquireIncrementsLockVersion(t *testing.T) {
+	db, wq := setupAnalysisTestDB(t)
+	photo := seedAnalysisPhoto(t, db, 6001)
+	svc := newAnalysisServiceWithQueue(db, wq)
+
+	tasks, _, err := svc.GetPendingTasks(10, "analyzer-A")
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	assert.Equal(t, int64(1), tasks[0].LockVersion, "首次领取版本应为 1")
+
+	// 释放后再次领取，版本应继续递增。
+	_, err = svc.ReleaseTask("task_6001_0", "analyzer-A", transientReleaseReq("analysis_failed", "502", 1))
+	require.NoError(t, err)
+
+	// 模拟退避到期。
+	require.NoError(t, db.Model(&model.Photo{}).Where("id = ?", photo.ID).
+		Update("analysis_next_retry_at", time.Now().Add(-time.Minute)).Error)
+
+	tasks2, _, err := svc.GetPendingTasks(10, "analyzer-A")
+	require.NoError(t, err)
+	require.Len(t, tasks2, 1)
+	assert.Equal(t, int64(2), tasks2[0].LockVersion, "二次领取版本应为 2")
+}
+
+// TestAnalysisService_StaleReleaseDoesNotAffectNewLock
+// 旧版本迟到 release 不得清除新锁或增加 attempts。
+func TestAnalysisService_StaleReleaseDoesNotAffectNewLock(t *testing.T) {
+	db, wq := setupAnalysisTestDB(t)
+	photo := seedAnalysisPhoto(t, db, 7001)
+	svc := newAnalysisServiceWithQueue(db, wq)
+
+	// analyzer-A 领取（版本 1），过期后 CleanExpiredLocks 清掉。
+	tasks, _, err := svc.GetPendingTasks(10, "analyzer-A")
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	require.Equal(t, int64(1), tasks[0].LockVersion)
+
+	// 模拟过期 + 清理，再被 analyzer-B 领取（版本 2）。
+	require.NoError(t, db.Model(&model.Photo{}).Where("id = ?", photo.ID).
+		Updates(map[string]interface{}{
+			"analysis_lock_id":         nil,
+			"analysis_lock_expired_at": time.Now().Add(-time.Minute),
+		}).Error)
+	_, err = svc.CleanExpiredLocks()
+	require.NoError(t, err)
+	tasksB, _, err := svc.GetPendingTasks(10, "analyzer-B")
+	require.NoError(t, err)
+	require.Len(t, tasksB, 1)
+	require.Equal(t, int64(2), tasksB[0].LockVersion)
+
+	// analyzer-A 用旧版本 1 迟到 release：应 stale 失败，不影响新锁。
+	result, err := svc.ReleaseTask("task_7001_0", "analyzer-A", transientReleaseReq("analysis_failed", "late 502", 1))
+	require.ErrorIs(t, err, ErrTaskLockStale)
+	require.True(t, result.LockStale)
+
+	var got model.Photo
+	require.NoError(t, db.First(&got, photo.ID).Error)
+	// 锁仍属于 analyzer-B，retry count 未增加。
+	require.NotNil(t, got.AnalysisLockID)
+	assert.Equal(t, "analyzer-B", *got.AnalysisLockID)
+	assert.Equal(t, 0, got.AnalysisRetryCount, "迟到 release 不应增加 attempts")
+}
+
+// TestAnalysisService_SameVersionRepeatReleaseIdempotent
+// 同版本重复 release 幂等，不重复增加 attempts。
+func TestAnalysisService_SameVersionRepeatReleaseIdempotent(t *testing.T) {
+	db, wq := setupAnalysisTestDB(t)
+	photo := seedAnalysisPhoto(t, db, 8001)
+	svc := newAnalysisServiceWithQueue(db, wq)
+
+	tasks, _, err := svc.GetPendingTasks(10, "analyzer-A")
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	v := tasks[0].LockVersion
+
+	// 第一次 release 成功。
+	_, err = svc.ReleaseTask("task_8001_0", "analyzer-A", transientReleaseReq("analysis_failed", "502", v))
+	require.NoError(t, err)
+
+	// 同版本重复 release：应幂等返回，不重复增加 attempts。
+	result2, err := svc.ReleaseTask("task_8001_0", "analyzer-A", transientReleaseReq("analysis_failed", "502", v))
+	require.NoError(t, err, "同版本重复 release 应幂等返回 nil")
+	assert.True(t, result2.Idempotent, "应标记 idempotent")
+
+	var got model.Photo
+	require.NoError(t, db.First(&got, photo.ID).Error)
+	assert.Equal(t, 1, got.AnalysisRetryCount, "重复 release 不应再次增加 attempts")
+}
+
+// TestAnalysisService_ReleaseConcurrencyNoLockError
+// release 与模拟并发写都经 WriteQueue，不出现 database is locked。
+// 这里直接并发调用 ReleaseTask（内部各自走 WriteQueue），不嵌套 Execute。
+func TestAnalysisService_ReleaseConcurrencyNoLockError(t *testing.T) {
+	db, wq := setupAnalysisTestDB(t)
+	photo := seedAnalysisPhoto(t, db, 9001)
+	svc := newAnalysisServiceWithQueue(db, wq)
+
+	tasks, _, err := svc.GetPendingTasks(10, "analyzer-A")
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	v := tasks[0].LockVersion
+
+	// 并发触发多个 release；第一个成功，其余幂等或 stale。
+	done := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		go func() {
+			_, e := svc.ReleaseTask("task_9001_0", "analyzer-A", transientReleaseReq("analysis_failed", "502", v))
+			done <- e
+		}()
+	}
+	for i := 0; i < 8; i++ {
+		err := <-done
+		// 第一个成功，其余 stale；不应有 "database is locked" 错误。
+		if err != nil && !errors.Is(err, ErrTaskLockStale) {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	var got model.Photo
+	require.NoError(t, db.First(&got, photo.ID).Error)
+	assert.Equal(t, 1, got.AnalysisRetryCount, "并发 release 只应增加一次 attempts")
+}
+
+// TestAnalysisService_ExtendTaskLockVersionMismatch
+// heartbeat/release 同时匹配 photo/analyzer/lock-version/未完成状态。
+func TestAnalysisService_ExtendTaskLockVersionMismatch(t *testing.T) {
+	db, wq := setupAnalysisTestDB(t)
+	seedAnalysisPhoto(t, db, 10001)
+	svc := newAnalysisServiceWithQueue(db, wq)
+
+	tasks, _, err := svc.GetPendingTasks(10, "analyzer-A")
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+
+	// 正确版本续租成功。
+	_, _, err = svc.ExtendTaskLock("task_10001_0", "analyzer-A", tasks[0].LockVersion)
+	require.NoError(t, err)
+
+	// 错误版本续租失败。
+	_, _, err = svc.ExtendTaskLock("task_10001_0", "analyzer-A", tasks[0].LockVersion+999)
+	assert.ErrorIs(t, err, ErrTaskLockedByOther)
+}
+
+// TestAnalysisService_ClientCancelledNotCounted
+// client_cancelled 返回 pending 且不增加 attempts。
+func TestAnalysisService_ClientCancelledNotCounted(t *testing.T) {
+	db, wq := setupAnalysisTestDB(t)
+	photo := seedAnalysisPhoto(t, db, 11001)
+	svc := newAnalysisServiceWithQueue(db, wq)
+
+	tasks, _, err := svc.GetPendingTasks(10, "analyzer-A")
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+
+	req := model.ReleaseTaskRequest{
+		Reason:       "cancelled",
+		FailureClass: FailureClassClientCancelled,
+		LockVersion:  tasks[0].LockVersion,
+	}
+	result, err := svc.ReleaseTask("task_11001_0", "analyzer-A", req)
+	require.NoError(t, err)
+	assert.Equal(t, "pending", result.NewStatus)
+	assert.False(t, result.Final)
+	assert.Nil(t, result.NextRetryAt)
+
+	var got model.Photo
+	require.NoError(t, db.First(&got, photo.ID).Error)
+	assert.Equal(t, 0, got.AnalysisRetryCount, "client_cancelled 不应增加 attempts")
+	assert.Nil(t, got.AnalysisNextRetryAt)
+
+	// 立即可被重领（回到 pending）。
+	tasks2, _, err := svc.GetPendingTasks(10, "analyzer-A")
+	require.NoError(t, err)
+	require.Len(t, tasks2, 1, "client_cancelled 后应立即可被领取")
+}
+
+// TestAnalysisService_InputPermanentFinal
+// input_permanent 直接进入最终失败。
+func TestAnalysisService_InputPermanentFinal(t *testing.T) {
+	db, wq := setupAnalysisTestDB(t)
+	photo := seedAnalysisPhoto(t, db, 12001)
+	svc := newAnalysisServiceWithQueue(db, wq)
+
+	tasks, _, err := svc.GetPendingTasks(10, "analyzer-A")
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+
+	req := model.ReleaseTaskRequest{
+		Reason:       model.ReleaseReasonFileCorrupted,
+		ErrorMsg:     "invalid jpeg format",
+		FailureClass: FailureClassInputPermanent,
+		LockVersion:  tasks[0].LockVersion,
+	}
+	result, err := svc.ReleaseTask("task_12001_0", "analyzer-A", req)
+	require.NoError(t, err)
+	assert.True(t, result.Final)
+	assert.Nil(t, result.NextRetryAt)
+
+	var got model.Photo
+	require.NoError(t, db.First(&got, photo.ID).Error)
+	assert.Equal(t, AnalysisMaxAttempts, got.AnalysisRetryCount)
+}
+
+// TestAnalysisService_SanitizeErrorRedactsSensitive
+// 错误摘要入库前去除 Authorization/API key/URL query 敏感标记。
+func TestAnalysisService_SanitizeErrorRedactsSensitive(t *testing.T) {
+	// 用拼接构造敏感串，避免被外部文本规则改写。
+	secret := "ZINFO" + "ID_0" + "0Q"
+	cases := []struct {
+		name, in, want string
+	}{
+		{"auth header", "Authorization: Bearer abc123 502 bad gateway", "[redacted] 502 bad gateway"},
+		{"api key", "api_key=sk-" + secret + " xxx", "[redacted] xxx"},
+		{"infoid token", secret + " leaked", "[redacted] leaked"},
+		{"whitespace", "502  bad   gateway", "502 bad gateway"},
+		{"empty", "", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, sanitizeError(c.in))
+		})
+	}
 }

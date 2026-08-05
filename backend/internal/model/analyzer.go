@@ -16,6 +16,7 @@ type AnalysisTask struct {
 	Location      string     `json:"location,omitempty"`        // 位置
 	CameraModel   string     `json:"camera_model,omitempty"`    // 相机型号
 	LockExpiresAt *time.Time `json:"lock_expires_at,omitempty"` // 锁过期时间
+	LockVersion   int64      `json:"lock_version,omitempty"`    // 锁版本，release/heartbeat 必须匹配
 }
 
 // AnalyzerTasksResponse 获取任务响应
@@ -29,21 +30,38 @@ type AnalyzerTasksResponse struct {
 
 // HeartbeatRequest 心跳请求
 type HeartbeatRequest struct {
-	Progress int    `json:"progress,omitempty"` // 进度百分比（0-100）
-	Status   string `json:"status,omitempty"`   // 当前状态：analyzing, downloading
+	Progress    int    `json:"progress,omitempty"` // 进度百分比（0-100）
+	Status      string `json:"status,omitempty"`   // 当前状态：analyzing, downloading
+	LockVersion int64  `json:"lock_version,omitempty"`
 }
 
 // HeartbeatResponse 心跳响应
 type HeartbeatResponse struct {
 	LockExpiresAt time.Time `json:"lock_expires_at"` // 锁过期时间
 	LockDuration  int       `json:"lock_duration"`   // 锁定期（秒）
+	LockVersion   int64     `json:"lock_version,omitempty"`
 }
 
 // ReleaseTaskRequest 释放任务请求
 type ReleaseTaskRequest struct {
-	Reason     string `json:"reason" binding:"required"` // 释放原因
-	ErrorMsg   string `json:"error_msg,omitempty"`       // 详细错误信息
-	RetryLater bool   `json:"retry_later"`               // 是否允许稍后重试
+	Reason            string `json:"reason" binding:"required"`            // 释放原因
+	ErrorMsg          string `json:"error_msg,omitempty"`                  // 详细错误信息
+	RetryLater        bool   `json:"retry_later"`                          // legacy compatibility only
+	FailureClass      string `json:"failure_class,omitempty"`              // 失败分类
+	Provider          string `json:"provider,omitempty"`                   // Provider 名称
+	RetryAfterSeconds int    `json:"retry_after_seconds,omitempty"`        // 客户端解析的 Retry-After
+	LockVersion       int64  `json:"lock_version,omitempty"`               // 必须匹配当前锁版本
+}
+
+// ReleaseTaskResult 释放任务后服务端返回的结构化结果。
+type ReleaseTaskResult struct {
+	TaskID       string     `json:"task_id"`
+	NewStatus    string     `json:"new_status"`     // pending / retry_wait / failed
+	Attempts     int        `json:"attempts"`       // 更新后的失败次数
+	NextRetryAt  *time.Time `json:"next_retry_at"`  // 终态为 nil
+	Final        bool       `json:"final"`          // 是否最终失败
+	LockStale    bool       `json:"lock_stale"`     // 旧版本迟到 release 命中
+	Idempotent   bool       `json:"idempotent"`     // 同版本重复 release
 }
 
 // ReleaseReason 释放原因枚举
@@ -96,9 +114,10 @@ type SubmitResultsResponse struct {
 type AnalyzerStatsResponse struct {
 	TotalPhotos     int64         `json:"total_photos"`       // 照片总数
 	Analyzed        int64         `json:"analyzed"`           // 已分析数
-	Pending         int64         `json:"pending"`            // 待分析数
+	Pending         int64         `json:"pending"`            // 待分析数（不含 retry_wait / failed）
+	RetryWaiting    int64         `json:"retry_waiting"`      // 退避等待中（next_retry_at 未到）
 	Locked          int64         `json:"locked"`             // 当前被锁定数
-	Failed          int64         `json:"failed"`             // 失败数
+	Failed          int64         `json:"failed"`             // 最终失败数（达到 max attempts）
 	MyTasks         *MyTasksStats `json:"my_tasks,omitempty"` // 当前设备的任务统计
 	AvgAnalysisTime float64       `json:"avg_analysis_time"`  // 平均分析时间（秒）
 	QueuePressure   string        `json:"queue_pressure"`     // 队列压力：low, normal, high

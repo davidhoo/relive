@@ -132,10 +132,12 @@ type analysisServiceStub struct{}
 func (analysisServiceStub) GetPendingTasks(int, string) ([]model.AnalysisTask, int64, error) {
 	return nil, 0, nil
 }
-func (analysisServiceStub) ExtendTaskLock(string, string) (time.Time, error) {
-	return time.Time{}, nil
+func (analysisServiceStub) ExtendTaskLock(string, string, int64) (time.Time, int64, error) {
+	return time.Time{}, 0, nil
 }
-func (analysisServiceStub) ReleaseTask(string, string, string, string, bool) error { return nil }
+func (analysisServiceStub) ReleaseTask(string, string, model.ReleaseTaskRequest) (*model.ReleaseTaskResult, error) {
+	return nil, nil
+}
 func (analysisServiceStub) SubmitResults([]model.AnalysisResult, uint) (*model.SubmitResultsResponse, error) {
 	return nil, nil
 }
