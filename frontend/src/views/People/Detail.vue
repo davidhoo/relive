@@ -153,8 +153,8 @@
                 <button type="button" class="photo-card" @click="goToPhoto(item.id)">
                   <img :src="photoThumbnail(item)" :alt="item.file_name || `photo-${item.id}`" class="photo-image" loading="lazy" decoding="async" />
                   <div class="photo-card-main">
-                    <div class="photo-title">{{ item.caption || item.file_name || `Photo #${item.id}` }}</div>
-                    <div class="photo-subtitle">{{ formatTime(item.taken_at || item.created_at) }}</div>
+                    <div v-if="photoGridSize !== 'small'" class="photo-title">{{ item.caption || item.file_name || `Photo #${item.id}` }}</div>
+                    <div class="photo-subtitle">{{ photoGridSize === 'small' ? formatShortTime(item.taken_at || item.created_at) : formatTime(item.taken_at || item.created_at) }}</div>
                   </div>
                 </button>
               </template>
@@ -572,6 +572,20 @@ const formatTime = (value?: string) => {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '-'
   return date.toLocaleString('zh-CN')
+}
+
+// 小图模式短日期时间：YYYY/M/D HH:mm（浏览器本地时区、24 小时制、月日不补零、时分补零）。
+// 不引入额外日期库，仅用 Date 已有方法拼接。日期来源优先级与 formatTime 一致：taken_at → created_at。
+const formatShortTime = (value?: string) => {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '-'
+  const year = date.getFullYear()
+  const month = date.getMonth() + 1
+  const day = date.getDate()
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  return `${year}/${month}/${day} ${hours}:${minutes}`
 }
 
 // 版本化缩略图 URL：使用可反映缩略图变化的版本值（updated_at 时间戳），

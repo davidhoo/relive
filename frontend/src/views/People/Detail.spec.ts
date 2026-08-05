@@ -677,6 +677,178 @@ describe('Detail - 120+ 照片 / 160+ 人脸端到端分页回归（Task 5）', 
   })
 })
 
+// 可渲染 item 插槽的轻量 VirtualMediaGrid 桩：仅渲染少量照片项用于卡片展示断言。
+// 不承担分页/虚拟滚动行为，避免扩大既有分页测试的渲染负担。
+const makeRenderingGridStub = () => ({
+  name: 'RenderingGridStub',
+  props: ['items', 'columns', 'rowHeight', 'gap', 'sizeClass'],
+  emits: ['visible-range-change'],
+  setup(_: any, { slots }: any) {
+    const getScrollOffset = () => 0
+    const scrollToOffset = () => {}
+    const measure = () => {}
+    const getFirstVisibleIndex = () => 0
+    const scrollToIndex = () => {}
+    const recomputeScrollMargin = () => {}
+    return { getScrollOffset, scrollToOffset, measure, getFirstVisibleIndex, scrollToIndex, recomputeScrollMargin, slots }
+  },
+  template: `<div class="rendering-grid-stub"><div v-for="item in items" :key="item.id"><slot name="item" :item="item" /></div></div>`,
+})
+
+describe('Detail - 照片卡片小图模式精简展示', () => {
+  const makePhoto = (over: Partial<Record<string, unknown>> = {}) => ({
+    id: 1,
+    file_name: 'IMG_001.jpg',
+    caption: '海边日落',
+    taken_at: '2026-08-05T14:03:07Z',
+    created_at: '2026-08-05T14:03:07Z',
+    updated_at: '2026-08-05T14:03:07Z',
+    ...over,
+  })
+
+  const mountWithPhotos = async (photos: any[]) => {
+    mockGetById.mockReset()
+    mockGetPhotos.mockReset()
+    mockGetFaces.mockReset()
+    mockGetList.mockReset()
+    mockGetById.mockResolvedValue(makePerson())
+    mockGetPhotos.mockResolvedValue(cursor(photos, false, ''))
+    mockGetFaces.mockResolvedValue(facesPage(50, false))
+
+    const stub = makeRenderingGridStub()
+    const wrapper = mount(Detail, {
+      global: {
+        stubs: {
+          SectionHeader: SectionHeader,
+          VirtualMediaGrid: stub,
+          PersonEditDialog: true,
+          PersonMergeConfirmDialog: true,
+          'el-card': { template: '<div><slot/><slot name="header"/></div>' },
+          'el-tabs': { template: '<div><slot/></div>' },
+          'el-tab-pane': { template: '<div><slot/></div>' },
+          'el-button': { template: '<button @click="$emit(\'click\')"><slot/></button>' },
+          'el-empty': true,
+          'el-tag': { template: '<span><slot/></span>' },
+          'el-tooltip': { template: '<span><slot/></span>' },
+          'el-avatar': true,
+          'el-icon': true,
+          'el-dialog': true,
+          'el-select': true,
+          'el-option': true,
+          'el-divider': true,
+          'el-checkbox': true,
+        },
+      },
+    })
+    await flushPromises()
+    return wrapper
+  }
+
+  beforeEach(() => {
+    // 确保每个用例的 localStorage 密度初始为 medium，避免互相污染。
+    localStorage.removeItem('people_detail_photoGridSize')
+    localStorage.removeItem('people_detail_faceGridSize')
+  })
+
+  it('small 模式不渲染 .photo-title', async () => {
+    const wrapper = await mountWithPhotos([makePhoto()])
+    const vm = wrapper.findComponent(Detail).vm as any
+    vm.photoGridSize = 'small'
+    await flushPromises()
+    expect(wrapper.findAll('.photo-title').length).toBe(0)
+  })
+
+  it('small 模式显示 YYYY/M/D HH:mm 形式的时间', async () => {
+    const wrapper = await mountWithPhotos([makePhoto({ taken_at: '2026-08-05T14:03:07Z' })])
+    const vm = wrapper.findComponent(Detail).vm as any
+    vm.photoGridSize = 'small'
+    await flushPromises()
+    const subtitle = wrapper.find('.photo-subtitle')
+    expect(subtitle.exists()).toBe(true)
+    // 浏览器本地时区渲染；格式必须为 YYYY/M/D HH:mm（月日不补零、时分补零、无秒）。
+    // 不绑定具体时区，仅校验格式与可解析性。
+    expect(subtitle.text()).toMatch(/^\d{4}\/\d{1,2}\/\d{1,2} \d{2}:\d{2}$/)
+    // 同一时刻用 Date 解析后，时分应与本地时区一致。
+    const d = new Date('2026-08-05T14:03:07Z')
+    const hh = String(d.getHours()).padStart(2, '0')
+    const mm = String(d.getMinutes()).padStart(2, '0')
+    expect(subtitle.text()).toBe(`2026/8/5 ${hh}:${mm}`)
+  })
+
+  it('small 模式时间中不包含秒数', async () => {
+    const wrapper = await mountWithPhotos([makePhoto({ taken_at: '2026-08-05T14:03:07Z' })])
+    const vm = wrapper.findComponent(Detail).vm as any
+    vm.photoGridSize = 'small'
+    await flushPromises()
+    const text = wrapper.find('.photo-subtitle').text()
+    // 不应出现秒（:07）或毫秒。
+    expect(text).not.toContain(':07')
+    expect(text).not.toMatch(/\d{2}:\d{2}:\d{2}/)
+  })
+
+  it('medium 模式仍显示标题', async () => {
+    const wrapper = await mountWithPhotos([makePhoto()])
+    const vm = wrapper.findComponent(Detail).vm as any
+    vm.photoGridSize = 'medium'
+    await flushPromises()
+    const title = wrapper.find('.photo-title')
+    expect(title.exists()).toBe(true)
+    expect(title.text()).toContain('海边日落')
+  })
+
+  it('large 模式仍显示标题', async () => {
+    const wrapper = await mountWithPhotos([makePhoto()])
+    const vm = wrapper.findComponent(Detail).vm as any
+    vm.photoGridSize = 'large'
+    await flushPromises()
+    const title = wrapper.find('.photo-title')
+    expect(title.exists()).toBe(true)
+    expect(title.text()).toContain('海边日落')
+  })
+
+  it('日期为空或非法时显示 -', async () => {
+    const wrapper = await mountWithPhotos([
+      makePhoto({ id: 1, taken_at: '', created_at: '' }),
+      makePhoto({ id: 2, taken_at: 'not-a-date', created_at: 'not-a-date' }),
+    ])
+    const vm = wrapper.findComponent(Detail).vm as any
+    vm.photoGridSize = 'small'
+    await flushPromises()
+    const subtitles = wrapper.findAll('.photo-subtitle')
+    expect(subtitles.length).toBe(2)
+    expect(subtitles[0]!.text()).toBe('-')
+    expect(subtitles[1]!.text()).toBe('-')
+  })
+
+  it('从小图切换回中图后，标题重新出现', async () => {
+    const wrapper = await mountWithPhotos([makePhoto()])
+    const vm = wrapper.findComponent(Detail).vm as any
+    vm.photoGridSize = 'small'
+    await flushPromises()
+    expect(wrapper.findAll('.photo-title').length).toBe(0)
+
+    vm.photoGridSize = 'medium'
+    await flushPromises()
+    expect(wrapper.findAll('.photo-title').length).toBe(1)
+    expect(wrapper.find('.photo-title').text()).toContain('海边日落')
+  })
+
+  it('切换密度不会重新请求已加载的照片数据', async () => {
+    const wrapper = await mountWithPhotos([makePhoto()])
+    const callsAfterLoad = mockGetPhotos.mock.calls.length
+    const vm = wrapper.findComponent(Detail).vm as any
+
+    vm.photoGridSize = 'small'
+    await flushPromises()
+    vm.photoGridSize = 'medium'
+    await flushPromises()
+    vm.photoGridSize = 'large'
+    await flushPromises()
+
+    expect(mockGetPhotos.mock.calls.length).toBe(callsAfterLoad)
+  })
+})
+
 // ===== 停止滚动后请求稳定回归（规格核心）=====
 //
 // 规格要求：内容超过视口、用户停止滚动后，分页请求必须稳定停止；不再有
