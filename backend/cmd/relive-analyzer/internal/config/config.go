@@ -97,11 +97,15 @@ func DefaultConfig() *Config {
 			Timeout:  60,
 		},
 		Analyzer: AnalyzerConfig{
-			Workers:        4,
-			FetchLimit:     10,
-			RetryCount:     3,
-			RetryDelay:     5,
-			CheckpointFile: "~/.relive-analyzer/checkpoint.db",
+			Workers:                4,
+			FetchLimit:             10,
+			RetryCount:             3,
+			RetryDelay:             5,
+			CheckpointFile:         "~/.relive-analyzer/checkpoint.db",
+			MaxAttempts:            10,
+			CircuitFailureThreshold: 3,
+			CircuitInitialBackoff:  30,
+			CircuitMaxBackoff:      600,
 		},
 		AI: AIConfig{
 			Provider: "ollama",
@@ -229,6 +233,25 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("ai.provider must be 'ollama' or 'vllm'")
 	}
 
+	// 熔断与重试治理边界校验。缺省值允许为 0（由 analyzer 包补全）；
+	// 显式提供非法负值时返回明确错误。
+	if c.Analyzer.MaxAttempts < 0 {
+		return fmt.Errorf("analyzer.max_attempts must be >= 0")
+	}
+	if c.Analyzer.CircuitFailureThreshold < 0 {
+		return fmt.Errorf("analyzer.circuit_failure_threshold must be >= 0")
+	}
+	if c.Analyzer.CircuitInitialBackoff < 0 {
+		return fmt.Errorf("analyzer.circuit_initial_backoff must be >= 0")
+	}
+	if c.Analyzer.CircuitMaxBackoff < 0 {
+		return fmt.Errorf("analyzer.circuit_max_backoff must be >= 0")
+	}
+	if c.Analyzer.CircuitMaxBackoff > 0 && c.Analyzer.CircuitInitialBackoff > 0 &&
+		c.Analyzer.CircuitInitialBackoff > c.Analyzer.CircuitMaxBackoff {
+		return fmt.Errorf("analyzer.circuit_initial_backoff must be <= circuit_max_backoff")
+	}
+
 	return nil
 }
 
@@ -276,9 +299,16 @@ server:
 analyzer:
   workers: 4                            # 并发分析数
   fetch_limit: 10                       # 每批获取任务数
-  retry_count: 3                        # AI 分析重试次数
+  retry_count: 3                        # AI 分析重试次数（客户端本地重试）
   retry_delay: 5                        # 重试延迟（秒）
   checkpoint_file: "~/.relive-analyzer/checkpoint.db"  # 断点续传文件
+  # 服务端统一最大尝试次数（仅诊断用，权威值在服务端 analysis_max_attempts=10）
+  max_attempts: 10
+  # Provider 熔断：连续 N 个不同照片失败后 open
+  circuit_failure_threshold: 3
+  # open 退避阶梯：30s → 1m → 2m → 5m → 10m（秒）
+  circuit_initial_backoff: 30
+  circuit_max_backoff: 600
 
 ai:
   provider: "ollama"                    # AI Provider: ollama 或 vllm

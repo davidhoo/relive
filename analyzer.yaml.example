@@ -12,9 +12,16 @@ server:
 analyzer:
   workers: 4                            # 并发分析数（根据 AI 提供商标配）
   fetch_limit: 10                       # 每批获取任务数
-  retry_count: 3                        # AI 分析重试次数
+  retry_count: 3                        # AI 分析重试次数（客户端本地重试）
   retry_delay: 5                        # 重试延迟（秒）
   checkpoint_file: "./data/analyzer-checkpoint.db"  # 断点续传文件路径（项目内独立文件，避免不同目录共享）
+  # 服务端统一最大尝试次数（仅诊断用，权威值在服务端 analysis_max_attempts=10）
+  max_attempts: 10
+  # Provider 熔断：连续 N 个不同照片失败后 open
+  circuit_failure_threshold: 3
+  # open 退避阶梯：30s → 1m → 2m → 5m → 10m（秒）
+  circuit_initial_backoff: 30
+  circuit_max_backoff: 600
 
 ai:
   provider: "ollama"                    # AI Provider: ollama, vllm

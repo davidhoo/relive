@@ -140,3 +140,55 @@ analyzer 主要使用以下接口：
 - 仍希望沿用 `export.db` 文件交换流程
 
 如需查看旧的文件模式背景，请参考 `docs/ANALYZER.md`；该文档仅保留为历史说明，不代表当前实现。
+
+---
+
+## 失败退避与 Provider 熔断（v2 运维语义）
+
+为防止 AI Provider 短暂 5xx / 429 / 异常响应被放大成“领取 → 失败 → 立即重领”的热循环，analyzer 与服务端协同实现了失败退避与 Provider 级熔断。服务端是任务状态的唯一真值。
+
+### 服务端重试与退避
+
+- 统一最大尝试次数 `analysisMaxAttempts = 10`，替代历史上本地 3 次 / 服务端 10 次 / 统计 3 次三套口径。
+- 退避表（第 N 次失败后距下次可重试）：`30s → 2m → 10m → 30m → 2h → 2h → 2h → 2h → 2h`；第 10 次进入最终失败，不再参与自动领取。
+- `input_permanent`（JPEG 损坏、不支持格式）直接进入最终失败。
+- 成功提交结果后清空 attempts、next_retry_at 与最近失败字段。
+- 客户端的 `Retry-After` 只能延长退避，不能缩短服务端退避。
+
+### Provider 熔断（analyzer 侧）
+
+- 默认连续 **3 个不同照片**的 Provider 故障后熔断 open；同一照片重复失败不伪造阈值。
+- open 退避阶梯：`30s → 1m → 2m → 5m → 10m`，上限 10 分钟。
+- open 时停止领取；已在 worker 中的任务允许结束并分别释放。
+- 到期只允许一个 half-open 探测任务；探测成功 close，失败重新 open 并升级退避。
+- HTTP 429 直接 open，并优先遵守 `Retry-After`。
+- runtime lease 丢失（连续 3 次心跳失败）进入 `lease-paused`，停止普通 fetch，重获成功才恢复。
+
+### 统计字段（`GET /api/v1/analyzer/stats`）
+
+| 字段 | 含义 |
+|------|------|
+| `pending` | 可被领取（未被锁、未进入 retry_wait / failed） |
+| `retry_waiting` | 退避等待中（next_retry_at 未到） |
+| `locked` | 当前被锁定（且 ai_analyzed=false） |
+| `failed` | 最终失败（达到 max attempts） |
+
+### 安全停止与恢复
+
+- **circuit open 不等于任务丢失**：照片仍在服务端，退避到期后会自动重新领取。
+- **自动恢复**：Provider 恢复后 half-open 探测成功即 close，无需清库或重启 NAS。
+- **最终失败**：达到 max attempts 的照片不再自动领取；如需重试，请通过 Web UI 排除/恢复或后续手动重置接口，**禁止直接修改 SQLite 的 `analysis_retry_count` / `analysis_next_retry_at` / `analysis_lock_*` 字段**——这些字段由服务端原子维护，手改会破坏锁版本与退避一致性。
+- **安全停止**：`Ctrl+C` / `SIGTERM` 触发优雅退出；在途任务会以 `client_cancelled` 释放（不计业务失败次数），不会触发熔断。
+
+### 配置项（`analyzer.yaml`）
+
+```yaml
+analyzer:
+  max_attempts: 10                # 诊断用，权威值在服务端
+  circuit_failure_threshold: 3    # 连续不同照片失败阈值
+  circuit_initial_backoff: 30     # 秒
+  circuit_max_backoff: 600        # 秒
+```
+
+非法值（负数、initial > max）会在启动校验时返回明确错误。
+

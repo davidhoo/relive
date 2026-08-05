@@ -98,3 +98,42 @@ func TestConfig_Load_InvalidYAML(t *testing.T) {
 	_, err := Load(p)
 	require.Error(t, err)
 }
+
+func TestConfig_Validate_CircuitDefaultsAndBounds(t *testing.T) {
+	// 默认值合法。
+	cfg := DefaultConfig()
+	cfg.Server.Endpoint = "http://localhost:8080"
+	cfg.Server.APIKey = "key"
+	require.NoError(t, cfg.Validate())
+	assert.Equal(t, 10, cfg.Analyzer.MaxAttempts)
+	assert.Equal(t, 3, cfg.Analyzer.CircuitFailureThreshold)
+	assert.Equal(t, 30, cfg.Analyzer.CircuitInitialBackoff)
+	assert.Equal(t, 600, cfg.Analyzer.CircuitMaxBackoff)
+
+	// initial > max 非法。
+	cfg2 := DefaultConfig()
+	cfg2.Server.Endpoint = "http://localhost:8080"
+	cfg2.Server.APIKey = "key"
+	cfg2.Analyzer.CircuitInitialBackoff = 700
+	cfg2.Analyzer.CircuitMaxBackoff = 600
+	err := cfg2.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "circuit_initial_backoff")
+
+	// 负值非法。
+	cfg3 := DefaultConfig()
+	cfg3.Server.Endpoint = "http://localhost:8080"
+	cfg3.Server.APIKey = "key"
+	cfg3.Analyzer.CircuitFailureThreshold = -1
+	err = cfg3.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "circuit_failure_threshold")
+}
+
+func TestGenerateSampleConfig_ContainsCircuitKeys(t *testing.T) {
+	sample := GenerateSampleConfig()
+	assert.Contains(t, sample, "max_attempts")
+	assert.Contains(t, sample, "circuit_failure_threshold")
+	assert.Contains(t, sample, "circuit_initial_backoff")
+	assert.Contains(t, sample, "circuit_max_backoff")
+}
