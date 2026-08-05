@@ -65,22 +65,45 @@ const paged = (items: unknown[], total: number) => ({
 
 // 可显式触发 visible-range-change 的 VirtualMediaGrid 测试桩。
 // 不再简单 stub 为 true：Detail 的分页守卫必须被真实事件覆盖。
+// 同时暴露 getScrollOffset/scrollToOffset，验证 Tab 切换时 Detail 通过网格方法
+// 保存/恢复 .main-content.scrollTop（而非 window.scrollY/window.scrollTo）。
 const makeVirtualMediaGridStub = () => {
-  const handlers: { visibleRange: (p: any) => void } = { visibleRange: () => {} }
+  const handlers: { visibleRange: (p: any) => void; emit: any; offset: number } = {
+    visibleRange: () => {},
+    emit: null,
+    offset: 0,
+  }
   return {
     component: {
       name: 'VirtualMediaGridStub',
       props: ['items', 'columns', 'rowHeight', 'gap', 'sizeClass'],
       emits: ['visible-range-change'],
       setup(_: any, { emit }: any) {
-        // 暴露一个触发器，供测试直接派发可见区间事件，模拟 window virtualizer。
+        // 暴露一个触发器，供测试直接派发可见区间事件，模拟元素 virtualizer。
         ;(handlers as any).emit = emit
-        return () => null
+        // 暴露滚动读取/恢复：用内部 offset 变量模拟 .main-content.scrollTop。
+        const getScrollOffset = () => handlers.offset
+        const scrollToOffset = (v: number) => { handlers.offset = v }
+        const measure = () => {}
+        const getFirstVisibleIndex = () => 0
+        const scrollToIndex = () => {}
+        const recomputeScrollMargin = () => {}
+        return {
+          getScrollOffset,
+          scrollToOffset,
+          measure,
+          getFirstVisibleIndex,
+          scrollToIndex,
+          recomputeScrollMargin,
+        }
       },
     },
     triggerVisibleRange: (p: { firstRowIndex: number; lastRowIndex: number; rowCount: number }) => {
       ;(handlers as any).emit('visible-range-change', p)
     },
+    // 供测试直接操纵该网格桩的“scrollTop”，模拟用户滚动。
+    setScrollOffset: (v: number) => { handlers.offset = v },
+    getScrollOffset: () => handlers.offset,
   }
 }
 
@@ -390,6 +413,67 @@ describe('Detail - Tab 切换恢复各自滚动位置（测试项 8）', () => {
     vm.activeTab = 'photos'
     await flushPromises()
     expect(vm.photosScrollTop).toBe(0)
+  })
+
+  it('离开 Tab 时通过网格 getScrollOffset 保存 .main-content.scrollTop（测试项 7）', async () => {
+    const wrapper = await mountDetail()
+    await flushPromises()
+    const vm = wrapper.findComponent(Detail).vm as any
+
+    // 模拟用户在照片 Tab 滚动到 250px（桩网格的 offset）。
+    gridStub.setScrollOffset(250)
+
+    // 切到 faces：Detail 应在离开 photos 前调用 photosGrid.getScrollOffset() 保存。
+    vm.activeTab = 'faces'
+    await flushPromises()
+    expect(vm.photosScrollTop).toBe(250)
+
+    // 人脸 Tab 滚动到 480px。
+    gridStub.setScrollOffset(480)
+    // 切回 photos：保存 faces 滚动位置。
+    vm.activeTab = 'photos'
+    await flushPromises()
+    expect(vm.facesScrollTop).toBe(480)
+
+    // 照片 Tab 恢复时，Detail 应调用 photosGrid.scrollToOffset(250)。
+    // 桩 gridStub 是共享单例（photos/faces 共用），offset 会被恢复调用覆盖为 250。
+    expect(gridStub.getScrollOffset()).toBe(250)
+
+    // 再切回 faces：应恢复 faces 的 480。
+    vm.activeTab = 'faces'
+    await flushPromises()
+    expect(gridStub.getScrollOffset()).toBe(480)
+  })
+
+  it('切换 Tab 后不丢失照片、人脸分页状态和人脸选择状态（测试项 8）', async () => {
+    const wrapper = await mountDetail()
+    await flushPromises()
+    const vm = wrapper.findComponent(Detail).vm as any
+
+    // 照片第一页 30 张已加载。
+    expect(vm.photos.length).toBe(30)
+
+    // 选中一张人脸需先切到 faces 加载，但选择集合独立于 Tab。直接模拟选中。
+    vm.selectedFaceSet = new Set([7, 9])
+
+    // 切到 faces → 加载人脸第一页（50 张），不清空选择。
+    vm.activeTab = 'faces'
+    await flushPromises()
+    expect(vm.faces.length).toBe(50)
+    expect(vm.selectedFaceSet.size).toBe(2)
+
+    // 切回 photos → 照片分页状态保留（仍 30 张），选择状态保留。
+    vm.activeTab = 'photos'
+    await flushPromises()
+    expect(vm.photos.length).toBe(30)
+    expect(vm.selectedFaceSet.size).toBe(2)
+
+    // 再切回 faces → 人脸分页状态保留（仍 50 张，不重新加载第一页），选择仍保留。
+    vm.activeTab = 'faces'
+    await flushPromises()
+    expect(vm.faces.length).toBe(50)
+    expect(mockGetFaces).toHaveBeenCalledTimes(1) // 全程只加载一次第一页
+    expect(vm.selectedFaceSet.size).toBe(2)
   })
 })
 

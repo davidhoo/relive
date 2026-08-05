@@ -28,7 +28,7 @@
 查询“还有哪些计划中的工作没做”时，默认只把 `Pending` 视为活动 backlog；应跳过 `Completed`、`Review Only`、`Superseded`，并把 `Candidate` 仅视为未来选项而非当前承诺路线。
 
 ### Pending
-- 当前 `docs/plans/` 下没有已批准但尚未实现的 `Pending` 计划文件
+- `docs/plans/2026-08-05-analyzer-failure-backoff-and-circuit-breaker.md`：Analyzer 失败持久退避、Provider 熔断与 SQLite release 写入治理
 
 ### Partially Completed
 - `docs/plans/event-driven-curation.md`：Phase 0 / 1 / 2a / 2b / 2c 已完成，其余阶段当前搁置

@@ -513,7 +513,7 @@ const facesLoadedOnce = ref(false)
 // 虚拟网格 ref
 const photosGridRef = ref<InstanceType<typeof VirtualMediaGrid> | null>(null)
 const facesGridRef = ref<InstanceType<typeof VirtualMediaGrid> | null>(null)
-// 各 Tab 滚动锚点：window scroll + 首个可见 item index，用于密度/Tab 切换后恢复位置。
+// 各 Tab 滚动锚点：.main-content.scrollTop，用于密度/Tab 切换后恢复位置。
 const photosScrollTop = ref(0)
 const facesScrollTop = ref(0)
 
@@ -820,7 +820,7 @@ const markFacesStalled = (reason: string) => {
   ElMessage.error(`人脸分页未推进，请重试（${reason}）`)
 }
 
-// --- 可见区间驱动的加载判定（window virtualizer 模式）---
+// --- 可见区间驱动的加载判定（元素 virtualizer 模式）---
 // 由 VirtualMediaGrid 的 visible-range-change 触发。只有当前 Tab 可见、非 loading、
 // 非 error、hasMore 且最后可见行接近末尾时才加载。隐藏 Tab / 失败态 / in-flight 都不触发。
 const LOAD_THRESHOLD_ROWS = 3
@@ -1445,13 +1445,17 @@ const goBack = () => {
 }
 
 // Tab 切换：按需加载 + 恢复各自滚动锚点。不清空选择状态、不清空数据。
-// window virtualizer 模式下，滚动位置由 window 维护，不再读取组件内部 scrollRef.scrollTop。
+// 元素 virtualizer 模式下，滚动位置由 .main-content 维护；通过网格暴露的
+// getScrollOffset/scrollToOffset 保存与恢复，不再依赖 window.scrollY/window.scrollTo。
 watch(activeTab, async (tab, prev) => {
-  // 离开当前 Tab 前记忆 window 滚动位置
-  if (prev === 'photos') {
-    photosScrollTop.value = typeof window !== 'undefined' ? window.scrollY : 0
-  } else if (prev === 'faces') {
-    facesScrollTop.value = typeof window !== 'undefined' ? window.scrollY : 0
+  // 离开当前 Tab 前记忆 .main-content 滚动位置（通过该 Tab 网格读取实际滚动容器）。
+  const prevGrid = prev === 'photos' ? photosGridRef.value : prev === 'faces' ? facesGridRef.value : null
+  if (prevGrid && typeof (prevGrid as any).getScrollOffset === 'function') {
+    if (prev === 'photos') {
+      photosScrollTop.value = (prevGrid as any).getScrollOffset()
+    } else if (prev === 'faces') {
+      facesScrollTop.value = (prevGrid as any).getScrollOffset()
+    }
   }
 
   // 首次切到人脸 Tab 才加载第一页
@@ -1460,17 +1464,16 @@ watch(activeTab, async (tab, prev) => {
   }
 
   await nextTick()
-  // 重新测量目标 Tab 的虚拟网格（隐藏 pane 变可见后需刷新可见区间），并恢复 window 滚动锚点。
+  // 重新测量目标 Tab 的虚拟网格（隐藏 pane 变可见后需刷新可见区间），并恢复 .main-content 滚动锚点。
   const target = tab === 'photos' ? photosGridRef.value : facesGridRef.value
   const top = tab === 'photos' ? photosScrollTop.value : facesScrollTop.value
   if (target && typeof (target as any).measure === 'function') {
     ;(target as any).measure()
   }
-  // window 滚动恢复。tab 切换通常不大幅改变页面总高度，直接恢复 scrollY 即可。
-  if (typeof window !== 'undefined') {
-    nextTick(() => {
-      window.scrollTo({ top, behavior: 'instant' as ScrollBehavior })
-    })
+  // 等目标网格重新测量后再恢复滚动位置，避免恢复时仍用旧布局导致偏移。
+  await nextTick()
+  if (target && typeof (target as any).scrollToOffset === 'function') {
+    ;(target as any).scrollToOffset(top)
   }
 })
 

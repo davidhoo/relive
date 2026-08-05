@@ -53,7 +53,7 @@ export function shouldLoadMore(p: ShouldLoadMoreParams): boolean {
   return p.rowCount - p.visibleLastRowIndex <= p.threshold
 }
 
-// shouldLoadByVisibleRange 是 window-virtualizer 模式下的事件驱动加载判定纯函数。
+// shouldLoadByVisibleRange 是元素-virtualizer 模式下的事件驱动加载判定纯函数。
 // 由 VirtualMediaGrid 的 visible-range-change 事件触发判定。
 // 语义：只有当前 Tab 可见、非 loading、非 error、hasMore 且最后可见行接近数据末尾时返回 true。
 // 首屏（rowCount<=0）允许加载；有数据但 lastVisibleRowIndex<0（尚未测量）不加载，避免风暴。

@@ -1,8 +1,8 @@
 <template>
   <div ref="gridRef" class="virtual-media-grid">
     <!--
-      window virtualizer 模式：网格容器不再自带滚动条，占据正常文档流位置；
-      滚动由浏览器 window 驱动，整个页面自然向下滚动（不引入列表内部滚动条）。
+      element virtualizer 模式：网格容器不再自带滚动条，占据正常文档流位置；
+      滚动由最近的 .main-content（应用真正的滚动容器）驱动，不再用 window。
       内层相对定位容器撑开总高度，虚拟行绝对定位在其内。
     -->
     <div
@@ -28,19 +28,26 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useWindowVirtualizer } from '@tanstack/vue-virtual'
+import { useVirtualizer } from '@tanstack/vue-virtual'
 
-// VirtualMediaGrid：基于 window 的行级虚拟网格。
+// VirtualMediaGrid：基于 .main-content 元素滚动的行级虚拟网格。
 // 照片与人脸共用同一套滚动/分页/密度计算逻辑。
 // 已加载数据组织为虚拟行，仅挂载可见行 + 前后各 overscan 行。
 //
-// 与旧版差异：
-//   - 滚动源改为 window（useWindowVirtualizer），不再有列表内部 overflow-y:auto。
+// 滚动源：应用真正的滚动容器是 MainLayout 的 .main-content（height:100vh; overflow:hidden
+// 在外层，.main-content overflow-y:auto）。useWindowVirtualizer 监听 window 滚动，但用户
+// 滚 .main-content 时 window 不动 → virtualizer 收不到偏移 → visible-range-change 不推进 →
+// 连续分页中断。改为 useVirtualizer，把 .main-content 作为 scrollElement。
+//
+// 与旧版（window 模式）差异：
+//   - 滚动源改为 gridRef.closest('.main-content')（不使用全局 querySelector，避免多窗口/嵌套取错）。
+//   - scrollMargin 改为相对滚动容器坐标系：
+//       gridRect.top - scrollContainerRect.top + scrollContainer.scrollTop
+//     （window 模式下是 gridRect.top + window.scrollY）。
 //   - 行高优先采用真实 DOM 测量（measureElement），rowHeight 仅作首屏估算。
 //   - 组件不再自行决定是否加载，统一输出 visible-range-change，由父组件结合
 //     active/loading/error/hasMore 决定。删除 watch(items.length)->maybeLoadMore。
-//   - scrollMargin 用 getBoundingClientRect().top + window.scrollY 计算页面绝对偏移，
-//     不再用 offsetTop（offsetTop 相对 offsetParent，在 Element Plus 卡片/Tab 嵌套下不可靠）。
+//   - 行位置公式仍是 translateY(row.start - scrollMargin)，scrollMargin 来自 .main-content 坐标系。
 
 export interface VirtualMediaGridProps {
   // 已加载的全部数据项
@@ -72,35 +79,53 @@ const emit = defineEmits<{
 
 const gridRef = ref<HTMLElement | null>(null)
 
+// 实际滚动容器：最近的 .main-content。元素模式下由 virtualizer 监听其 scrollTop。
+// 用 ref 包裹，元素变化时 computed options 重算，virtualizer 重新 setOptions + _willUpdate。
+const scrollElRef = ref<HTMLElement | null>(null)
+
 const rowCount = computed(() =>
   props.items.length === 0 ? 0 : Math.ceil(props.items.length / props.columns),
 )
 
-// scrollMargin = 网格容器在页面中的绝对顶部偏移。
-// window virtualizer 把 window scroll 映射到列表内部坐标，需扣除网格顶部到页面顶部的
-// 固定偏移（页面头部卡片高度）。offsetTop 相对 offsetParent，在 Element Plus 卡片/Tab 等
-// 嵌套结构下不等于页面绝对位置，故改用 getBoundingClientRect().top + window.scrollY。
-// 保存在响应式 ref 中，布局变化时重算，触发 virtualizer 重新 setOptions。
+// 取最近 .main-content：从 gridRef 向上找，不用全局 querySelector。
+// 测试 / SSR / 嵌套布局下若不存在则返回 null，virtualizer 进入无滚动元素态，安全降级。
+const resolveScrollElement = (): HTMLElement | null => {
+  if (!gridRef.value) return null
+  // closest 在 Element 原型上，gridRef.value 是 HTMLElement 一定有。
+  const el = gridRef.value.closest('.main-content') as HTMLElement | null
+  return el || null
+}
+
+// scrollMargin = 网格容器在滚动容器内容坐标系中的顶部偏移。
+// 元素模式下 virtualizer 监听 scrollElement.scrollTop，row.start 基于 scrollMargin 起算；
+// scrollMargin 必须表达“网格顶部相对滚动容器内容顶部的距离”：
+//   gridRect.top - scrollContainerRect.top + scrollContainer.scrollTop
+// （gridRect.top - scrollContainerRect.top 是网格在滚动容器视口内的静态偏移，
+//  加上 scrollTop 还原到内容坐标）。保存在响应式 ref，布局/滚动变化时重算。
 const scrollMarginPx = ref(0)
 
 const recomputeScrollMargin = () => {
   const el = gridRef.value
-  if (!el || typeof window === 'undefined') {
+  const scroller = scrollElRef.value
+  if (!el || !scroller) {
     scrollMarginPx.value = 0
     return
   }
-  const rect = el.getBoundingClientRect()
-  // 页面绝对偏移 = 视口内顶部位置 + 当前滚动量。负值时夹到 0。
-  const abs = rect.top + window.scrollY
+  const gridRect = el.getBoundingClientRect()
+  const scrollRect = scroller.getBoundingClientRect()
+  const abs = gridRect.top - scrollRect.top + scroller.scrollTop
   scrollMarginPx.value = abs > 0 ? abs : 0
 }
 
-// options 必须用 computed 包裹：useWindowVirtualizer 内部 watch(() => unref(options))
-// 依赖该 ref 在 count/columns/scrollMargin 变化时重新 setOptions，翻页与密度切换才生效。
+// options 必须用 computed 包裹：useVirtualizer 内部 watch(() => unref(options))
+// 依赖该 ref 在 count/columns/scrollMargin/scrollElement 变化时重新 setOptions，翻页与密度切换才生效。
+// getScrollElement 返回 scrollElRef.value；vue-virtual 内部 watch getScrollElement() 返回值，
+// 元素引用变化时触发 _willUpdate，确保切换容器后重新挂监听。
 // estimateSize 只返回行本身估算高度；行间距统一交给 virtualizer 的 gap，避免重复计算。
-const virtualizer = useWindowVirtualizer(
+const virtualizer = useVirtualizer(
   computed(() => ({
     count: rowCount.value,
+    getScrollElement: () => scrollElRef.value,
     estimateSize: () => props.rowHeight,
     overscan: props.overscan,
     gap: props.gap,
@@ -125,9 +150,9 @@ const virtualRows = computed(() => {
 })
 const totalHeight = computed(() => virtualizer.value.getTotalSize())
 
-// 行 transform：useWindowVirtualizer 给出的 row.start 已是“相对列表顶部”的坐标，
-// 但它内部为把 window scroll 对齐到列表坐标，已把 scrollMargin 计入 start（即 start 包含
-// 网格顶部到页面顶部的固定偏移）。而本组件内层绝对定位容器起点就在列表顶部（top:0），
+// 行 transform：useVirtualizer 给出的 row.start 已是“相对列表顶部”的坐标，
+// 但它内部为把滚动容器 scrollTop 对齐到列表坐标，已把 scrollMargin 计入 start（即 start 包含
+// 网格顶部到滚动容器内容顶部的固定偏移）。而本组件内层绝对定位容器起点就在列表顶部（top:0），
 // 若直接 translateY(start)，第一行会被多下移一个 scrollMargin，表现为列表顶部出现一块空白。
 // 因此必须减去 scrollMarginPx，使第一行最终落在列表起点（translate 接近 0）。
 const rowStyle = (row: { start: number }) => ({
@@ -210,13 +235,34 @@ const scrollToIndex = (index: number) => {
   virtualizer.value.scrollToIndex(rowIndex, { align: 'start' })
 }
 
+// 滚动容器读取/恢复：暴露给父组件，Tab 切换时保存与恢复 .main-content.scrollTop。
+// 没有取得滚动容器时安全返回，不抛异常。
+const getScrollOffset = (): number => {
+  return scrollElRef.value?.scrollTop ?? 0
+}
+
+const scrollToOffset = (offset: number) => {
+  const scroller = scrollElRef.value
+  if (!scroller) return
+  scroller.scrollTop = offset
+}
+
 const measure = () => {
-  // 重新测量前先重算 scrollMargin（隐藏 Tab 变可见、人物信息区高度变化都会改变绝对偏移）。
+  // 重新测量前先重算 scrollMargin（隐藏 Tab 变可见、人物信息区高度变化都会改变相对偏移）。
   recomputeScrollMargin()
   virtualizer.value?.measure()
 }
 
-// scrollMargin 依赖页面绝对位置，窗口/布局变化后重新测量并重算偏移。
+// 显式监听滚动容器解析：scrollElRef 从 null→元素（或换元素）时，virtualizer 内部虽会
+// watch getScrollElement() 触发 _willUpdate 重新挂监听，但 scrollMargin/可见区间的重算
+// 靠这里显式驱动，避免依赖 scrollMarginPx 变化的间接联动。容器变化必伴随布局变化，
+// 重算 scrollMargin + measure 后 visible-range-change 才会按新坐标系推进。
+watch(scrollElRef, () => {
+  recomputeScrollMargin()
+  virtualizer.value?.measure()
+})
+
+// scrollMargin 依赖相对滚动容器的位置，窗口/布局/滚动容器变化后重新测量并重算偏移。
 let resizeRaf = 0
 const onViewportResize = () => {
   if (resizeRaf) cancelAnimationFrame(resizeRaf)
@@ -239,10 +285,15 @@ const setupResizeObserver = () => {
 }
 
 onMounted(() => {
+  // 挂载后从 gridRef.closest('.main-content') 取滚动容器，赋值给 scrollElRef 触发 options 重算。
+  scrollElRef.value = resolveScrollElement()
   recomputeScrollMargin()
   setupResizeObserver()
-  // 挂载后再次确认偏移：挂载瞬间布局可能尚未稳定。
+  // 挂载后再次确认偏移与容器：挂载瞬间布局可能尚未稳定。
   nextTick(() => {
+    if (!scrollElRef.value) {
+      scrollElRef.value = resolveScrollElement()
+    }
     recomputeScrollMargin()
     virtualizer.value?.measure()
   })
@@ -267,6 +318,8 @@ defineExpose({
   scrollToIndex,
   measure,
   gridRef,
+  getScrollOffset,
+  scrollToOffset,
   // 暴露重算供父组件在 Tab 切换、密度切换等显式场景调用。
   recomputeScrollMargin,
 })
