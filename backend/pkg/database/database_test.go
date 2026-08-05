@@ -320,3 +320,36 @@ func TestAutoMigrateAddsPersonIdentity(t *testing.T) {
 		}
 	}
 }
+
+func TestPhotoAnalysisFieldsMigrated(t *testing.T) {
+	db := openMigratedTestDB(t)
+
+	required := []string{
+		"analysis_lock_version",
+		"analysis_next_retry_at",
+		"analysis_last_error_code",
+		"analysis_last_error",
+		"analysis_last_failed_at",
+	}
+	for _, col := range required {
+		if !db.Migrator().HasColumn(&model.Photo{}, col) {
+			t.Fatalf("expected photos.%s column after migration", col)
+		}
+	}
+
+	// 复合索引 idx_analysis_retry_ready 应存在（GORM tag 创建）。
+	indexes, err := db.Migrator().GetIndexes(&model.Photo{})
+	if err != nil {
+		t.Fatalf("get indexes: %v", err)
+	}
+	found := false
+	for _, idx := range indexes {
+		if idx.Name() == "idx_analysis_retry_ready" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected idx_analysis_retry_ready index after migration")
+	}
+}

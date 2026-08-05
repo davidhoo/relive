@@ -95,6 +95,14 @@ type Photo struct {
 	AnalysisLockID        *string    `gorm:"type:varchar(64);index:idx_analysis_lock" json:"-"`      // 分析器实例ID（UUID）
 	AnalysisLockExpiredAt *time.Time `json:"-"`                                                      // 锁过期时间
 	AnalysisRetryCount    int        `gorm:"default:0" json:"-"`                                     // 分析重试次数
+	// AnalysisLockVersion 单调递增的锁版本，避免同一 Analyzer 的迟到 heartbeat/release 影响新任务。
+	AnalysisLockVersion int64 `gorm:"not null;default:0" json:"-"`
+	// AnalysisNextRetryAt 下次可重试时间；非空且晚于 now 时不得被领取。
+	AnalysisNextRetryAt *time.Time `gorm:"index:idx_analysis_retry_ready" json:"-"`
+	// AnalysisLastErrorCode / AnalysisLastError / AnalysisLastFailedAt 最近一次失败分类与脱敏摘要。
+	AnalysisLastErrorCode string     `gorm:"type:varchar(50)" json:"-"`
+	AnalysisLastError     string     `gorm:"type:varchar(500)" json:"-"`
+	AnalysisLastFailedAt  *time.Time `json:"-"`
 	Description           string     `gorm:"type:text" json:"description"`                           // 详细描述（80-200字）
 	Caption               string     `gorm:"type:varchar(100)" json:"caption"`                       // 精美短句（8-30字）
 	MemoryScore           int        `gorm:"default:0;index:idx_memory_score" json:"memory_score"`   // 回忆价值评分（0-100）
