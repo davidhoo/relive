@@ -16,10 +16,13 @@ import (
 
 // setupAnalysisTestDB 建立最小测试数据库：迁移 Photo，初始化独立 WriteQueue，
 // 插入 thumbnail ready、ai_analyzed=false 的照片。
+//
+// 注意：使用 cache=shared 内存库时必须在 cleanup 关闭底层 sql.DB，否则共享库
+// 会跨测试存活，污染 people/ANN 测试（embedding 维度不一致导致 HNSW panic）。
 func setupAnalysisTestDB(t *testing.T) (*gorm.DB, *database.WriteQueue) {
 	t.Helper()
 
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared&_busy_timeout=60000"), &gorm.Config{})
 	require.NoError(t, err)
 
 	// 每个测试用唯一内存库，避免 shared cache 串扰
@@ -28,6 +31,13 @@ func setupAnalysisTestDB(t *testing.T) (*gorm.DB, *database.WriteQueue) {
 
 	wq := database.NewWriteQueue(nil)
 	t.Cleanup(wq.Stop)
+
+	// 关闭底层连接，释放 shared in-memory DB，避免污染后续测试。
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil && sqlDB != nil {
+			_ = sqlDB.Close()
+		}
+	})
 
 	return db, wq
 }
