@@ -67,6 +67,13 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
     .
 WORKDIR /app
 
+# 构建重复人脸跨人物归属审计工具
+RUN CGO_ENABLED=1 GOOS=linux go build \
+    -tags "fts5" \
+    -ldflags "-X github.com/davidhoo/relive/pkg/version.BuildTime=${BUILD_TIME} -X github.com/davidhoo/relive/pkg/version.GitCommit=${VERSION}" \
+    -o /app/relive-duplicate-face-audit \
+    ./cmd/relive-duplicate-face-audit
+
 # Stage 3: 运行阶段
 FROM alpine:3.21
 
@@ -90,6 +97,7 @@ RUN apk add --no-cache \
 # 从构建阶段复制后端二进制文件
 COPY --from=backend-builder /app/relive /app/relive
 COPY --from=backend-builder /app/relive-analyzer /app/relive-analyzer
+COPY --from=backend-builder /app/relive-duplicate-face-audit /app/relive-duplicate-face-audit
 COPY --from=backend-builder /app/assets/fonts /app/fonts
 
 # 从构建阶段复制前端静态文件
