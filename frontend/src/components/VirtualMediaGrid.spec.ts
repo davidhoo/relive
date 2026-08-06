@@ -119,7 +119,7 @@ const mountInScroller = (props: Record<string, unknown>, scrollerOpts: Parameter
       attachTo: scroller,
     },
   )
-  return { wrapper, scroller, setTop, ...built }
+  return { wrapper, ...built }
 }
 
 // 简化挂载：用默认 800px 高 .main-content。
@@ -191,6 +191,48 @@ describe('VirtualMediaGrid - 每行 items 不超过 columns（测试项 1 组件
       for (const row of rows) {
         expect(row.element.childElementCount).toBeLessThanOrEqual(5)
       }
+      wrapper.unmount()
+    } finally {
+      restore()
+    }
+  })
+
+  // columns 是列数唯一来源：行内 grid-template-columns 由 columns prop 内联决定，
+  // 不再依赖 sizeClass 的 CSS 媒体查询。sizeClass 仅作密度样式标识，不参与列数。
+  it('columns prop 内联决定 grid-template-columns，与 sizeClass 无关（测试项 1）', async () => {
+    const restore = stubRowOffsetHeight(110)
+    try {
+      // columns=7，sizeClass='small'（不对应任何 7 列媒体查询）
+      const wrapper = mountGrid({ columns: 7, sizeClass: 'small', items: Array.from({ length: 70 }, (_, i) => ({ id: i + 1 })) })
+      await flushPromises()
+      const rows = wrapper.findAll('.virtual-media-grid-row')
+      expect(rows.length).toBeGreaterThan(0)
+      for (const row of rows) {
+        const tpl = (row.element as HTMLElement).style.gridTemplateColumns
+        expect(tpl).toBe('repeat(7, minmax(0, 1fr))')
+        // 每行 child 不超过 columns
+        expect(row.element.childElementCount).toBeLessThanOrEqual(7)
+      }
+      wrapper.unmount()
+    } finally {
+      restore()
+    }
+  })
+
+  it('切换 columns prop 后行内 grid-template-columns 同步变化', async () => {
+    const restore = stubRowOffsetHeight(110)
+    try {
+      const wrapper = mountGrid({ columns: 5, items: Array.from({ length: 50 }, (_, i) => ({ id: i + 1 })) })
+      await flushPromises()
+      let rows = wrapper.findAll('.virtual-media-grid-row')
+      expect(rows.length).toBeGreaterThan(0)
+      expect((rows[0]!.element as HTMLElement).style.gridTemplateColumns).toBe('repeat(5, minmax(0, 1fr))')
+
+      await wrapper.setProps({ columns: 3 })
+      await flushPromises()
+      rows = wrapper.findAll('.virtual-media-grid-row')
+      expect(rows.length).toBeGreaterThan(0)
+      expect((rows[0]!.element as HTMLElement).style.gridTemplateColumns).toBe('repeat(3, minmax(0, 1fr))')
       wrapper.unmount()
     } finally {
       restore()

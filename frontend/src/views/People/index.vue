@@ -157,31 +157,38 @@
               </div>
             </div>
 
-            <!-- 连续浏览模式 -->
-            <div v-else class="people-grid-wrap">
+            <!-- 连续浏览模式：行级虚拟网格，仅挂载可见行 + overscan -->
+            <div v-else ref="peopleListWrapRef" class="people-grid-wrap">
               <el-empty
                 v-if="!continuousLoading && !continuousError && continuousPeople.length === 0"
                 description="暂无人物数据"
               />
 
-              <div v-if="continuousPeople.length > 0" class="people-card-grid">
-                <PersonCard
-                  v-for="personItem in continuousPeople"
-                  :key="personItem.id"
-                  :person="personItem"
-                  :avatar-failed="avatarFailed"
-                  :selectable="batchMode"
-                  :selected="selectedIds.has(personItem.id)"
-                  @detail="goToDetail"
-                  @edit="openEditDialog"
-                  @avatar-failed="markAvatarFailed"
-                  @toggle-select="toggleSelect"
-                  @visibility="handleVisibilityChange"
-                />
-              </div>
-
-              <!-- 触底哨兵 + 状态条 -->
-              <div ref="sentinelRef" class="continuous-sentinel" />
+              <VirtualMediaGrid
+                v-if="continuousPeople.length > 0"
+                ref="peopleGridRef"
+                :items="continuousPeople"
+                :columns="peopleColumns"
+                :row-height="peopleRowHeightEstimate"
+                :gap="14"
+                :overscan="5"
+                size-class="people"
+                @visible-range-change="onPeopleVisibleRange"
+              >
+                <template #item="{ item }">
+                  <PersonCard
+                    :person="item"
+                    :avatar-failed="avatarFailed"
+                    :selectable="batchMode"
+                    :selected="selectedIds.has(item.id)"
+                    @detail="goToDetail"
+                    @edit="openEditDialog"
+                    @avatar-failed="markAvatarFailed"
+                    @toggle-select="toggleSelect"
+                    @visibility="handleVisibilityChange"
+                  />
+                </template>
+              </VirtualMediaGrid>
 
               <div v-if="continuousLoading" class="continuous-status">加载中…</div>
               <div v-else-if="continuousError" class="continuous-status continuous-error">
@@ -438,6 +445,7 @@ import { ArrowUp, Clock, Connection, Document, User } from '@element-plus/icons-
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import SectionHeader from '@/components/SectionHeader.vue'
+import VirtualMediaGrid from '@/components/VirtualMediaGrid.vue'
 import { peopleApi } from '@/api/people'
 import { backgroundApi } from '@/api/background'
 import type {
@@ -462,6 +470,13 @@ import {
   getPersonAvatarFallback,
   getPersonCategoryLabel,
 } from './peopleHelpers'
+import { shouldLoadByVisibleRange } from './peopleGridUtils'
+import {
+  columnsForPeopleList,
+  PEOPLE_CARD_GAP,
+  PEOPLE_ROW_HEIGHT_ESTIMATE,
+  PEOPLE_LOAD_THRESHOLD_ROWS,
+} from './peopleListGridUtils'
 import {
   type BrowseMode,
   clearContinuousSnapshot,
@@ -521,8 +536,16 @@ const continuousLoading = ref(false)
 const continuousError = ref(false)
 // 请求代际：切换筛选时递增，用于丢弃过期请求结果，避免旧数据覆盖新筛选结果
 const requestEpoch = ref(0)
-const sentinelRef = ref<HTMLElement | null>(null)
-let scrollObserver: IntersectionObserver | null = null
+// 连续浏览虚拟网格 ref：用于读取/恢复滚动位置、Tab 切换后重算 scrollMargin。
+const peopleGridRef = ref<InstanceType<typeof VirtualMediaGrid> | null>(null)
+// 连续浏览列表容器 wrap，用于挂载 ResizeObserver 监听宽度变化。
+const peopleListWrapRef = ref<HTMLElement | null>(null)
+// 列表容器宽度 → 列数。由 ResizeObserver 驱动，避免用 window 宽度猜测内容区宽度。
+const peopleColumns = ref(2)
+const peopleRowHeightEstimate = PEOPLE_ROW_HEIGHT_ESTIMATE
+// ResizeObserver 监听列表容器宽度变化，rAF 节流避免频繁重算。
+let peopleResizeRaf = 0
+let peopleResizeObserver: ResizeObserver | null = null
 
 // 头像加载失败的 faceId 集合，失败后显示兜底内容
 const avatarFailed = ref(new Set<number>())
@@ -798,20 +821,6 @@ const displayTotal = computed(() =>
   browseMode.value === 'continuous' ? continuousTotal.value : total.value,
 )
 
-/**
- * 获取内容区滚动容器（el-main）。连续浏览模式下用于触底检测与滚动位置恢复。
- */
-const getScrollContainer = (): HTMLElement | null => {
-  let el: HTMLElement | null = peoplePageRef.value
-  while (el && el !== document.body) {
-    if (el.scrollHeight > el.clientHeight && getComputedStyle(el).overflowY !== 'visible') {
-      return el
-    }
-    el = el.parentElement
-  }
-  return document.scrollingElement as HTMLElement | null
-}
-
 const loadPeople = async () => {
   peopleLoading.value = true
   syncFiltersToQuery()
@@ -1038,6 +1047,14 @@ const loadMoreContinuous = async () => {
 /**
  * 进入连续浏览模式：若存在与当前筛选匹配的快照（从详情页返回），恢复已加载列表与滚动位置；
  * 否则从第一页开始加载。
+ *
+ * 恢复时序（严格）：
+ *  1. 恢复 continuousPeople 与分页状态；
+ *  2. await nextTick() 等虚拟网格渲染数据；
+ *  3. recomputeScrollMargin + measure，让虚拟器知道总高度并对齐坐标系；
+ *  4. await nextTick() 等 measure 生效；
+ *  5. scrollToOffset 恢复滚动位置。
+ * 少一步会导致恢复位置偏移或首行空白。恢复过程不要求挂载全部历史 PersonCard。
  */
 const initContinuousMode = async () => {
   if (isContinuousSnapshotUsable(filters.search, filters.category, filters.visibility, CONTINUOUS_PAGE_SIZE)) {
@@ -1048,72 +1065,74 @@ const initContinuousMode = async () => {
     continuousFinished.value = snap.finished
     continuousError.value = false
     continuousLoading.value = false
-    // 恢复滚动位置（等待 DOM 渲染完成）
+    clearContinuousSnapshot()
+    // 等虚拟网格挂载并渲染数据
     await nextTick()
-    const container = getScrollContainer()
-    if (container && snap.scrollTop > 0) {
-      container.scrollTop = snap.scrollTop
+    const grid = peopleGridRef.value as any
+    if (grid) {
+      if (typeof grid.recomputeScrollMargin === 'function') grid.recomputeScrollMargin()
+      if (typeof grid.measure === 'function') grid.measure()
+      // 等 measure 写入 itemSizeCache / totalHeight 后再恢复滚动位置
+      await nextTick()
+      if (snap.scrollTop > 0 && typeof grid.scrollToOffset === 'function') {
+        grid.scrollToOffset(snap.scrollTop)
+      }
     }
-    // 若恢复后仍未加载完且哨兵可见，继续加载
-    setupScrollObserver()
+    // 恢复完成后，若真实可见区已接近末尾，由 visible-range-change 正常续页
     return
   }
   clearContinuousSnapshot()
   resetContinuousList()
   await loadMoreContinuous()
-  setupScrollObserver()
+}
+
+/**
+ * 连续浏览：可见区间驱动的加载判定。
+ * 由 VirtualMediaGrid 的 visible-range-change 触发，仅当人物列表 Tab、连续浏览模式、
+ * 非 loading、非 error、未 finished，且最后真实可见行距已加载末尾不超过阈值时加载下一页。
+ * lastVisibleRowIndex 必须是 virtualizer.range.endIndex（真实视口，不含 overscan）。
+ */
+const onPeopleVisibleRange = (payload: { firstRowIndex: number; lastRowIndex: number; rowCount: number }) => {
+  if (activeTab.value !== 'people') return
+  if (browseMode.value !== 'continuous') return
+  const rowCount = continuousPeople.value.length === 0
+    ? 0
+    : Math.ceil(continuousPeople.value.length / peopleColumns.value)
+  if (!shouldLoadByVisibleRange({
+    active: true,
+    loading: continuousLoading.value,
+    error: continuousError.value,
+    hasMore: !continuousFinished.value,
+    rowCount,
+    lastVisibleRowIndex: payload.lastRowIndex,
+    thresholdRows: PEOPLE_LOAD_THRESHOLD_ROWS,
+  })) return
+  void loadMoreContinuous()
 }
 
 const handleModeChange = async (mode: BrowseMode | string) => {
   const nextMode = mode as BrowseMode
-  // 切换模式前先拆除旧的触底监听，避免悬挂在已卸载的哨兵节点上
-  teardownScrollObserver()
   saveBrowseMode(nextMode)
   avatarFailed.value = new Set()
   onFilterChange()
   if (nextMode === 'continuous') {
     await initContinuousMode()
+    // 连续浏览 wrap 此刻才渲染，挂载 ResizeObserver 监听其宽度。
+    await nextTick()
+    setupPeopleResizeObserver()
   } else {
     // 切回翻页模式：加载当前分页
     await loadPeople()
   }
 }
 
-/**
- * 连续浏览模式下，触底哨兵进入视口时加载下一批。
- */
-const setupScrollObserver = () => {
-  teardownScrollObserver()
-  if (browseMode.value !== 'continuous') return
-  const container = getScrollContainer()
-  if (!container || !sentinelRef.value) {
-    // 容器或哨兵尚未就绪，稍后重试
-    return
-  }
-  scrollObserver = new IntersectionObserver(
-    entries => {
-      for (const entry of entries) {
-        if (entry.isIntersecting) {
-          void loadMoreContinuous()
-        }
-      }
-    },
-    { root: container, rootMargin: '200px' },
-  )
-  scrollObserver.observe(sentinelRef.value)
-}
-
-const teardownScrollObserver = () => {
-  if (scrollObserver) {
-    scrollObserver.disconnect()
-    scrollObserver = null
-  }
-}
-
 const goToDetail = (personId: number) => {
   // 连续浏览模式：离开前保存已加载列表与滚动位置，便于返回恢复
   if (browseMode.value === 'continuous') {
-    const container = getScrollContainer()
+    const grid = peopleGridRef.value as any
+    const scrollTop = (grid && typeof grid.getScrollOffset === 'function')
+      ? (grid.getScrollOffset() as number)
+      : 0
     saveContinuousSnapshot({
       items: continuousPeople.value,
       nextPage: continuousPage.value,
@@ -1123,7 +1142,7 @@ const goToDetail = (personId: number) => {
       category: filters.category,
       visibility: filters.visibility,
       pageSize: CONTINUOUS_PAGE_SIZE,
-      scrollTop: container?.scrollTop ?? 0,
+      scrollTop,
     })
   }
   router.push({
@@ -1613,22 +1632,19 @@ watch(mergeSuggestionDialogVisible, (visible) => {
 
 watch(activeTab, async (tab) => {
   if (tab === 'task') {
-    teardownScrollObserver()
     await loadTaskData()
     return
   }
   await loadMergeSuggestions()
-  // 回到人物列表 Tab 时，若处于连续浏览模式，重新挂载触底监听
-  await nextTick()
+  // 回到人物列表 Tab：el-tab-pane 用 v-show 切换，display:none 期间虚拟器尺寸测量失效，
+  // 重新可见后需重算 scrollMargin 并 measure，让虚拟器对齐新坐标系、补齐可见区间。
   if (browseMode.value === 'continuous') {
-    setupScrollObserver()
-  }
-})
-
-// 连续浏览模式下哨兵节点变化时重新挂载监听
-watch(sentinelRef, () => {
-  if (browseMode.value === 'continuous') {
-    setupScrollObserver()
+    await nextTick()
+    const grid = peopleGridRef.value as any
+    if (grid) {
+      if (typeof grid.recomputeScrollMargin === 'function') grid.recomputeScrollMargin()
+      if (typeof grid.measure === 'function') grid.measure()
+    }
   }
 })
 
@@ -1639,6 +1655,8 @@ onMounted(async () => {
   } else {
     await Promise.all([loadPeople(), loadMergeSuggestions()])
   }
+  // 虚拟网格已挂载，挂载 ResizeObserver 监听列表容器宽度变化。
+  setupPeopleResizeObserver()
   // 后台治理状态条：独立轮询，最多 30s 一次，仅页面打开时。
   void loadBackgroundStatus()
   backgroundStatusTimer = window.setInterval(() => {
@@ -1662,8 +1680,47 @@ onBeforeUnmount(() => {
     clearInterval(backgroundStatusTimer)
     backgroundStatusTimer = null
   }
-  teardownScrollObserver()
+  if (peopleResizeRaf) {
+    cancelAnimationFrame(peopleResizeRaf)
+    peopleResizeRaf = 0
+  }
+  if (peopleResizeObserver) {
+    peopleResizeObserver.disconnect()
+    peopleResizeObserver = null
+  }
 })
+
+/**
+ * ResizeObserver 回调：列表容器宽度变化时重算列数。
+ * rAF 节流，避免连续 resize 触发频繁重算。列数变化会通过 props 传给 VirtualMediaGrid，
+ * 组件内部 watch(columns) 会 nextTick(measure) 重测已挂载行。
+ */
+const onPeopleListResize = (entries: ResizeObserverEntry[]) => {
+  const entry = entries[0]
+  if (!entry) return
+  const width = entry.contentRect.width
+  if (peopleResizeRaf) cancelAnimationFrame(peopleResizeRaf)
+  peopleResizeRaf = requestAnimationFrame(() => {
+    const next = columnsForPeopleList(width)
+    if (next !== peopleColumns.value) {
+      peopleColumns.value = next
+    }
+  })
+}
+
+/**
+ * 挂载 ResizeObserver 监听列表容器宽度。
+ * 容器 ref 在 people-grid-wrap（连续浏览模式渲染时才存在），故在 initContinuousMode 后调用。
+ */
+const setupPeopleResizeObserver = () => {
+  if (typeof ResizeObserver === 'undefined') return
+  const host = peopleGridRef.value?.gridRef?.parentElement as HTMLElement | null
+    ?? peopleListWrapRef.value
+  if (!host) return
+  if (peopleResizeObserver) peopleResizeObserver.disconnect()
+  peopleResizeObserver = new ResizeObserver(onPeopleListResize)
+  peopleResizeObserver.observe(host)
+}
 </script>
 
 <style scoped>
@@ -1805,7 +1862,8 @@ onBeforeUnmount(() => {
 
 .people-card-grid {
   display: grid;
-  /* 宽屏桌面约 5–7 人/行；auto-fill + minmax 自适应密度 */
+  /* 翻页模式：宽屏桌面约 5–7 人/行；auto-fill + minmax 自适应密度。
+     连续浏览模式不再使用此 class，列数由 VirtualMediaGrid 的 columns prop 内联决定。 */
   grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
   gap: 14px;
 }
@@ -1850,7 +1908,15 @@ onBeforeUnmount(() => {
 }
 
 .continuous-sentinel {
+  /* 旧触底哨兵已移除，连续浏览改用虚拟网格 visible-range-change 驱动分页。
+     保留空规则占位避免误删关联样式，下方 .continuous-status 仍用于底部状态条。 */
   height: 1px;
+  width: 100%;
+}
+
+/* 连续浏览虚拟网格：与照片页一致，行级虚拟，仅挂载可见行 + overscan。
+   列数由 VirtualMediaGrid 的 columns prop 内联决定，不在此处用媒体查询覆盖。 */
+.people-grid-wrap :deep(.virtual-media-grid) {
   width: 100%;
 }
 
@@ -2055,7 +2121,7 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 1200px) {
-  /* 普通桌面 / 平板：约 3–4 人/行 */
+  /* 普通桌面 / 平板：约 3–4 人/行（翻页模式 CSS） */
   .people-card-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }

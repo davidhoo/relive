@@ -37,6 +37,7 @@
           v-if="person.representative_face_id && !avatarFailed.has(person.representative_face_id)"
           :src="getFaceThumbnail(person.representative_face_id)"
           loading="lazy"
+          decoding="async"
           alt=""
           @error="emit('avatar-failed', person.representative_face_id!)"
         />
