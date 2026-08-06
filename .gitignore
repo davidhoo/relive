@@ -76,6 +76,7 @@ backend/relive
 backend/relive-analyzer
 backend/relive-people-worker
 backend/relive-identity-profile-report
+backend/relive-duplicate-face-audit
 
 # Config files with sensitive data
 analyzer.yaml

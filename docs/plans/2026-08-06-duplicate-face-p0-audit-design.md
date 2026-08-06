@@ -79,3 +79,18 @@ relive-duplicate-face-audit \
 ## 验证原则
 
 测试数据库必须覆盖：跨人物 P0 命中、同人物重复不命中、普通合照不命中、excluded 忽略、缺失 hash/embedding 的跳过计数、路径脱敏开关、JSON/Markdown 稳定排序，以及只读连接拒绝 INSERT/UPDATE/DELETE。
+
+## 构建与运行
+
+```bash
+cd backend
+go build -o bin/relive-duplicate-face-audit ./cmd/relive-duplicate-face-audit
+./bin/relive-duplicate-face-audit -db /path/to/copied-relive.db -format markdown > duplicate-face-p0-audit.md
+./bin/relive-duplicate-face-audit -db /path/to/copied-relive.db -format json > duplicate-face-p0-audit.json
+./bin/relive-duplicate-face-audit -db /path/to/copied-relive.db -format markdown -include-paths > duplicate-face-p0-audit-with-paths.md
+```
+
+- `-db` 必须是数据库**副本**（先 `cp relive.db relive.copy.db` 再审计），避免读取正在被服务写入的库；
+- 工具以 `mode=ro` + `PRAGMA query_only=ON` 打开，不会创建或修改任何数据；
+- 默认不输出原始文件路径，仅在显式 `-include-paths` 时输出，便于脱敏分发；
+- 报告只提供可复核证据（照片 ID、人脸 ID、人物 ID、embedding 指纹），最终归属处置由人工完成。
