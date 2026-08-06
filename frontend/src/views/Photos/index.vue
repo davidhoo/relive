@@ -253,7 +253,7 @@
     </el-card>
 
     <!-- 照片列表 -->
-    <el-card shadow="never" class="photos-grid-card animate-fade-in" v-loading="loading">
+    <el-card shadow="never" class="photos-grid-card animate-fade-in" v-loading="activeListLoading">
       <template #header>
         <SectionHeader :icon="Picture" :title="`照片列表（共 ${total} 张）`">
         <template #actions>
@@ -282,16 +282,16 @@
       </SectionHeader>
       </template>
 
-      <!-- 空状态：系统中没有照片 -->
-      <el-empty v-if="!photos.length && !loading && statsReady && systemTotal === 0" description="暂无照片" :image-size="120">
+      <!-- 空状态：系统中没有照片（连续浏览错误态交由哨兵处理，此处排除） -->
+      <el-empty v-if="!activeList.length && !activeListLoading && !activeListError && statsReady && systemTotal === 0" description="暂无照片" :image-size="120">
         <el-button type="primary" @click="handleAddPath">
           <el-icon><Plus /></el-icon>
           添加扫描路径
         </el-button>
       </el-empty>
 
-      <!-- 空状态：搜索结果为空 -->
-      <el-empty v-else-if="!photos.length && !loading && statsReady && systemTotal > 0" description="未找到匹配的照片" :image-size="120">
+      <!-- 空状态：搜索结果为空（连续浏览错误态交由哨兵处理，此处排除） -->
+      <el-empty v-else-if="!activeList.length && !activeListLoading && !activeListError && statsReady && systemTotal > 0" description="未找到匹配的照片" :image-size="120">
         <p class="empty-hint">系统中共有 {{ systemTotal }} 张照片，但没有符合当前搜索条件的结果</p>
         <el-button type="primary" @click="resetSearch">
           <el-icon><Refresh /></el-icon>
@@ -852,6 +852,20 @@ const gotoDetailContinuous = (photoId: number) => {
 // 当前活动列表：连续浏览用 continuousPhotos，翻页用 photos。Shift 连选基于该数组索引。
 const activeList = computed<Photo[]>(() =>
   browseMode.value === 'continuous' ? continuousPhotos.value : photos.value,
+)
+
+// 当前活动列表的加载状态：连续浏览用 continuousLoading，翻页用 loading。
+// 空状态判断必须基于当前模式对应的数据源与加载状态，否则 cursor 接口成功
+// 但 photos 仍为空时，会错误命中“没有符合当前搜索条件”空状态，导致虚拟网格不挂载。
+const activeListLoading = computed(() =>
+  browseMode.value === 'continuous' ? continuousLoading.value : loading.value,
+)
+
+// 当前活动列表的错误状态：连续浏览请求失败时为 true，翻页模式无错误态。
+// 连续浏览失败后 continuousPhotos 为空且不在加载中，若不抑制，会落入通用
+// “没有符合当前搜索条件”空状态，遮蔽错误哨兵与重试入口，故空状态需排除错误态。
+const activeListError = computed(() =>
+  browseMode.value === 'continuous' ? continuousError.value : false,
 )
 
 const toggleSelectPhoto = (id: number, event?: MouseEvent) => {
@@ -2681,6 +2695,7 @@ defineExpose({
 .browse-mode-group {
   display: inline-flex;
   align-items: center;
+  gap: 8px;
   padding: 4px;
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-border);
