@@ -35,6 +35,7 @@
 
 ### Candidate / Future Option
 - `docs/plans/face-recognition-vector-db.md`
+- `docs/plans/2026-08-07-sha256-exact-duplicate-photo-content-design.md`：SHA-256 精确重复照片的内容级索引归一化技术方案（不处理物理文件）
 
 ### Review Only
 - `docs/plans/2026-04-05-runtime-state-and-graceful-restart-review.md`
