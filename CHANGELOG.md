@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.8.0] - 2026-08-07
+
+### Added
+- **身份画像系统** — 引入多中心身份画像（identity profiles），通过 shadow clustering 记录聚类决策、校准报告、rescue 模式补漏历史聚类遗漏，配合 ANN 索引快照与增量更新驱动更精准的合并建议；身份画像后台构建改为有界并发协调器，前台变更后自动失效重建
+- **人物列表页虚拟滚动与连续浏览** — 人物列表新增虚拟滚动、翻页与连续浏览模式，卡片视觉重构，支持批量管理与隐藏/恢复操作
+- **照片管理列表连续浏览** — 照片管理页新增翻页/连续浏览及虚拟滚动，首屏加载优化与计数缓存
+- **人脸排除功能** — 支持持久化排除误检/低质量人脸样本，排除后不再参与聚类
+- **照片详情页单张人脸操作** — 详情页支持单张人脸改名、归属变更与拆分操作
+- **人物详情页密度切换** — 照片/人脸网格支持密度切换并记忆到 localStorage，新增隐藏/恢复操作，Tab 布局与无限滚动重构
+- **后台任务协调器** — 新增 BackgroundTaskCoordinator，按运行时负载采样节流自动后台任务，前端展示压力状态，SQLite busy/locked 上报协调器
+- **Analyzer 故障分类与熔断** — provider 故障分类 + 熔断器 + 持久化重试调度，lease release 改为 durable 且 token-aware，provider/lease 中断期间暂停拉取
+- **重复人脸审计 CLI** — 新增只读 P0 重复人脸审计工具，Docker 镜像打包该 CLI
+- **NAS 备份 worker** — 通过 SSH 实现原子备份，独立备份配置加载
+- **人物任务终态清理** — 已检测/待检测统计独立于任务明细
+- **事件策展启动治理** — 自动聚类启动治理 + yieldable batching
+- **Shift 范围多选** — 人物列表支持 Shift 点击范围多选
+
+### Changed
+- **人物详情页虚拟网格** — 改用虚拟网格 + 缩略图版本化缓存重构照片/人脸展示（性能细节见 Performance）
+- **聚类协调器统一调度** — 引入 peopleClusteringCoordinator 统一管理增量聚类调度，前台变更注册到后台协调器
+- **筛选条件布局** — 筛选条件移入卡片头部，后台任务数据懒加载
+- **全局页面布局统一** — 移除各页面 PageHeader，操作按钮并入 SectionHeader
+- **Dashboard 查询性能优化** — 消除冗余全表 COUNT 扫描
+- **人物合并/照片重算查询性能优化**
+- **历史批次列表** — 改为摘要 + 按需加载，减少首屏查询开销
+- **ANN 重建合并** — 合并原型缓存刷新与 ANN 重建，coalesce identity ANN rebuilds，前台变更在 write gate 外刷新原型缓存
+
+### Fixed
+- **人物详情页虚拟网格多页渲染** — 修复第二页虚拟网格渲染、加载、行偏移与停滞分页问题，保留 photo cursor 的 UTC 时区
+- **person_photos 回填一致性** — 回填孤立人脸并补全一致性边界，退避可测试化
+- **合并建议 404 静默处理** — 剔除最后一个候选后打开详情页不再报错
+- **Analyzer release retry hot loop** — 修复 release 重试热循环
+- **ANN 重建期间并发 dirty 被错误清除**
+- **embedding 解析误判** — 首字节为 0x5B 时被误判为 JSON
+- **单张照片分析异步化** — 修复正文页分析后不刷新
+- **SQLite busy/locked 上报** — 后台协调器感知数据库锁冲突
+- **拆分操作归属冲突判定** — 改用显式 source_person_id 判定归属冲突
+- **重复 move/split 请求幂等化**
+- **NAS 备份 worker 启动** — 修复 stdin 流式执行下无法启动
+- **身份画像配置校验** — 加固配置校验与边界用例
+
+### Performance
+- **person_photos 派生表** — 加速照片 cursor 分页
+- **count-free cursor pagination** — 照片与人脸分页免计数
+- **window virtualizer** — 可见区间加载守卫
+- **照片管理页首屏加载** — 计数缓存 + 延迟扫描路径统计
+
+---
+
 ## [1.7.1] - 2026-06-29
 
 ### Added
