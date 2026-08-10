@@ -167,6 +167,12 @@ func (r *faceRepository) ListByPersonIDPaginated(personID uint, page, pageSize i
 // ListByPersonIDCursor returns one page of non-excluded faces for a person using keyset
 // pagination (no COUNT). Sort order is quality_score DESC, id ASC — same as the paginated method.
 // Returns (items, hasMore, nextCursor, error). nextCursor is nil when hasMore is false.
+//
+// 性能依赖 partial index idx_faces_person_quality_cursor
+// (person_id, quality_score DESC, id ASC) WHERE cluster_status != 'excluded'，由
+// database.migratePersonFaceCursorIndex 创建。该索引覆盖 person_id 等值谓词与排序键，
+// 第一页直接按索引顺序读前 limit+1 条、后续页走 keyset 范围扫描，均不产生临时排序树。
+// 修改本方法的排序、过滤或 keyset 谓词前，须同步评估该索引是否仍能命中。
 func (r *faceRepository) ListByPersonIDCursor(personID uint, cursor *PersonFaceCursor, limit int) ([]*model.Face, bool, *PersonFaceCursor, error) {
 	selectCols := "id, created_at, updated_at, photo_id, person_id, b_box_x, b_box_y, b_box_width, b_box_height, confidence, quality_score, thumbnail_path, cluster_status, cluster_score, clustered_at, manual_locked, manual_lock_reason, manual_locked_at, recluster_generation, retry_count"
 

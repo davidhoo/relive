@@ -2,11 +2,13 @@ package repository
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestFaceExclusionRepo_CreateAndList(t *testing.T) {
@@ -307,4 +309,106 @@ func TestFaceRepository_ExcludedFaceNotInListPrototypeEmbeddings(t *testing.T) {
 	protos, err := faceRepo.ListPrototypeEmbeddings([]uint{p.ID}, 5)
 	require.NoError(t, err)
 	assert.Len(t, protos, 1, "excluded face should not appear in prototype embeddings")
+}
+
+// explainPersonFaceCursor runs EXPLAIN QUERY PLAN for the person-face cursor query
+// (first page or a cursor-continued page) and returns the concatenated plan text.
+// selectCols mirrors ListByPersonIDCursor's projection so the optimizer sees the same shape.
+func explainPersonFaceCursor(t *testing.T, db *gorm.DB, personID uint, cursor *PersonFaceCursor, limit int) string {
+	t.Helper()
+	selectCols := "id, created_at, updated_at, photo_id, person_id, b_box_x, b_box_y, b_box_width, b_box_height, confidence, quality_score, thumbnail_path, cluster_status, cluster_score, clustered_at, manual_locked, manual_lock_reason, manual_locked_at, recluster_generation, retry_count"
+
+	query := fmt.Sprintf(
+		"EXPLAIN QUERY PLAN SELECT %s FROM faces WHERE person_id = ? AND cluster_status != ?",
+		selectCols,
+	)
+	args := []interface{}{personID, model.FaceClusterStatusExcluded}
+	if cursor != nil {
+		query += " AND (quality_score < ? OR (quality_score = ? AND id > ?))"
+		args = append(args, cursor.QualityScore, cursor.QualityScore, cursor.ID)
+	}
+	query += fmt.Sprintf(" ORDER BY quality_score DESC, id ASC LIMIT %d", limit+1)
+
+	rows, err := db.Raw(query, args...).Rows()
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var plans []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &notused, &detail))
+		plans = append(plans, detail)
+	}
+	return strings.Join(plans, "\n")
+}
+
+// TestPersonFaceCursorIndex_HitFirstPageAndCursorPage 校验人物人脸 cursor 分页查询
+// 在第一页和带 cursor 的后续页都命中专用 partial index idx_faces_person_quality_cursor，
+// 且不产生临时排序树 (USE TEMP B-TREE)。这是首屏慢请求修复的硬门槛。
+//
+// 索引由 database.migratePersonFaceCursorIndex 在 AutoMigrate 阶段创建（其创建行为由
+// database 包的迁移测试覆盖）。repository 测试用的 setupTestDB 只跑模型 AutoMigrate，
+// 不执行自定义迁移函数，因此这里显式建出与线上等价的 partial index，再断言查询计划命中。
+func TestPersonFaceCursorIndex_HitFirstPageAndCursorPage(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	// 与 migratePersonFaceCursorIndex 创建的索引等价。
+	require.NoError(t, db.Exec(`CREATE INDEX IF NOT EXISTS idx_faces_person_quality_cursor
+		ON faces(person_id, quality_score DESC, id ASC)
+		WHERE cluster_status != 'excluded'`).Error)
+
+	faceRepo := NewFaceRepository(db)
+
+	person := &model.Person{Name: "Explain", Category: model.PersonCategoryFamily}
+	require.NoError(t, db.Create(person).Error)
+
+	var photoIDs []uint
+	for i := 0; i < 5; i++ {
+		p := &model.Photo{
+			FilePath: fmt.Sprintf("/ep_%d.jpg", i),
+			FileName: fmt.Sprintf("ep_%d.jpg", i),
+			FileSize: 1,
+			FileHash: fmt.Sprintf("eh_%d", i),
+		}
+		require.NoError(t, db.Create(p).Error)
+		photoIDs = append(photoIDs, p.ID)
+	}
+
+	// 写入足够多的人脸触发索引选择，并包含一个 excluded（不应进索引）。
+	for i := 0; i < 5; i++ {
+		status := model.FaceClusterStatusAssigned
+		score := 0.5 + float64(i)*0.05
+		if i == 4 {
+			status = model.FaceClusterStatusExcluded
+			score = 0.99
+		}
+		require.NoError(t, faceRepo.Create(&model.Face{
+			PhotoID:       photoIDs[i],
+			PersonID:      &person.ID,
+			Confidence:    0.9,
+			QualityScore:  score,
+			ClusterStatus: status,
+		}))
+	}
+
+	// 第一页：无 cursor。
+	planFirst := explainPersonFaceCursor(t, db, person.ID, nil, 50)
+	assert.Contains(t, planFirst, "idx_faces_person_quality_cursor",
+		"first page should use idx_faces_person_quality_cursor, got: %s", planFirst)
+	assert.NotContains(t, planFirst, "USE TEMP B-TREE",
+		"first page must not create a temp b-tree for order by, got: %s", planFirst)
+
+	// 先取真实 cursor，再用它跑后续页的 EXPLAIN。
+	items, _, nextCursor, err := faceRepo.ListByPersonIDCursor(person.ID, nil, 2)
+	require.NoError(t, err)
+	require.NotNil(t, nextCursor)
+	require.Len(t, items, 2)
+
+	planCursor := explainPersonFaceCursor(t, db, person.ID, nextCursor, 50)
+	assert.Contains(t, planCursor, "idx_faces_person_quality_cursor",
+		"cursor page should use idx_faces_person_quality_cursor, got: %s", planCursor)
+	assert.NotContains(t, planCursor, "USE TEMP B-TREE",
+		"cursor page must not create a temp b-tree for order by, got: %s", planCursor)
 }

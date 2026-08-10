@@ -303,6 +303,10 @@ func AutoMigrate(db *gorm.DB) error {
 		log.Printf("[database] warning: photos cursor index migration failed: %v", err)
 	}
 
+	if err := migratePersonFaceCursorIndex(db); err != nil {
+		log.Printf("[database] warning: person face cursor index migration failed: %v", err)
+	}
+
 	return nil
 }
 
@@ -991,5 +995,53 @@ func migratePhotosCursorIndex(db *gorm.DB) error {
 
 	log.Printf("[database] photos cursor index created")
 	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
+	return nil
+}
+
+// migratePersonFaceCursorIndex 为人物人脸详情页 cursor 分页创建专用 partial index。
+//
+// 人物详情页第一页查询固定排序 (quality_score DESC, id ASC) 并按 person_id 等值、
+// cluster_status != 'excluded' 过滤。冷缓存下该人物全部人脸需读出后临时排序
+// (USE TEMP B-TREE FOR ORDER BY)，导致首屏数秒至数十秒耗时。
+//
+// 该 partial index 覆盖 person_id 等值谓词 + 排序键，且仅收录非 excluded 人脸：
+//
+//	CREATE INDEX idx_faces_person_quality_cursor
+//	ON faces(person_id, quality_score DESC, id ASC)
+//	WHERE cluster_status != 'excluded'
+//
+// 第一页可直接按索引顺序读前 page_size+1 条，后续页的 keyset 谓词
+// (quality_score < ? OR (quality_score = ? AND id > ?)) 也可走同一索引范围扫描，
+// 不再创建临时排序树。EXPLAIN QUERY PLAN 应出现 idx_faces_person_quality_cursor，
+// 且不得出现 USE TEMP B-TREE。
+//
+// 迁移标记 migration.person_face_cursor_index_v1 仅用于记录是否首次完成日志，
+// 不作为跳过 CREATE INDEX 的条件：CREATE INDEX IF NOT EXISTS 始终执行，
+// 索引被意外删除后下次启动可自愈重建。失败仅 warning，不阻塞启动。
+func migratePersonFaceCursorIndex(db *gorm.DB) error {
+	const migrationKey = "migration.person_face_cursor_index_v1"
+
+	var cfg model.AppConfig
+	alreadyMarked := db.Where("key = ?", migrationKey).First(&cfg).Error == nil
+
+	if !alreadyMarked {
+		log.Printf("[database] creating person face cursor index (person_id, quality_score DESC, id ASC)...")
+	}
+
+	start := time.Now()
+	indexSQL := `CREATE INDEX IF NOT EXISTS idx_faces_person_quality_cursor
+		ON faces(person_id, quality_score DESC, id ASC)
+		WHERE cluster_status != 'excluded'`
+	if err := db.Exec(indexSQL).Error; err != nil {
+		return fmt.Errorf("create person face cursor index: %w", err)
+	}
+	elapsed := time.Since(start)
+
+	if !alreadyMarked {
+		log.Printf("[database] person face cursor index created (elapsed=%s)", elapsed)
+		db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
+	} else {
+		log.Printf("[database] person face cursor index verified (elapsed=%s)", elapsed)
+	}
 	return nil
 }

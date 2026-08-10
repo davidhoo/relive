@@ -1,6 +1,7 @@
 package database
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -358,5 +359,86 @@ func TestPhotoAnalysisFieldsMigrated(t *testing.T) {
 	}
 	if singleFound {
 		t.Fatal("idx_analysis_retry_ready should be dropped (covered by compound index)")
+	}
+}
+
+// TestAutoMigrateAddsPersonFaceCursorIndex 验证人物人脸 cursor 分页专用 partial index
+// 在 AutoMigrate 后存在，且 sqlite_master 中字段顺序和 partial 条件正确。
+func TestAutoMigrateAddsPersonFaceCursorIndex(t *testing.T) {
+	db := openMigratedTestDB(t)
+
+	const indexName = "idx_faces_person_quality_cursor"
+
+	var sql string
+	if err := db.Raw("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?", indexName).Scan(&sql).Error; err != nil {
+		t.Fatalf("query index %s: %v", indexName, err)
+	}
+	if sql == "" {
+		t.Fatalf("expected index %s to exist after migration", indexName)
+	}
+
+	// 字段顺序必须为 person_id, quality_score DESC, id ASC
+	if !strings.Contains(sql, "person_id") || !strings.Contains(sql, "quality_score DESC") || !strings.Contains(sql, "id ASC") {
+		t.Fatalf("index %s has wrong column order/direction: %s", indexName, sql)
+	}
+
+	// 必须 partial：仅收录非 excluded 人脸
+	if !strings.Contains(sql, "cluster_status != 'excluded'") {
+		t.Fatalf("index %s should be a partial index excluding cluster_status='excluded': %s", indexName, sql)
+	}
+}
+
+// TestMigratePersonFaceCursorIndex_IdempotentAndSelfHealing 验证：
+//   - 连续执行迁移两次不报错、不产生重复索引；
+//   - 迁移标记保留；
+//   - 手动删除索引后再执行迁移能够重建索引（自愈）。
+func TestMigratePersonFaceCursorIndex_IdempotentAndSelfHealing(t *testing.T) {
+	db := openMigratedTestDB(t)
+
+	const indexName = "idx_faces_person_quality_cursor"
+	const migrationKey = "migration.person_face_cursor_index_v1"
+
+	countIndex := func() int64 {
+		var count int64
+		if err := db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?", indexName).Scan(&count).Error; err != nil {
+			t.Fatalf("count index: %v", err)
+		}
+		return count
+	}
+
+	// AutoMigrate 已执行过一次，索引应已存在且标记已写入。
+	if got := countIndex(); got != 1 {
+		t.Fatalf("expected 1 index after initial migration, got %d", got)
+	}
+	var cfg model.AppConfig
+	if err := db.Where("key = ?", migrationKey).First(&cfg).Error; err != nil {
+		t.Fatalf("expected migration marker %s to exist: %v", migrationKey, err)
+	}
+
+	// 再次执行迁移：幂等，不应报错，不应产生重复索引。
+	if err := migratePersonFaceCursorIndex(db); err != nil {
+		t.Fatalf("second migration should be idempotent: %v", err)
+	}
+	if got := countIndex(); got != 1 {
+		t.Fatalf("expected 1 index after second migration, got %d", got)
+	}
+
+	// 手动删除索引后，再执行迁移必须能重建。
+	if err := db.Exec("DROP INDEX IF EXISTS " + indexName).Error; err != nil {
+		t.Fatalf("drop index: %v", err)
+	}
+	if got := countIndex(); got != 0 {
+		t.Fatalf("expected 0 index after drop, got %d", got)
+	}
+	if err := migratePersonFaceCursorIndex(db); err != nil {
+		t.Fatalf("self-healing migration should rebuild index: %v", err)
+	}
+	if got := countIndex(); got != 1 {
+		t.Fatalf("expected 1 index after self-healing migration, got %d", got)
+	}
+
+	// 迁移标记仍应存在（不应被删除）。
+	if err := db.Where("key = ?", migrationKey).First(&cfg).Error; err != nil {
+		t.Fatalf("migration marker should still exist after self-healing: %v", err)
 	}
 }
