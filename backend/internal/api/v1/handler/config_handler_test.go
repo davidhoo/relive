@@ -88,3 +88,26 @@ func TestConfigHandler_ListConfigs(t *testing.T) {
 	resp := decodeAPIResponse(t, rec)
 	assert.True(t, resp.Success)
 }
+
+type recordingAICompletionHandler struct {
+	service.AIService
+	handler service.AnalysisCompletedHandler
+}
+
+func (s *recordingAICompletionHandler) SetAnalysisCompletedHandler(handler service.AnalysisCompletedHandler) {
+	s.handler = handler
+}
+
+type noopAnalysisCompletedHandler struct{}
+
+func (noopAnalysisCompletedHandler) HandleAnalysisCompleted(uint) error { return nil }
+
+func TestConfigHandlerPropagatesAnalysisCompletedHandler(t *testing.T) {
+	aiService := &recordingAICompletionHandler{}
+	h := &ConfigHandler{aiService: aiService}
+	completed := noopAnalysisCompletedHandler{}
+
+	h.SetAnalysisCompletedHandler(completed)
+
+	assert.Equal(t, completed, aiService.handler)
+}

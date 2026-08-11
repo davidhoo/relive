@@ -594,9 +594,17 @@ func (s *photoService) BatchUpdateStatus(req *model.BatchUpdateStatusRequest) (i
 
 // UpdateCategory 更新照片分类
 func (s *photoService) UpdateCategory(id uint, category string) error {
-	return s.executeWrite(func() error {
-		return s.repo.UpdateCategory(id, category)
-	})
+	fields := peopleExclusionFields(category)
+	fields["main_category"] = category
+	if err := s.executeWrite(func() error {
+		return s.repo.UpdateFields(id, fields)
+	}); err != nil {
+		return err
+	}
+	if s.peopleService != nil {
+		return s.peopleService.HandleAnalysisCompleted(id)
+	}
+	return nil
 }
 
 // UpdateManualRotation 手动旋转并重新生成缩略图

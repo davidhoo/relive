@@ -20,17 +20,18 @@ import (
 
 // ConfigHandler 配置处理器
 type ConfigHandler struct {
-	service        service.ConfigService
-	aiService      service.AIService
-	runtimeService service.AnalysisRuntimeService
-	photoService   service.PhotoService
-	promptService  service.PromptService
-	geocodeService service.GeocodeService
-	cfg            *config.Config
-	photoRepo      repository.PhotoRepository
-	photoTagRepo   repository.PhotoTagRepository
-	aiHandler      *AIHandler // 用于更新 AIHandler 的 aiService
-	db             *gorm.DB
+	service                  service.ConfigService
+	aiService                service.AIService
+	runtimeService           service.AnalysisRuntimeService
+	photoService             service.PhotoService
+	promptService            service.PromptService
+	geocodeService           service.GeocodeService
+	cfg                      *config.Config
+	photoRepo                repository.PhotoRepository
+	photoTagRepo             repository.PhotoTagRepository
+	aiHandler                *AIHandler // 用于更新 AIHandler 的 aiService
+	analysisCompletedHandler service.AnalysisCompletedHandler
+	db                       *gorm.DB
 }
 
 // NewConfigHandler 创建配置处理器
@@ -52,6 +53,15 @@ func NewConfigHandler(service service.ConfigService, aiService service.AIService
 // SetAIHandler 设置 AIHandler 引用（用于动态更新 AI 服务）
 func (h *ConfigHandler) SetAIHandler(aiHandler *AIHandler) {
 	h.aiHandler = aiHandler
+}
+
+// SetAnalysisCompletedHandler keeps the AI→People bridge attached when the AI
+// service is initialized or replaced by a runtime configuration update.
+func (h *ConfigHandler) SetAnalysisCompletedHandler(handler service.AnalysisCompletedHandler) {
+	h.analysisCompletedHandler = handler
+	if h.aiService != nil {
+		h.aiService.SetAnalysisCompletedHandler(handler)
+	}
 }
 
 // GetConfig 获取配置
@@ -181,6 +191,7 @@ func (h *ConfigHandler) SetConfig(c *gin.Context) {
 				})
 				return
 			}
+			newAIService.SetAnalysisCompletedHandler(h.analysisCompletedHandler)
 			h.aiService = newAIService
 			logger.Info("AI service initialized successfully")
 			// 同时更新 AIHandler 中的 aiService
@@ -379,6 +390,7 @@ func (h *ConfigHandler) SetBatchConfigs(c *gin.Context) {
 				})
 				return
 			}
+			newAIService.SetAnalysisCompletedHandler(h.analysisCompletedHandler)
 			h.aiService = newAIService
 			logger.Info("AI service initialized successfully")
 			// 同时更新 AIHandler 中的 aiService

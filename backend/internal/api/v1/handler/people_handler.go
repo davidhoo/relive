@@ -912,6 +912,14 @@ func (h *PeopleHandler) EnqueuePhotoForDetection(c *gin.Context) {
 	force := c.Query("force") == "true"
 
 	if err := h.service.EnqueuePhoto(photoID, model.PeopleJobSourceManual, 80, force); err != nil {
+		if errors.Is(err, service.ErrPhotoAnalysisPending) {
+			writePeopleError(c, http.StatusConflict, "PHOTO_ANALYSIS_PENDING", err.Error())
+			return
+		}
+		if errors.Is(err, service.ErrPhotoPeopleExcluded) {
+			writePeopleError(c, http.StatusConflict, "PHOTO_PEOPLE_EXCLUDED", err.Error())
+			return
+		}
 		writePeopleError(c, http.StatusInternalServerError, "ENQUEUE_FAILED", err.Error())
 		return
 	}
@@ -1409,6 +1417,10 @@ func (h *PeopleHandler) GetWorkerTasks(c *gin.Context) {
 		if err != nil || photo == nil {
 			continue
 		}
+		if !model.IsPhotoEligibleForPeople(photo) {
+			_ = h.cancelIneligibleWorkerJob(job.ID, service.ErrPhotoPeopleExcluded)
+			continue
+		}
 
 		// 检查照片是否有人工锁定的人脸
 		faces, _ := h.faceRepo.ListByPhotoID(photo.ID)
@@ -1535,6 +1547,11 @@ func (h *PeopleHandler) SubmitWorkerResults(c *gin.Context) {
 			errors = append(errors, fmt.Sprintf("photo %d not found", result.PhotoID))
 			continue
 		}
+		if !model.IsPhotoEligibleForPeople(photo) {
+			_ = h.cancelIneligibleWorkerJob(job.ID, service.ErrPhotoPeopleExcluded)
+			errors = append(errors, fmt.Sprintf("task %d: %v", result.TaskID, service.ErrPhotoPeopleExcluded))
+			continue
+		}
 
 		// 应用检测结果
 		if err := h.service.ApplyDetectionResult(job, photo, &result); err != nil {
@@ -1551,6 +1568,19 @@ func (h *PeopleHandler) SubmitWorkerResults(c *gin.Context) {
 			Processed: processed,
 			Errors:    errors,
 		},
+	})
+}
+
+func (h *PeopleHandler) cancelIneligibleWorkerJob(jobID uint, reason error) error {
+	now := time.Now()
+	return h.jobRepo.UpdateFields(jobID, map[string]interface{}{
+		"status":            model.PeopleJobStatusCancelled,
+		"worker_id":         "",
+		"lock_expires_at":   nil,
+		"last_heartbeat_at": nil,
+		"last_error":        reason.Error(),
+		"status_message":    reason.Error(),
+		"completed_at":      &now,
 	})
 }
 

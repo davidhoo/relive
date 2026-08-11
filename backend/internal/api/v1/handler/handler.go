@@ -55,6 +55,7 @@ func NewHandlers(db *gorm.DB, services *service.Services, repos *repository.Repo
 
 	// 设置 ConfigHandler 对 AIHandler 的引用，用于配置变更后热重载
 	handlers.Config.SetAIHandler(handlers.AI)
+	handlers.Config.SetAnalysisCompletedHandler(services.People)
 
 	return handlers
 }

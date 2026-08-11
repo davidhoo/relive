@@ -76,6 +76,9 @@ func main() {
 
 	// 初始化路由（同时获取服务集合）
 	r, services := router.Setup(db, cfg, appState)
+	if err := services.People.ReconcileAnalysisEligibility(); err != nil {
+		logger.Fatalf("Failed to reconcile AI/People eligibility: %v", err)
+	}
 
 	// 启动 person_photos 派生表后台回填（P2 automatic：foreground/I/O 高时暂停，
 	// 服务重启从 app_config 进度继续，不阻塞启动）。回填完成一致性校验通过后，

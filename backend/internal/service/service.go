@@ -97,6 +97,10 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		peopleClient = mlclient.New(cfg.People.MLEndpoint, time.Duration(cfg.People.Timeout)*time.Second)
 	}
 	peopleSvc := NewPeopleService(db, repos.Photo, repos.Face, repos.Person, repos.PeopleJob, repos.PeopleMergeJob, repos.CannotLink, cfg, peopleClient, runtimeService)
+	analysisService.SetAnalysisCompletedHandler(peopleSvc)
+	if aiService != nil {
+		aiService.SetAnalysisCompletedHandler(peopleSvc)
+	}
 	mergeSuggestionService := NewPersonMergeSuggestionService(
 		db,
 		repos.Photo,

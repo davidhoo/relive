@@ -33,6 +33,7 @@ type stubPeopleService struct {
 	startResult           *model.PeopleTask
 	startCalled           int
 	startErr              error
+	enqueuePhotoErr       error
 	enqueueByPathPath     string
 	enqueueByPathSource   string
 	enqueueByPathPriority int
@@ -75,7 +76,7 @@ func (s *stubPeopleService) GetStats() (*model.PeopleStatsResponse, error) {
 }
 func (s *stubPeopleService) GetBackgroundLogs() []string { return s.logs }
 func (s *stubPeopleService) EnqueuePhoto(_ uint, _ string, _ int, _ bool) error {
-	return nil
+	return s.enqueuePhotoErr
 }
 func (s *stubPeopleService) EnqueueByPath(path string, source string, priority int) (int, error) {
 	s.enqueueByPathPath = path
@@ -89,6 +90,8 @@ func (s *stubPeopleService) EnqueueByPath(path string, source string, priority i
 func (s *stubPeopleService) EnqueueUnprocessed() (int, error) {
 	return 0, nil
 }
+func (s *stubPeopleService) HandleAnalysisCompleted(uint) error  { return nil }
+func (s *stubPeopleService) ReconcileAnalysisEligibility() error { return nil }
 func (s *stubPeopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint) (*model.ReclusterResult, error) {
 	if s.err != nil {
 		return nil, s.err
@@ -193,7 +196,7 @@ func (s *stubIdentityProfileService) MarkDirty([]uint, string) error { return ni
 func (s *stubIdentityProfileService) Invalidate(service.IdentityProfileInvalidation) error {
 	return nil
 }
-func (s *stubIdentityProfileService) InvalidateANNOnly([]uint) {}
+func (s *stubIdentityProfileService) InvalidateANNOnly([]uint)  {}
 func (s *stubIdentityProfileService) RunBackgroundSlice() error { return nil }
 func (s *stubIdentityProfileService) GetActive(uint) (*model.PersonIdentityProfileBuild, error) {
 	return nil, nil
@@ -802,6 +805,31 @@ func TestPeopleHandlerUpdateCategory(t *testing.T) {
 	assert.Equal(t, model.PersonCategoryFriend, svc.updateCategoryValue)
 }
 
+func TestPeopleHandlerEnqueuePhotoReportsAIEligibilityConflict(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		code string
+	}{
+		{name: "analysis pending", err: service.ErrPhotoAnalysisPending, code: "PHOTO_ANALYSIS_PENDING"},
+		{name: "people excluded", err: service.ErrPhotoPeopleExcluded, code: "PHOTO_PEOPLE_EXCLUDED"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler, svc, _, _, _ := newPeopleHandlerForTest(t)
+			svc.enqueuePhotoErr = tt.err
+
+			rec := performJSONRequest(t, http.MethodPost, "/api/v1/people/photos/7/enqueue", nil, gin.Params{{Key: "id", Value: "7"}}, handler.EnqueuePhotoForDetection)
+
+			require.Equal(t, http.StatusConflict, rec.Code)
+			resp := decodeAPIResponse(t, rec)
+			require.NotNil(t, resp.Error)
+			assert.Equal(t, tt.code, resp.Error.Code)
+		})
+	}
+}
+
 func TestPeopleHandlerUpdateName(t *testing.T) {
 	handler, svc, _, _, _ := newPeopleHandlerForTest(t)
 
@@ -1239,6 +1267,67 @@ func TestPeopleHandlerGetWorkerTasksRequiresRuntimeLease(t *testing.T) {
 	require.False(t, resp.Success)
 }
 
+func TestPeopleHandlerGetWorkerTasksSkipsScreenshot(t *testing.T) {
+	handler, runtimeService, db := newPeopleHandlerWithRuntimeForTest(t)
+	_, err := runtimeService.Acquire(model.GlobalPeopleResourceKey, model.AnalysisOwnerTypePeopleWorker, "worker-1", "worker one")
+	require.NoError(t, err)
+
+	photo := &model.Photo{
+		FilePath: "/photos/worker-screen.png", FileName: "worker-screen.png", FileSize: 1, FileHash: "worker-screen",
+		Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: model.PhotoMainCategoryScreenshot,
+		PeopleExcluded: true, PeopleExclusionReason: model.PeopleExclusionReasonScreenshot,
+	}
+	require.NoError(t, db.Create(photo).Error)
+	job := &model.PeopleJob{
+		PhotoID: photo.ID, FilePath: photo.FilePath, Status: model.PeopleJobStatusQueued,
+		Priority: 100, Source: model.PeopleJobSourcePassive, QueuedAt: time.Now(),
+	}
+	require.NoError(t, db.Create(job).Error)
+
+	rec := performWorkerRequest(
+		t, http.MethodGet, "/api/v1/people/worker/tasks?limit=1", nil, nil,
+		map[string]string{"X-Worker-ID": "worker-1"}, 1, handler.GetWorkerTasks,
+	)
+	require.Equal(t, http.StatusOK, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	payload := decodeResponseData[model.PeopleWorkerTasksResponse](t, resp)
+	assert.Empty(t, payload.Tasks)
+
+	var updated model.PeopleJob
+	require.NoError(t, db.First(&updated, job.ID).Error)
+	assert.Equal(t, model.PeopleJobStatusCancelled, updated.Status)
+}
+
+func TestPeopleHandlerSubmitWorkerResultsRejectsScreenshot(t *testing.T) {
+	handler, _, db := newPeopleHandlerWithRuntimeForTest(t)
+	photo := &model.Photo{
+		FilePath: "/photos/result-screen.png", FileName: "result-screen.png", FileSize: 1, FileHash: "result-screen",
+		Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: model.PhotoMainCategoryScreenshot,
+		PeopleExcluded: true, PeopleExclusionReason: model.PeopleExclusionReasonScreenshot,
+	}
+	require.NoError(t, db.Create(photo).Error)
+	job := &model.PeopleJob{
+		PhotoID: photo.ID, FilePath: photo.FilePath, Status: model.PeopleJobStatusProcessing,
+		Priority: 100, Source: model.PeopleJobSourcePassive, QueuedAt: time.Now(), WorkerID: "worker-1",
+	}
+	require.NoError(t, db.Create(job).Error)
+	body, err := json.Marshal(model.PeopleWorkerSubmitResultsRequest{Results: []model.PeopleDetectionResult{{
+		TaskID: job.ID, PhotoID: photo.ID,
+	}}})
+	require.NoError(t, err)
+
+	rec := performWorkerRequest(
+		t, http.MethodPost, "/api/v1/people/worker/results", body, nil,
+		map[string]string{"X-Worker-ID": "worker-1"}, 1, handler.SubmitWorkerResults,
+	)
+	require.Equal(t, http.StatusOK, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	payload := decodeResponseData[model.PeopleWorkerSubmitResultsResponse](t, resp)
+	assert.Equal(t, 0, payload.Processed)
+	require.Len(t, payload.Errors, 1)
+	assert.Contains(t, payload.Errors[0], "退出人物识别")
+}
+
 // TestPeopleHandler_ListPeopleVisibility 验证 visibility 查询参数与响应 hidden 字段。
 func TestPeopleHandler_ListPeopleVisibility(t *testing.T) {
 	handler, _, _, db, _ := newPeopleHandlerForTest(t)
@@ -1583,9 +1672,9 @@ func newTestDB(t *testing.T) *gorm.DB {
 // foreground scope was active at the moment GetByID ran.
 type foregroundCapturingPersonRepo struct {
 	repository.PersonRepository
-	coord                *service.BackgroundTaskCoordinator
-	db                   *gorm.DB
-	sawActiveDuringGet   bool
+	coord              *service.BackgroundTaskCoordinator
+	db                 *gorm.DB
+	sawActiveDuringGet bool
 }
 
 func (r *foregroundCapturingPersonRepo) GetByID(id uint) (*model.Person, error) {

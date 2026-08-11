@@ -886,6 +886,44 @@ func TestPhotoService_BatchUpdateStatus_InvalidatesCountsCache(t *testing.T) {
 	assert.Equal(t, int64(2), counts.ExcludedCount)
 }
 
+type recordingPeopleEligibilityHandler struct {
+	PeopleService
+	photoIDs []uint
+}
+
+func (h *recordingPeopleEligibilityHandler) HandleAnalysisCompleted(photoID uint) error {
+	h.photoIDs = append(h.photoIDs, photoID)
+	return nil
+}
+
+func TestPhotoService_UpdateCategoryReconcilesPeopleEligibility(t *testing.T) {
+	svc, repo, _ := newPhotoServiceForDeleteTest(t)
+	photo := &model.Photo{
+		FilePath: "/category-screen.png", FileName: "category-screen.png", FileSize: 1, FileHash: "category-screen",
+		Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: model.PhotoMainCategoryScreenshot,
+		PeopleExcluded: true, PeopleExclusionReason: model.PeopleExclusionReasonScreenshot,
+	}
+	require.NoError(t, repo.Create(photo))
+
+	recorder := &recordingPeopleEligibilityHandler{}
+	svc.SetPeopleService(recorder)
+
+	require.NoError(t, svc.UpdateCategory(photo.ID, "人物"))
+	updated, err := repo.GetByID(photo.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "人物", updated.MainCategory)
+	assert.False(t, updated.PeopleExcluded)
+	assert.Empty(t, updated.PeopleExclusionReason)
+	assert.Equal(t, []uint{photo.ID}, recorder.photoIDs)
+
+	require.NoError(t, svc.UpdateCategory(photo.ID, model.PhotoMainCategoryScreenshot))
+	updated, err = repo.GetByID(photo.ID)
+	require.NoError(t, err)
+	assert.True(t, updated.PeopleExcluded)
+	assert.Equal(t, model.PeopleExclusionReasonScreenshot, updated.PeopleExclusionReason)
+	assert.Equal(t, []uint{photo.ID, photo.ID}, recorder.photoIDs)
+}
+
 // newPhotoServiceForDeleteTest 创建包含 Face/Person/person_photos/trigger 的测试服务。
 func newPhotoServiceForDeleteTest(t *testing.T) (*photoService, repository.PhotoRepository, *gorm.DB) {
 	t.Helper()

@@ -1748,11 +1748,8 @@ func (s *peopleService) enqueuePhotoModel(photo *model.Photo, source string, pri
 	if photo.Status == model.PhotoStatusExcluded {
 		return nil
 	}
-	if !photo.AIAnalyzed {
-		return ErrPhotoAnalysisPending
-	}
-	if photo.PeopleExcluded || strings.TrimSpace(photo.MainCategory) == model.PhotoMainCategoryScreenshot {
-		return ErrPhotoPeopleExcluded
+	if err := photoPeopleEligibilityError(photo); err != nil {
+		return err
 	}
 	if source == "" {
 		source = model.PeopleJobSourceManual
@@ -2049,6 +2046,19 @@ func (s *peopleService) preflightCheck(job *model.PeopleJob) (*model.Photo, bool
 			"completed_at": &now,
 		})
 	}
+	if eligibilityErr := photoPeopleEligibilityError(photo); eligibilityErr != nil {
+		s.appendBackgroundLog(fmt.Sprintf("照片 #%d 不满足人物识别条件，跳过：%v", photo.ID, eligibilityErr))
+		if err := s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
+			"face_process_status": model.FaceProcessStatusNone,
+		}); err != nil {
+			return nil, false, err
+		}
+		return nil, true, s.jobRepo.UpdateFields(job.ID, map[string]interface{}{
+			"status":       model.PeopleJobStatusCancelled,
+			"last_error":   eligibilityErr.Error(),
+			"completed_at": &now,
+		})
+	}
 
 	existingFaces, err := s.faceRepo.ListByPhotoID(photo.ID)
 	if err != nil {
@@ -2131,6 +2141,25 @@ func (s *peopleService) detectFacesLocally(photo *model.Photo) (*mlclient.Detect
 // ApplyDetectionResult applies detection results: deletes old faces, creates new ones, runs clustering.
 // This method is used by both local processing and remote worker submission.
 func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.Photo, result *model.PeopleDetectionResult) error {
+	if job == nil || photo == nil {
+		return fmt.Errorf("people job and photo are required")
+	}
+	currentPhoto, err := s.photoRepo.GetByID(photo.ID)
+	if err != nil {
+		return err
+	}
+	if eligibilityErr := photoPeopleEligibilityError(currentPhoto); eligibilityErr != nil {
+		now := time.Now()
+		if updateErr := s.jobRepo.UpdateFields(job.ID, map[string]interface{}{
+			"status":       model.PeopleJobStatusCancelled,
+			"last_error":   eligibilityErr.Error(),
+			"completed_at": &now,
+		}); updateErr != nil {
+			return updateErr
+		}
+		return eligibilityErr
+	}
+	photo = currentPhoto
 	now := time.Now()
 
 	existingFaces, err := s.faceRepo.ListByPhotoID(photo.ID)
@@ -4102,6 +4131,16 @@ var (
 	ErrPhotoAnalysisPending = errors.New("照片 AI 分析尚未完成，不能进行人物检测")
 	ErrPhotoPeopleExcluded  = errors.New("照片已退出人物识别")
 )
+
+func photoPeopleEligibilityError(photo *model.Photo) error {
+	if photo == nil || photo.Status != model.PhotoStatusActive || photo.PeopleExcluded || strings.TrimSpace(photo.MainCategory) == model.PhotoMainCategoryScreenshot {
+		return ErrPhotoPeopleExcluded
+	}
+	if !photo.AIAnalyzed {
+		return ErrPhotoAnalysisPending
+	}
+	return nil
+}
 
 // ErrPersonHidden indicates an operation was attempted on a hidden person.
 // The handler maps this to HTTP 409 with code PERSON_HIDDEN.
