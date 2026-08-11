@@ -86,21 +86,28 @@ type AIService interface {
 
 	// ReloadProvider 重新加载 AI provider（配置变更后调用）
 	ReloadProvider() error
+
+	SetAnalysisCompletedHandler(handler AnalysisCompletedHandler)
 }
 
 // aiService AI 分析服务实现
 type aiService struct {
-	photoRepo        repository.PhotoRepository
-	photoTagRepo     repository.PhotoTagRepository
-	config           *config.Config
-	configService    ConfigService
-	runtimeService   AnalysisRuntimeService
-	provider         provider.AIProvider
-	currentTask      *AnalyzeTask
-	taskMutex        sync.RWMutex
-	backgroundStopCh chan struct{}
-	backgroundLogMu  sync.RWMutex
-	backgroundLogs   []string
+	photoRepo                repository.PhotoRepository
+	photoTagRepo             repository.PhotoTagRepository
+	config                   *config.Config
+	configService            ConfigService
+	runtimeService           AnalysisRuntimeService
+	provider                 provider.AIProvider
+	currentTask              *AnalyzeTask
+	taskMutex                sync.RWMutex
+	backgroundStopCh         chan struct{}
+	backgroundLogMu          sync.RWMutex
+	backgroundLogs           []string
+	analysisCompletedHandler AnalysisCompletedHandler
+}
+
+func (s *aiService) SetAnalysisCompletedHandler(handler AnalysisCompletedHandler) {
+	s.analysisCompletedHandler = handler
 }
 
 // AIConfigFromDB 数据库中存储的 AI 配置结构
@@ -691,7 +698,7 @@ func (s *aiService) analyzePhotoInternal(photoID uint, force bool) error {
 	beautyScore := int(result.BeautyScore)
 	overallScore := model.CalcOverallScore(memoryScore, beautyScore)
 
-	if err := s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
+	updates := map[string]interface{}{
 		"ai_analyzed":   true,
 		"ai_provider":   s.provider.Name(),
 		"description":   result.Description,
@@ -703,7 +710,11 @@ func (s *aiService) analyzePhotoInternal(photoID uint, force bool) error {
 		"overall_score": overallScore,
 		"score_reason":  result.Reason,
 		"analyzed_at":   &now,
-	}); err != nil {
+	}
+	for key, value := range peopleExclusionFields(result.MainCategory) {
+		updates[key] = value
+	}
+	if err := s.photoRepo.UpdateFields(photo.ID, updates); err != nil {
 		return fmt.Errorf("update photo: %w", err)
 	}
 
@@ -713,6 +724,7 @@ func (s *aiService) analyzePhotoInternal(photoID uint, force bool) error {
 			logger.Warnf("Failed to sync tags for photo %d: %v", photo.ID, err)
 		}
 	}
+	notifyAnalysisCompleted(s.analysisCompletedHandler, photo.ID)
 
 	logger.Infof("Photo %d analyzed successfully (2 sessions): memory=%d, beauty=%d, overall=%d, caption=%s",
 		photoID, memoryScore, beautyScore, overallScore, caption)
@@ -1296,7 +1308,7 @@ func (s *aiService) analyzeInBatchesAsync(task *AnalyzeTask, photos []*model.Pho
 				beautyScore := int(result.BeautyScore)
 				overallScore := model.CalcOverallScore(memoryScore, beautyScore)
 
-				if err := s.photoRepo.UpdateFields(photo.ID, map[string]interface{}{
+				updates := map[string]interface{}{
 					"ai_analyzed":   true,
 					"ai_provider":   result.Provider,
 					"description":   result.Description,
@@ -1308,7 +1320,11 @@ func (s *aiService) analyzeInBatchesAsync(task *AnalyzeTask, photos []*model.Pho
 					"overall_score": overallScore,
 					"score_reason":  result.Reason,
 					"analyzed_at":   &now,
-				}); err != nil {
+				}
+				for key, value := range peopleExclusionFields(result.MainCategory) {
+					updates[key] = value
+				}
+				if err := s.photoRepo.UpdateFields(photo.ID, updates); err != nil {
 					logger.Errorf("[Task %s] Failed to update photo %d: %v", task.ID, photo.ID, err)
 					failedCount++
 					if task.Mode == model.AnalysisOwnerTypeBackground {
@@ -1321,6 +1337,7 @@ func (s *aiService) analyzeInBatchesAsync(task *AnalyzeTask, photos []*model.Pho
 							logger.Warnf("[Task %s] Failed to sync tags for photo %d: %v", task.ID, photo.ID, err)
 						}
 					}
+					notifyAnalysisCompleted(s.analysisCompletedHandler, photo.ID)
 					successCount++
 					totalCost += s.provider.BatchCost()
 					if task.Mode == model.AnalysisOwnerTypeBackground {

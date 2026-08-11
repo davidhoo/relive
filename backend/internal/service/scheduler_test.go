@@ -145,9 +145,10 @@ func (analysisServiceStub) SubmitResults([]model.AnalysisResult, uint) (*model.S
 func (analysisServiceStub) SubmitResultsDirectly([]model.AnalysisResult, uint) (*model.SubmitResultsResponse, error) {
 	return nil, nil
 }
-func (analysisServiceStub) GetStats(uint) (*model.AnalyzerStatsResponse, error) { return nil, nil }
-func (analysisServiceStub) CleanExpiredLocks() (int64, error)                   { return 0, nil }
-func (analysisServiceStub) SetResultQueue(*ResultQueue)                         {}
+func (analysisServiceStub) GetStats(uint) (*model.AnalyzerStatsResponse, error)  { return nil, nil }
+func (analysisServiceStub) CleanExpiredLocks() (int64, error)                    { return 0, nil }
+func (analysisServiceStub) SetResultQueue(*ResultQueue)                          {}
+func (analysisServiceStub) SetAnalysisCompletedHandler(AnalysisCompletedHandler) {}
 
 func TestTaskSchedulerIdentityProfileSliceRunsOncePerTick(t *testing.T) {
 	stub := &identityProfileServiceStub{mode: "shadow"}

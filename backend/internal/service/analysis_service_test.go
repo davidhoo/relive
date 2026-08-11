@@ -196,6 +196,32 @@ func TestAnalysisService_SuccessClearsHistory(t *testing.T) {
 	assert.Nil(t, got.AnalysisLastFailedAt, "成功后 last failed at 应清空")
 }
 
+func TestAnalysisService_AnalysisCompletedAfterCommit(t *testing.T) {
+	db, wq := setupAnalysisTestDB(t)
+	photo := seedAnalysisPhoto(t, db, 5101)
+	svc := newAnalysisServiceWithQueue(db, wq)
+	completed := &recordingAnalysisCompletedHandler{}
+	svc.SetAnalysisCompletedHandler(completed)
+
+	resp, err := svc.SubmitResultsDirectly([]model.AnalysisResult{{
+		PhotoID:      photo.ID,
+		Description:  "测试截屏",
+		MemoryScore:  10,
+		BeautyScore:  10,
+		Tags:         "截屏",
+		MainCategory: model.PhotoMainCategoryScreenshot,
+	}}, 0)
+	require.NoError(t, err)
+	require.Equal(t, 1, resp.Accepted)
+
+	var got model.Photo
+	require.NoError(t, db.First(&got, photo.ID).Error)
+	assert.True(t, got.AIAnalyzed)
+	assert.True(t, got.PeopleExcluded)
+	assert.Equal(t, model.PeopleExclusionReasonScreenshot, got.PeopleExclusionReason)
+	assert.Equal(t, []uint{photo.ID}, completed.photoIDs)
+}
+
 // --- Task 3: 锁版本与原子 release 回归 ---
 
 // TestAnalysisService_AcquireIncrementsLockVersion

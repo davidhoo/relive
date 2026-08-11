@@ -23,6 +23,16 @@ type blockingAIProvider struct {
 	caption        string
 }
 
+type recordingAnalysisCompletedHandler struct {
+	photoIDs []uint
+	err      error
+}
+
+func (h *recordingAnalysisCompletedHandler) HandleAnalysisCompleted(photoID uint) error {
+	h.photoIDs = append(h.photoIDs, photoID)
+	return h.err
+}
+
 func (p *blockingAIProvider) Analyze(request *provider.AnalyzeRequest) (*provider.AnalyzeResult, error) {
 	p.analyzeStarted.Do(func() {
 		close(p.analyzeStartCh)
@@ -193,6 +203,8 @@ func TestAIService_AnalyzePhoto_DoesNotOverwritePeopleFields(t *testing.T) {
 		},
 		provider: providerStub,
 	}
+	completed := &recordingAnalysisCompletedHandler{}
+	svc.SetAnalysisCompletedHandler(completed)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -232,10 +244,66 @@ func TestAIService_AnalyzePhoto_DoesNotOverwritePeopleFields(t *testing.T) {
 	assert.Equal(t, "并发回归测试描述", updated.Description)
 	assert.Equal(t, "并发回归测试文案", updated.Caption)
 	assert.Equal(t, "人物", updated.MainCategory)
+	assert.False(t, updated.PeopleExcluded)
+	assert.Empty(t, updated.PeopleExclusionReason)
+	assert.Equal(t, []uint{photo.ID}, completed.photoIDs)
 
 	faces, err := faceRepo.ListByPhotoID(photo.ID)
 	require.NoError(t, err)
 	assert.Len(t, faces, 1)
+}
+
+func TestAIService_AnalysisCompletedPersistsScreenshotExclusion(t *testing.T) {
+	db := setupPeopleServiceTestDB(t)
+	photoRepo := repository.NewPhotoRepository(db)
+
+	rootDir := t.TempDir()
+	photoPath := createTestImageFile(t, rootDir, "screen.jpg")
+	info, err := os.Stat(photoPath)
+	require.NoError(t, err)
+	photo := &model.Photo{
+		FilePath:        photoPath,
+		FileName:        filepath.Base(photoPath),
+		FileSize:        info.Size(),
+		FileHash:        "screen-hash",
+		Width:           320,
+		Height:          320,
+		ThumbnailStatus: model.ThumbnailStatusReady,
+	}
+	require.NoError(t, photoRepo.Create(photo))
+
+	providerStub := &blockingAIProvider{
+		analyzeStartCh: make(chan struct{}),
+		analyzeGateCh:  make(chan struct{}),
+		result: &provider.AnalyzeResult{
+			Description:  "手机截屏",
+			MainCategory: model.PhotoMainCategoryScreenshot,
+			Tags:         "截屏",
+			MemoryScore:  10,
+			BeautyScore:  10,
+			Reason:       "界面内容",
+		},
+		caption: "手机截屏",
+	}
+	close(providerStub.analyzeGateCh)
+	completed := &recordingAnalysisCompletedHandler{}
+	svc := &aiService{
+		photoRepo: photoRepo,
+		config: &config.Config{
+			Photos: config.PhotosConfig{ThumbnailPath: filepath.Join(rootDir, ".thumbnails")},
+			AI:     config.AIConfig{Temperature: 0.7, Timeout: 1},
+		},
+		provider: providerStub,
+	}
+	svc.SetAnalysisCompletedHandler(completed)
+
+	require.NoError(t, svc.AnalyzePhoto(photo.ID))
+
+	updated, err := photoRepo.GetByID(photo.ID)
+	require.NoError(t, err)
+	assert.True(t, updated.PeopleExcluded)
+	assert.Equal(t, model.PeopleExclusionReasonScreenshot, updated.PeopleExclusionReason)
+	assert.Equal(t, []uint{photo.ID}, completed.photoIDs)
 }
 
 // TestAIService_GetAnalyzeProgress_Lite 验证 lite 模式复用共享缓存，

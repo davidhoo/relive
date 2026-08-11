@@ -35,16 +35,18 @@ type AnalysisService interface {
 	GetStats(deviceID uint) (*model.AnalyzerStatsResponse, error)
 	CleanExpiredLocks() (int64, error)
 	SetResultQueue(queue *ResultQueue)
+	SetAnalysisCompletedHandler(handler AnalysisCompletedHandler)
 }
 
 // analysisService 分析服务实现
 type analysisService struct {
-	db           *gorm.DB
-	photoRepo    repository.PhotoRepository
-	photoTagRepo repository.PhotoTagRepository
-	cfg          *config.Config
-	resultQueue  *ResultQueue
-	writeQueue   *database.WriteQueue
+	db                       *gorm.DB
+	photoRepo                repository.PhotoRepository
+	photoTagRepo             repository.PhotoTagRepository
+	cfg                      *config.Config
+	resultQueue              *ResultQueue
+	writeQueue               *database.WriteQueue
+	analysisCompletedHandler AnalysisCompletedHandler
 }
 
 // NewAnalysisService 创建分析服务
@@ -69,6 +71,10 @@ func (s *analysisService) executeWrite(fn func() error) error {
 // SetResultQueue 设置结果队列（必须在 Start 之前调用）
 func (s *analysisService) SetResultQueue(queue *ResultQueue) {
 	s.resultQueue = queue
+}
+
+func (s *analysisService) SetAnalysisCompletedHandler(handler AnalysisCompletedHandler) {
+	s.analysisCompletedHandler = handler
 }
 
 // pendingTaskLockDuration 单次领取/续租的锁有效期。
@@ -376,6 +382,7 @@ func (s *analysisService) SubmitResultsDirectly(results []model.AnalysisResult, 
 		return resp, nil
 	}
 
+	committedPhotoIDs := make([]uint, 0, len(validResults))
 	err := s.executeWrite(func() error {
 		return s.db.Transaction(func(tx *gorm.DB) error {
 			photoIDs := make([]uint, 0, len(validResults))
@@ -435,12 +442,18 @@ func (s *analysisService) SubmitResultsDirectly(results []model.AnalysisResult, 
 			}
 
 			resp.Accepted = len(toUpdate)
+			for _, vr := range toUpdate {
+				committedPhotoIDs = append(committedPhotoIDs, vr.result.PhotoID)
+			}
 			return nil
 		})
 	})
 
 	if err != nil {
 		return nil, err
+	}
+	for _, photoID := range committedPhotoIDs {
+		notifyAnalysisCompleted(s.analysisCompletedHandler, photoID)
 	}
 
 	logger.Debugf("Directly submitted %d results: accepted=%d, rejected=%d, failed=%d",
@@ -461,7 +474,7 @@ func (s *analysisService) batchUpdatePhotos(tx *gorm.DB, results []struct {
 	}
 
 	for _, vr := range results {
-		if err := tx.Model(&model.Photo{}).Where("id = ?", vr.result.PhotoID).Updates(map[string]interface{}{
+		updates := map[string]interface{}{
 			"ai_analyzed":              true,
 			"description":              vr.result.Description,
 			"caption":                  vr.result.Caption,
@@ -481,7 +494,11 @@ func (s *analysisService) batchUpdatePhotos(tx *gorm.DB, results []struct {
 			"analysis_last_error_code": "",
 			"analysis_last_error":      "",
 			"analysis_last_failed_at":  nil,
-		}).Error; err != nil {
+		}
+		for key, value := range peopleExclusionFields(vr.result.MainCategory) {
+			updates[key] = value
+		}
+		if err := tx.Model(&model.Photo{}).Where("id = ?", vr.result.PhotoID).Updates(updates).Error; err != nil {
 			return fmt.Errorf("update photo %d: %w", vr.result.PhotoID, err)
 		}
 

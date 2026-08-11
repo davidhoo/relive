@@ -19,7 +19,7 @@ import (
 
 // stubAnalysisService 实现 handler.AnalysisService 接口，用于 release/heartbeat handler 测试。
 type stubAnalysisService struct {
-	releaseFunc  func(taskID, analyzerID string, req model.ReleaseTaskRequest) (*model.ReleaseTaskResult, error)
+	releaseFunc   func(taskID, analyzerID string, req model.ReleaseTaskRequest) (*model.ReleaseTaskResult, error)
 	heartbeatFunc func(taskID, analyzerID string, lockVersion int64) (time.Time, int64, error)
 }
 
@@ -44,9 +44,10 @@ func (s *stubAnalysisService) SubmitResults([]model.AnalysisResult, uint) (*mode
 func (s *stubAnalysisService) SubmitResultsDirectly([]model.AnalysisResult, uint) (*model.SubmitResultsResponse, error) {
 	return nil, nil
 }
-func (s *stubAnalysisService) GetStats(uint) (*model.AnalyzerStatsResponse, error) { return nil, nil }
-func (s *stubAnalysisService) CleanExpiredLocks() (int64, error)                   { return 0, nil }
-func (s *stubAnalysisService) SetResultQueue(*service.ResultQueue)                 {}
+func (s *stubAnalysisService) GetStats(uint) (*model.AnalyzerStatsResponse, error)          { return nil, nil }
+func (s *stubAnalysisService) CleanExpiredLocks() (int64, error)                            { return 0, nil }
+func (s *stubAnalysisService) SetResultQueue(*service.ResultQueue)                          {}
+func (s *stubAnalysisService) SetAnalysisCompletedHandler(service.AnalysisCompletedHandler) {}
 
 func newReleaseHandler(svc *stubAnalysisService) *AnalyzerHandler {
 	return &AnalyzerHandler{analysisService: svc}
