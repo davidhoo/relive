@@ -112,6 +112,17 @@ func (s *peopleService) UpdateFaceExclusion(faceIDs []uint, excluded bool, reaso
 		}
 	}
 
+	// Reject if any face belongs to a hidden person (only when excluding).
+	if excluded && len(affectedPersonIDs) > 0 {
+		personIDs := make([]uint, 0, len(affectedPersonIDs))
+		for pid := range affectedPersonIDs {
+			personIDs = append(personIDs, pid)
+		}
+		if err := s.rejectIfHidden(personIDs...); err != nil {
+			return nil, err
+		}
+	}
+
 	now := time.Now()
 
 	// Perform the update in a transaction

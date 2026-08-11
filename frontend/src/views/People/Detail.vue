@@ -54,40 +54,44 @@
                 <el-button v-if="selectedFaceCount > 0" size="small" text type="info" @click="clearSelection">清空选择</el-button>
               </div>
               <div class="ops-toolbar-actions">
+                <!-- Hidden person: disable ownership operations, allow visibility toggle + edit -->
+                <el-alert v-if="person?.hidden" type="warning" :closable="false" show-icon class="hidden-alert">
+                  该人物已停止参与识别和聚类
+                </el-alert>
                 <el-tooltip content="把当前选中的人脸拆成一个新人物" placement="top">
-                  <el-button size="small" type="warning" plain :disabled="selectedFaceIds.length === 0 || foregroundBusy" :loading="splitting" @click="splitSelectedFaces">
+                  <el-button size="small" type="warning" plain :disabled="selectedFaceIds.length === 0 || foregroundBusy || person?.hidden" :loading="splitting" @click="splitSelectedFaces">
                     拆分
                   </el-button>
                 </el-tooltip>
                 <el-tooltip content="把选中的人脸移动到已有人物" placement="top">
-                  <el-button size="small" plain :disabled="selectedFaceIds.length === 0 || foregroundBusy" @click="ensureCandidatePeople(); showMoveDialog = true">
+                  <el-button size="small" plain :disabled="selectedFaceIds.length === 0 || foregroundBusy || person?.hidden" @click="ensureCandidatePeople(); showMoveDialog = true">
                     移动
                   </el-button>
                 </el-tooltip>
                 <el-tooltip content="排除选中的人脸样本（非人脸或低质量）" placement="top">
-                  <el-button size="small" type="danger" plain :disabled="selectedFaceIds.length === 0 || foregroundBusy" :loading="excluding" @click="excludeSelectedFaces">
+                  <el-button size="small" type="danger" plain :disabled="selectedFaceIds.length === 0 || foregroundBusy || person?.hidden" :loading="excluding" @click="excludeSelectedFaces">
                     排除
                   </el-button>
                 </el-tooltip>
                 <span class="ops-divider" />
                 <el-tooltip content="从其他人物中选择若干个，并入当前人物" placement="top">
-                  <el-button size="small" plain :disabled="foregroundBusy" @click="ensureCandidatePeople(); showMergeDialog = true">
+                  <el-button size="small" plain :disabled="foregroundBusy || person?.hidden" @click="ensureCandidatePeople(); showMergeDialog = true">
                     合并到当前
                   </el-button>
                 </el-tooltip>
                 <span class="ops-divider" />
                 <el-tooltip content="计算当前人物与目标人物的相似度" placement="top">
-                  <el-button size="small" plain :disabled="foregroundBusy" @click="ensureCandidatePeople(); showSimilarityDialog = true">
+                  <el-button size="small" plain :disabled="foregroundBusy || person?.hidden" @click="ensureCandidatePeople(); showSimilarityDialog = true">
                     相似度
                   </el-button>
                 </el-tooltip>
                 <el-tooltip :content="person.hidden ? '在人物管理列表中恢复显示此人物' : '在人物管理列表中隐藏此人物'" placement="top">
-                  <el-button size="small" plain :loading="togglingVisibility" :disabled="foregroundBusy" @click="handleToggleVisibility">
+                  <el-button size="small" plain :loading="togglingVisibility" :disabled="foregroundBusy && !person?.hidden" @click="handleToggleVisibility">
                     {{ person.hidden ? '恢复显示' : '隐藏' }}
                   </el-button>
                 </el-tooltip>
                 <el-tooltip content="将所有人脸打回未聚类状态，删除当前人物" placement="top">
-                  <el-button size="small" type="danger" plain :loading="dissolving" :disabled="foregroundBusy" @click="handleDissolve">
+                  <el-button size="small" type="danger" plain :loading="dissolving" :disabled="foregroundBusy || person?.hidden" @click="handleDissolve">
                     解散
                   </el-button>
                 </el-tooltip>
@@ -896,19 +900,51 @@ const loadData = async () => {
   facesConsumedCursors.value = new Set()
 
   try {
-    // 首次进入：只加载人物基本信息 + 当前默认 Tab“照片”第一页。
-    // 人脸 Tab 首次切换时再加载。
+    // 加载人物基本信息。若人物已被清理（404 或空数据），提示并返回列表，
+    // 不保留旧 person，也不展示空详情页。其它错误继续显示明确错误，不误判为已删除。
     const personRes = await peopleApi.getById(personId)
-    person.value = personRes.data?.data || null
+    const personData = personRes.data?.data || null
+    if (!personData) {
+      handlePersonGone()
+      return
+    }
+    person.value = personData
     resetSelections()
     candidatePeopleLoaded.value = false
 
-    await loadMorePhotos()
+    // 按当前 Tab 加载对应列表第一页，避免人脸 Tab 下固定加载照片导致的假空列表。
+    // 首次进入页面 activeTab 默认仍为 photos，原有“首次不预加载人脸”行为不变。
+    if (activeTab.value === 'faces') {
+      await loadMoreFaces()
+    } else {
+      await loadMorePhotos()
+    }
   } catch (error: any) {
+    // getById 404 表示人物已被清理（排除/移动/拆分后人脸归零）。其它网络/服务错误
+    // 继续显示明确错误，不得误判为人物已删除。
+    if (isPersonNotFound(error)) {
+      handlePersonGone()
+      return
+    }
     ElMessage.error(error.message || '加载人物详情失败')
   } finally {
     loading.value = false
   }
+}
+
+// isPersonNotFound：getById 返回 404 才认为人物已被清理。其它状态码一律视为普通错误。
+const isPersonNotFound = (error: any): boolean => {
+  return error?.response?.status === 404
+}
+
+// handlePersonGone：人物已无有效人脸样本被清理后的统一处理——提示、清空旧 person、返回列表。
+const handlePersonGone = () => {
+  person.value = null
+  faces.value = []
+  photos.value = []
+  selectedFaceSet.value = new Set()
+  ElMessage.info('人物已无有效人脸样本')
+  router.push('/people')
 }
 
 // 精准刷新：只刷新人物信息，不重载照片和样本，不清空已选人脸
@@ -1119,6 +1155,18 @@ const isSplitAssignmentConflict = (error: any): boolean => {
     error?.response?.data?.error?.code === 'SPLIT_ASSIGNMENT_CONFLICT'
 }
 
+// isPersonHiddenError 判断错误是否为人物已隐藏（HTTP 409 / PERSON_HIDDEN）。
+// 隐藏人物执行归属操作时返回此错误，需提示用户先恢复人物显示。
+const isPersonHiddenError = (error: any): boolean => {
+  return error?.response?.status === 409 &&
+    error?.response?.data?.error?.code === 'PERSON_HIDDEN'
+}
+
+// showPersonHiddenError 提示人物已隐藏，需先恢复显示。
+const showPersonHiddenError = () => {
+  ElMessage.warning('该人物已隐藏，请先恢复显示后再执行该操作')
+}
+
 const splitSelectedFaces = async () => {
   if (selectedFaceIds.value.length === 0) return
   // 双击防重复：若已有前台操作进行中，直接 return，不重复提交。
@@ -1142,6 +1190,10 @@ const splitSelectedFaces = async () => {
       selectedFaceSet.value = new Set()
       await loadData()
       ElMessage.warning('所选人脸归属已发生变化，请刷新后重新选择')
+      return
+    }
+    if (isPersonHiddenError(error)) {
+      showPersonHiddenError()
       return
     }
     if (isLikelyForegroundStillProcessing(error)) {
@@ -1187,22 +1239,17 @@ const excludeSelectedFaces = async () => {
     selectedFaceSet.value = new Set()
     await loadData()
   } catch (error: any) {
+    if (isPersonHiddenError(error)) {
+      showPersonHiddenError()
+      return
+    }
     if (isLikelyForegroundStillProcessing(error)) {
       ElMessage.warning('操作可能仍在后台处理中，请稍后刷新页面查看结果')
     } else {
       ElMessage.error(error.response?.data?.error?.message || error.message || '排除人脸失败')
     }
-    // If person was cleaned up (no more valid faces), navigate back
-    try {
-      const res = await peopleApi.getById(Number(route.params.id))
-      if (!res.data?.data) {
-        ElMessage.info('人物已无有效人脸样本')
-        router.push('/people')
-      }
-    } catch {
-      ElMessage.info('人物已无有效人脸样本')
-      router.push('/people')
-    }
+    // 操作失败：不伪造刷新成功，不清空选择，不误判人物已删除。
+    // 人物是否已被清理由随后 loadData() 中的 getById 404 判定；此处失败仅提示错误并保留当前选择。
   } finally {
     excluding.value = false
   }
@@ -1228,6 +1275,10 @@ const confirmMoveFaces = async () => {
     }
     await loadData()
   } catch (error: any) {
+    if (isPersonHiddenError(error)) {
+      showPersonHiddenError()
+      return
+    }
     if (isLikelyForegroundStillProcessing(error)) {
       ElMessage.warning('操作可能仍在后台处理中，请稍后刷新页面查看结果')
     } else {
@@ -1277,6 +1328,10 @@ const confirmMerge = async () => {
       await pollMergeJobForMerge(jobId)
     }
   } catch (error: any) {
+    if (isPersonHiddenError(error)) {
+      showPersonHiddenError()
+      return
+    }
     ElMessage.error(error.message || '合并人物失败')
   } finally {
     merging.value = false
@@ -1290,6 +1345,10 @@ const calculateSimilarity = async () => {
     const res = await peopleApi.calculateSimilarity(person.value.id, similarityTargetId.value)
     similarityResult.value = res.data?.data || null
   } catch (error: any) {
+    if (isPersonHiddenError(error)) {
+      showPersonHiddenError()
+      return
+    }
     ElMessage.error(error.message || '计算相似度失败')
   } finally {
     calculatingSimilarity.value = false
@@ -1319,6 +1378,10 @@ const handleDissolve = async () => {
     ElMessage.success(`人物已解散，${res.data?.data?.faces_released || 0} 张人脸已释放`)
     router.push('/people')
   } catch (error: any) {
+    if (isPersonHiddenError(error)) {
+      showPersonHiddenError()
+      return
+    }
     ElMessage.error(error.response?.data?.error?.message || error.message || '解散人物失败')
   } finally {
     dissolving.value = false
@@ -1329,16 +1392,17 @@ const handleToggleVisibility = async () => {
   if (!person.value) return
   const willHide = !person.value.hidden
   const displayName = person.value.name?.trim() || `人物 #${person.value.id}`
-  if (willHide) {
-    try {
-      await ElMessageBox.confirm(
-        `确定要在人物管理列表中隐藏「${displayName}」吗？\n隐藏后此人物不会出现在默认人物列表中，但不会删除人物、人脸或照片。`,
-        '隐藏人物确认',
-        { confirmButtonText: '确认隐藏', cancelButtonText: '取消', type: 'warning' },
-      )
-    } catch {
-      return
-    }
+  const message = willHide
+    ? `隐藏后，该人物将从默认人物列表消失，并停止参与人物识别、聚类和合并建议。原有人脸归属会保留；以后出现的相似人脸不会匹配到此人物，可能形成新人物。可在"已隐藏"中恢复。`
+    : `恢复后，该人物将重新参与识别、聚类和合并建议。原有人脸归属保持不变，隐藏期间形成的新人物不会自动合并回来。`
+  try {
+    await ElMessageBox.confirm(message, `${willHide ? '隐藏' : '恢复显示'}确认`, {
+      confirmButtonText: `确认${willHide ? '隐藏' : '恢复显示'}`,
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
   }
   togglingVisibility.value = true
   try {
@@ -1391,9 +1455,14 @@ watch(activeTab, async (tab, prev) => {
     }
   }
 
-  // 首次切到人脸 Tab 才加载第一页
+  // 按需加载对称规则：切到某 Tab 时，若该 Tab 尚未加载过且当前无请求进行中，则加载第一页。
+  // faces 分支覆盖首次进入后切到人脸 Tab 的懒加载；
+  // photos 分支覆盖 loadData() 重置两个 Tab、只重新加载当前 Tab 后，用户再切到另一个 Tab 的对称场景
+  //（例如人脸操作后 loadData() 重置 + 只加载 faces，再切回 photos 时需按需重新加载）。
   if (tab === 'faces' && !facesLoadedOnce.value && !facesLoading.value) {
     await loadMoreFaces()
+  } else if (tab === 'photos' && !photosLoadedOnce.value && !photosLoading.value) {
+    await loadMorePhotos()
   }
 
   await nextTick()

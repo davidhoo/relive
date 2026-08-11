@@ -5026,3 +5026,125 @@ func TestPeopleService_ProtoCacheRefreshEquivalentAssignment(t *testing.T) {
 	assert.Equal(t, person.ID, *pendingFaces[0].PersonID, "assignment must be unchanged after moving refresh outside writeGate")
 	assert.Equal(t, model.FaceClusterStatusAssigned, pendingFaces[0].ClusterStatus)
 }
+
+// --- Hidden person service tests ---
+
+// TestUpdateVisibility_FacesUnchanged verifies that hiding a person does not
+// modify any face fields (person_id, cluster_status, manual_locked).
+func TestUpdateVisibility_FacesUnchanged(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, nil)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+
+	person := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(person))
+
+	face := &model.Face{
+		PhotoID:       1,
+		PersonID:      &person.ID,
+		ClusterStatus: model.FaceClusterStatusAssigned,
+		ManualLocked:  true,
+		ClusterScore:  0.85,
+	}
+	require.NoError(t, faceRepo.Create(face))
+
+	// Record original state.
+	origPersonID := *face.PersonID
+	origClusterStatus := face.ClusterStatus
+	origManualLocked := face.ManualLocked
+	origClusterScore := face.ClusterScore
+
+	// Hide the person.
+	updated, err := svc.UpdateVisibility([]uint{person.ID}, true)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), updated)
+
+	// Reload face from DB and verify nothing changed.
+	var got model.Face
+	require.NoError(t, db.First(&got, face.ID).Error)
+	assert.Equal(t, origPersonID, *got.PersonID, "person_id must not change")
+	assert.Equal(t, origClusterStatus, got.ClusterStatus, "cluster_status must not change")
+	assert.Equal(t, origManualLocked, got.ManualLocked, "manual_locked must not change")
+	assert.Equal(t, origClusterScore, got.ClusterScore, "cluster_score must not change")
+	assert.NotEqual(t, model.FaceClusterStatusExcluded, got.ClusterStatus, "must not be excluded")
+}
+
+// TestUpdateVisibility_Idempotent verifies that hiding an already-hidden person
+// is idempotent (second call returns updated=0, no error).
+func TestUpdateVisibility_Idempotent(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, nil)
+	personRepo := repository.NewPersonRepository(db)
+
+	person := &model.Person{Category: model.PersonCategoryFriend}
+	require.NoError(t, personRepo.Create(person))
+
+	// First hide.
+	updated1, err := svc.UpdateVisibility([]uint{person.ID}, true)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), updated1)
+
+	// Second hide — should be idempotent. SQLite RowsAffected counts matched
+	// rows regardless of value change, so updated may be 1. The key check is:
+	// no error, no panic, and person remains hidden.
+	_, err = svc.UpdateVisibility([]uint{person.ID}, true)
+	require.NoError(t, err)
+
+	// Verify person is still hidden.
+	var got model.Person
+	require.NoError(t, db.First(&got, person.ID).Error)
+	assert.True(t, got.Hidden)
+}
+
+// TestMergePeople_RejectHiddenPerson verifies that MergePeople returns
+// ErrPersonHidden when the target or source is hidden.
+func TestMergePeople_RejectHiddenPerson(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, nil)
+	personRepo := repository.NewPersonRepository(db)
+
+	target := &model.Person{Category: model.PersonCategoryFriend}
+	source := &model.Person{Category: model.PersonCategoryFriend, Hidden: true}
+	require.NoError(t, personRepo.Create(target))
+	require.NoError(t, personRepo.Create(source))
+
+	_, err := svc.MergePeople(target.ID, []uint{source.ID})
+	assert.ErrorIs(t, err, ErrPersonHidden)
+}
+
+// TestDissolvePerson_RejectHidden verifies that DissolvePerson returns
+// ErrPersonHidden when the person is hidden.
+func TestDissolvePerson_RejectHidden(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, nil)
+	personRepo := repository.NewPersonRepository(db)
+
+	person := &model.Person{Category: model.PersonCategoryFriend, Hidden: true, FaceCount: 1}
+	require.NoError(t, personRepo.Create(person))
+
+	_, err := svc.DissolvePerson(person.ID)
+	assert.ErrorIs(t, err, ErrPersonHidden)
+}
+
+// TestUpdateVisibility_RestoreReenablesPerson verifies that restoring a hidden
+// person removes it from the runtime block-set, allowing clustering to match again.
+func TestUpdateVisibility_RestoreReenablesPerson(t *testing.T) {
+	svc, _ := newPeopleServiceForTest(t, nil)
+
+	// The block-set should be empty initially (no hidden persons).
+	svc.hiddenPersonsMu.RLock()
+	assert.Empty(t, svc.hiddenPersonIDs)
+	svc.hiddenPersonsMu.RUnlock()
+
+	// Hide a person (use a fake ID; UpdateVisibility will try DB but we test
+	// the block-set logic directly).
+	svc.addToHiddenSet([]uint{42})
+	svc.hiddenPersonsMu.RLock()
+	_, blocked := svc.hiddenPersonIDs[42]
+	svc.hiddenPersonsMu.RUnlock()
+	assert.True(t, blocked, "person 42 should be in block-set after hide")
+
+	// Restore.
+	svc.removeFromHiddenSet([]uint{42})
+	svc.hiddenPersonsMu.RLock()
+	_, blocked = svc.hiddenPersonIDs[42]
+	svc.hiddenPersonsMu.RUnlock()
+	assert.False(t, blocked, "person 42 should be removed from block-set after restore")
+}

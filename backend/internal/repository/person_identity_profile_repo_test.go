@@ -1136,3 +1136,142 @@ func TestPersonIdentityProfileRepository_GetStats_ActiveCenterMemberAggregation(
 	assert.Equal(t, int64(1), stats.MemberCandidate)
 	assert.Equal(t, int64(1), stats.MemberExcluded)
 }
+
+// --- Hidden person filtering tests ---
+
+func TestIdentityProfileRepo_HiddenFilteredFromBackfill(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewPersonIdentityProfileRepository(db)
+	personRepo := NewPersonRepository(db)
+
+	visible := &model.Person{Category: model.PersonCategoryFriend}
+	hidden := &model.Person{Category: model.PersonCategoryFriend, Hidden: true}
+	require.NoError(t, personRepo.Create(visible))
+	require.NoError(t, personRepo.Create(hidden))
+
+	ids, err := repo.ListBackfillPersonIDs(0, 100)
+	require.NoError(t, err)
+	assert.Contains(t, ids, visible.ID)
+	assert.NotContains(t, ids, hidden.ID)
+}
+
+func TestIdentityProfileRepo_HiddenFilteredFromListDirty(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewPersonIdentityProfileRepository(db)
+	personRepo := NewPersonRepository(db)
+
+	visible := &model.Person{Category: model.PersonCategoryFriend}
+	hidden := &model.Person{Category: model.PersonCategoryFriend, Hidden: true}
+	require.NoError(t, personRepo.Create(visible))
+	require.NoError(t, personRepo.Create(hidden))
+
+	// Create dirty profiles for both.
+	require.NoError(t, repo.MarkDirty([]uint{visible.ID, hidden.ID}, "test"))
+
+	profiles, err := repo.ListDirty(0, 100)
+	require.NoError(t, err)
+	personIDs := make(map[uint]bool)
+	for _, p := range profiles {
+		personIDs[p.PersonID] = true
+	}
+	assert.True(t, personIDs[visible.ID])
+	assert.False(t, personIDs[hidden.ID])
+}
+
+func TestIdentityProfileRepo_HiddenFilteredFromListDirtyByReasons(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewPersonIdentityProfileRepository(db)
+	personRepo := NewPersonRepository(db)
+
+	visible := &model.Person{Category: model.PersonCategoryFriend}
+	hidden := &model.Person{Category: model.PersonCategoryFriend, Hidden: true}
+	require.NoError(t, personRepo.Create(visible))
+	require.NoError(t, personRepo.Create(hidden))
+
+	require.NoError(t, repo.MarkDirty([]uint{visible.ID, hidden.ID}, "people_merged"))
+
+	profiles, err := repo.ListDirtyByReasons([]string{"people_merged"}, 0, 100)
+	require.NoError(t, err)
+	personIDs := make(map[uint]bool)
+	for _, p := range profiles {
+		personIDs[p.PersonID] = true
+	}
+	assert.True(t, personIDs[visible.ID])
+	assert.False(t, personIDs[hidden.ID])
+}
+
+func TestIdentityProfileRepo_HiddenFilteredFromAllActiveCenters(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewPersonIdentityProfileRepository(db)
+	personRepo := NewPersonRepository(db)
+
+	visible := &model.Person{Category: model.PersonCategoryFriend}
+	hidden := &model.Person{Category: model.PersonCategoryFriend, Hidden: true}
+	require.NoError(t, personRepo.Create(visible))
+	require.NoError(t, personRepo.Create(hidden))
+
+	// Create ready profiles + active centers for both.
+	for _, p := range []*model.Person{visible, hidden} {
+		profile := &model.PersonIdentityProfile{
+			PersonID:        p.ID,
+			Status:          model.PersonIdentityProfileStatusReady,
+			ActiveGeneration: 1,
+			EmbeddingModel:  "test-model",
+		}
+		require.NoError(t, db.Create(profile).Error)
+		center := &model.PersonIdentityCenter{
+			PersonID:  p.ID,
+			Generation: 1,
+			Ordinal:   0,
+		}
+		require.NoError(t, db.Create(center).Error)
+	}
+
+	centers, err := repo.ListAllActiveCenters("test-model")
+	require.NoError(t, err)
+	personIDs := make(map[uint]bool)
+	for _, c := range centers {
+		personIDs[c.PersonID] = true
+	}
+	assert.True(t, personIDs[visible.ID])
+	assert.False(t, personIDs[hidden.ID])
+}
+
+func TestIdentityProfileRepo_HiddenFilteredFromActiveCentersByPersonIDs(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewPersonIdentityProfileRepository(db)
+	personRepo := NewPersonRepository(db)
+
+	visible := &model.Person{Category: model.PersonCategoryFriend}
+	hidden := &model.Person{Category: model.PersonCategoryFriend, Hidden: true}
+	require.NoError(t, personRepo.Create(visible))
+	require.NoError(t, personRepo.Create(hidden))
+
+	for _, p := range []*model.Person{visible, hidden} {
+		profile := &model.PersonIdentityProfile{
+			PersonID:        p.ID,
+			Status:          model.PersonIdentityProfileStatusReady,
+			ActiveGeneration: 1,
+			EmbeddingModel:  "test-model",
+		}
+		require.NoError(t, db.Create(profile).Error)
+		center := &model.PersonIdentityCenter{
+			PersonID:  p.ID,
+			Generation: 1,
+			Ordinal:   0,
+		}
+		require.NoError(t, db.Create(center).Error)
+	}
+
+	centers, err := repo.ListActiveCentersByPersonIDs([]uint{visible.ID, hidden.ID}, "test-model")
+	require.NoError(t, err)
+	_, hasVisible := centers[visible.ID]
+	_, hasHidden := centers[hidden.ID]
+	assert.True(t, hasVisible, "visible person centers should be returned")
+	assert.False(t, hasHidden, "hidden person centers should be filtered out")
+}

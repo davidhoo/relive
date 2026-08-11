@@ -183,6 +183,7 @@ func (r *personIdentityProfileRepository) MarkDirty(personIDs []uint, reason str
 func (r *personIdentityProfileRepository) ListDirty(cursor uint, limit int) ([]*model.PersonIdentityProfile, error) {
 	var profiles []*model.PersonIdentityProfile
 	q := r.db.Where("status = ? AND person_id > ?", model.PersonIdentityProfileStatusDirty, cursor).
+		Where("person_id NOT IN (SELECT id FROM people WHERE hidden = ?)", true).
 		Order("person_id ASC")
 	if limit > 0 {
 		q = q.Limit(limit)
@@ -199,6 +200,7 @@ func (r *personIdentityProfileRepository) ListDirty(cursor uint, limit int) ([]*
 func (r *personIdentityProfileRepository) ListDirtyByReasons(reasons []string, cursor uint, limit int) ([]*model.PersonIdentityProfile, error) {
 	var profiles []*model.PersonIdentityProfile
 	q := r.db.Where("status = ? AND person_id > ?", model.PersonIdentityProfileStatusDirty, cursor)
+	q = q.Where("person_id NOT IN (SELECT id FROM people WHERE hidden = ?)", true)
 	if len(reasons) > 0 {
 		q = q.Where("dirty_reason IN ?", reasons)
 	}
@@ -255,6 +257,7 @@ func (r *personIdentityProfileRepository) ListAllActiveCenters(embeddingModel st
 		Joins("INNER JOIN people ON people.id = c.person_id").
 		Where("c.generation = p.active_generation AND p.active_generation > 0").
 		Where("p.embedding_model = ?", embeddingModel).
+		Where("people.hidden = ?", false).
 		Order("c.person_id ASC, c.ordinal ASC")
 	if err := q.Find(&centers).Error; err != nil {
 		return nil, err
@@ -284,6 +287,7 @@ func (r *personIdentityProfileRepository) ListActiveCentersByPersonIDs(personIDs
 			Where("c.generation = p.active_generation AND p.active_generation > 0").
 			Where("p.status = ?", model.PersonIdentityProfileStatusReady).
 			Where("p.embedding_model = ?", embeddingModel).
+			Where("people.hidden = ?", false).
 			Where("c.person_id IN ?", chunk).
 			Order("c.person_id ASC, c.ordinal ASC, c.id ASC")
 		if err := q.Find(&centers).Error; err != nil {
@@ -641,7 +645,7 @@ func (r *personIdentityProfileRepository) ListBackfillPersonIDs(cursor uint, lim
 	}
 	var ids []uint
 	err := r.db.Model(&model.Person{}).
-		Where("id > ? AND id NOT IN (SELECT person_id FROM person_identity_profiles)", cursor).
+		Where("id > ? AND id NOT IN (SELECT person_id FROM person_identity_profiles) AND hidden = ?", cursor, false).
 		Order("id ASC").
 		Limit(limit).
 		Pluck("id", &ids).Error

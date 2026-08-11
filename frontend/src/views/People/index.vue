@@ -1347,9 +1347,22 @@ const handleMergeConfirm = async () => {
 
 /**
  * 单个人物隐藏/恢复：本地翻转标记或移除，不重置列表与滚动位置。
- * 操作可逆，无需二次确认。成功后刷新当前列表并提示结果。
+ * 操作前显示确认弹窗说明影响。成功后刷新当前列表并提示结果。
  */
 const handleVisibilityChange = async (personId: number, hidden: boolean) => {
+  const action = hidden ? '隐藏' : '恢复显示'
+  const message = hidden
+    ? '隐藏后，该人物将从默认人物列表消失，并停止参与人物识别、聚类和合并建议。原有人脸归属会保留；以后出现的相似人脸不会匹配到此人物，可能形成新人物。可在"已隐藏"中恢复。'
+    : '恢复后，该人物将重新参与识别、聚类和合并建议。原有人脸归属保持不变，隐藏期间形成的新人物不会自动合并回来。'
+  try {
+    await ElMessageBox.confirm(message, `${action}确认`, {
+      confirmButtonText: `确认${action}`,
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
   try {
     await peopleApi.updateVisibility([personId], hidden)
     // 翻转标记或按可见性筛选移除
@@ -1393,9 +1406,12 @@ const handleBatchVisibility = async (hidden: boolean) => {
   const ids = Array.from(selectedIds.value)
   if (ids.length === 0) return
   const action = hidden ? '隐藏' : '恢复显示'
+  const message = hidden
+    ? `确定要${action}选中的 ${ids.length} 个人物吗？\n\n隐藏后，该人物将从默认人物列表消失，并停止参与人物识别、聚类和合并建议。原有人脸归属会保留；以后出现的相似人脸不会匹配到此人物，可能形成新人物。可在"已隐藏"中恢复。`
+    : `确定要${action}选中的 ${ids.length} 个人物吗？\n\n恢复后，该人物将重新参与识别、聚类和合并建议。原有人脸归属保持不变，隐藏期间形成的新人物不会自动合并回来。`
   try {
     await ElMessageBox.confirm(
-      `确定要${action}选中的 ${ids.length} 个人物吗？`,
+      message,
       `批量${action}确认`,
       { confirmButtonText: `确认${action}`, cancelButtonText: '取消', type: 'warning' },
     )

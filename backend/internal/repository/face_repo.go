@@ -233,8 +233,11 @@ func (r *faceRepository) ListAssigned() ([]*model.Face, error) {
 
 func (r *faceRepository) ListAssignedPersonIDs() ([]uint, error) {
 	var ids []uint
+	// hidden=true 人物退出聚类候选：通过子查询过滤隐藏人物的 person_id。用子查询而非
+	// GORM Joins，规避 SQLite 反引号不兼容坑（people.id 主键、faces.person_id 有索引，子查询走索引）。
 	err := r.db.Model(&model.Face{}).
-		Where("person_id IS NOT NULL AND cluster_status != ?", model.FaceClusterStatusExcluded).
+		Where("person_id IS NOT NULL AND cluster_status != ? AND person_id NOT IN (SELECT id FROM people WHERE hidden = ?)",
+			model.FaceClusterStatusExcluded, true).
 		Distinct("person_id").
 		Pluck("person_id", &ids).Error
 	return ids, err
@@ -249,8 +252,10 @@ func (r *faceRepository) ListAssignedPersonIDsPaged(offset, limit int) ([]uint, 
 		return nil, nil
 	}
 	var ids []uint
+	// 分页查询同样过滤隐藏人物，保证完整/增量 protoCache 构建都不装入隐藏人物。
 	err := r.db.Model(&model.Face{}).
-		Where("person_id IS NOT NULL AND cluster_status != ?", model.FaceClusterStatusExcluded).
+		Where("person_id IS NOT NULL AND cluster_status != ? AND person_id NOT IN (SELECT id FROM people WHERE hidden = ?)",
+			model.FaceClusterStatusExcluded, true).
 		Distinct("person_id").
 		Order("person_id ASC").
 		Offset(offset).
@@ -331,6 +336,7 @@ func (r *faceRepository) ListPrototypeEmbeddings(personIDs []uint, perPerson int
 					) AS rn
 				FROM faces
 				WHERE person_id IN ? AND cluster_status != 'excluded'
+					AND person_id NOT IN (SELECT id FROM people WHERE hidden = 1)
 			) sub
 			WHERE rn <= ?
 		`, chunk, perPerson).Scan(&faces).Error
@@ -382,9 +388,11 @@ func (r *faceRepository) ListProfileFaces(personID uint) ([]*model.Face, error) 
 
 func (r *faceRepository) ListLowConfidence(threshold float64, maxGeneration int) ([]*model.Face, error) {
 	var faces []*model.Face
+	// hidden=true 人物退出反馈重聚类：其低置信度人脸不得被释放回 pending。
+	// 通过子查询过滤归属隐藏人物的人脸，避免 JOIN 反引号问题。
 	err := r.db.Select("id, person_id").
-		Where("manual_locked = ? AND cluster_status = ? AND cluster_score < ? AND recluster_generation < ?",
-			false, model.FaceClusterStatusAssigned, threshold, maxGeneration).
+		Where("manual_locked = ? AND cluster_status = ? AND cluster_score < ? AND recluster_generation < ? AND person_id NOT IN (SELECT id FROM people WHERE hidden = ?)",
+			false, model.FaceClusterStatusAssigned, threshold, maxGeneration, true).
 		Find(&faces).Error
 	return faces, err
 }

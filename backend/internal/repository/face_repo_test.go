@@ -677,3 +677,152 @@ func encodeFloat32(t *testing.T, vals []float32) []byte {
 	require.NoError(t, err)
 	return payload
 }
+
+// --- Hidden person filtering tests ---
+
+func TestFaceRepo_HiddenPersonFilteredFromAssignedPersonIDs(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	faceRepo := NewFaceRepository(db)
+	personRepo := NewPersonRepository(db)
+
+	visible := &model.Person{Category: model.PersonCategoryFriend}
+	hidden := &model.Person{Category: model.PersonCategoryFriend, Hidden: true}
+	require.NoError(t, personRepo.Create(visible))
+	require.NoError(t, personRepo.Create(hidden))
+
+	for _, p := range []*model.Person{visible, hidden} {
+		face := &model.Face{
+			PhotoID:      1,
+			PersonID:     &p.ID,
+			ClusterStatus: model.FaceClusterStatusAssigned,
+		}
+		require.NoError(t, faceRepo.Create(face))
+	}
+
+	ids, err := faceRepo.ListAssignedPersonIDs()
+	require.NoError(t, err)
+	assert.Contains(t, ids, visible.ID)
+	assert.NotContains(t, ids, hidden.ID)
+
+	paged, err := faceRepo.ListAssignedPersonIDsPaged(0, 100)
+	require.NoError(t, err)
+	assert.Contains(t, paged, visible.ID)
+	assert.NotContains(t, paged, hidden.ID)
+}
+
+func TestFaceRepo_HiddenPersonFilteredFromPrototypeEmbeddings(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	faceRepo := NewFaceRepository(db)
+	personRepo := NewPersonRepository(db)
+
+	visible := &model.Person{Category: model.PersonCategoryFriend}
+	hidden := &model.Person{Category: model.PersonCategoryFriend, Hidden: true}
+	require.NoError(t, personRepo.Create(visible))
+	require.NoError(t, personRepo.Create(hidden))
+
+	emb := []byte(`[0.1,0.2,0.3]`)
+	for _, p := range []*model.Person{visible, hidden} {
+		face := &model.Face{
+			PhotoID:       1,
+			PersonID:      &p.ID,
+			ClusterStatus: model.FaceClusterStatusAssigned,
+			Embedding:     emb,
+		}
+		require.NoError(t, faceRepo.Create(face))
+	}
+
+	faces, err := faceRepo.ListPrototypeEmbeddings([]uint{visible.ID, hidden.ID}, 5)
+	require.NoError(t, err)
+	personIDs := make(map[uint]bool)
+	for _, f := range faces {
+		if f.PersonID != nil {
+			personIDs[*f.PersonID] = true
+		}
+	}
+	assert.True(t, personIDs[visible.ID], "visible person prototype should be returned")
+	assert.False(t, personIDs[hidden.ID], "hidden person prototype should be filtered out")
+}
+
+func TestFaceRepo_HiddenPersonFilteredFromLowConfidence(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	faceRepo := NewFaceRepository(db)
+	personRepo := NewPersonRepository(db)
+
+	visible := &model.Person{Category: model.PersonCategoryFriend}
+	hidden := &model.Person{Category: model.PersonCategoryFriend, Hidden: true}
+	require.NoError(t, personRepo.Create(visible))
+	require.NoError(t, personRepo.Create(hidden))
+
+	for _, p := range []*model.Person{visible, hidden} {
+		face := &model.Face{
+			PhotoID:       1,
+			PersonID:      &p.ID,
+			ClusterStatus: model.FaceClusterStatusAssigned,
+			ClusterScore:  0.3,
+		}
+		require.NoError(t, faceRepo.Create(face))
+	}
+
+	faces, err := faceRepo.ListLowConfidence(0.5, 10)
+	require.NoError(t, err)
+	personIDs := make(map[uint]bool)
+	for _, f := range faces {
+		if f.PersonID != nil {
+			personIDs[*f.PersonID] = true
+		}
+	}
+	assert.True(t, personIDs[visible.ID], "visible person low-confidence face should be returned")
+	assert.False(t, personIDs[hidden.ID], "hidden person low-confidence face should be filtered out")
+}
+
+func TestFaceRepo_PendingNotAffectedByHidden(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	faceRepo := NewFaceRepository(db)
+
+	// Pending face with no person_id — should always be returned.
+	pendingFace := &model.Face{
+		PhotoID:       1,
+		ClusterStatus: model.FaceClusterStatusPending,
+	}
+	require.NoError(t, faceRepo.Create(pendingFace))
+
+	faces, err := faceRepo.ListPending(10)
+	require.NoError(t, err)
+	assert.Len(t, faces, 1)
+	assert.Equal(t, pendingFace.ID, faces[0].ID)
+}
+
+func TestFaceRepo_RestorePersonReappearsInQueries(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	faceRepo := NewFaceRepository(db)
+	personRepo := NewPersonRepository(db)
+
+	person := &model.Person{Category: model.PersonCategoryFriend, Hidden: true}
+	require.NoError(t, personRepo.Create(person))
+
+	face := &model.Face{
+		PhotoID:       1,
+		PersonID:      &person.ID,
+		ClusterStatus: model.FaceClusterStatusAssigned,
+	}
+	require.NoError(t, faceRepo.Create(face))
+
+	// Hidden: should not appear.
+	ids, err := faceRepo.ListAssignedPersonIDs()
+	require.NoError(t, err)
+	assert.NotContains(t, ids, person.ID)
+
+	// Restore.
+	_, err = personRepo.UpdateVisibility([]uint{person.ID}, false)
+	require.NoError(t, err)
+
+	// Should reappear.
+	ids, err = faceRepo.ListAssignedPersonIDs()
+	require.NoError(t, err)
+	assert.Contains(t, ids, person.ID)
+}

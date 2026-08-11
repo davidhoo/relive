@@ -286,3 +286,118 @@ func TestPersonRepository_MergeInto_PreservesTargetHidden(t *testing.T) {
 		assert.False(t, targetAfter.Hidden, "visible target must stay visible after merge")
 	})
 }
+
+// --- Hidden person filtering tests ---
+
+func TestPersonRepo_ListHiddenPersonIDs(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewPersonRepository(db)
+
+	visible := &model.Person{Category: model.PersonCategoryFriend}
+	hidden1 := &model.Person{Category: model.PersonCategoryFriend, Hidden: true}
+	hidden2 := &model.Person{Category: model.PersonCategoryStranger, Hidden: true}
+	require.NoError(t, repo.Create(visible))
+	require.NoError(t, repo.Create(hidden1))
+	require.NoError(t, repo.Create(hidden2))
+
+	ids, err := repo.ListHiddenPersonIDs()
+	require.NoError(t, err)
+	assert.Len(t, ids, 2)
+	assert.Contains(t, ids, hidden1.ID)
+	assert.Contains(t, ids, hidden2.ID)
+	assert.NotContains(t, ids, visible.ID)
+}
+
+func TestPersonRepo_HiddenFilteredFromMergeSuggestionTargets(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewPersonRepository(db)
+
+	visible := &model.Person{Category: model.PersonCategoryFamily, FaceCount: 1}
+	hidden := &model.Person{Category: model.PersonCategoryFamily, FaceCount: 1, Hidden: true}
+	require.NoError(t, repo.Create(visible))
+	require.NoError(t, repo.Create(hidden))
+
+	targets, err := repo.ListMergeSuggestionTargets(0, 100)
+	require.NoError(t, err)
+	ids := make(map[uint]bool)
+	for _, p := range targets {
+		ids[p.ID] = true
+	}
+	assert.True(t, ids[visible.ID])
+	assert.False(t, ids[hidden.ID])
+}
+
+func TestPersonRepo_HiddenFilteredFromListWithAvatar(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewPersonRepository(db)
+
+	visible := &model.Person{Category: model.PersonCategoryFriend, RepresentativeFaceID: uintPtrPerson(1)}
+	hidden := &model.Person{Category: model.PersonCategoryFriend, RepresentativeFaceID: uintPtrPerson(2), Hidden: true}
+	require.NoError(t, repo.Create(visible))
+	require.NoError(t, repo.Create(hidden))
+
+	people, err := repo.ListWithAvatar()
+	require.NoError(t, err)
+	ids := make(map[uint]bool)
+	for _, p := range people {
+		ids[p.ID] = true
+	}
+	assert.True(t, ids[visible.ID])
+	assert.False(t, ids[hidden.ID])
+}
+
+func TestPersonRepo_HiddenFilteredListByNameExact(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewPersonRepository(db)
+
+	visible := &model.Person{Name: "Alice", Category: model.PersonCategoryFriend}
+	hidden := &model.Person{Name: "Alice", Category: model.PersonCategoryFriend, Hidden: true}
+	require.NoError(t, repo.Create(visible))
+	require.NoError(t, repo.Create(hidden))
+
+	people, err := repo.ListByNameExact("Alice")
+	require.NoError(t, err)
+	ids := make(map[uint]bool)
+	for _, p := range people {
+		ids[p.ID] = true
+	}
+	assert.True(t, ids[visible.ID])
+	assert.False(t, ids[hidden.ID])
+}
+
+func TestPersonRepo_RestoreReappearsInCandidates(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+	repo := NewPersonRepository(db)
+
+	person := &model.Person{Name: "Bob", Category: model.PersonCategoryFamily, FaceCount: 1, Hidden: true}
+	require.NoError(t, repo.Create(person))
+
+	// Hidden: should not appear.
+	targets, err := repo.ListMergeSuggestionTargets(0, 100)
+	require.NoError(t, err)
+	for _, p := range targets {
+		assert.NotEqual(t, person.ID, p.ID)
+	}
+
+	// Restore.
+	_, err = repo.UpdateVisibility([]uint{person.ID}, false)
+	require.NoError(t, err)
+
+	// Should reappear.
+	targets, err = repo.ListMergeSuggestionTargets(0, 100)
+	require.NoError(t, err)
+	found := false
+	for _, p := range targets {
+		if p.ID == person.ID {
+			found = true
+		}
+	}
+	assert.True(t, found, "restored person should reappear in merge suggestion targets")
+}
+
+func uintPtrPerson(v uint) *uint { return &v }

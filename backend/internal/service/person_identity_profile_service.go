@@ -139,6 +139,10 @@ type PersonIdentityProfileService interface {
 	// MarkDirty 标记人物画像待重建。legacy 直接返回不写库；其他模式去重后调用 Repository。
 	// 本任务只实现服务能力，暂不接入人物操作。
 	MarkDirty(personIDs []uint, reason string) error
+	// InvalidateANNOnly 仅在内存中失效指定人物的 ANN 中心，不修改 profile 表的 status。
+	// 用于人物隐藏：ANN 立即 fail-closed，但不把 ready profile 改成无意义的 dirty，
+	// 避免隐藏人物持续污染运行统计。legacy 模式 no-op。
+	InvalidateANNOnly(personIDs []uint)
 	// Invalidate 统一应用一次身份画像失效。legacy 直接返回不写库不操作 ANN。
 	// 非 legacy 模式按 fail-closed 顺序执行（ANN 先失效 → Repository 原子失效 → 请求重建）。
 	Invalidate(invalidation IdentityProfileInvalidation) error
@@ -444,6 +448,18 @@ func (s *personIdentityProfileService) MarkDirty(personIDs []uint, reason string
 	return s.executeWrite(func() error {
 		return s.repo.MarkDirty(ids, reason)
 	})
+}
+
+// InvalidateANNOnly 仅在内存中失效指定人物的 ANN 中心，不修改 profile 表。
+// 用于人物隐藏：ANN 立即 fail-closed，但不把 ready profile 改成 dirty。
+// legacy 模式 no-op（ann 为 nil）。
+func (s *personIdentityProfileService) InvalidateANNOnly(personIDs []uint) {
+	if s.mode == identityProfileModeLegacy || s.ann == nil {
+		return
+	}
+	for _, pid := range dedupPersonIDs(personIDs) {
+		s.ann.InvalidatePerson(pid)
+	}
 }
 
 // RunBackgroundSlice 执行一次有界后台工作。

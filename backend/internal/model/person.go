@@ -31,8 +31,11 @@ type Person struct {
 	FaceCount            int   `gorm:"not null;default:0" json:"face_count"`
 	PhotoCount           int   `gorm:"not null;default:0" json:"photo_count"`
 
-	// Hidden 仅控制人物是否出现在人物管理主列表，与人物分类完全独立，
-	// 不影响照片展示、人物识别、聚类、合并建议及合并/移动候选。
+	// Hidden 是人物参与识别、聚类、画像和合并建议的唯一开关：
+	//   hidden=false：正常显示并参与人物识别、聚类、画像和合并建议；
+	//   hidden=true ：从默认人物列表隐藏，同时退出识别、聚类、画像和合并建议。
+	// 原有人脸的 person_id/cluster_status/人工锁定/聚类分数一律保留，不转成 excluded，
+	// 照片计数、照片关联与 top_person_category 不因隐藏重算。仅控制参与资格，与分类独立。
 	Hidden bool `gorm:"not null;default:false;index:idx_people_hidden" json:"hidden"`
 }
 

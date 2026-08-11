@@ -22,6 +22,9 @@ type PersonRepository interface {
 	ListMergeSuggestionTargets(cursorID uint, limit int) ([]*model.Person, error) // cursor 分页，只返回 family/friend 且有脸的人物
 	ListWithAvatar() ([]*model.Person, error)                                     // 只返回有头像的人物（用于合并/移动候选列表）
 	ListPeople(opts ListPeopleOptions) ([]*model.Person, int64, error)            // 数据库层分页查询
+	// ListHiddenPersonIDs 返回所有 hidden=true 的人物 ID，供 peopleService 启动时
+	// 初始化运行时阻断集合。走 idx_people_hidden 索引，只 Pluck id，不加载完整对象。
+	ListHiddenPersonIDs() ([]uint, error)
 	RefreshStats(personID uint) error
 	MergeInto(targetPersonID uint, sourcePersonIDs []uint) ([]uint, error)
 	// UpdateVisibility 批量设置人物隐藏状态，单次事务更新，返回实际更新行数。
@@ -91,11 +94,12 @@ func (r *personRepository) ListMergeSuggestionTargets(cursorID uint, limit int) 
 		limit = 100
 	}
 	var people []*model.Person
-	q := r.db.Where("category IN ? AND face_count > 0", []string{
+	// hidden=true 人物退出合并建议，不得作为 target 候选。
+	q := r.db.Where("category IN ? AND face_count > 0 AND hidden = ?", []string{
 		model.PersonCategoryFamily,
 		model.PersonCategoryFriend,
 		model.PersonCategoryAcquaintance,
-	}).Order("id ASC").Limit(limit)
+	}, false).Order("id ASC").Limit(limit)
 	if cursorID > 0 {
 		q = q.Where("id > ?", cursorID)
 	}
@@ -120,7 +124,8 @@ func (r *personRepository) ListByIDs(ids []uint) ([]*model.Person, error) {
 
 func (r *personRepository) ListWithAvatar() ([]*model.Person, error) {
 	var people []*model.Person
-	err := r.db.Where("representative_face_id IS NOT NULL").
+	// 合并/移动候选默认排除隐藏人物。
+	err := r.db.Where("representative_face_id IS NOT NULL AND hidden = ?", false).
 		Order("id ASC").
 		Find(&people).Error
 	return people, err
@@ -132,8 +137,21 @@ func (r *personRepository) ListByNameExact(name string) ([]*model.Person, error)
 		return nil, nil
 	}
 	var people []*model.Person
-	err := r.db.Where("LOWER(name) = LOWER(?)", trimmed).Order("id ASC").Find(&people).Error
+	// 改名归属的同名匹配默认排除隐藏人物，避免命中已隐藏人物作为归属目标。
+	err := r.db.Where("LOWER(name) = LOWER(?) AND hidden = ?", trimmed, false).Order("id ASC").Find(&people).Error
 	return people, err
+}
+
+// ListHiddenPersonIDs 返回所有 hidden=true 的人物 ID。走 idx_people_hidden 索引，
+// 只 Pluck id 字段，避免在 NAS 上加载几万个人物的完整对象。供 peopleService 启动时
+// 初始化运行时阻断集合（fail-closed）。
+func (r *personRepository) ListHiddenPersonIDs() ([]uint, error) {
+	var ids []uint
+	err := r.db.Model(&model.Person{}).
+		Where("hidden = ?", true).
+		Order("id ASC").
+		Pluck("id", &ids).Error
+	return ids, err
 }
 
 func (r *personRepository) ListPeople(opts ListPeopleOptions) ([]*model.Person, int64, error) {

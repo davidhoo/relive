@@ -941,6 +941,12 @@ func (s *personMergeSuggestionService) ExcludeCandidates(suggestionID uint, cand
 		return fmt.Errorf("merge suggestion %d not found", suggestionID)
 	}
 
+	// Fail-closed: re-read person state before excluding. Reject if target or
+	// any candidate is hidden.
+	if err := s.rejectIfHidden(suggestion.TargetPersonID, candidateIDs); err != nil {
+		return err
+	}
+
 	// 仅记录仍为 pending、实际被剔除的候选；已经 excluded 的重复请求不重复产生反馈。
 	// 在写入前查询 pending 项，交集即为本次真正发生状态转换的候选。
 	actuallyExcluded := s.pendingCandidatesInSuggestion(suggestionID, candidateIDs)
@@ -1025,6 +1031,12 @@ func (s *personMergeSuggestionService) ApplySuggestion(suggestionID uint, candid
 		return fmt.Errorf("merge suggestion %d not found", suggestionID)
 	}
 
+	// Fail-closed: re-read person state before applying. Reject if target or
+	// any candidate is hidden.
+	if err := s.rejectIfHidden(suggestion.TargetPersonID, candidateIDs); err != nil {
+		return err
+	}
+
 	// Acquire write gate to exclude background clustering worker from
 	// writing faces/people tables during the merge, preventing SQLite lock contention.
 	if s.writeGateFn != nil {
@@ -1078,6 +1090,8 @@ func (s *personMergeSuggestionService) ListPending(page, pageSize int) ([]model.
 	if err != nil {
 		return nil, 0, err
 	}
+	// Filter out suggestions whose target or any candidate is hidden.
+	suggestions = s.filterHiddenSuggestions(suggestions)
 	items := make([]*model.PersonMergeSuggestionItem, 0)
 	for _, suggestion := range suggestions {
 		suggestionItems, itemErr := s.mergeSuggestionRepo.GetItems(suggestion.ID, model.PersonMergeSuggestionItemStatusPending)
@@ -1097,6 +1111,12 @@ func (s *personMergeSuggestionService) GetPendingByID(id uint) (*model.PersonMer
 	if suggestion == nil || suggestion.Status != model.PersonMergeSuggestionStatusPending {
 		return nil, nil
 	}
+	// Filter out suggestions whose target or any candidate is hidden.
+	filtered := s.filterHiddenSuggestions([]*model.PersonMergeSuggestion{suggestion})
+	if len(filtered) == 0 {
+		return nil, nil
+	}
+	suggestion = filtered[0]
 	items, err := s.mergeSuggestionRepo.GetItems(id, model.PersonMergeSuggestionItemStatusPending)
 	if err != nil {
 		return nil, err
@@ -1115,6 +1135,60 @@ func (s *personMergeSuggestionService) listSuggestionTargets(cursorID uint) ([]*
 	}
 	bgPersonRepo, _, _, _ := s.bgRepos()
 	return bgPersonRepo.ListMergeSuggestionTargets(cursorID, batchSize)
+}
+
+// rejectIfHidden re-reads target and candidate person state from the database
+// and returns ErrPersonHidden if any are hidden. This is a fail-closed check
+// performed before any write operation on merge suggestions.
+func (s *personMergeSuggestionService) rejectIfHidden(targetPersonID uint, candidateIDs []uint) error {
+	allIDs := make([]uint, 0, 1+len(candidateIDs))
+	allIDs = append(allIDs, targetPersonID)
+	allIDs = append(allIDs, candidateIDs...)
+	people, err := s.personRepo.ListByIDs(allIDs)
+	if err != nil {
+		return fmt.Errorf("check person hidden state: %w", err)
+	}
+	for _, p := range people {
+		if p != nil && p.Hidden {
+			return ErrPersonHidden
+		}
+	}
+	return nil
+}
+
+// filterHiddenSuggestions removes suggestions whose target person is hidden.
+// Candidate-level hidden filtering is handled by the item-level check in
+// buildSuggestionResponses via ListByIDs; here we only do a fast target-level
+// filter to avoid loading items for hidden-target suggestions.
+func (s *personMergeSuggestionService) filterHiddenSuggestions(suggestions []*model.PersonMergeSuggestion) []*model.PersonMergeSuggestion {
+	if len(suggestions) == 0 {
+		return suggestions
+	}
+	targetIDs := make([]uint, 0, len(suggestions))
+	for _, sug := range suggestions {
+		if sug != nil && sug.TargetPersonID != 0 {
+			targetIDs = append(targetIDs, sug.TargetPersonID)
+		}
+	}
+	people, err := s.personRepo.ListByIDs(targetIDs)
+	if err != nil {
+		// On error, fail closed: filter out all suggestions to avoid showing
+		// potentially stale suggestions with hidden targets.
+		return nil
+	}
+	hiddenTargets := make(map[uint]bool, len(people))
+	for _, p := range people {
+		if p != nil && p.Hidden {
+			hiddenTargets[p.ID] = true
+		}
+	}
+	out := make([]*model.PersonMergeSuggestion, 0, len(suggestions))
+	for _, sug := range suggestions {
+		if sug == nil || !hiddenTargets[sug.TargetPersonID] {
+			out = append(out, sug)
+		}
+	}
+	return out
 }
 
 func (s *personMergeSuggestionService) currentBatchSize() (int, error) {
@@ -1174,6 +1248,10 @@ func (s *personMergeSuggestionService) buildSuggestionResponses(
 		if item == nil {
 			continue
 		}
+		// Skip items whose candidate person is hidden.
+		if p := peopleByID[item.CandidatePersonID]; p != nil && p.Hidden {
+			continue
+		}
 		itemsBySuggestion[item.SuggestionID] = append(itemsBySuggestion[item.SuggestionID], model.PersonMergeSuggestionItemResponse{
 			ID:                item.ID,
 			SuggestionID:      item.SuggestionID,
@@ -1190,6 +1268,15 @@ func (s *personMergeSuggestionService) buildSuggestionResponses(
 	responses := make([]model.PersonMergeSuggestionResponse, 0, len(suggestions))
 	for _, suggestion := range suggestions {
 		if suggestion == nil {
+			continue
+		}
+		// Skip suggestions whose target is hidden (defensive: filterHiddenSuggestions
+		// should already catch this, but fail-closed here too).
+		if p := peopleByID[suggestion.TargetPersonID]; p != nil && p.Hidden {
+			continue
+		}
+		// Skip suggestions that have no visible items after candidate filtering.
+		if len(itemsBySuggestion[suggestion.ID]) == 0 {
 			continue
 		}
 		responses = append(responses, model.PersonMergeSuggestionResponse{

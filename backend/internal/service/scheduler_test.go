@@ -107,6 +107,7 @@ func (s *identityProfileServiceStub) MarkDirty([]uint, string) error { return ni
 func (s *identityProfileServiceStub) Invalidate(IdentityProfileInvalidation) error {
 	return nil
 }
+func (s *identityProfileServiceStub) InvalidateANNOnly([]uint) {}
 func (s *identityProfileServiceStub) RunBackgroundSlice() error {
 	s.runCalls.Add(1)
 	return nil

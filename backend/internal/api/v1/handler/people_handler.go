@@ -597,7 +597,7 @@ func (h *PeopleHandler) UpdateVisibility(c *gin.Context) {
 		return
 	}
 
-	updated, err := h.personRepo.UpdateVisibility(ids, *req.Hidden)
+	updated, err := h.service.UpdateVisibility(ids, *req.Hidden)
 	if err != nil {
 		writePeopleError(c, http.StatusInternalServerError, "UPDATE_FAILED", err.Error())
 		return
@@ -1217,6 +1217,11 @@ func writeServiceFailure(c *gin.Context, err error) {
 	status := http.StatusInternalServerError
 	code := "OPERATION_FAILED"
 	message := err.Error()
+	if errors.Is(err, service.ErrPersonHidden) {
+		status = http.StatusConflict
+		code = "PERSON_HIDDEN"
+		message = err.Error()
+	}
 	if errors.Is(err, gorm.ErrRecordNotFound) || strings.Contains(strings.ToLower(message), "not found") {
 		status = http.StatusNotFound
 		code = "NOT_FOUND"

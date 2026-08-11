@@ -88,7 +88,7 @@ type PeopleService interface {
 	GetMergeJobStatus(jobID uint) (*model.PeopleMergeJob, error)
 	SplitPerson(sourcePersonID uint, faceIDs []uint) (*model.Person, *model.ReclusterResult, error)
 	MoveFaces(faceIDs []uint, targetPersonID uint) (*model.ReclusterResult, error)
-	// AssignFacePerson 针对单张人脸执行“改名”归属变更，供照片详情页使用：
+	// AssignFacePerson 针对单张人脸执行"改名"归属变更，供照片详情页使用：
 	//   - targetPersonID 有值：移动到目标人物，忽略 name/category；
 	//   - targetPersonID 为空但 name 命中已有人物：移动到命中人物；
 	//   - targetPersonID 为空且 name 未命中：拆分创建新人物并命名/分类。
@@ -99,6 +99,15 @@ type PeopleService interface {
 	UpdatePersonName(personID uint, name string) error
 	UpdatePersonAvatar(personID uint, faceID uint) error
 	DissolvePerson(personID uint) (int, error)
+	// UpdateVisibility 批量设置人物隐藏状态。进入 foreground mutation/write gate，
+	// 先更新 DB 再更新内存阻断集合（先 DB 后内存：DB 失败直接返回 error 不动内存，
+	// 幂等性自然保证）。隐藏时触发 protoCacheDirty + ANN InvalidatePerson + merge
+	// suggestion dirty；恢复时触发 protoCacheDirty + profile dirty + merge suggestion dirty。
+	// 去重/500 限制/404 判断留在 handler 层。
+	UpdateVisibility(personIDs []uint, hidden bool) (updated int64, err error)
+	// InitHiddenPersons 从 DB 加载隐藏人物 ID 集合。在 NewServices wireup 时调用，
+	// 失败则 hiddenPersonsLoaded=false，StartBackground 会拒绝启动（fail-closed）。
+	InitHiddenPersons() error
 	HandleShutdown() error
 	ApplyDetectionResult(job *model.PeopleJob, photo *model.Photo, result *model.PeopleDetectionResult) error
 }
@@ -181,6 +190,11 @@ type peopleService struct {
 	// invalidateIdentityProfiles 直接返回不产生任何开销。
 	identityProfileInvalidateFn identityProfileInvalidateFn
 
+	// identityProfileANNInvalidateFn 仅失效 ANN 内存中心，不写 profile 表。用于人物隐藏：
+	// ANN 立即 fail-closed，但不把 ready profile 改成 dirty。生产由 service.go 注入
+	// identityProfileService.InvalidateANNOnly（仅非 legacy 模式）；legacy 模式下为 nil。
+	identityProfileANNInvalidateFn func(personIDs []uint)
+
 	// backgroundCoordinator 是后台任务治理的统一准入控制器（Phase 2）。Task 8 起前台
 	// mutation 通过它注册 foreground scope，使 P2 automatic 后台 slice 在前台操作期间让路。
 	// nil 时（旧测试桩）前台 mutation 仍走 clusteringCoordinator.foregroundWaiters 兼容桥。
@@ -199,6 +213,18 @@ type peopleService struct {
 	statsCache   *model.PeopleStatsResponse
 	statsCacheAt time.Time
 	statsCacheMu sync.RWMutex
+
+	// hiddenPersonIDs is the runtime block-set for hidden persons. It mirrors
+	// people.hidden=true from the database and is used to prevent hidden persons
+	// from being matched by attachComponentToExistingPersonWithEmbeddings even
+	// when the protoCache has not yet been refreshed. This is only a cache of DB
+	// state, not a new business state source.
+	// InitHiddenPersons must be called during wireup (service.go) before
+	// StartBackground; StartBackground checks hiddenPersonsLoaded and refuses to
+	// start if false (fail-closed).
+	hiddenPersonIDs     map[uint]struct{}
+	hiddenPersonsMu     sync.RWMutex
+	hiddenPersonsLoaded bool
 }
 
 type clustProtoCache struct {
@@ -391,6 +417,10 @@ func NewPeopleService(db *gorm.DB, photoRepo repository.PhotoRepository, faceRep
 	svc.clusteringCoordinator = newPeopleClusteringCoordinator(svc)
 	svc.clusteringCoordinator.start()
 	svc.protoCacheDirty = newProtoCacheDirtyState()
+	// Load hidden person IDs into the runtime block-set. Done in constructor so
+	// all callers (production wireup + tests) get fail-closed for free. If this
+	// fails, hiddenPersonsLoaded stays false and StartBackground will refuse to start.
+	_ = svc.InitHiddenPersons()
 	return svc
 }
 
@@ -449,6 +479,13 @@ func (s *peopleService) effectiveLinkThreshold(retryCount int) float64 {
 func (s *peopleService) StartBackground() (*model.PeopleTask, error) {
 	if s.client == nil {
 		return nil, fmt.Errorf("people ml client not configured")
+	}
+
+	// Fail-closed: refuse to start background clustering if hidden person IDs
+	// have not been loaded. This prevents running clustering with an unknown
+	// participation state (e.g. InitHiddenPersons failed during wireup).
+	if !s.isHiddenPersonsLoaded() {
+		return nil, fmt.Errorf("hidden person IDs not loaded; call InitHiddenPersons before starting background")
 	}
 
 	// Acquire people runtime lease
@@ -738,6 +775,10 @@ func (s *peopleService) ResetAllPeople() (int, error) {
 }
 
 func (s *peopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint) (result *model.ReclusterResult, err error) {
+	// Reject if target or any source is hidden.
+	if err := s.rejectIfHidden(append([]uint{targetPersonID}, sourcePersonIDs...)...); err != nil {
+		return nil, err
+	}
 	totalStart := time.Now()
 	lockWait := s.beginForegroundMutationTimed()
 	defer s.endForegroundMutation()
@@ -810,6 +851,11 @@ func (s *peopleService) MergePeople(targetPersonID uint, sourcePersonIDs []uint)
 func (s *peopleService) MergePeopleAsync(targetPersonID uint, sourcePersonIDs []uint, jobType string) (uint, error) {
 	if len(sourcePersonIDs) == 0 {
 		return 0, fmt.Errorf("no source persons to merge")
+	}
+
+	// Reject if target or any source is hidden.
+	if err := s.rejectIfHidden(append([]uint{targetPersonID}, sourcePersonIDs...)...); err != nil {
+		return 0, err
 	}
 
 	// 验证目标人物存在
@@ -920,6 +966,9 @@ func (s *peopleService) GetMergeJobStatus(jobID uint) (*model.PeopleMergeJob, er
 }
 
 func (s *peopleService) SplitPerson(sourcePersonID uint, faceIDs []uint) (person *model.Person, result *model.ReclusterResult, err error) {
+	if err := s.rejectIfHidden(sourcePersonID); err != nil {
+		return nil, nil, err
+	}
 	totalStart := time.Now()
 	lockWait := s.beginForegroundMutationTimed()
 	defer s.endForegroundMutation()
@@ -1080,6 +1129,9 @@ func (s *peopleService) SplitPerson(sourcePersonID uint, faceIDs []uint) (person
 }
 
 func (s *peopleService) MoveFaces(faceIDs []uint, targetPersonID uint) (result *model.ReclusterResult, err error) {
+	if err := s.rejectIfHidden(targetPersonID); err != nil {
+		return nil, err
+	}
 	totalStart := time.Now()
 	lockWait := s.beginForegroundMutationTimed()
 	defer s.endForegroundMutation()
@@ -1230,9 +1282,21 @@ func (s *peopleService) AssignFacePerson(faceID uint, req model.FacePersonAssign
 	}
 	sourcePersonID := *face.PersonID
 
+	// Reject if source person is hidden.
+	if err := s.rejectIfHidden(sourcePersonID); err != nil {
+		return 0, err
+	}
+
 	targetPersonID, createNew, err := s.resolveAssignTarget(sourcePersonID, req)
 	if err != nil {
 		return 0, err
+	}
+
+	// Reject if target person (when not creating new) is hidden.
+	if !createNew {
+		if err := s.rejectIfHidden(targetPersonID); err != nil {
+			return 0, err
+		}
 	}
 
 	// 目标与当前归属相同：视为无变化，直接返回，不产生副作用。
@@ -1424,6 +1488,9 @@ func (s *peopleService) UpdatePersonAvatar(personID uint, faceID uint) error {
 // DissolvePerson 解散指定人物：将其所有人脸（含人工确认）打回 pending，删除人物记录和约束。
 // 返回被释放的人脸数量。不触发自动重聚类，由后台任务自然处理。
 func (s *peopleService) DissolvePerson(personID uint) (released int, err error) {
+	if err := s.rejectIfHidden(personID); err != nil {
+		return 0, err
+	}
 	totalStart := time.Now()
 	lockWait := s.beginForegroundMutationTimed()
 	defer s.endForegroundMutation()
@@ -2264,6 +2331,143 @@ func (s *peopleService) releaseCoordinatorForeground() {
 	}
 }
 
+// isHiddenPersonsLoaded returns whether InitHiddenPersons has successfully loaded
+// the hidden person ID set from the database.
+func (s *peopleService) isHiddenPersonsLoaded() bool {
+	s.hiddenPersonsMu.RLock()
+	defer s.hiddenPersonsMu.RUnlock()
+	return s.hiddenPersonsLoaded
+}
+
+// InitHiddenPersons loads hidden=true person IDs from the database into the
+// runtime block-set. Called during NewServices wireup. On failure, sets
+// hiddenPersonsLoaded=false so StartBackground refuses to start (fail-closed).
+func (s *peopleService) InitHiddenPersons() error {
+	ids, err := s.personRepo.ListHiddenPersonIDs()
+	if err != nil {
+		logger.Errorf("Failed to load hidden person IDs: %v", err)
+		s.hiddenPersonsMu.Lock()
+		s.hiddenPersonsLoaded = false
+		s.hiddenPersonsMu.Unlock()
+		return fmt.Errorf("load hidden person IDs: %w", err)
+	}
+	m := make(map[uint]struct{}, len(ids))
+	for _, id := range ids {
+		m[id] = struct{}{}
+	}
+	s.hiddenPersonsMu.Lock()
+	s.hiddenPersonIDs = m
+	s.hiddenPersonsLoaded = true
+	s.hiddenPersonsMu.Unlock()
+	logger.Infof("Loaded %d hidden person IDs into runtime block-set", len(ids))
+	return nil
+}
+
+// addToHiddenSet adds person IDs to the runtime block-set. Caller must hold writeGate.
+func (s *peopleService) addToHiddenSet(ids []uint) {
+	s.hiddenPersonsMu.Lock()
+	defer s.hiddenPersonsMu.Unlock()
+	if s.hiddenPersonIDs == nil {
+		s.hiddenPersonIDs = make(map[uint]struct{})
+	}
+	for _, id := range ids {
+		s.hiddenPersonIDs[id] = struct{}{}
+	}
+}
+
+// removeFromHiddenSet removes person IDs from the runtime block-set. Caller must hold writeGate.
+func (s *peopleService) removeFromHiddenSet(ids []uint) {
+	s.hiddenPersonsMu.Lock()
+	defer s.hiddenPersonsMu.Unlock()
+	if s.hiddenPersonIDs == nil {
+		return
+	}
+	for _, id := range ids {
+		delete(s.hiddenPersonIDs, id)
+	}
+}
+
+// mergeHiddenPersonsIntoBlocked merges the runtime hidden person set into the
+// given blockedPersons map. Called from attachComponent callers to ensure
+// hidden persons are never matched, even if protoCache still contains them.
+func (s *peopleService) mergeHiddenPersonsIntoBlocked(blockedPersons map[uint]bool) {
+	s.hiddenPersonsMu.RLock()
+	defer s.hiddenPersonsMu.RUnlock()
+	for id := range s.hiddenPersonIDs {
+		blockedPersons[id] = true
+	}
+}
+
+// UpdateVisibility 批量设置人物隐藏状态。
+//
+// 核心顺序约束：先更新 DB → 再更新内存阻断集合。DB 失败直接返回 error 不动内存，
+// 保证幂等性。隐藏时触发 protoCacheDirty（移除隐藏人物）；恢复时触发 protoCacheDirty
+// （重新装入可见人物）。隐藏时调用 ANN InvalidatePerson（内存操作，不删 profile）；
+// 恢复时标记 profile dirty。
+//
+// 去重/500 限制/404 判断留在 handler 层。Service 返回 (updated, err)。
+func (s *peopleService) UpdateVisibility(personIDs []uint, hidden bool) (updated int64, err error) {
+	if len(personIDs) == 0 {
+		return 0, nil
+	}
+
+	totalStart := time.Now()
+	lockWait := s.beginForegroundMutationTimed()
+	defer s.endForegroundMutation()
+
+	// 1. 先更新 DB
+	updated, err = s.personRepo.UpdateVisibility(personIDs, hidden)
+	if err != nil {
+		return 0, fmt.Errorf("update visibility: %w", err)
+	}
+	if updated == 0 {
+		return 0, nil
+	}
+
+	// Determine which IDs were actually affected (only those that exist in DB).
+	// personRepo.UpdateVisibility returns total rows affected, not the specific IDs.
+	// We add/remove all requested IDs to/from the block-set; IDs that weren't in DB
+	// are harmless no-ops in the set.
+	if hidden {
+		s.addToHiddenSet(personIDs)
+	} else {
+		s.removeFromHiddenSet(personIDs)
+	}
+
+	// 2. Trigger protoCache dirty so the cache is refreshed (hidden persons removed
+	// or restored persons re-added) at the next safe opportunity.
+	s.markProtoCacheDirty(personIDs, nil, "person_visibility_changed")
+
+	// 3. ANN / identity profile handling
+	if hidden {
+		// InvalidatePerson is a pure in-memory ANN operation (no DB writes).
+		// Do not mark profile dirty — hidden persons should not pollute dirty stats.
+		if s.identityProfileANNInvalidateFn != nil {
+			s.identityProfileANNInvalidateFn(personIDs)
+		}
+	} else {
+		// Restore: mark profile dirty so background scheduler rebuilds and reactivates.
+		if s.identityProfileMarkDirtyFn != nil {
+			_ = s.identityProfileMarkDirtyFn(personIDs, "person_visibility_changed")
+		}
+	}
+
+	// 4. Merge suggestion dirty
+	if s.mergeSuggestionDirty != nil {
+		_ = s.mergeSuggestionDirty("person_visibility_changed")
+	}
+
+	elapsed := time.Since(totalStart)
+	action := "restore"
+	if hidden {
+		action = "hide"
+	}
+	logger.Infof("UpdateVisibility action=%s requested=%d updated=%d elapsed=%v gate_wait=%v",
+		action, len(personIDs), updated, elapsed, lockWait)
+
+	return updated, nil
+}
+
 // peopleMutationTiming captures the timing breakdown of a single foreground
 // people mutation (split/move/merge/dissolve/assign) for structured observability.
 // The coordinator uses foreground-vs-background priority decisions that can make
@@ -2509,6 +2713,12 @@ type identityProfileInvalidateFn func(invalidation IdentityProfileInvalidation) 
 // invalidateIdentityProfiles 直接返回不产生任何开销。
 func (s *peopleService) SetIdentityProfileInvalidationHook(fn identityProfileInvalidateFn) {
 	s.identityProfileInvalidateFn = fn
+}
+
+// SetIdentityProfileANNInvalidateFn 注入 ANN-only 失效 hook（人物隐藏专用）。
+// 生产由 service.go 装配时注入 identityProfileService.InvalidateANNOnly。
+func (s *peopleService) SetIdentityProfileANNInvalidateFn(fn func(personIDs []uint)) {
+	s.identityProfileANNInvalidateFn = fn
 }
 
 // invalidateIdentityProfiles 是所有业务路径触发身份画像失效的统一入口。
@@ -3028,6 +3238,9 @@ func (s *peopleService) attachComponentToExistingPerson(component []*model.Face,
 		prototypesWithEmb[personID] = decodeFacesWithEmbeddings(protoFaces)
 	}
 
+	// Merge runtime hidden person block-set into cannot-link block-set.
+	s.mergeHiddenPersonsIntoBlocked(blockedPersons)
+
 	return s.attachComponentToExistingPersonWithEmbeddings(componentWithEmb, prototypesWithEmb, blockedPersons, prototypes, attachThreshold)
 }
 
@@ -3426,6 +3639,9 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, []identitySh
 			}
 		}
 
+		// Merge runtime hidden person block-set into cannot-link block-set.
+		s.mergeHiddenPersonsIntoBlocked(blockedPersons)
+
 		personID, score, attached := s.attachComponentToExistingPersonWithEmbeddings(
 			componentWithEmb, prototypesWithEmb, blockedPersons, prototypes, s.effectiveAttachThreshold(maxRetry),
 		)
@@ -3744,6 +3960,36 @@ func (s *peopleService) syncPersonState(personID uint) error {
 // handler 将其映射为 HTTP 409 / SPLIT_ASSIGNMENT_CONFLICT，而非通用 500。
 // 返回此错误而非静默创建新人物或复用无关人物，避免重复 split 请求造成人物链或误归属。
 var ErrPeopleSplitConflict = errors.New("split request conflicts with current face assignments")
+
+// ErrPersonHidden indicates an operation was attempted on a hidden person.
+// The handler maps this to HTTP 409 with code PERSON_HIDDEN.
+var ErrPersonHidden = errors.New("人物已隐藏，请先恢复显示后再执行该操作")
+
+// rejectIfHidden re-reads person state from the database and returns
+// ErrPersonHidden if any of the given person IDs are hidden. Used by
+// MergePeople/SplitPerson/MoveFaces/AssignFacePerson/DissolvePerson/
+// UpdateFaceExclusion to fail-closed before mutating ownership.
+func (s *peopleService) rejectIfHidden(personIDs ...uint) error {
+	ids := make([]uint, 0, len(personIDs))
+	for _, id := range personIDs {
+		if id != 0 {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	people, err := s.personRepo.ListByIDs(ids)
+	if err != nil {
+		return fmt.Errorf("check person hidden state: %w", err)
+	}
+	for _, p := range people {
+		if p != nil && p.Hidden {
+			return ErrPersonHidden
+		}
+	}
+	return nil
+}
 
 // errPeopleSplitConflict 是 ErrPeopleSplitConflict 的内部别名，保留既有调用点与测试的
 // 错误判定语义（errors.Is 仍成立），无需大范围改写。

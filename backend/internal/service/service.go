@@ -190,10 +190,14 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 			// （detection/merge/split/move/dissolve/reset/聚类/recluster）通过该 hook 统一
 			// 失效画像，替代 Task 12 仅用于 rescue 的 dirty hook。rescue 的画像持久化失效
 			// 由聚类批次末尾的 clustering_assignment 失效完成，rescue_attach 仅作遥测原因。
-			peopleSvc.(*peopleService).SetIdentityProfileInvalidationHook(
-				identityProfileService.Invalidate,
-			)
-			// 注入前台让路判定：当 peopleService 存在前台写操作等待/进行中（foregroundWaiters>0
+		peopleSvc.(*peopleService).SetIdentityProfileInvalidationHook(
+			identityProfileService.Invalidate,
+		)
+		// 人物隐藏专用：仅失效 ANN 内存中心，不写 profile 表。
+		peopleSvc.(*peopleService).SetIdentityProfileANNInvalidateFn(
+			identityProfileService.InvalidateANNOnly,
+		)
+		// 注入前台让路判定：当 peopleService 存在前台写操作等待/进行中（foregroundWaiters>0
 			// 或 writeGate 被独占持有）时，身份画像协调器不启动新的构建批次，已开始的小批次
 			// 允许完成。复用 clusteringCoordinator.foregroundWaiterCount 作为前台忙判定。
 			ips := identityProfileService.(*personIdentityProfileService)

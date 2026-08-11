@@ -38,6 +38,7 @@ type stubPeopleService struct {
 	enqueueByPathPriority int
 	enqueueByPathCount    int
 	enqueueByPathErr      error
+	updateVisibilityFn    func(ids []uint, hidden bool) (int64, error)
 	updateCategoryPerson  uint
 	updateCategoryValue   string
 	updateNamePerson      uint
@@ -192,6 +193,7 @@ func (s *stubIdentityProfileService) MarkDirty([]uint, string) error { return ni
 func (s *stubIdentityProfileService) Invalidate(service.IdentityProfileInvalidation) error {
 	return nil
 }
+func (s *stubIdentityProfileService) InvalidateANNOnly([]uint) {}
 func (s *stubIdentityProfileService) RunBackgroundSlice() error { return nil }
 func (s *stubIdentityProfileService) GetActive(uint) (*model.PersonIdentityProfileBuild, error) {
 	return nil, nil
@@ -1284,11 +1286,18 @@ func TestPeopleHandler_ListPeopleVisibility(t *testing.T) {
 
 // TestPeopleHandler_UpdateVisibility 验证批量隐藏/恢复、参数校验、不存在 ID 行为及副作用隔离。
 func TestPeopleHandler_UpdateVisibility(t *testing.T) {
-	handler, _, _, db, _ := newPeopleHandlerForTest(t)
+	handler, serviceStub, _, db, _ := newPeopleHandlerForTest(t)
 	fixture := seedPeopleHandlerFixture(t, db)
 
 	// 记录 family 原始分类，用于验证隐藏操作不修改分类
 	originalCategory := fixture.FamilyPerson.Category
+
+	// Inject real DB-backed UpdateVisibility so the stub service writes to the
+	// same in-memory DB the handler test validates against.
+	personRepo := repository.NewPersonRepository(db)
+	serviceStub.updateVisibilityFn = func(ids []uint, hidden bool) (int64, error) {
+		return personRepo.UpdateVisibility(ids, hidden)
+	}
 
 	t.Run("batch hide then restore", func(t *testing.T) {
 		body := []byte(`{"person_ids":[` + strconv.FormatUint(uint64(fixture.FamilyPerson.ID), 10) + `],"hidden":true}`)
@@ -1586,4 +1595,33 @@ func (r *foregroundCapturingPersonRepo) GetByID(id uint) (*model.Person, error) 
 		return nil, err
 	}
 	return &person, nil
+}
+func (s *stubPeopleService) UpdateVisibility(ids []uint, hidden bool) (int64, error) {
+	if s.updateVisibilityFn != nil {
+		return s.updateVisibilityFn(ids, hidden)
+	}
+	return 0, nil
+}
+func (s *stubPeopleService) InitHiddenPersons() error { return nil }
+
+func TestPeopleHandler_PersonHidden409(t *testing.T) {
+	handler, svc, _, _, _ := newPeopleHandlerForTest(t)
+	svc.err = service.ErrPersonHidden
+
+	// Dissolve
+	rec := performJSONRequest(t, http.MethodDelete, "/api/v1/people/1", nil, gin.Params{{Key: "id", Value: "1"}}, handler.DissolvePerson)
+	require.Equal(t, http.StatusConflict, rec.Code)
+	resp := decodeAPIResponse(t, rec)
+	require.False(t, resp.Success)
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, "PERSON_HIDDEN", resp.Error.Code)
+
+	// Merge (via async)
+	svc.err = service.ErrPersonHidden
+	rec = performJSONRequest(t, http.MethodPost, "/api/v1/people/merge", []byte(`{"target_person_id":1,"source_person_ids":[2]}`), nil, handler.MergePeople)
+	require.Equal(t, http.StatusConflict, rec.Code)
+	resp = decodeAPIResponse(t, rec)
+	require.False(t, resp.Success)
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, "PERSON_HIDDEN", resp.Error.Code)
 }

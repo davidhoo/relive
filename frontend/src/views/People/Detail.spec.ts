@@ -30,6 +30,10 @@ const mockGetById = vi.fn()
 const mockGetPhotos = vi.fn()
 const mockGetFaces = vi.fn()
 const mockGetList = vi.fn()
+const mockUpdateFaceExclusion = vi.fn()
+const mockMoveFaces = vi.fn()
+const mockSplit = vi.fn()
+const mockMerge = vi.fn()
 
 vi.mock('@/api/people', () => ({
   peopleApi: {
@@ -37,15 +41,27 @@ vi.mock('@/api/people', () => ({
     getPhotos: (...a: unknown[]) => mockGetPhotos(...a),
     getFaces: (...a: unknown[]) => mockGetFaces(...a),
     getList: (...a: unknown[]) => mockGetList(...a),
+    updateFaceExclusion: (...a: unknown[]) => mockUpdateFaceExclusion(...a),
+    moveFaces: (...a: unknown[]) => mockMoveFaces(...a),
+    split: (...a: unknown[]) => mockSplit(...a),
+    merge: (...a: unknown[]) => mockMerge(...a),
   },
 }))
 
+// vue-router push 捕获：用 holder 对象在工厂内创建 vi.fn() 并暴露给测试断言。
+// holder 在 vi.mock 提升（hoist）后初始化，工厂内引用 holder.push（运行时读取）避免 TDZ。
+const routerMockHolder: { push?: ReturnType<typeof vi.fn> } = {}
 vi.mock('vue-router', () => ({
   useRoute: () => ({ params: { id: '271594' }, query: {} }),
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => {
+    if (!routerMockHolder.push) routerMockHolder.push = vi.fn()
+    return { push: routerMockHolder.push }
+  },
 }))
 
 // element-plus 的 ElMessage / ElMessageBox 在 jsdom 下挂载较重，简化 mock。
+// ElMessageBox.confirm 默认 resolve（非人脸路径），测试可临时覆盖为 reject('cancel') 走低质量路径。
+// 使用工厂内 vi.fn() 避免 hoist 后引用未初始化的顶层变量。
 vi.mock('element-plus', () => ({
   ElMessage: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
   ElMessageBox: { confirm: vi.fn() },
@@ -53,6 +69,7 @@ vi.mock('element-plus', () => ({
 
 import Detail from '@/views/People/Detail.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 // cursor 模式响应：人物详情页照片/人脸分页返回 { items, has_more, next_cursor }。
 const cursor = (items: unknown[], hasMore: boolean, nextCursor = '') => ({
@@ -472,9 +489,129 @@ describe('Detail - Tab 切换恢复各自滚动位置（测试项 8）', () => {
     // 再切回 faces → 人脸分页状态保留（仍 50 张，不重新加载第一页），选择仍保留。
     vm.activeTab = 'faces'
     await flushPromises()
-    expect(vm.faces.length).toBe(50)
-    expect(mockGetFaces).toHaveBeenCalledTimes(1) // 全程只加载一次第一页
-    expect(vm.selectedFaceSet.size).toBe(2)
+   expect(vm.faces.length).toBe(50)
+   expect(mockGetFaces).toHaveBeenCalledTimes(1) // 全程只加载一次第一页
+   expect(vm.selectedFaceSet.size).toBe(2)
+ })
+})
+
+describe('Detail - 隐藏人物操作禁用与 PERSON_HIDDEN 错误提示', () => {
+  const mountHiddenDetail = async () => {
+    gridStub = makeVirtualMediaGridStub()
+    mockGetById.mockResolvedValue({
+      data: {
+        success: true,
+        data: {
+          id: 271594,
+          name: 'Hidden Person',
+          category: 'family',
+          has_avatar: false,
+          face_count: 10,
+          photo_count: 5,
+          hidden: true,
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+        },
+      },
+    })
+    mockGetPhotos.mockResolvedValue(photosPage(5, false))
+    mockGetFaces.mockResolvedValue(facesPage(10, false))
+    const wrapper = mount(Detail, {
+      global: {
+        stubs: {
+          SectionHeader: SectionHeader,
+          VirtualMediaGrid: gridStub.component,
+          PersonEditDialog: true,
+          PersonMergeConfirmDialog: true,
+          'el-card': { template: '<div><slot/><slot name="header"/></div>' },
+          'el-tabs': { template: '<div><slot/></div>' },
+          'el-tab-pane': { template: '<div><slot/></div>' },
+          'el-button': { template: '<button :disabled="disabled" @click="$emit(\'click\')"><slot/></button>', props: ['disabled'] },
+          'el-empty': true,
+          'el-tag': { template: '<span><slot/></span>' },
+          'el-tooltip': { template: '<span><slot/></span>' },
+          'el-alert': { template: '<div class="hidden-alert"><slot/></div>' },
+          'el-avatar': true,
+          'el-icon': true,
+          'el-dialog': true,
+          'el-select': true,
+          'el-option': true,
+          'el-divider': true,
+          'el-checkbox': true,
+        },
+      },
+    })
+    await flushPromises()
+    return wrapper
+  }
+
+  beforeEach(() => {
+    mockGetById.mockReset()
+    mockGetPhotos.mockReset()
+    mockGetFaces.mockReset()
+    mockGetList.mockReset()
+    mockSplit.mockReset()
+    mockMoveFaces.mockReset()
+    mockMerge.mockReset()
+    vi.mocked(ElMessage.warning).mockClear()
+    vi.mocked(ElMessage.error).mockClear()
+  })
+
+  it('隐藏人物详情页展示已停止参与识别和聚类的状态提示', async () => {
+    const wrapper = await mountHiddenDetail()
+    const alert = wrapper.find('.hidden-alert')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('已停止参与识别和聚类')
+  })
+
+  it('隐藏人物详情页禁用拆分/移动/排除/合并/相似度/解散按钮', async () => {
+    const wrapper = await mountHiddenDetail()
+    const vm: any = wrapper.vm
+    // person is hidden — all ownership operations should be disabled
+    expect(vm.person?.hidden).toBe(true)
+    // Find all disabled buttons in the ops toolbar
+    const buttons = wrapper.findAll('button[disabled]')
+    const disabledTexts = buttons.map(b => b.text())
+    // At minimum, split/move/exclude/merge/similarity/dissolve should be disabled
+    expect(disabledTexts.some(t => t.includes('拆分'))).toBe(true)
+    expect(disabledTexts.some(t => t.includes('移动'))).toBe(true)
+    expect(disabledTexts.some(t => t.includes('排除'))).toBe(true)
+    expect(disabledTexts.some(t => t.includes('合并到当前'))).toBe(true)
+    expect(disabledTexts.some(t => t.includes('相似度'))).toBe(true)
+    expect(disabledTexts.some(t => t.includes('解散'))).toBe(true)
+  })
+
+  it('隐藏人物恢复显示按钮不被禁用', async () => {
+    const wrapper = await mountHiddenDetail()
+    const buttons = wrapper.findAll('button')
+    const restoreBtn = buttons.find(b => b.text().includes('恢复显示'))
+    expect(restoreBtn).toBeDefined()
+    expect(restoreBtn?.attributes('disabled')).toBeFalsy()
+  })
+
+  it('收到 PERSON_HIDDEN 409 错误时提示先恢复显示，不显示通用操作失败', async () => {
+    // Simulate a split operation returning 409 PERSON_HIDDEN
+    mockSplit.mockRejectedValue({
+      response: {
+        status: 409,
+        data: { error: { code: 'PERSON_HIDDEN', message: '人物已隐藏，请先恢复显示后再执行该操作' } },
+      },
+    })
+
+    const wrapper = await mountHiddenDetail()
+    const vm: any = wrapper.vm
+
+    // Select a face first
+    vm.selectedFaceSet = new Set([1])
+    await wrapper.vm.$nextTick()
+
+    // Trigger split
+    await vm.splitSelectedFaces()
+    await flushPromises()
+
+    // Should show warning about person hidden, not generic error
+    expect(ElMessage.warning).toHaveBeenCalledWith('该人物已隐藏，请先恢复显示后再执行该操作')
+    expect(ElMessage.error).not.toHaveBeenCalled()
   })
 })
 
@@ -1130,5 +1267,305 @@ describe('Detail - P0 自动滚动回归（finally 不重测，无滚动不续�
     await flushPromises()
     expect(mockGetPhotos.mock.calls.length).toBe(callsAfterSettled)
     void vm
+  })
+})
+
+// ===== P0 回归：人脸操作后当前 Tab 自动重新加载 =====
+//
+// 根因：人脸 Tab 懒加载改造后，mutation 成功调用 loadData() 会清空 faces、重置
+// facesLoadedOnce=false，但 loadData 固定调用 loadMorePhotos()，而 activeTab 未变化
+// → watch(activeTab) 不触发 → 人脸列表保持假空，需切到照片再切回才恢复。
+// 修复：loadData() 按 activeTab 加载对应 Tab；watch(activeTab) 补齐 photos 分支对称懒加载。
+describe('Detail - 人脸操作后当前 Tab 重新加载（P0 回归）', () => {
+  const photosOf = (count: number, start: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      id: start + i + 1,
+      file_name: `p${start + i}.jpg`,
+      updated_at: '2026-01-01T00:00:00Z',
+    }))
+
+  beforeEach(() => {
+    ;(ElMessageBox.confirm as any).mockReset()
+    ;(ElMessageBox.confirm as any).mockResolvedValue('confirm')
+    mockGetById.mockReset()
+    mockGetPhotos.mockReset()
+    mockGetFaces.mockReset()
+    mockGetList.mockReset()
+    mockUpdateFaceExclusion.mockReset()
+    mockMoveFaces.mockReset()
+    routerMockHolder.push?.mockClear()
+    ;(ElMessage.success as any).mockReset()
+    ;(ElMessage.error as any).mockReset()
+    ;(ElMessage.info as any).mockReset()
+    ;(ElMessage.warning as any).mockReset()
+    mockGetById.mockResolvedValue(makePerson())
+    mockGetPhotos.mockResolvedValue(cursor(photosOf(30, 0), true, 'c2'))
+    mockGetFaces.mockResolvedValue(facesPage(50, true))
+  })
+
+  it('首次进入详情页：只请求人物信息和照片第一页，不请求人脸', async () => {
+    await mountDetail()
+    await flushPromises()
+
+    expect(mockGetById).toHaveBeenCalledWith(271594)
+    expect(mockGetPhotos).toHaveBeenCalledTimes(1)
+    // 人脸在首次进入时不应被加载
+    expect(mockGetFaces).not.toHaveBeenCalled()
+  })
+
+  it('切换到人脸 Tab：请求人脸第一页', async () => {
+    const wrapper = await mountDetail()
+    await flushPromises()
+    expect(mockGetFaces).not.toHaveBeenCalled()
+
+    const vm = wrapper.findComponent(Detail).vm as any
+    vm.activeTab = 'faces'
+    await flushPromises()
+
+    expect(mockGetFaces).toHaveBeenCalledTimes(1)
+  })
+
+  it('停留在人脸 Tab 点击刷新：人脸列表自动重新加载，Tab 不切换', async () => {
+    const wrapper = await mountDetail()
+    await flushPromises()
+    const vm = wrapper.findComponent(Detail).vm as any
+
+    // 先切到人脸 Tab 加载一次
+    vm.activeTab = 'faces'
+    await flushPromises()
+    expect(mockGetFaces).toHaveBeenCalledTimes(1)
+
+    // 在人脸 Tab 下点击顶部「刷新」按钮 → loadData() 应重新加载人脸第一页
+    const refreshBtn = wrapper.findAll('button').find(b => b.text().includes('刷新'))
+    expect(refreshBtn).toBeTruthy()
+    await (refreshBtn as any).trigger('click')
+    await flushPromises()
+
+    // Tab 仍停留在 faces（未切换规避）
+    expect(vm.activeTab).toBe('faces')
+    // 人脸列表被重新请求（加载首页）
+    expect(mockGetFaces.mock.calls.length).toBeGreaterThanOrEqual(2)
+    // 人脸列表非空
+    expect(vm.faces.length).toBeGreaterThan(0)
+  })
+
+  it('排除部分选中人脸后：再次请求人脸第一页，展示剩余人脸，选择清空', async () => {
+    const wrapper = await mountDetail()
+    await flushPromises()
+    const vm = wrapper.findComponent(Detail).vm as any
+
+    // 切到人脸 Tab
+    vm.activeTab = 'faces'
+    await flushPromises()
+    expect(mockGetFaces).toHaveBeenCalledTimes(1)
+    const facesCallsAfterFirst = mockGetFaces.mock.calls.length
+
+    // 选中两张人脸
+    vm.selectedFaceSet = new Set([7, 9])
+    await flushPromises()
+    expect(vm.selectedFaceSet.size).toBe(2)
+
+    // mock 排除成功 + 后续 getById + getFaces 刷新
+    mockUpdateFaceExclusion.mockResolvedValueOnce({})
+    // 排除后剩余人脸（48 张，无更多）
+    mockGetFaces.mockResolvedValueOnce(facesPage(48, false))
+    // getById 刷新人物信息（face_count 更新）
+    mockGetById.mockResolvedValueOnce(makePerson())
+
+    await vm.excludeSelectedFaces()
+    await flushPromises()
+
+    // 排除接口被调用一次，参数为选中的人脸 id
+    expect(mockUpdateFaceExclusion).toHaveBeenCalledWith([7, 9], true, 'non_face')
+    // loadData 被触发，人脸列表被重新请求
+    expect(mockGetFaces.mock.calls.length).toBeGreaterThan(facesCallsAfterFirst)
+    // 选择被清空
+    expect(vm.selectedFaceSet.size).toBe(0)
+    // Tab 仍停留在 faces（未切到 photos 规避）
+    expect(vm.activeTab).toBe('faces')
+    // 人脸列表非空（剩余人脸）
+    expect(vm.faces.length).toBeGreaterThan(0)
+  })
+
+  it('部分移动人脸后：当前人脸列表重新加载，不切换 Tab', async () => {
+    const wrapper = await mountDetail()
+    await flushPromises()
+    const vm = wrapper.findComponent(Detail).vm as any
+
+    // 切到人脸 Tab
+    vm.activeTab = 'faces'
+    await flushPromises()
+    const facesCallsAfterFirst = mockGetFaces.mock.calls.length
+
+    // 选中 2 张（少于 facesTotal=10000，非全部移动）
+    vm.selectedFaceSet = new Set([3, 5])
+    vm.moveTargetPersonId = 999
+    await flushPromises()
+
+    // mock 移动成功（返回带 recluster 统计的对象）
+    mockMoveFaces.mockResolvedValueOnce({ data: { data: { recluster_evaluated: 0, recluster_reassigned: 0 } } })
+    // 后续 loadData 刷新人脸第一页
+    mockGetFaces.mockResolvedValueOnce(facesPage(48, false))
+    mockGetById.mockResolvedValueOnce(makePerson())
+
+    await vm.confirmMoveFaces()
+    await flushPromises()
+
+    // 移动接口被调用
+    expect(mockMoveFaces).toHaveBeenCalledWith([3, 5], 999)
+    // 人脸列表被重新加载（loadData 触发）
+    expect(mockGetFaces.mock.calls.length).toBeGreaterThan(facesCallsAfterFirst)
+    // 没有跳转到 /people（非全部移动）
+    expect(routerMockHolder.push).not.toHaveBeenCalled()
+    // Tab 仍停留在 faces
+    expect(vm.activeTab).toBe('faces')
+  })
+
+  it('人脸操作后切到照片：照片第一页按需重新加载，不出现空列表', async () => {
+    const wrapper = await mountDetail()
+    await flushPromises()
+    const vm = wrapper.findComponent(Detail).vm as any
+
+    // 切到人脸 Tab
+    vm.activeTab = 'faces'
+    await flushPromises()
+
+    // 选中并排除
+    vm.selectedFaceSet = new Set([7])
+    await flushPromises()
+    mockUpdateFaceExclusion.mockResolvedValueOnce({})
+    mockGetFaces.mockResolvedValueOnce(facesPage(48, false))
+    mockGetById.mockResolvedValueOnce(makePerson())
+    await vm.excludeSelectedFaces()
+    await flushPromises()
+
+    // 此时 photosLoadedOnce 被 loadData 重置为 false，但 loadData 只加载了 faces（当前 Tab）。
+    // 切到 photos Tab → 对称懒加载应触发照片第一页重新加载，不出现假空列表。
+    const photosCallsBeforeSwitch = mockGetPhotos.mock.calls.length
+    vm.activeTab = 'photos'
+    await flushPromises()
+
+    expect(mockGetPhotos.mock.calls.length).toBeGreaterThan(photosCallsBeforeSwitch)
+    // 照片列表非空
+    expect(vm.photos.length).toBeGreaterThan(0)
+  })
+
+  it('操作后人物已不存在：提示后返回 /people', async () => {
+    const wrapper = await mountDetail()
+    await flushPromises()
+    const vm = wrapper.findComponent(Detail).vm as any
+
+    // 切到人脸 Tab 并选中
+    vm.activeTab = 'faces'
+    await flushPromises()
+    vm.selectedFaceSet = new Set([7])
+    await flushPromises()
+
+    // 排除成功，但随后 loadData 的 getById 返回 404（人物被清理）
+    mockUpdateFaceExclusion.mockResolvedValueOnce({})
+    const notFoundError = { response: { status: 404, data: { error: { message: 'not found' } } } }
+    mockGetById.mockRejectedValueOnce(notFoundError)
+
+    await vm.excludeSelectedFaces()
+    await flushPromises()
+
+    // 提示人物已无有效人脸样本
+    expect(ElMessage.info).toHaveBeenCalledWith('人物已无有效人脸样本')
+    // 跳转到人物列表
+    expect(routerMockHolder.push).toHaveBeenCalledWith('/people')
+    // person 被清空，不保留旧数据
+    expect(vm.person).toBeNull()
+  })
+
+  it('mutation 请求失败：不伪造刷新成功，不清空现有选择', async () => {
+    const wrapper = await mountDetail()
+    await flushPromises()
+    const vm = wrapper.findComponent(Detail).vm as any
+
+    // 切到人脸 Tab 并选中两张
+    vm.activeTab = 'faces'
+    await flushPromises()
+    vm.selectedFaceSet = new Set([7, 9])
+    await flushPromises()
+
+    // 排除接口失败（500 服务端错误，非 404）
+    const serverError = {
+      response: {
+        status: 500,
+        data: { error: { message: '服务器内部错误' } },
+      },
+    }
+    mockUpdateFaceExclusion.mockRejectedValueOnce(serverError)
+
+    const facesCallsBefore = mockGetFaces.mock.calls.length
+    await vm.excludeSelectedFaces()
+    await flushPromises()
+
+    // 失败后不应触发 loadData 刷新（不伪造刷新成功）
+    expect(mockGetFaces.mock.calls.length).toBe(facesCallsBefore)
+    // 选择不被清空
+    expect(vm.selectedFaceSet.size).toBe(2)
+    // 没有跳转
+    expect(routerMockHolder.push).not.toHaveBeenCalled()
+    // 显示了错误提示
+    expect(ElMessage.error).toHaveBeenCalled()
+  })
+
+  it('人脸重新加载失败：显示加载错误，不显示「暂无人脸样本」假空态', async () => {
+    const wrapper = await mountDetail()
+    await flushPromises()
+    const vm = wrapper.findComponent(Detail).vm as any
+
+    // 切到人脸 Tab 正常加载一次
+    vm.activeTab = 'faces'
+    await flushPromises()
+
+    // 选中并排除，但 loadData 触发的人脸重新加载失败
+    vm.selectedFaceSet = new Set([7])
+    await flushPromises()
+    mockUpdateFaceExclusion.mockResolvedValueOnce({})
+    mockGetById.mockResolvedValueOnce(makePerson())
+    // 人脸重新加载失败
+    mockGetFaces.mockRejectedValueOnce(new Error('网络错误'))
+
+    await vm.excludeSelectedFaces()
+    await flushPromises()
+
+    // facesError 置位（显示加载错误 + 重试入口），而非展示空态
+    expect(vm.facesError).toBe(true)
+    // 人脸列表为空，但因为有 error 标记，模板不会渲染「暂无人脸样本」空态
+    // （模板条件 faces.length === 0 && !facesLoading && facesLoadedOnce && !facesError）
+    expect(vm.faces.length).toBe(0)
+  })
+
+  it('普通 Tab 往返：已加载数据、滚动位置和选择状态保持不变', async () => {
+    const wrapper = await mountDetail()
+    await flushPromises()
+    const vm = wrapper.findComponent(Detail).vm as any
+
+    // 照片第一页 30 张已加载
+    expect(vm.photos.length).toBe(30)
+
+    // 模拟选中两张人脸（选择集合独立于 Tab）
+    vm.selectedFaceSet = new Set([7, 9])
+
+    // 切到 faces → 加载人脸第一页（50 张），不清空选择
+    vm.activeTab = 'faces'
+    await flushPromises()
+    expect(vm.faces.length).toBe(50)
+    expect(vm.selectedFaceSet.size).toBe(2)
+
+    // 切回 photos → 照片分页状态保留（仍 30 张），选择状态保留
+    vm.activeTab = 'photos'
+    await flushPromises()
+    expect(vm.photos.length).toBe(30)
+    expect(vm.selectedFaceSet.size).toBe(2)
+
+    // 再切回 faces → 人脸分页状态保留（仍 50 张，不重新加载第一页），选择仍保留
+    vm.activeTab = 'faces'
+    await flushPromises()
+    expect(vm.faces.length).toBe(50)
+    expect(mockGetFaces).toHaveBeenCalledTimes(1) // 全程只加载一次第一页
+    expect(vm.selectedFaceSet.size).toBe(2)
   })
 })
