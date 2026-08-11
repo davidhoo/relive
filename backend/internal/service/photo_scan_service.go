@@ -505,15 +505,6 @@ func (s *photoService) runScanTask(runtime *activeScanJob, path string, rebuild 
 			}
 		}
 	}
-	if s.peopleService != nil {
-		if task := s.peopleService.GetTaskStatus(); task == nil || (task.Status != model.TaskStatusRunning && task.Status != model.TaskStatusStopping) {
-			if _, err := s.peopleService.StartBackground(); err != nil {
-				logger.Warnf("[Task %s] Auto start people background failed: %v", runtime.id, err)
-			} else {
-				logger.Infof("[Task %s] People background started automatically after scan completion", runtime.id)
-			}
-		}
-	}
 	if s.eventClusteringService != nil {
 		go s.eventClusteringService.RunIncremental()
 	}
@@ -574,7 +565,6 @@ func (s *photoService) processScanFile(ctx context.Context, jobID string, task s
 			progress.incrementNew(1)
 			s.enqueueThumbnailForPhoto(photo, model.ThumbnailJobSourceScan, thumbnailPriorityScan)
 			s.enqueueGeocodeForPhoto(photo, model.GeocodeJobSourceScan, geocodePriorityScan)
-			s.enqueuePeopleForPhoto(photo, model.PeopleJobSourceScan, peoplePriorityScan, false)
 		}
 		progress.incrementProcessed(1)
 		return nil
@@ -591,7 +581,6 @@ func (s *photoService) processScanFile(ctx context.Context, jobID string, task s
 			progress.incrementUpdated(1)
 			s.enqueueThumbnailForPhoto(photo, model.ThumbnailJobSourceScan, thumbnailPriorityScan)
 			s.enqueueGeocodeForPhoto(photo, model.GeocodeJobSourceScan, geocodePriorityScan)
-			s.enqueuePeopleForPhoto(photo, model.PeopleJobSourceScan, peoplePriorityScan, true)
 		}
 		progress.incrementProcessed(1)
 		return nil
@@ -608,7 +597,6 @@ func (s *photoService) processScanFile(ctx context.Context, jobID string, task s
 			progress.incrementUpdated(1)
 			s.enqueueThumbnailForPhoto(photo, model.ThumbnailJobSourceScan, thumbnailPriorityScan)
 			s.enqueueGeocodeForPhoto(photo, model.GeocodeJobSourceScan, geocodePriorityScan)
-			s.enqueuePeopleForPhoto(photo, model.PeopleJobSourceScan, peoplePriorityScan, false)
 		}
 	}
 

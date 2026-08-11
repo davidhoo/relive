@@ -1348,7 +1348,7 @@ func TestPeopleServiceBackground(t *testing.T) {
 	})
 }
 
-func TestPhotoScanStartsPeopleBackground(t *testing.T) {
+func TestPhotoServiceScanDoesNotEnqueuePeopleBeforeAI(t *testing.T) {
 	rootDir := t.TempDir()
 	activePath := filepath.Join(rootDir, "active.jpg")
 	excludedPath := filepath.Join(rootDir, "excluded.jpg")
@@ -1388,8 +1388,6 @@ func TestPhotoScanStartsPeopleBackground(t *testing.T) {
 		},
 		nil,
 	).(*peopleService)
-	// Reset clustering counter to ensure clustering runs
-	peopleSvc.clusteringTaskCounter = peopleClusteringTaskInterval
 	photoSvc.SetPeopleService(peopleSvc)
 
 	excludedInfo, err := os.Stat(excludedPath)
@@ -1410,32 +1408,13 @@ func TestPhotoScanStartsPeopleBackground(t *testing.T) {
 	task, err := photoSvc.StartScan(rootDir)
 	require.NoError(t, err)
 	require.NotNil(t, task)
-	t.Logf("Started scan, task ID=%s, status=%s, waiting for completion...", task.ID, task.Status)
-
-	// Give goroutine time to start and update status
-	time.Sleep(200 * time.Millisecond)
-
-	// Check current status
-	currentTask := photoSvc.GetScanTask()
-	if currentTask != nil {
-		t.Logf("After sleep, scan task status: %s", currentTask.Status)
-	} else {
-		t.Logf("After sleep, GetScanTask returned nil")
-	}
-
 	waitForTaskStatus(t, photoSvc, map[string]bool{model.ScanJobStatusCompleted: true}, 3*time.Second)
-
-	waitForPeopleCondition(t, 3*time.Second, func() bool {
-		task := peopleSvc.GetTaskStatus()
-		stats, statsErr := peopleSvc.GetStats()
-		require.NoError(t, statsErr)
-		return task != nil && (task.Status == model.TaskStatusRunning || task.Status == model.TaskStatusIdle) && stats.Total == 1 && stats.Completed == 1
-	})
 
 	activePhoto, err := photoRepo.GetByFilePath(activePath)
 	require.NoError(t, err)
 	require.NotNil(t, activePhoto)
-	assert.Equal(t, model.FaceProcessStatusNoFace, activePhoto.FaceProcessStatus)
+	assert.False(t, activePhoto.AIAnalyzed)
+	assert.Equal(t, model.FaceProcessStatusNone, activePhoto.FaceProcessStatus)
 
 	excludedAfter, err := photoRepo.GetByID(excludedPhoto.ID)
 	require.NoError(t, err)
@@ -1444,13 +1423,8 @@ func TestPhotoScanStartsPeopleBackground(t *testing.T) {
 
 	stats, err := peopleSvc.GetStats()
 	require.NoError(t, err)
-	assert.Equal(t, int64(1), stats.Total)
-
-	require.NoError(t, peopleSvc.StopBackground())
-	waitForPeopleCondition(t, 3*time.Second, func() bool {
-		task := peopleSvc.GetTaskStatus()
-		return task != nil && task.Status == model.TaskStatusStopped
-	})
+	assert.Equal(t, int64(0), stats.Total)
+	assert.Nil(t, peopleSvc.GetTaskStatus())
 }
 
 func TestPeopleServiceMarksNoFaceReady(t *testing.T) {
