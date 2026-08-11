@@ -142,7 +142,8 @@ func IsPhotoEligibleForPeople(photo *Photo) bool {
 	if photo == nil || photo.Status != PhotoStatusActive || !photo.AIAnalyzed || photo.PeopleExcluded {
 		return false
 	}
-	return strings.TrimSpace(photo.MainCategory) != PhotoMainCategoryScreenshot
+	category := strings.TrimSpace(photo.MainCategory)
+	return category != "" && category != PhotoMainCategoryScreenshot
 }
 
 // UpdateCategoryRequest 更新分类请求

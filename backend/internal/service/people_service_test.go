@@ -1553,7 +1553,7 @@ func TestPeopleService_ReconcileAnalysisEligibility(t *testing.T) {
 	}
 	historicalScreenshot := &model.Photo{
 		FilePath: "/photos/historical.png", FileName: "historical.png", FileSize: 1, FileHash: "historical",
-		Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: model.PhotoMainCategoryScreenshot,
+		Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: " " + model.PhotoMainCategoryScreenshot + " ",
 		FaceProcessStatus: model.FaceProcessStatusReady, FaceCount: 1,
 	}
 	cleanScreenshot := &model.Photo{
@@ -1562,13 +1562,24 @@ func TestPeopleService_ReconcileAnalysisEligibility(t *testing.T) {
 		PeopleExcluded: true, PeopleExclusionReason: model.PeopleExclusionReasonScreenshot,
 		FaceProcessStatus: model.FaceProcessStatusNone,
 	}
+	staleJobScreenshot := &model.Photo{
+		FilePath: "/photos/stale-job-screen.png", FileName: "stale-job-screen.png", FileSize: 1, FileHash: "stale-job-screen",
+		Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: model.PhotoMainCategoryScreenshot,
+		PeopleExcluded: true, PeopleExclusionReason: model.PeopleExclusionReasonScreenshot,
+		FaceProcessStatus: model.FaceProcessStatusNone,
+	}
 	unanalyzed := &model.Photo{
 		FilePath: "/photos/waiting.jpg", FileName: "waiting.jpg", FileSize: 1, FileHash: "waiting",
 		Status: model.PhotoStatusActive, AIAnalyzed: false, FaceProcessStatus: model.FaceProcessStatusNone,
 	}
-	for _, photo := range []*model.Photo{eligible, historicalScreenshot, cleanScreenshot, unanalyzed} {
+	for _, photo := range []*model.Photo{eligible, historicalScreenshot, cleanScreenshot, staleJobScreenshot, unanalyzed} {
 		require.NoError(t, photoRepo.Create(photo))
 	}
+	require.NoError(t, svc.jobRepo.Create(&model.PeopleJob{
+		PhotoID: staleJobScreenshot.ID, FilePath: staleJobScreenshot.FilePath,
+		Status: model.PeopleJobStatusQueued, Source: model.PeopleJobSourcePassive,
+		Priority: peoplePriorityPassive, QueuedAt: time.Now(),
+	}))
 	cleanUpdatedAt := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
 	require.NoError(t, db.Model(&model.Photo{}).Where("id = ?", cleanScreenshot.ID).UpdateColumn("updated_at", cleanUpdatedAt).Error)
 
@@ -1588,6 +1599,9 @@ func TestPeopleService_ReconcileAnalysisEligibility(t *testing.T) {
 	unchangedCleanScreenshot, err := photoRepo.GetByID(cleanScreenshot.ID)
 	require.NoError(t, err)
 	assert.Equal(t, cleanUpdatedAt, unchangedCleanScreenshot.UpdatedAt, "already-clean screenshots should not be rewritten on every startup")
+	staleScreenshotJob, err := svc.jobRepo.GetActiveByPhotoID(staleJobScreenshot.ID)
+	require.NoError(t, err)
+	assert.Nil(t, staleScreenshotJob, "active jobs make an otherwise-clean screenshot inconsistent")
 }
 
 func TestPeopleService_EnqueueRequiresAIEligibility(t *testing.T) {
@@ -1598,6 +1612,10 @@ func TestPeopleService_EnqueueRequiresAIEligibility(t *testing.T) {
 		FilePath: "/photos/unanalyzed.jpg", FileName: "unanalyzed.jpg", FileSize: 1, FileHash: "unanalyzed",
 		Status: model.PhotoStatusActive, AIAnalyzed: false, MainCategory: "", FaceProcessStatus: model.FaceProcessStatusNone,
 	}
+	analyzedWithoutCategory := &model.Photo{
+		FilePath: "/photos/no-category.jpg", FileName: "no-category.jpg", FileSize: 1, FileHash: "no-category",
+		Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: " ", FaceProcessStatus: model.FaceProcessStatusNone,
+	}
 	screenshot := &model.Photo{
 		FilePath: "/photos/screenshot.jpg", FileName: "screenshot.jpg", FileSize: 1, FileHash: "screenshot",
 		Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: model.PhotoMainCategoryScreenshot,
@@ -1607,11 +1625,12 @@ func TestPeopleService_EnqueueRequiresAIEligibility(t *testing.T) {
 		FilePath: "/photos/eligible-2.jpg", FileName: "eligible-2.jpg", FileSize: 1, FileHash: "eligible-2",
 		Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: "人物", FaceProcessStatus: model.FaceProcessStatusNone,
 	}
-	for _, photo := range []*model.Photo{unanalyzed, screenshot, eligible} {
+	for _, photo := range []*model.Photo{unanalyzed, analyzedWithoutCategory, screenshot, eligible} {
 		require.NoError(t, photoRepo.Create(photo))
 	}
 
 	assert.ErrorIs(t, svc.EnqueuePhoto(unanalyzed.ID, model.PeopleJobSourceManual, peoplePriorityManual, false), ErrPhotoAnalysisPending)
+	assert.ErrorIs(t, svc.EnqueuePhoto(analyzedWithoutCategory.ID, model.PeopleJobSourceManual, peoplePriorityManual, false), ErrPhotoAnalysisPending)
 	assert.ErrorIs(t, svc.EnqueuePhoto(screenshot.ID, model.PeopleJobSourceManual, peoplePriorityManual, false), ErrPhotoPeopleExcluded)
 
 	count, err := svc.EnqueueUnprocessed()
@@ -1621,6 +1640,7 @@ func TestPeopleService_EnqueueRequiresAIEligibility(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, job)
 	assert.Nil(t, mustActivePeopleJob(t, svc.jobRepo, unanalyzed.ID))
+	assert.Nil(t, mustActivePeopleJob(t, svc.jobRepo, analyzedWithoutCategory.ID))
 	assert.Nil(t, mustActivePeopleJob(t, svc.jobRepo, screenshot.ID))
 }
 

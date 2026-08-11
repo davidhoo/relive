@@ -687,7 +687,11 @@ func (s *peopleService) HandleAnalysisCompleted(photoID uint) error {
 	if photo == nil || photo.Status != model.PhotoStatusActive || !photo.AIAnalyzed {
 		return nil
 	}
-	if photo.PeopleExcluded || strings.TrimSpace(photo.MainCategory) == model.PhotoMainCategoryScreenshot {
+	category := strings.TrimSpace(photo.MainCategory)
+	if category == "" {
+		return nil
+	}
+	if photo.PeopleExcluded || category == model.PhotoMainCategoryScreenshot {
 		return s.excludeScreenshotPhoto(photo)
 	}
 	return s.enqueuePhotoModel(photo, model.PeopleJobSourcePassive, peoplePriorityPassive, false)
@@ -699,14 +703,15 @@ func (s *peopleService) ReconcileAnalysisEligibility() error {
 	var photos []*model.Photo
 	if err := s.db.
 		Where(`status = ? AND ai_analyzed = ? AND (
-			(main_category = ? AND (
+			(TRIM(COALESCE(main_category, '')) = ? AND (
 				people_excluded = ? OR
 				COALESCE(people_exclusion_reason, '') != ? OR
 				face_process_status != ? OR
 				face_count != 0 OR
-				EXISTS (SELECT 1 FROM faces WHERE faces.photo_id = photos.id)
+				EXISTS (SELECT 1 FROM faces WHERE faces.photo_id = photos.id) OR
+				EXISTS (SELECT 1 FROM people_jobs WHERE people_jobs.photo_id = photos.id AND people_jobs.status IN (?, ?, ?))
 			)) OR
-			(COALESCE(main_category, '') != ? AND people_excluded = ? AND face_process_status = ?)
+			(TRIM(COALESCE(main_category, '')) != '' AND TRIM(main_category) != ? AND people_excluded = ? AND face_process_status = ?)
 		)`,
 			model.PhotoStatusActive,
 			true,
@@ -714,6 +719,9 @@ func (s *peopleService) ReconcileAnalysisEligibility() error {
 			false,
 			model.PeopleExclusionReasonScreenshot,
 			model.FaceProcessStatusNone,
+			model.PeopleJobStatusPending,
+			model.PeopleJobStatusQueued,
+			model.PeopleJobStatusProcessing,
 			model.PhotoMainCategoryScreenshot,
 			false,
 			model.FaceProcessStatusNone,
@@ -4149,7 +4157,7 @@ func photoPeopleEligibilityError(photo *model.Photo) error {
 	if photo == nil || photo.Status != model.PhotoStatusActive || photo.PeopleExcluded || strings.TrimSpace(photo.MainCategory) == model.PhotoMainCategoryScreenshot {
 		return ErrPhotoPeopleExcluded
 	}
-	if !photo.AIAnalyzed {
+	if !photo.AIAnalyzed || strings.TrimSpace(photo.MainCategory) == "" {
 		return ErrPhotoAnalysisPending
 	}
 	return nil

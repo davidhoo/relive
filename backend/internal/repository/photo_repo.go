@@ -1007,7 +1007,7 @@ func (r *photoRepository) ListByPathPrefix(prefix string) ([]*model.Photo, error
 func (r *photoRepository) ListByFaceStatus(status string) ([]*model.Photo, error) {
 	var photos []*model.Photo
 	err := r.db.Where(
-		"face_process_status = ? AND status = ? AND ai_analyzed = ? AND people_excluded = ? AND main_category != ?",
+		"face_process_status = ? AND status = ? AND ai_analyzed = ? AND people_excluded = ? AND TRIM(COALESCE(main_category, '')) != '' AND TRIM(main_category) != ?",
 		status,
 		model.PhotoStatusActive,
 		true,

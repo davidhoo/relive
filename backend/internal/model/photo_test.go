@@ -116,6 +116,15 @@ func TestPhotoPeopleEligibility(t *testing.T) {
 			want: false,
 		},
 		{
+			name: "analyzed photo without category is ineligible",
+			photo: &Photo{
+				Status:       PhotoStatusActive,
+				AIAnalyzed:   true,
+				MainCategory: "  ",
+			},
+			want: false,
+		},
+		{
 			name: "explicit exclusion is ineligible",
 			photo: &Photo{
 				Status:                PhotoStatusActive,
@@ -132,6 +141,15 @@ func TestPhotoPeopleEligibility(t *testing.T) {
 				Status:       PhotoStatusActive,
 				AIAnalyzed:   true,
 				MainCategory: PhotoMainCategoryScreenshot,
+			},
+			want: false,
+		},
+		{
+			name: "trimmed screenshot category fails closed",
+			photo: &Photo{
+				Status:       PhotoStatusActive,
+				AIAnalyzed:   true,
+				MainCategory: "  " + PhotoMainCategoryScreenshot + " ",
 			},
 			want: false,
 		},
