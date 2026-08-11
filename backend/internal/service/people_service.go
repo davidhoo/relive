@@ -82,6 +82,8 @@ type PeopleService interface {
 	EnqueuePhoto(photoID uint, source string, priority int, force bool) error
 	EnqueueByPath(path string, source string, priority int) (int, error)
 	EnqueueUnprocessed() (int, error)
+	HandleAnalysisCompleted(photoID uint) error
+	ReconcileAnalysisEligibility() error
 	ResetAllPeople() (int, error)
 	MergePeople(targetPersonID uint, sourcePersonIDs []uint) (*model.ReclusterResult, error)
 	MergePeopleAsync(targetPersonID uint, sourcePersonIDs []uint, jobType string) (uint, error)
@@ -672,6 +674,135 @@ func (s *peopleService) EnqueueUnprocessed() (int, error) {
 	}
 
 	return count, nil
+}
+
+// HandleAnalysisCompleted is the post-commit bridge from AI analysis into the
+// People pipeline. It is intentionally idempotent so startup reconciliation can
+// replay a photo after a missed notification.
+func (s *peopleService) HandleAnalysisCompleted(photoID uint) error {
+	photo, err := s.photoRepo.GetByID(photoID)
+	if err != nil {
+		return err
+	}
+	if photo == nil || photo.Status != model.PhotoStatusActive || !photo.AIAnalyzed {
+		return nil
+	}
+	if photo.PeopleExcluded || strings.TrimSpace(photo.MainCategory) == model.PhotoMainCategoryScreenshot {
+		return s.excludeScreenshotPhoto(photo)
+	}
+	return s.enqueuePhotoModel(photo, model.PeopleJobSourcePassive, peoplePriorityPassive, false)
+}
+
+// ReconcileAnalysisEligibility repairs the durable AI→People handoff after an
+// upgrade, restart, or a best-effort callback failure.
+func (s *peopleService) ReconcileAnalysisEligibility() error {
+	var photos []*model.Photo
+	if err := s.db.
+		Where("status = ? AND ai_analyzed = ? AND (main_category = ? OR (people_excluded = ? AND face_process_status = ?))",
+			model.PhotoStatusActive,
+			true,
+			model.PhotoMainCategoryScreenshot,
+			false,
+			model.FaceProcessStatusNone,
+		).
+		Order("id ASC").
+		Find(&photos).Error; err != nil {
+		return fmt.Errorf("list AI/People reconciliation candidates: %w", err)
+	}
+
+	for _, photo := range photos {
+		if err := s.HandleAnalysisCompleted(photo.ID); err != nil {
+			return fmt.Errorf("reconcile photo %d: %w", photo.ID, err)
+		}
+	}
+	return nil
+}
+
+func (s *peopleService) excludeScreenshotPhoto(photo *model.Photo) error {
+	if photo == nil {
+		return nil
+	}
+
+	totalStart := time.Now()
+	lockWait := s.beginForegroundMutationTimed()
+	defer s.endForegroundMutation()
+	bizStart := time.Now()
+	defer func() {
+		logPeopleMutationTiming(peopleMutationTiming{
+			Operation: "exclude_screenshot_photo",
+			TargetID:  photo.ID,
+			GateWait:  lockWait,
+			Business:  time.Since(bizStart),
+			Total:     time.Since(totalStart),
+		})
+	}()
+
+	existingFaces, err := s.faceRepo.ListByPhotoID(photo.ID)
+	if err != nil {
+		return fmt.Errorf("list screenshot faces: %w", err)
+	}
+	affectedPersonIDs := personIDsFromFaces(existingFaces)
+	now := time.Now()
+
+	if err := s.executeWrite(func() error {
+		return s.db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Model(&model.PeopleJob{}).
+				Where("photo_id = ? AND status IN ?", photo.ID, []string{
+					model.PeopleJobStatusPending,
+					model.PeopleJobStatusQueued,
+					model.PeopleJobStatusProcessing,
+				}).
+				Updates(map[string]interface{}{
+					"status":       model.PeopleJobStatusCancelled,
+					"last_error":   "photo excluded from People after AI classified it as screenshot",
+					"completed_at": &now,
+				}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("photo_id = ?", photo.ID).Delete(&model.FaceExclusion{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("photo_id = ?", photo.ID).Delete(&model.Face{}).Error; err != nil {
+				return err
+			}
+			return tx.Model(&model.Photo{}).Where("id = ?", photo.ID).Updates(map[string]interface{}{
+				"people_excluded":         true,
+				"people_exclusion_reason": model.PeopleExclusionReasonScreenshot,
+				"face_process_status":     model.FaceProcessStatusNone,
+				"face_count":              0,
+				"top_person_category":     "",
+			}).Error
+		})
+	}); err != nil {
+		return fmt.Errorf("exclude screenshot photo %d: %w", photo.ID, err)
+	}
+
+	var dirtyPersonIDs, deletedPersonIDs []uint
+	for _, personID := range affectedPersonIDs {
+		if err := s.syncPersonState(personID); err != nil {
+			return fmt.Errorf("sync person %d after screenshot exclusion: %w", personID, err)
+		}
+		person, err := s.personRepo.GetByID(personID)
+		if err != nil {
+			return err
+		}
+		if person == nil {
+			deletedPersonIDs = append(deletedPersonIDs, personID)
+		} else {
+			dirtyPersonIDs = append(dirtyPersonIDs, personID)
+		}
+	}
+	if len(affectedPersonIDs) > 0 {
+		s.markProtoCacheDirty(dirtyPersonIDs, deletedPersonIDs, "screenshot_photo_excluded")
+		s.invalidateIdentityProfiles(IdentityProfileInvalidation{
+			DirtyPersonIDs:   dirtyPersonIDs,
+			DeletedPersonIDs: deletedPersonIDs,
+			Reason:           "screenshot_photo_excluded",
+		})
+		s.markMergeSuggestionsDirty("screenshot_photo_excluded")
+	}
+	s.invalidateStatsCache()
+	return nil
 }
 
 func (s *peopleService) HandleShutdown() error {
@@ -1616,6 +1747,12 @@ func (s *peopleService) enqueuePhotoModel(photo *model.Photo, source string, pri
 	}
 	if photo.Status == model.PhotoStatusExcluded {
 		return nil
+	}
+	if !photo.AIAnalyzed {
+		return ErrPhotoAnalysisPending
+	}
+	if photo.PeopleExcluded || strings.TrimSpace(photo.MainCategory) == model.PhotoMainCategoryScreenshot {
+		return ErrPhotoPeopleExcluded
 	}
 	if source == "" {
 		source = model.PeopleJobSourceManual
@@ -3960,6 +4097,11 @@ func (s *peopleService) syncPersonState(personID uint) error {
 // handler 将其映射为 HTTP 409 / SPLIT_ASSIGNMENT_CONFLICT，而非通用 500。
 // 返回此错误而非静默创建新人物或复用无关人物，避免重复 split 请求造成人物链或误归属。
 var ErrPeopleSplitConflict = errors.New("split request conflicts with current face assignments")
+
+var (
+	ErrPhotoAnalysisPending = errors.New("照片 AI 分析尚未完成，不能进行人物检测")
+	ErrPhotoPeopleExcluded  = errors.New("照片已退出人物识别")
+)
 
 // ErrPersonHidden indicates an operation was attempted on a hidden person.
 // The handler maps this to HTTP 409 with code PERSON_HIDDEN.

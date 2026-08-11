@@ -1427,6 +1427,198 @@ func TestPhotoServiceScanDoesNotEnqueuePeopleBeforeAI(t *testing.T) {
 	assert.Nil(t, peopleSvc.GetTaskStatus())
 }
 
+func TestPeopleService_HandleAnalysisCompletedEnqueuesEligiblePhoto(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	photoRepo := repository.NewPhotoRepository(db)
+
+	photo := &model.Photo{
+		FilePath:          "/photos/analyzed.jpg",
+		FileName:          "analyzed.jpg",
+		FileSize:          1,
+		FileHash:          "analyzed-hash",
+		Status:            model.PhotoStatusActive,
+		AIAnalyzed:        true,
+		MainCategory:      "人物",
+		FaceProcessStatus: model.FaceProcessStatusNone,
+	}
+	require.NoError(t, photoRepo.Create(photo))
+
+	require.NoError(t, svc.HandleAnalysisCompleted(photo.ID))
+
+	job, err := svc.jobRepo.GetActiveByPhotoID(photo.ID)
+	require.NoError(t, err)
+	require.NotNil(t, job)
+	assert.Equal(t, model.PeopleJobSourcePassive, job.Source)
+
+	updated, err := photoRepo.GetByID(photo.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.FaceProcessStatusPending, updated.FaceProcessStatus)
+
+	// Replaying a committed AI result is idempotent and reuses the active job.
+	require.NoError(t, svc.HandleAnalysisCompleted(photo.ID))
+	var activeCount int64
+	require.NoError(t, db.Model(&model.PeopleJob{}).
+		Where("photo_id = ? AND status IN ?", photo.ID, []string{model.PeopleJobStatusPending, model.PeopleJobStatusQueued, model.PeopleJobStatusProcessing}).
+		Count(&activeCount).Error)
+	assert.Equal(t, int64(1), activeCount)
+}
+
+func TestPeopleService_HandleAnalysisCompletedCleansScreenshot(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	photoRepo := repository.NewPhotoRepository(db)
+	personRepo := repository.NewPersonRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+
+	photo := &model.Photo{
+		FilePath:             "/photos/screenshot.png",
+		FileName:             "screenshot.png",
+		FileSize:             1,
+		FileHash:             "screenshot-hash",
+		Status:               model.PhotoStatusActive,
+		AIAnalyzed:           true,
+		MainCategory:         model.PhotoMainCategoryScreenshot,
+		PeopleExcluded:       true,
+		PeopleExclusionReason: model.PeopleExclusionReasonScreenshot,
+		FaceProcessStatus:    model.FaceProcessStatusReady,
+		FaceCount:            1,
+		TopPersonCategory:    model.PersonCategoryStranger,
+	}
+	require.NoError(t, photoRepo.Create(photo))
+	person := &model.Person{Category: model.PersonCategoryStranger}
+	require.NoError(t, personRepo.Create(person))
+	face := &model.Face{
+		PhotoID:       photo.ID,
+		PersonID:      &person.ID,
+		BBoxX:         0.1,
+		BBoxY:         0.1,
+		BBoxWidth:     0.2,
+		BBoxHeight:    0.2,
+		Confidence:    0.9,
+		QualityScore:  0.8,
+		ClusterStatus: model.FaceClusterStatusAssigned,
+	}
+	require.NoError(t, faceRepo.Create(face))
+	require.NoError(t, personRepo.RefreshStats(person.ID))
+	require.NoError(t, db.Create(&model.FaceExclusion{
+		PhotoID:      photo.ID,
+		SourceFaceID: face.ID,
+		Reason:       model.ExclusionReasonLowQuality,
+		BBoxX:        face.BBoxX,
+		BBoxY:        face.BBoxY,
+		BBoxWidth:    face.BBoxWidth,
+		BBoxHeight:   face.BBoxHeight,
+	}).Error)
+	require.NoError(t, svc.jobRepo.Create(&model.PeopleJob{
+		PhotoID:  photo.ID,
+		FilePath: photo.FilePath,
+		Status:   model.PeopleJobStatusQueued,
+		Priority: peoplePriorityPassive,
+		Source:   model.PeopleJobSourcePassive,
+		QueuedAt: time.Now(),
+	}))
+
+	require.NoError(t, svc.HandleAnalysisCompleted(photo.ID))
+
+	faces, err := faceRepo.ListByPhotoID(photo.ID)
+	require.NoError(t, err)
+	assert.Empty(t, faces)
+	var exclusionCount int64
+	require.NoError(t, db.Model(&model.FaceExclusion{}).Where("photo_id = ?", photo.ID).Count(&exclusionCount).Error)
+	assert.Equal(t, int64(0), exclusionCount)
+
+	updated, err := photoRepo.GetByID(photo.ID)
+	require.NoError(t, err)
+	assert.True(t, updated.PeopleExcluded)
+	assert.Equal(t, model.PeopleExclusionReasonScreenshot, updated.PeopleExclusionReason)
+	assert.Equal(t, model.FaceProcessStatusNone, updated.FaceProcessStatus)
+	assert.Equal(t, 0, updated.FaceCount)
+	assert.Empty(t, updated.TopPersonCategory)
+
+	activeJob, err := svc.jobRepo.GetActiveByPhotoID(photo.ID)
+	require.NoError(t, err)
+	assert.Nil(t, activeJob)
+	deletedPerson, err := personRepo.GetByID(person.ID)
+	require.NoError(t, err)
+	assert.Nil(t, deletedPerson)
+}
+
+func TestPeopleService_ReconcileAnalysisEligibility(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	photoRepo := repository.NewPhotoRepository(db)
+
+	eligible := &model.Photo{
+		FilePath: "/photos/eligible.jpg", FileName: "eligible.jpg", FileSize: 1, FileHash: "eligible",
+		Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: "日常", FaceProcessStatus: model.FaceProcessStatusNone,
+	}
+	historicalScreenshot := &model.Photo{
+		FilePath: "/photos/historical.png", FileName: "historical.png", FileSize: 1, FileHash: "historical",
+		Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: model.PhotoMainCategoryScreenshot,
+		FaceProcessStatus: model.FaceProcessStatusReady, FaceCount: 1,
+	}
+	unanalyzed := &model.Photo{
+		FilePath: "/photos/waiting.jpg", FileName: "waiting.jpg", FileSize: 1, FileHash: "waiting",
+		Status: model.PhotoStatusActive, AIAnalyzed: false, FaceProcessStatus: model.FaceProcessStatusNone,
+	}
+	for _, photo := range []*model.Photo{eligible, historicalScreenshot, unanalyzed} {
+		require.NoError(t, photoRepo.Create(photo))
+	}
+
+	require.NoError(t, svc.ReconcileAnalysisEligibility())
+
+	job, err := svc.jobRepo.GetActiveByPhotoID(eligible.ID)
+	require.NoError(t, err)
+	require.NotNil(t, job)
+	waitingJob, err := svc.jobRepo.GetActiveByPhotoID(unanalyzed.ID)
+	require.NoError(t, err)
+	assert.Nil(t, waitingJob)
+	updatedScreenshot, err := photoRepo.GetByID(historicalScreenshot.ID)
+	require.NoError(t, err)
+	assert.True(t, updatedScreenshot.PeopleExcluded)
+	assert.Equal(t, model.PeopleExclusionReasonScreenshot, updatedScreenshot.PeopleExclusionReason)
+	assert.Equal(t, 0, updatedScreenshot.FaceCount)
+}
+
+func TestPeopleService_EnqueueRequiresAIEligibility(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	photoRepo := repository.NewPhotoRepository(db)
+
+	unanalyzed := &model.Photo{
+		FilePath: "/photos/unanalyzed.jpg", FileName: "unanalyzed.jpg", FileSize: 1, FileHash: "unanalyzed",
+		Status: model.PhotoStatusActive, AIAnalyzed: false, MainCategory: "", FaceProcessStatus: model.FaceProcessStatusNone,
+	}
+	screenshot := &model.Photo{
+		FilePath: "/photos/screenshot.jpg", FileName: "screenshot.jpg", FileSize: 1, FileHash: "screenshot",
+		Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: model.PhotoMainCategoryScreenshot,
+		PeopleExcluded: true, PeopleExclusionReason: model.PeopleExclusionReasonScreenshot, FaceProcessStatus: model.FaceProcessStatusNone,
+	}
+	eligible := &model.Photo{
+		FilePath: "/photos/eligible-2.jpg", FileName: "eligible-2.jpg", FileSize: 1, FileHash: "eligible-2",
+		Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: "人物", FaceProcessStatus: model.FaceProcessStatusNone,
+	}
+	for _, photo := range []*model.Photo{unanalyzed, screenshot, eligible} {
+		require.NoError(t, photoRepo.Create(photo))
+	}
+
+	assert.ErrorIs(t, svc.EnqueuePhoto(unanalyzed.ID, model.PeopleJobSourceManual, peoplePriorityManual, false), ErrPhotoAnalysisPending)
+	assert.ErrorIs(t, svc.EnqueuePhoto(screenshot.ID, model.PeopleJobSourceManual, peoplePriorityManual, false), ErrPhotoPeopleExcluded)
+
+	count, err := svc.EnqueueUnprocessed()
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	job, err := svc.jobRepo.GetActiveByPhotoID(eligible.ID)
+	require.NoError(t, err)
+	require.NotNil(t, job)
+	assert.Nil(t, mustActivePeopleJob(t, svc.jobRepo, unanalyzed.ID))
+	assert.Nil(t, mustActivePeopleJob(t, svc.jobRepo, screenshot.ID))
+}
+
+func mustActivePeopleJob(t *testing.T, repo repository.PeopleJobRepository, photoID uint) *model.PeopleJob {
+	t.Helper()
+	job, err := repo.GetActiveByPhotoID(photoID)
+	require.NoError(t, err)
+	return job
+}
+
 func TestPeopleServiceMarksNoFaceReady(t *testing.T) {
 	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{
 		responses: map[string]*mlclient.DetectFacesResponse{

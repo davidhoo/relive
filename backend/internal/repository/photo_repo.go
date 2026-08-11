@@ -1006,7 +1006,14 @@ func (r *photoRepository) ListByPathPrefix(prefix string) ([]*model.Photo, error
 
 func (r *photoRepository) ListByFaceStatus(status string) ([]*model.Photo, error) {
 	var photos []*model.Photo
-	err := r.db.Where("face_process_status = ? AND status = ?", status, model.PhotoStatusActive).Find(&photos).Error
+	err := r.db.Where(
+		"face_process_status = ? AND status = ? AND ai_analyzed = ? AND people_excluded = ? AND main_category != ?",
+		status,
+		model.PhotoStatusActive,
+		true,
+		false,
+		model.PhotoMainCategoryScreenshot,
+	).Find(&photos).Error
 	return photos, err
 }
 
