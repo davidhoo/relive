@@ -127,6 +127,24 @@ func TestAutoMigrateAddsPeopleColumns(t *testing.T) {
 	}
 }
 
+func TestAutoMigrateAddsPhotoPeopleExclusion(t *testing.T) {
+	db := openMigratedTestDB(t)
+
+	for _, column := range []string{"people_excluded", "people_exclusion_reason"} {
+		if !db.Migrator().HasColumn(&model.Photo{}, column) {
+			t.Fatalf("expected photos.%s column to exist after migration", column)
+		}
+	}
+
+	var count int64
+	if err := db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?", "idx_people_excluded").Scan(&count).Error; err != nil {
+		t.Fatalf("query idx_people_excluded: %v", err)
+	}
+	if count != 1 {
+		t.Fatal("expected idx_people_excluded to exist after migration")
+	}
+}
+
 func TestAutoMigrateAddsPeopleFeedbackIndexes(t *testing.T) {
 	db := openMigratedTestDB(t)
 

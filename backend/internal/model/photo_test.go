@@ -78,3 +78,68 @@ func TestPhoto_HasGPS(t *testing.T) {
 func TestPhoto_TableName(t *testing.T) {
 	assert.Equal(t, "photos", Photo{}.TableName())
 }
+
+func TestPhotoPeopleEligibility(t *testing.T) {
+	tests := []struct {
+		name  string
+		photo *Photo
+		want  bool
+	}{
+		{
+			name: "analyzed active non-screenshot is eligible",
+			photo: &Photo{
+				Status:       PhotoStatusActive,
+				AIAnalyzed:   true,
+				MainCategory: "人物",
+			},
+			want: true,
+		},
+		{
+			name: "nil photo is ineligible",
+			want: false,
+		},
+		{
+			name: "inactive photo is ineligible",
+			photo: &Photo{
+				Status:       PhotoStatusExcluded,
+				AIAnalyzed:   true,
+				MainCategory: "人物",
+			},
+			want: false,
+		},
+		{
+			name: "unanalyzed photo is ineligible",
+			photo: &Photo{
+				Status:       PhotoStatusActive,
+				MainCategory: "人物",
+			},
+			want: false,
+		},
+		{
+			name: "explicit exclusion is ineligible",
+			photo: &Photo{
+				Status:                PhotoStatusActive,
+				AIAnalyzed:            true,
+				MainCategory:          "人物",
+				PeopleExcluded:        true,
+				PeopleExclusionReason: PeopleExclusionReasonScreenshot,
+			},
+			want: false,
+		},
+		{
+			name: "screenshot category fails closed",
+			photo: &Photo{
+				Status:       PhotoStatusActive,
+				AIAnalyzed:   true,
+				MainCategory: PhotoMainCategoryScreenshot,
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsPhotoEligibleForPeople(tt.photo))
+		})
+	}
+}

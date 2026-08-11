@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -36,6 +37,11 @@ const (
 	FaceProcessStatusReady      = "ready"
 	FaceProcessStatusNoFace     = "no_face"
 	FaceProcessStatusFailed     = "failed"
+)
+
+const (
+	PhotoMainCategoryScreenshot     = "截屏"
+	PeopleExclusionReasonScreenshot = "screenshot"
 )
 
 // Photo 照片模型
@@ -82,9 +88,11 @@ type Photo struct {
 	GeocodedAt      *time.Time `json:"geocoded_at"`
 
 	// 人物系统派生状态
-	FaceProcessStatus string `gorm:"type:varchar(20);default:none;index:idx_face_process_status;check:chk_face_process_status,face_process_status IN ('none','pending','processing','ready','no_face','failed')" json:"face_process_status"`
-	FaceCount         int    `gorm:"not null;default:0" json:"face_count"`
-	TopPersonCategory string `gorm:"type:varchar(20);default:'';index:idx_top_person_category;check:chk_photo_top_person_category,top_person_category IN ('','family','friend','acquaintance','stranger')" json:"top_person_category"`
+	FaceProcessStatus     string `gorm:"type:varchar(20);default:none;index:idx_face_process_status;check:chk_face_process_status,face_process_status IN ('none','pending','processing','ready','no_face','failed')" json:"face_process_status"`
+	FaceCount             int    `gorm:"not null;default:0" json:"face_count"`
+	TopPersonCategory     string `gorm:"type:varchar(20);default:'';index:idx_top_person_category;check:chk_photo_top_person_category,top_person_category IN ('','family','friend','acquaintance','stranger')" json:"top_person_category"`
+	PeopleExcluded        bool   `gorm:"not null;default:false;index:idx_people_excluded" json:"people_excluded"`
+	PeopleExclusionReason string `gorm:"type:varchar(20);default:''" json:"people_exclusion_reason,omitempty"`
 
 	// AI 分析结果
 	AIAnalyzed bool       `gorm:"default:false;index:idx_ai_analyzed" json:"ai_analyzed"` // 是否已分析
@@ -126,6 +134,15 @@ type Photo struct {
 
 	// 关联
 	DisplayRecords []DisplayRecord `gorm:"foreignKey:PhotoID" json:"-"` // 展示记录
+}
+
+// IsPhotoEligibleForPeople is the shared fail-closed admission rule for face
+// detection and every downstream People worker boundary.
+func IsPhotoEligibleForPeople(photo *Photo) bool {
+	if photo == nil || photo.Status != PhotoStatusActive || !photo.AIAnalyzed || photo.PeopleExcluded {
+		return false
+	}
+	return strings.TrimSpace(photo.MainCategory) != PhotoMainCategoryScreenshot
 }
 
 // UpdateCategoryRequest 更新分类请求
