@@ -572,7 +572,7 @@ func TestPeopleService_ProcessJobUsesIncrementalClustering(t *testing.T) {
 	jobRepo := repository.NewPeopleJobRepository(db)
 
 	oldPhoto := &model.Photo{FilePath: oldPhotoPath, FileName: "old.jpg", FileSize: 1, FileHash: "old-process-job", Width: 100, Height: 100, Status: model.PhotoStatusActive}
-	newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: "new.jpg", FileSize: 1, FileHash: "new-process-job", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true}
+	newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: "new.jpg", FileSize: 1, FileHash: "new-process-job", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: "人物"}
 	require.NoError(t, photoRepo.Create(oldPhoto))
 	require.NoError(t, photoRepo.Create(newPhoto))
 
@@ -656,7 +656,7 @@ func TestPeopleService_SingleUncertainFaceStaysPending(t *testing.T) {
 	faceRepo := repository.NewFaceRepository(db)
 	jobRepo := repository.NewPeopleJobRepository(db)
 
-	photo := &model.Photo{FilePath: photoPath, FileName: "uncertain.jpg", FileSize: 1, FileHash: "uncertain-process-job", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true}
+	photo := &model.Photo{FilePath: photoPath, FileName: "uncertain.jpg", FileSize: 1, FileHash: "uncertain-process-job", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: "人物"}
 	require.NoError(t, photoRepo.Create(photo))
 
 	job := &model.PeopleJob{
@@ -896,7 +896,7 @@ func TestPeopleService_TwoSimilarSamePhotoFacesStayPending(t *testing.T) {
 	faceRepo := repository.NewFaceRepository(db)
 	jobRepo := repository.NewPeopleJobRepository(db)
 
-	photo := &model.Photo{FilePath: photoPath, FileName: "pair.jpg", FileSize: 1, FileHash: "pair-regression", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true}
+	photo := &model.Photo{FilePath: photoPath, FileName: "pair.jpg", FileSize: 1, FileHash: "pair-regression", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: "人物"}
 	require.NoError(t, photoRepo.Create(photo))
 	job := &model.PeopleJob{
 		PhotoID:  photo.ID,
@@ -964,8 +964,8 @@ func TestPeopleService_PendingFacesBecomeAssignedWhenMoreEvidenceArrives(t *test
 	faceRepo := repository.NewFaceRepository(db)
 	jobRepo := repository.NewPeopleJobRepository(db)
 
-	firstPhoto := &model.Photo{FilePath: firstPhotoPath, FileName: "first.jpg", FileSize: 1, FileHash: "pending-first", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true}
-	secondPhoto := &model.Photo{FilePath: secondPhotoPath, FileName: "second.jpg", FileSize: 1, FileHash: "pending-second", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true}
+	firstPhoto := &model.Photo{FilePath: firstPhotoPath, FileName: "first.jpg", FileSize: 1, FileHash: "pending-first", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: "人物"}
+	secondPhoto := &model.Photo{FilePath: secondPhotoPath, FileName: "second.jpg", FileSize: 1, FileHash: "pending-second", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: "人物"}
 	require.NoError(t, photoRepo.Create(firstPhoto))
 	require.NoError(t, photoRepo.Create(secondPhoto))
 
@@ -1057,7 +1057,7 @@ func TestPeopleService_SamePhotoComponentStaysPending(t *testing.T) {
 	faceRepo := repository.NewFaceRepository(db)
 	jobRepo := repository.NewPeopleJobRepository(db)
 
-	photo := &model.Photo{FilePath: photoPath, FileName: "same-photo-pending.jpg", FileSize: 1, FileHash: "same-photo-pending", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true}
+	photo := &model.Photo{FilePath: photoPath, FileName: "same-photo-pending.jpg", FileSize: 1, FileHash: "same-photo-pending", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: "人物"}
 	require.NoError(t, photoRepo.Create(photo))
 	job := &model.PeopleJob{
 		PhotoID:  photo.ID,
@@ -1122,7 +1122,7 @@ func TestPeopleService_SamePhotoComponentCanStillAttach(t *testing.T) {
 	jobRepo := repository.NewPeopleJobRepository(db)
 
 	oldPhoto := &model.Photo{FilePath: oldPhotoPath, FileName: "same-photo-attach-old.jpg", FileSize: 1, FileHash: "same-photo-attach-old", Width: 100, Height: 100, Status: model.PhotoStatusActive}
-	newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: "same-photo-attach-new.jpg", FileSize: 1, FileHash: "same-photo-attach-new", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true}
+	newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: "same-photo-attach-new.jpg", FileSize: 1, FileHash: "same-photo-attach-new", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: "人物"}
 	require.NoError(t, photoRepo.Create(oldPhoto))
 	require.NoError(t, photoRepo.Create(newPhoto))
 
@@ -1203,8 +1203,8 @@ func TestPeopleService_CrossPhotoComponentCreatesPerson(t *testing.T) {
 	faceRepo := repository.NewFaceRepository(db)
 	jobRepo := repository.NewPeopleJobRepository(db)
 
-	firstPhoto := &model.Photo{FilePath: firstPhotoPath, FileName: "cross-photo-first.jpg", FileSize: 1, FileHash: "cross-photo-first", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true}
-	secondPhoto := &model.Photo{FilePath: secondPhotoPath, FileName: "cross-photo-second.jpg", FileSize: 1, FileHash: "cross-photo-second", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true}
+	firstPhoto := &model.Photo{FilePath: firstPhotoPath, FileName: "cross-photo-first.jpg", FileSize: 1, FileHash: "cross-photo-first", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: "人物"}
+	secondPhoto := &model.Photo{FilePath: secondPhotoPath, FileName: "cross-photo-second.jpg", FileSize: 1, FileHash: "cross-photo-second", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: "人物"}
 	require.NoError(t, photoRepo.Create(firstPhoto))
 	require.NoError(t, photoRepo.Create(secondPhoto))
 
@@ -1301,6 +1301,7 @@ func TestPeopleServiceBackground(t *testing.T) {
 		Height:   100,
 		Status:   model.PhotoStatusActive,
 		AIAnalyzed: true,
+		MainCategory: "人物",
 	}
 	require.NoError(t, photoRepo.Create(photo))
 	require.NoError(t, jobRepo.Create(&model.PeopleJob{
@@ -1718,6 +1719,7 @@ func TestPeopleServiceMarksNoFaceReady(t *testing.T) {
 		Height:   100,
 		Status:   model.PhotoStatusActive,
 		AIAnalyzed: true,
+		MainCategory: "人物",
 	}
 	require.NoError(t, photoRepo.Create(photo))
 	require.NoError(t, jobRepo.Create(&model.PeopleJob{
@@ -1895,6 +1897,7 @@ func TestPeopleServiceGeneratesFaceThumbnail(t *testing.T) {
 		Height:   400,
 		Status:   model.PhotoStatusActive,
 		AIAnalyzed: true,
+		MainCategory: "人物",
 	}
 	require.NoError(t, photoRepo.Create(photo))
 	require.NoError(t, jobRepo.Create(&model.PeopleJob{
@@ -1951,7 +1954,7 @@ func TestPeopleServiceCluster(t *testing.T) {
 		jobRepo := repository.NewPeopleJobRepository(db)
 
 		oldPhoto := &model.Photo{FilePath: filepath.Join(rootDir, "old.jpg"), FileName: "old.jpg", FileSize: 1, FileHash: "old", Width: 100, Height: 100, Status: model.PhotoStatusActive}
-		newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: filepath.Base(newPhotoPath), FileSize: 1, FileHash: "new", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true}
+		newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: filepath.Base(newPhotoPath), FileSize: 1, FileHash: "new", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: "人物"}
 		require.NoError(t, photoRepo.Create(oldPhoto))
 		require.NoError(t, photoRepo.Create(newPhoto))
 
@@ -2032,7 +2035,7 @@ func TestPeopleServiceCluster(t *testing.T) {
 		jobRepo := repository.NewPeopleJobRepository(db)
 
 		oldPhoto := &model.Photo{FilePath: filepath.Join(rootDir, "existing.jpg"), FileName: "existing.jpg", FileSize: 1, FileHash: "existing-medium", Width: 100, Height: 100, Status: model.PhotoStatusActive}
-		newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: filepath.Base(newPhotoPath), FileSize: 1, FileHash: "medium-similarity", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true}
+		newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: filepath.Base(newPhotoPath), FileSize: 1, FileHash: "medium-similarity", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: "人物"}
 		require.NoError(t, photoRepo.Create(oldPhoto))
 		require.NoError(t, photoRepo.Create(newPhoto))
 
@@ -2107,7 +2110,7 @@ func TestPeopleServiceCluster(t *testing.T) {
 		jobRepo := repository.NewPeopleJobRepository(db)
 
 		oldPhoto := &model.Photo{FilePath: filepath.Join(rootDir, "existing.jpg"), FileName: "existing.jpg", FileSize: 1, FileHash: "existing", Width: 100, Height: 100, Status: model.PhotoStatusActive}
-		newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: filepath.Base(newPhotoPath), FileSize: 1, FileHash: "uncertain", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true}
+		newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: filepath.Base(newPhotoPath), FileSize: 1, FileHash: "uncertain", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: "人物"}
 		require.NoError(t, photoRepo.Create(oldPhoto))
 		require.NoError(t, photoRepo.Create(newPhoto))
 
@@ -2188,7 +2191,7 @@ func TestPeopleServiceMerge(t *testing.T) {
 
 	targetPhoto := &model.Photo{FilePath: filepath.Join(rootDir, "target.jpg"), FileName: "target.jpg", FileSize: 1, FileHash: "target", Width: 100, Height: 100, Status: model.PhotoStatusActive}
 	sourcePhoto := &model.Photo{FilePath: filepath.Join(rootDir, "source.jpg"), FileName: "source.jpg", FileSize: 1, FileHash: "source", Width: 100, Height: 100, Status: model.PhotoStatusActive}
-	newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: filepath.Base(newPhotoPath), FileSize: 1, FileHash: "merged-new", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true}
+	newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: filepath.Base(newPhotoPath), FileSize: 1, FileHash: "merged-new", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: "人物"}
 	require.NoError(t, photoRepo.Create(targetPhoto))
 	require.NoError(t, photoRepo.Create(sourcePhoto))
 	require.NoError(t, photoRepo.Create(newPhoto))
@@ -2829,7 +2832,7 @@ func TestPeopleServiceManualAvatarWins(t *testing.T) {
 	jobRepo := repository.NewPeopleJobRepository(db)
 
 	oldPhoto := &model.Photo{FilePath: filepath.Join(rootDir, "avatar-old.jpg"), FileName: "avatar-old.jpg", FileSize: 1, FileHash: "avatar-old", Width: 100, Height: 100, Status: model.PhotoStatusActive}
-	newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: filepath.Base(newPhotoPath), FileSize: 1, FileHash: "avatar-new", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true}
+	newPhoto := &model.Photo{FilePath: newPhotoPath, FileName: filepath.Base(newPhotoPath), FileSize: 1, FileHash: "avatar-new", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: "人物"}
 	require.NoError(t, photoRepo.Create(oldPhoto))
 	require.NoError(t, photoRepo.Create(newPhoto))
 
@@ -2897,6 +2900,7 @@ func TestPeopleService_ApplyDetectionResult_EmptyFaceListCompletesSuccessfully(t
 		Height:   100,
 		Status:   model.PhotoStatusActive,
 		AIAnalyzed: true,
+		MainCategory: "人物",
 	}
 	require.NoError(t, photoRepo.Create(photo))
 
@@ -2957,6 +2961,7 @@ func TestPeopleService_ApplyDetectionResult_WithFacesCreatesFacesAndCompletes(t 
 		Height:   320,
 		Status:   model.PhotoStatusActive,
 		AIAnalyzed: true,
+		MainCategory: "人物",
 	}
 	require.NoError(t, photoRepo.Create(photo))
 
@@ -3034,6 +3039,7 @@ func TestPeopleService_ApplyDetectionResult_CleansUpOldFaces(t *testing.T) {
 		Height:   320,
 		Status:   model.PhotoStatusActive,
 		AIAnalyzed: true,
+		MainCategory: "人物",
 	}
 	require.NoError(t, photoRepo.Create(photo))
 
@@ -3124,6 +3130,7 @@ func TestPeopleService_ApplyDetectionResultMarksMergeSuggestionsDirty(t *testing
 		Height:   320,
 		Status:   model.PhotoStatusActive,
 		AIAnalyzed: true,
+		MainCategory: "人物",
 	}
 	require.NoError(t, photoRepo.Create(photo))
 
