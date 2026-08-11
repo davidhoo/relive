@@ -671,15 +671,6 @@ func (s *photoService) enqueueThumbnailForPhoto(photo *model.Photo, source strin
 	}
 }
 
-func (s *photoService) enqueuePeopleForPhoto(photo *model.Photo, source string, priority int, force bool) {
-	if s.peopleService == nil || photo == nil || photo.ID == 0 {
-		return
-	}
-	if err := s.peopleService.EnqueuePhoto(photo.ID, source, priority, force); err != nil {
-		logger.Warnf("enqueue people failed for photo %d: %v", photo.ID, err)
-	}
-}
-
 func (s *photoService) clearActiveJob(jobID string) {
 	s.taskMutex.Lock()
 	defer s.taskMutex.Unlock()

@@ -698,9 +698,22 @@ func (s *peopleService) HandleAnalysisCompleted(photoID uint) error {
 func (s *peopleService) ReconcileAnalysisEligibility() error {
 	var photos []*model.Photo
 	if err := s.db.
-		Where("status = ? AND ai_analyzed = ? AND (main_category = ? OR (people_excluded = ? AND face_process_status = ?))",
+		Where(`status = ? AND ai_analyzed = ? AND (
+			(main_category = ? AND (
+				people_excluded = ? OR
+				COALESCE(people_exclusion_reason, '') != ? OR
+				face_process_status != ? OR
+				face_count != 0 OR
+				EXISTS (SELECT 1 FROM faces WHERE faces.photo_id = photos.id)
+			)) OR
+			(COALESCE(main_category, '') != ? AND people_excluded = ? AND face_process_status = ?)
+		)`,
 			model.PhotoStatusActive,
 			true,
+			model.PhotoMainCategoryScreenshot,
+			false,
+			model.PeopleExclusionReasonScreenshot,
+			model.FaceProcessStatusNone,
 			model.PhotoMainCategoryScreenshot,
 			false,
 			model.FaceProcessStatusNone,
@@ -887,7 +900,7 @@ func (s *peopleService) ResetAllPeople() (int, error) {
 	s.markProtoCacheFullRebuild("reset_all_people")
 
 	enqueued := 0
-	err = s.photoRepo.IterateActivePhotos([]string{"id", "status"}, 500, func(photos []*model.Photo) error {
+	err = s.photoRepo.IterateActivePhotos([]string{"id", "status", "ai_analyzed", "people_excluded", "main_category"}, 500, func(photos []*model.Photo) error {
 		for _, photo := range photos {
 			if err := s.enqueuePhotoModel(photo, model.PeopleJobSourceScan, peoplePriorityScan, true); err != nil {
 				logger.Warnf("re-enqueue photo %d after reset failed: %v", photo.ID, err)

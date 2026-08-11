@@ -1556,13 +1556,21 @@ func TestPeopleService_ReconcileAnalysisEligibility(t *testing.T) {
 		Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: model.PhotoMainCategoryScreenshot,
 		FaceProcessStatus: model.FaceProcessStatusReady, FaceCount: 1,
 	}
+	cleanScreenshot := &model.Photo{
+		FilePath: "/photos/clean-screen.png", FileName: "clean-screen.png", FileSize: 1, FileHash: "clean-screen",
+		Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: model.PhotoMainCategoryScreenshot,
+		PeopleExcluded: true, PeopleExclusionReason: model.PeopleExclusionReasonScreenshot,
+		FaceProcessStatus: model.FaceProcessStatusNone,
+	}
 	unanalyzed := &model.Photo{
 		FilePath: "/photos/waiting.jpg", FileName: "waiting.jpg", FileSize: 1, FileHash: "waiting",
 		Status: model.PhotoStatusActive, AIAnalyzed: false, FaceProcessStatus: model.FaceProcessStatusNone,
 	}
-	for _, photo := range []*model.Photo{eligible, historicalScreenshot, unanalyzed} {
+	for _, photo := range []*model.Photo{eligible, historicalScreenshot, cleanScreenshot, unanalyzed} {
 		require.NoError(t, photoRepo.Create(photo))
 	}
+	cleanUpdatedAt := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	require.NoError(t, db.Model(&model.Photo{}).Where("id = ?", cleanScreenshot.ID).UpdateColumn("updated_at", cleanUpdatedAt).Error)
 
 	require.NoError(t, svc.ReconcileAnalysisEligibility())
 
@@ -1577,6 +1585,9 @@ func TestPeopleService_ReconcileAnalysisEligibility(t *testing.T) {
 	assert.True(t, updatedScreenshot.PeopleExcluded)
 	assert.Equal(t, model.PeopleExclusionReasonScreenshot, updatedScreenshot.PeopleExclusionReason)
 	assert.Equal(t, 0, updatedScreenshot.FaceCount)
+	unchangedCleanScreenshot, err := photoRepo.GetByID(cleanScreenshot.ID)
+	require.NoError(t, err)
+	assert.Equal(t, cleanUpdatedAt, unchangedCleanScreenshot.UpdatedAt, "already-clean screenshots should not be rewritten on every startup")
 }
 
 func TestPeopleService_EnqueueRequiresAIEligibility(t *testing.T) {
@@ -4375,16 +4386,29 @@ func TestPeopleService_Invalidate_ResetAllPeople(t *testing.T) {
 	photoRepo := repository.NewPhotoRepository(db)
 	personRepo := repository.NewPersonRepository(db)
 	faceRepo := repository.NewFaceRepository(db)
-	photo := &model.Photo{FilePath: "/photos/inv-reset.jpg", FileName: "inv-reset.jpg", FileSize: 1, FileHash: "inv-reset", Width: 100, Height: 100, Status: model.PhotoStatusActive}
+	photo := &model.Photo{FilePath: "/photos/inv-reset.jpg", FileName: "inv-reset.jpg", FileSize: 1, FileHash: "inv-reset", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: "人物"}
 	require.NoError(t, photoRepo.Create(photo))
+	screenshot := &model.Photo{
+		FilePath: "/photos/inv-reset-screen.png", FileName: "inv-reset-screen.png", FileSize: 1, FileHash: "inv-reset-screen",
+		Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: model.PhotoMainCategoryScreenshot,
+		PeopleExcluded: true, PeopleExclusionReason: model.PeopleExclusionReasonScreenshot,
+	}
+	require.NoError(t, photoRepo.Create(screenshot))
 	person := &model.Person{Category: model.PersonCategoryFamily}
 	require.NoError(t, personRepo.Create(person))
 	require.NoError(t, faceRepo.Create(&model.Face{PhotoID: photo.ID, PersonID: &person.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.9, QualityScore: 0.8, Embedding: encodeEmbedding(t, []float32{1, 0}), ClusterStatus: model.FaceClusterStatusAssigned, ClusterScore: 0.9}))
 	require.NoError(t, personRepo.RefreshStats(person.ID))
 	require.NoError(t, photoRepo.UpdateFields(photo.ID, map[string]interface{}{"face_process_status": model.FaceProcessStatusReady, "face_count": 1}))
 
-	_, err := svc.ResetAllPeople()
+	enqueued, err := svc.ResetAllPeople()
 	require.NoError(t, err)
+	assert.Equal(t, 1, enqueued)
+	eligibleJob, err := svc.jobRepo.GetActiveByPhotoID(photo.ID)
+	require.NoError(t, err)
+	require.NotNil(t, eligibleJob)
+	screenshotJob, err := svc.jobRepo.GetActiveByPhotoID(screenshot.ID)
+	require.NoError(t, err)
+	assert.Nil(t, screenshotJob)
 
 	require.Equal(t, 1, rec.invalidateCount())
 	inv := rec.invalidateCallsSnapshot()[0]
