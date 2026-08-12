@@ -39,6 +39,9 @@ func TestFaceQualityBackfill_GeneratesCandidatesWithoutChangingOwnership(t *test
 	require.Len(t, evts, 1)
 	assert.Equal(t, model.FaceQualitySourceAuto, evts[0].Source)
 	assert.True(t, evts[0].IsCurrent)
+	// 存量审计事件一律标 historical_backfill；有证据快照 → available。
+	assert.Equal(t, model.FaceQualityEvidenceOriginHistoricalBackfill, evts[0].EvidenceOrigin)
+	assert.Equal(t, model.FaceQualityEvidenceStateAvailable, evts[0].EvidenceState)
 
 	// Face 排除态与人物归属未变
 	var updated model.Face
@@ -73,6 +76,9 @@ func TestFaceQualityBackfill_LegacyFaceWithoutEvidenceGoesReview(t *testing.T) {
 	require.NoError(t, db.Where("photo_id = ? AND is_current = ?", photo.ID, true).First(&evt).Error)
 	assert.Equal(t, model.FaceQualityDecisionReviewRequired, evt.Decision)
 	assert.Equal(t, model.FaceQualitySourceAuto, evt.Source)
+	// 无证据快照的旧 Face → historical_backfill + missing（不混入人工审核）。
+	assert.Equal(t, model.FaceQualityEvidenceOriginHistoricalBackfill, evt.EvidenceOrigin)
+	assert.Equal(t, model.FaceQualityEvidenceStateMissing, evt.EvidenceState)
 }
 
 // 暂停/继续：Pause 后 runOnce 不处理新批次。

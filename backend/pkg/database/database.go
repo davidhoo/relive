@@ -300,6 +300,10 @@ func AutoMigrate(db *gorm.DB) error {
 		log.Printf("[database] warning: face quality columns migration failed: %v", err)
 	}
 
+	if err := migrateFaceQualityEvidenceOrigin(db); err != nil {
+		log.Printf("[database] warning: face quality evidence origin migration failed: %v", err)
+	}
+
 	if err := migratePersonPhotosTable(db); err != nil {
 		log.Printf("[database] warning: person_photos migration failed: %v", err)
 	}
@@ -376,6 +380,80 @@ func migrateFaceQualityColumns(db *gorm.DB) error {
 
 	log.Printf("[database] face quality columns added")
 	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
+	return nil
+}
+
+// migrateFaceQualityEvidenceOrigin 给 face_quality_events 增加 evidence_origin / evidence_state /
+// rescore_run_id 列，建复合索引与 rescore_run_id 索引，并一次性把“历史回填缺证据”的旧记录
+// 标记为 historical_backfill/missing，使其从“待人工审核”移入“历史人脸待补证据”。
+//
+// 一次性标记的精确条件（与计划 §3.2 一致，不得用分数/规则版本/时间范围推断）：
+//   is_current=1 AND source='auto' AND decision='review_required'
+//   AND TRIM(COALESCE(evidence_json,''))='' AND evidence_origin=''
+//
+// 幂等：app_config 标记 migration.face_quality_evidence_origin_v1。索引重建为自愈式（DROP IF EXISTS + CREATE）。
+func migrateFaceQualityEvidenceOrigin(db *gorm.DB) error {
+	const migrationKey = "migration.face_quality_evidence_origin_v1"
+
+	// 迁移标记存在则直接跳过（避免在已迁移库上重复 DROP/CREATE 索引与重复写标记）。
+	var existing model.AppConfig
+	if err := db.Where("key = ?", migrationKey).First(&existing).Error; err == nil {
+		return nil
+	}
+
+	// 1) 补列（新库由 AutoMigrate 创建，这里只补旧库）。
+	type colSpec struct {
+		name string
+		ddl  string
+	}
+	specs := []colSpec{
+		{"evidence_origin", "ALTER TABLE face_quality_events ADD COLUMN evidence_origin VARCHAR(32) DEFAULT ''"},
+		{"evidence_state", "ALTER TABLE face_quality_events ADD COLUMN evidence_state VARCHAR(24) DEFAULT ''"},
+		{"rescore_run_id", "ALTER TABLE face_quality_events ADD COLUMN rescore_run_id INTEGER"},
+	}
+	for _, s := range specs {
+		if !db.Migrator().HasColumn(&model.FaceQualityEvent{}, s.name) {
+			if err := db.Exec(s.ddl).Error; err != nil {
+				return fmt.Errorf("add %s column: %w", s.name, err)
+			}
+		}
+	}
+
+	// 2) 复合索引 (is_current, evidence_origin, evidence_state, id DESC) 与 rescore_run_id 索引。
+	//    自愈式：DROP IF EXISTS + CREATE，避免 GORM AutoMigrate 对已存在索引报错或方向不符。
+	idxComposite := "idx_fqe_evidence_origin_state"
+	idxRescore := "idx_fqe_rescore_run"
+	db.Exec("DROP INDEX IF EXISTS " + idxComposite)
+	db.Exec("DROP INDEX IF EXISTS " + idxRescore)
+	if err := db.Exec("CREATE INDEX " + idxComposite +
+		" ON face_quality_events (is_current, evidence_origin, evidence_state, id DESC)").Error; err != nil {
+		return fmt.Errorf("create %s index: %w", idxComposite, err)
+	}
+	if err := db.Exec("CREATE INDEX " + idxRescore + " ON face_quality_events (rescore_run_id)").Error; err != nil {
+		return fmt.Errorf("create %s index: %w", idxRescore, err)
+	}
+
+	// 3) 一次性标记历史回填缺证据记录（幂等：evidence_origin='' 才更新，已标记的不再动）。
+	res := db.Exec(`UPDATE face_quality_events
+		SET evidence_origin = ?, evidence_state = ?
+		WHERE is_current = 1
+		  AND source = ?
+		  AND decision = ?
+		  AND TRIM(COALESCE(evidence_json, '')) = ''
+		  AND evidence_origin = ''`,
+		model.FaceQualityEvidenceOriginHistoricalBackfill,
+		model.FaceQualityEvidenceStateMissing,
+		model.FaceQualitySourceAuto,
+		model.FaceQualityDecisionReviewRequired)
+	if res.Error != nil {
+		return fmt.Errorf("backfill historical missing evidence marker: %w", res.Error)
+	}
+
+	// 写迁移标记（OnConflict 兜底，防止软删除残留导致唯一索引冲突）。
+	marker := model.AppConfig{Key: migrationKey, Value: "done"}
+	if err := db.Where("key = ?", migrationKey).FirstOrCreate(&marker).Error; err != nil {
+		return fmt.Errorf("write migration marker: %w", err)
+	}
 	return nil
 }
 

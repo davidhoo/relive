@@ -7,6 +7,8 @@ import (
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/pkg/config"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -459,4 +461,104 @@ func TestMigratePersonFaceCursorIndex_IdempotentAndSelfHealing(t *testing.T) {
 	if err := db.Where("key = ?", migrationKey).First(&cfg).Error; err != nil {
 		t.Fatalf("migration marker should still exist after self-healing: %v", err)
 	}
+}
+
+// TestMigrateFaceQualityEvidenceOrigin 验证历史回填缺证据记录被一次性标记为
+// historical_backfill/missing，且不应误标：有 evidence 的 review_required、人工事件、
+// 已标记的记录均不受影响。索引应存在，迁移幂等。
+func TestMigrateFaceQualityEvidenceOrigin(t *testing.T) {
+	// 用仅 AutoMigrate FaceQualityEvent 的独立库，避免完整 AutoMigrate 流水线已写迁移标记
+	// 导致本测试调用 migrateFaceQualityEvidenceOrigin 时早退。
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.FaceQualityEvent{}, &model.AppConfig{}))
+
+	// 1) 历史缺证据：auto + review_required + 空 evidence_json + 空 evidence_origin。
+	histMissing := &model.FaceQualityEvent{
+		PhotoID: 1, FaceID: nil,
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionReviewRequired,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "test-v1",
+		EvidenceJSON:   "",
+		EvidenceOrigin: "",
+		IsCurrent:      true,
+	}
+	require.NoError(t, db.Create(histMissing).Error)
+
+	// 2) 真实模型 0 分但有 evidence：不应被标 missing。
+	realZero := &model.FaceQualityEvent{
+		PhotoID: 2,
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionReviewRequired,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "test-v1",
+		EvidenceJSON:   `{"face_validity_score":0,"pixel_width":50}`,
+		EvidenceOrigin: "",
+		IsCurrent:      true,
+	}
+	require.NoError(t, db.Create(realZero).Error)
+
+	// 3) 人工事件：source=manual，不应被该迁移动。
+	manualEvt := &model.FaceQualityEvent{
+		PhotoID: 3,
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionAccepted,
+		Source:   model.FaceQualitySourceManual, RuleVersion: "v1", ModelVersion: "test-v1",
+		EvidenceJSON:   "",
+		EvidenceOrigin: "",
+		IsCurrent:      true,
+	}
+	require.NoError(t, db.Create(manualEvt).Error)
+
+	// 4) 非当前历史缺证据：is_current=false，不应被标（只处理 is_current=1）。
+	notCurrent := &model.FaceQualityEvent{
+		PhotoID: 4,
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionReviewRequired,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "test-v1",
+		EvidenceJSON:   "",
+		EvidenceOrigin: "",
+		IsCurrent:      false,
+	}
+	require.NoError(t, db.Create(notCurrent).Error)
+
+	require.NoError(t, migrateFaceQualityEvidenceOrigin(db))
+
+	// 历史缺证据 → historical_backfill/missing
+	var got model.FaceQualityEvent
+	require.NoError(t, db.First(&got, histMissing.ID).Error)
+	assert.Equal(t, model.FaceQualityEvidenceOriginHistoricalBackfill, got.EvidenceOrigin)
+	assert.Equal(t, model.FaceQualityEvidenceStateMissing, got.EvidenceState)
+
+	// 真实 0 分有证据：origin/state 仍为空（实时由写入路径填，迁移只标 missing 集合）。
+	got = model.FaceQualityEvent{}
+	require.NoError(t, db.First(&got, realZero.ID).Error)
+	assert.Equal(t, "", got.EvidenceOrigin)
+	assert.Equal(t, "", got.EvidenceState)
+
+	// 人工事件不受影响。
+	got = model.FaceQualityEvent{}
+	require.NoError(t, db.First(&got, manualEvt.ID).Error)
+	assert.Equal(t, "", got.EvidenceOrigin)
+
+	// 非当前不受影响。
+	got = model.FaceQualityEvent{}
+	require.NoError(t, db.First(&got, notCurrent.ID).Error)
+	assert.Equal(t, "", got.EvidenceOrigin)
+
+	// 索引存在。
+	for _, idx := range []string{"idx_fqe_evidence_origin_state", "idx_fqe_rescore_run"} {
+		var cnt int64
+		require.NoError(t, db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?", idx).Scan(&cnt).Error)
+		assert.Equal(t, int64(1), cnt, "index %s should exist", idx)
+	}
+
+	// 迁移标记已写。
+	var cfg model.AppConfig
+	require.NoError(t, db.Where("key = ?", "migration.face_quality_evidence_origin_v1").First(&cfg).Error)
+
+	// 幂等：再跑一次早退不报错，已标记行不变。
+	require.NoError(t, migrateFaceQualityEvidenceOrigin(db))
+	got = model.FaceQualityEvent{}
+	require.NoError(t, db.First(&got, histMissing.ID).Error)
+	assert.Equal(t, model.FaceQualityEvidenceOriginHistoricalBackfill, got.EvidenceOrigin)
 }

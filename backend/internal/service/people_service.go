@@ -2378,19 +2378,21 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 			}
 			// 追加自动质检事件（FaceID 在事务内创建 Face 后回填）。
 			qualityEventsToWrite = append(qualityEventsToWrite, &model.FaceQualityEvent{
-				PhotoID:      photo.ID,
-				BBoxX:        detected.BBox.X,
-				BBoxY:        detected.BBox.Y,
-				BBoxWidth:    detected.BBox.Width,
-				BBoxHeight:   detected.BBox.Height,
-				Decision:     outcome.Decision,
-				Reason:       outcome.Reason,
-				Source:       model.FaceQualitySourceAuto,
-				RuleVersion:  qualityRuleVersionFromEvidence(ev),
-				ModelVersion: qualityModelVersionFromEvidence(ev),
-				EvidenceJSON: marshalEvidence(ev),
-				ReasonCodes:  reasonCodesCSV(outcome.ReasonCodes),
-				IsCurrent:    true,
+				PhotoID:        photo.ID,
+				BBoxX:          detected.BBox.X,
+				BBoxY:          detected.BBox.Y,
+				BBoxWidth:      detected.BBox.Width,
+				BBoxHeight:     detected.BBox.Height,
+				Decision:       outcome.Decision,
+				Reason:         outcome.Reason,
+				Source:         model.FaceQualitySourceAuto,
+				RuleVersion:    qualityRuleVersionFromEvidence(ev),
+				ModelVersion:   qualityModelVersionFromEvidence(ev),
+				EvidenceJSON:   marshalEvidence(ev),
+				ReasonCodes:    reasonCodesCSV(outcome.ReasonCodes),
+				EvidenceOrigin: model.FaceQualityEvidenceOriginRealtime,
+				EvidenceState:  model.FaceQualityEvidenceStateAvailable,
+				IsCurrent:      true,
 			})
 		}
 		createdFaces = append(createdFaces, face)

@@ -173,6 +173,44 @@ const (
 	FaceQualitySourceManual = "manual"
 )
 
+// 证据来源枚举（evidence_origin）：区分“谁作出最终结论”之外的“证据从何而来”。
+// 保留 source=auto/manual 的“谁作出最终结论”语义，不滥用 source 表达证据来源。
+const (
+	// FaceQualityEvidenceOriginRealtime 实时检测/实时自动质检产出的证据。
+	FaceQualityEvidenceOriginRealtime = "realtime"
+	// FaceQualityEvidenceOriginHistoricalBackfill 旧 Face 快照回放写入的审计事件（无模型证据）。
+	FaceQualityEvidenceOriginHistoricalBackfill = "historical_backfill"
+	// FaceQualityEvidenceOriginHistoricalRescore 历史重评分运行补齐的模型证据。
+	FaceQualityEvidenceOriginHistoricalRescore = "historical_rescore"
+)
+
+// 证据状态枚举（evidence_state）：审核队列分流的权威字段，不能由分数推断。
+const (
+	// FaceQualityEvidenceStateAvailable 已有可解析的模型证据（含真实 0 分）。
+	FaceQualityEvidenceStateAvailable = "available"
+	// FaceQualityEvidenceStateMissing 历史回填无模型证据，待补证据，不需人工逐张确认。
+	FaceQualityEvidenceStateMissing = "missing"
+	// FaceQualityEvidenceStateRetryableError 重评分遇到可重试技术问题（超时/读图失败/JSON 异常）。
+	FaceQualityEvidenceStateRetryableError = "retryable_error"
+	// FaceQualityEvidenceStateUnmatched 重评分未在图中找到与旧框匹配的人脸。
+	FaceQualityEvidenceStateUnmatched = "unmatched"
+)
+
+// IsValidEvidenceOrigin 校验证据来源是否合法
+func IsValidEvidenceOrigin(s string) bool {
+	return s == FaceQualityEvidenceOriginRealtime ||
+		s == FaceQualityEvidenceOriginHistoricalBackfill ||
+		s == FaceQualityEvidenceOriginHistoricalRescore
+}
+
+// IsValidEvidenceState 校验证据状态是否合法
+func IsValidEvidenceState(s string) bool {
+	return s == FaceQualityEvidenceStateAvailable ||
+		s == FaceQualityEvidenceStateMissing ||
+		s == FaceQualityEvidenceStateRetryableError ||
+		s == FaceQualityEvidenceStateUnmatched
+}
+
 // 质检审核动作枚举（face_quality_events.review_action）
 const (
 	FaceQualityReviewActionConfirmExclude = "confirm_exclude"
@@ -210,6 +248,15 @@ type FaceQualityEvent struct {
 	ModelVersion string `gorm:"type:varchar(40);not null" json:"model_version"`
 	EvidenceJSON string `gorm:"type:text" json:"evidence_json,omitempty"`
 	ReasonCodes  string `gorm:"type:varchar(255);default:''" json:"reason_codes,omitempty"`
+
+	// 证据来源/状态：队列分流的权威字段（详见枚举注释）。新写入路径必须显式填写有效枚举，
+	// 旧数据空字符串仅为向后兼容，由一次性迁移标记为 historical_backfill/missing。
+	// (is_current, evidence_origin, evidence_state, id DESC) 复合索引由
+	// migrateFaceQualityEvidenceOrigin 以原生 SQL 创建，便于带 id DESC 方向。
+	EvidenceOrigin string `gorm:"type:varchar(32);default:''" json:"evidence_origin,omitempty"`
+	EvidenceState  string `gorm:"type:varchar(24);default:''" json:"evidence_state,omitempty"`
+	// RescoreRunID 产生该次历史重评分结论的运行 ID；实时与旧回填为空。
+	RescoreRunID *uint `gorm:"index:idx_fqe_rescore_run" json:"rescore_run_id,omitempty"`
 
 	// 审核与恢复。
 	ReviewAction string     `gorm:"type:varchar(30);default:'';index:idx_fqe_review_action" json:"review_action,omitempty"`

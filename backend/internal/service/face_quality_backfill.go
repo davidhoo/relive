@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -177,6 +178,9 @@ func (b *FaceQualityBackfill) runOnce() (bool, error) {
 			ReasonCodes:  reasonCodesCSV(reasonCodes),
 			IsCurrent:    true,
 		}
+		// 存量审计事件一律标 historical_backfill。证据状态由是否构造出可解析 evidence 决定：
+		// 有证据快照 → available；无证据快照 → missing（交“历史待补证据”队列，不混入人工审核）。
+		evt.EvidenceOrigin = model.FaceQualityEvidenceOriginHistoricalBackfill
 		// 若 Face 上有证据快照，尝试构造证据 JSON。
 		if face.FaceValidityScore > 0 || face.QualityReasonsCSV != "" {
 			ev := &model.FaceQualityEvidence{
@@ -189,6 +193,12 @@ func (b *FaceQualityBackfill) runOnce() (bool, error) {
 			if b, err := json.Marshal(ev); err == nil {
 				evt.EvidenceJSON = string(b)
 			}
+		}
+		// 证据状态：有可解析 evidence → available；否则 missing（不混入人工审核）。
+		if strings.TrimSpace(evt.EvidenceJSON) != "" {
+			evt.EvidenceState = model.FaceQualityEvidenceStateAvailable
+		} else {
+			evt.EvidenceState = model.FaceQualityEvidenceStateMissing
 		}
 		if err := b.people.faceQualityRepo.Create(evt); err != nil {
 			logger.Warnf("face_quality backfill create event for face %d: %v", face.ID, err)
