@@ -259,6 +259,14 @@ func Setup(db *gorm.DB, cfg *config.Config, appState *lifecycle.State) (*gin.Eng
 				people.POST("/face-quality/backfill/pause", handlers.People.PauseFaceQualityBackfill)
 				people.POST("/face-quality/backfill/resume", handlers.People.ResumeFaceQualityBackfill)
 				people.POST("/face-quality/restore-auto", handlers.People.RestoreAutoFaceQuality)
+				// 历史重评分运行接口（校准/全量 + 暂停/恢复/取消/run 级恢复）。
+				people.POST("/face-quality/rescore-runs", handlers.People.CreateFaceQualityRescoreRun)
+				people.GET("/face-quality/rescore-runs", handlers.People.ListFaceQualityRescoreRuns)
+				people.GET("/face-quality/rescore-runs/:id", handlers.People.GetFaceQualityRescoreRun)
+				people.POST("/face-quality/rescore-runs/:id/pause", handlers.People.PauseFaceQualityRescoreRun)
+				people.POST("/face-quality/rescore-runs/:id/resume", handlers.People.ResumeFaceQualityRescoreRun)
+				people.POST("/face-quality/rescore-runs/:id/cancel", handlers.People.CancelFaceQualityRescoreRun)
+				people.POST("/face-quality/rescore-runs/:id/restore-auto", handlers.People.RestoreAutoFaceQualityRescoreRun)
 				people.PATCH("/faces/quality-decision", handlers.People.ApplyFaceQualityDecision)
 
 				people.POST("/background/start", handlers.People.StartBackground)

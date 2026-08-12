@@ -37,6 +37,8 @@ type PeopleHandler struct {
 	faceQualityService service.FaceQualityService
 	// faceQualityBackfill 存量质检审计后台任务（暂停/继续/进度接口）。nil 时返回 503。
 	faceQualityBackfill *service.FaceQualityBackfill
+	// faceQualityRescore 历史重评分运行管理服务（rescore-runs CRUD + pause/resume/cancel/restore-auto）。nil 时返回 503。
+	faceQualityRescore service.FaceQualityRescoreService
 	// backgroundCoordinator 让人物详情读请求（GetPerson/GetPersonPhotos/GetPersonFaces）
 	// 注册 foreground scope：执行期间 P2 自动后台任务暂停启动新批次，已运行任务在批次
 	// 边界让步，避免与详情页读请求争抢 NAS 磁盘。nil 时跳过注册（如测试）。
@@ -74,6 +76,11 @@ func (h *PeopleHandler) SetFaceQualityService(s service.FaceQualityService) {
 // SetFaceQualityBackfill 注入存量质检审计后台任务，供暂停/继续/进度接口使用。
 func (h *PeopleHandler) SetFaceQualityBackfill(b *service.FaceQualityBackfill) {
 	h.faceQualityBackfill = b
+}
+
+// SetFaceQualityRescore 注入历史重评分运行管理服务，供 rescore-runs 接口使用。
+func (h *PeopleHandler) SetFaceQualityRescore(s service.FaceQualityRescoreService) {
+	h.faceQualityRescore = s
 }
 
 // SetPersonPhotoRepo 注入人物照片派生表仓库，供 cursor 分页在迁移完成后切换到索引查询。
@@ -1175,6 +1182,194 @@ func (h *PeopleHandler) ResumeFaceQualityBackfill(c *gin.Context) {
 	}
 	h.faceQualityBackfill.Resume()
 	c.JSON(http.StatusOK, model.Response{Success: true, Message: "存量质检审计已恢复"})
+}
+
+// ---- 历史重评分运行接口 ----
+
+// rescoreRunResponse 把 model 转为 DTO 响应视图。
+func rescoreRunResponse(r *model.FaceQualityRescoreRun) model.FaceQualityRescoreRunResponse {
+	return model.FaceQualityRescoreRunResponse{
+		ID:                  r.ID,
+		Mode:                r.Mode,
+		ApplyMode:           r.ApplyMode,
+		Status:              r.Status,
+		TargetPhotoCount:    r.TargetPhotoCount,
+		TargetFaceCount:     r.TargetFaceCount,
+		ProcessedPhotoCount: r.ProcessedPhotoCount,
+		ProcessedFaceCount:  r.ProcessedFaceCount,
+		AcceptedCount:       r.AcceptedCount,
+		ReviewRequiredCount: r.ReviewRequiredCount,
+		AutoExcludedCount:   r.AutoExcludedCount,
+		RetryableCount:      r.RetryableCount,
+		LastError:           r.LastError,
+		StartedAt:           r.StartedAt,
+		CompletedAt:         r.CompletedAt,
+		RuleVersion:         r.RuleVersion,
+		ModelVersion:        r.ModelVersion,
+		PhotoLimit:          r.PhotoLimit,
+		CreatedAt:           r.CreatedAt,
+		UpdatedAt:           r.UpdatedAt,
+	}
+}
+
+// CreateFaceQualityRescoreRun 创建历史重评分运行。
+// 校准强制 shadow；full/enforce 需已完成 calibration；同时只允许一个活跃 run。
+func (h *PeopleHandler) CreateFaceQualityRescoreRun(c *gin.Context) {
+	if h.faceQualityRescore == nil {
+		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检重评分功能未启用")
+		return
+	}
+	var req model.FaceQualityRescoreRunCreateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+	// full 模式必须 enforce（不接受 full+shadow，无意义且误导）。
+	if req.Mode == model.FaceQualityRescoreModeFull {
+		// apply_mode 由调用方在 full 时强制为 enforce；计划未提供 full+shadow 语义。
+	}
+	run, err := h.faceQualityRescore.CreateRun(req.Mode, model.FaceQualityRescoreApplyModeEnforce, req.PhotoLimit)
+	if err != nil {
+		writeRescoreRunError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Data: rescoreRunResponse(run)})
+}
+
+// ListFaceQualityRescoreRuns 列出重评分运行（最近优先）。
+func (h *PeopleHandler) ListFaceQualityRescoreRuns(c *gin.Context) {
+	if h.faceQualityRescore == nil {
+		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检重评分功能未启用")
+		return
+	}
+	limit := 50
+	if l, err := strconv.Atoi(c.Query("limit")); err == nil && l > 0 && l <= 200 {
+		limit = l
+	}
+	runs, err := h.faceQualityRescore.ListRuns(limit)
+	if err != nil {
+		writePeopleError(c, http.StatusInternalServerError, "RESCORE_LIST_FAILED", err.Error())
+		return
+	}
+	items := make([]model.FaceQualityRescoreRunResponse, 0, len(runs))
+	for _, r := range runs {
+		items = append(items, rescoreRunResponse(r))
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Data: gin.H{"items": items}})
+}
+
+// GetFaceQualityRescoreRun 获取单个运行详情。
+func (h *PeopleHandler) GetFaceQualityRescoreRun(c *gin.Context) {
+	if h.faceQualityRescore == nil {
+		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检重评分功能未启用")
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid run id")
+		return
+	}
+	run, err := h.faceQualityRescore.GetRun(uint(id))
+	if err != nil {
+		writeRescoreRunError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Data: rescoreRunResponse(run)})
+}
+
+// PauseFaceQualityRescoreRun 暂停运行。
+func (h *PeopleHandler) PauseFaceQualityRescoreRun(c *gin.Context) {
+	if h.faceQualityRescore == nil {
+		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检重评分功能未启用")
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid run id")
+		return
+	}
+	if err := h.faceQualityRescore.Pause(uint(id)); err != nil {
+		writeRescoreRunError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "重评分运行已暂停"})
+}
+
+// ResumeFaceQualityRescoreRun 恢复运行（processing item 回到 pending）。
+func (h *PeopleHandler) ResumeFaceQualityRescoreRun(c *gin.Context) {
+	if h.faceQualityRescore == nil {
+		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检重评分功能未启用")
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid run id")
+		return
+	}
+	if err := h.faceQualityRescore.Resume(uint(id)); err != nil {
+		writeRescoreRunError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "重评分运行已恢复"})
+}
+
+// CancelFaceQualityRescoreRun 取消运行（停止未处理 item，不删除审计记录）。
+func (h *PeopleHandler) CancelFaceQualityRescoreRun(c *gin.Context) {
+	if h.faceQualityRescore == nil {
+		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检重评分功能未启用")
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid run id")
+		return
+	}
+	if err := h.faceQualityRescore.Cancel(uint(id)); err != nil {
+		writeRescoreRunError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "重评分运行已取消"})
+}
+
+// RestoreAutoFaceQualityRescoreRun 按运行恢复自动排除（只恢复 rescore_run_id 匹配的样本）。
+func (h *PeopleHandler) RestoreAutoFaceQualityRescoreRun(c *gin.Context) {
+	if h.faceQualityRescore == nil {
+		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检重评分功能未启用")
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid run id")
+		return
+	}
+	limit := 0
+	if l, err := strconv.Atoi(c.Query("limit")); err == nil && l > 0 {
+		limit = l
+	}
+	result, err := h.faceQualityRescore.RestoreAuto(uint(id), limit)
+	if err != nil {
+		writeRescoreRunError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "已按运行恢复自动排除样本", Data: result})
+}
+
+// writeRescoreRunError 把重评分服务错误映射为统一响应与错误码。
+func writeRescoreRunError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, service.ErrRescoreRunConflict):
+		writePeopleError(c, http.StatusConflict, "RESCORE_RUN_CONFLICT", err.Error())
+	case errors.Is(err, service.ErrRescoreCalibrationRequired):
+		writePeopleError(c, http.StatusConflict, "RESCORE_CALIBRATION_REQUIRED", err.Error())
+	case errors.Is(err, service.ErrRescoreRunNotFound), errors.Is(err, gorm.ErrRecordNotFound):
+		writePeopleError(c, http.StatusNotFound, "RESCORE_NOT_FOUND", err.Error())
+	default:
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			writePeopleError(c, http.StatusNotFound, "RESCORE_NOT_FOUND", err.Error())
+			return
+		}
+		writePeopleError(c, http.StatusInternalServerError, "RESCORE_OPERATION_FAILED", err.Error())
+	}
 }
 
 // buildPhotoPeopleResponse 复用 GetPhotoPeople 与 AssignFacePerson 的数据组装逻辑。

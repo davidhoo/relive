@@ -525,15 +525,11 @@ func (s *faceQualityRescoreService) writeRescoreResult(run *model.FaceQualityRes
 			}
 
 			// 2) 策略决策。
+			// evaluateFaceQuality 在 shadow 模式下已把 exclude 降级为 review_required，
+			// 因此这里只需区分 enforce 高置信排除与否则接受/灰区；无需再重复 shadow 降级。
 			decision := outcome.Decision
 			reason := outcome.Reason
 			exclude := outcome.Action == model.FaceQualityActionExclude && run.ApplyMode == model.FaceQualityRescoreApplyModeEnforce
-			// shadow 永不排除：策略若为 exclude，降级为 review_required 候选。
-			if outcome.Action == model.FaceQualityActionExclude && run.ApplyMode == model.FaceQualityRescoreApplyModeShadow {
-				decision = model.FaceQualityDecisionReviewRequired
-				reason = ""
-				exclude = false
-			}
 
 			// 3) 旧 baseline 事件失活。
 			if err := tx.Model(&model.FaceQualityEvent{}).
@@ -657,7 +653,7 @@ func (s *faceQualityRescoreService) markBaselineEventFailed(item *model.FaceQual
 				Updates(map[string]interface{}{
 					"evidence_origin": model.FaceQualityEvidenceOriginHistoricalRescore,
 					"evidence_state":  state,
-					"rescore_run_id":  nil,
+					"rescore_run_id":  item.RunID, // 保留 traceability：失败事件仍归属于本 run
 				}).Error
 		})
 	})
@@ -709,14 +705,27 @@ func (s *faceQualityRescoreService) refreshRunCounts(run *model.FaceQualityResco
 }
 
 // maybeCompleteRun 检查 run 是否全部 item 处理完（无 pending/processing），是则标 completed。
+// 已被 Cancel/Failed 的 run 不覆盖（避免与人工取消竞态）。
 func (s *faceQualityRescoreService) maybeCompleteRun(run *model.FaceQualityRescoreRun) {
+	if run.Status == model.FaceQualityRescoreStatusCancelled || run.Status == model.FaceQualityRescoreStatusFailed {
+		return
+	}
 	pending, _ := s.repo.CountItemsByStatus(run.ID, model.FaceQualityRescoreItemStatusPending)
 	processing, _ := s.repo.CountItemsByStatus(run.ID, model.FaceQualityRescoreItemStatusProcessing)
 	if pending == 0 && processing == 0 {
+		// 重新读取 run，确认中途未被人工 Cancel/Failed。
+		latest, err := s.repo.GetRun(run.ID)
+		if err != nil || latest == nil {
+			return
+		}
+		if latest.Status != model.FaceQualityRescoreStatusRunning && latest.Status != model.FaceQualityRescoreStatusQueued {
+			return
+		}
 		now := time.Now().UTC()
-		run.Status = model.FaceQualityRescoreStatusCompleted
-		run.CompletedAt = &now
-		_ = s.people.executeWrite(func() error { return s.repo.UpdateRun(run) })
+		latest.Status = model.FaceQualityRescoreStatusCompleted
+		latest.CompletedAt = &now
+		*run = *latest
+		_ = s.people.executeWrite(func() error { return s.repo.UpdateRun(latest) })
 	}
 }
 
@@ -789,10 +798,16 @@ var readFile = func(path string) ([]byte, error) {
 }
 
 // errRunConflict / errCalibrationRequired / errRunNotFound 供 handler 映射 HTTP 状态码。
+// 导出为公共错误，handler 用 errors.Is 判定。
 var (
-	errRunConflict         = fmt.Errorf("an active rescore run already exists")
-	errCalibrationRequired = fmt.Errorf("a completed calibration run is required before full/enforce")
-	errRunNotFound         = fmt.Errorf("rescore run not found")
+	ErrRescoreRunConflict         = fmt.Errorf("an active rescore run already exists")
+	ErrRescoreCalibrationRequired = fmt.Errorf("a completed calibration run is required before full/enforce")
+	ErrRescoreRunNotFound         = fmt.Errorf("rescore run not found")
+
+	// 内部别名，保持 service 内部引用不变。
+	errRunConflict         = ErrRescoreRunConflict
+	errCalibrationRequired = ErrRescoreCalibrationRequired
+	errRunNotFound         = ErrRescoreRunNotFound
 )
 
 // 编译期断言：service 实现 interface。
