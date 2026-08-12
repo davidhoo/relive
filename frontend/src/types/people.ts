@@ -106,7 +106,12 @@ export interface UpdateFaceExclusionResult {
 
 // ---- 人脸质检审核 ----
 
-export type FaceQualityState = 'pending_review' | 'auto_excluded' | 'manual_confirmed'
+export type FaceQualityState =
+  | 'pending_review'
+  | 'historical_missing_evidence'
+  | 'rescore_retryable'
+  | 'auto_excluded'
+  | 'manual_confirmed'
 export type FaceQualityAction =
   | 'confirm_exclude'
   | 'mark_non_face'
@@ -116,6 +121,8 @@ export type FaceQualityAction =
 
 export interface FaceQualityStats {
   pending_review: number
+  historical_missing_evidence: number
+  rescore_retryable: number
   auto_excluded: number
   manual_confirmed: number
   total: number
@@ -153,6 +160,10 @@ export interface FaceQualityReviewItem {
   face_validity_score: number
   quality_score: number
   evidence_json?: string
+  // 证据来源/状态（向后兼容新增）。
+  evidence_origin?: string
+  evidence_state?: string
+  rescore_run_id?: number
   // 仅当 evidence_json 非空且可解析为质检证据时为 true。
   // 区分“模型真实评分（含 0 分）”与“历史回填无证据样本”。缺失字段按 false 处理。
   quality_evidence_available: boolean
@@ -183,7 +194,47 @@ export interface FaceQualityDecisionResult {
 
 export interface FaceQualityRestoreResult {
   restored: number
+  rule_version?: string
+}
+
+// ---- 历史重评分运行 ----
+
+export type FaceQualityRescoreMode = 'calibration' | 'full'
+export type FaceQualityRescoreApplyMode = 'shadow' | 'enforce'
+export type FaceQualityRescoreStatus =
+  | 'queued'
+  | 'running'
+  | 'paused'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+export interface FaceQualityRescoreRun {
+  id: number
+  mode: FaceQualityRescoreMode
+  apply_mode: FaceQualityRescoreApplyMode
+  status: FaceQualityRescoreStatus
+  target_photo_count: number
+  target_face_count: number
+  processed_photo_count: number
+  processed_face_count: number
+  accepted_count: number
+  review_required_count: number
+  auto_excluded_count: number
+  retryable_count: number
+  last_error?: string
+  started_at?: string
+  completed_at?: string
   rule_version: string
+  model_version: string
+  photo_limit: number
+  created_at: string
+  updated_at: string
+}
+
+export interface FaceQualityRescoreRunCreateRequest {
+  mode: FaceQualityRescoreMode
+  photo_limit?: number
 }
 
 export interface PersonMergeSuggestionTask {

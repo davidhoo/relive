@@ -1224,10 +1224,8 @@ func (h *PeopleHandler) CreateFaceQualityRescoreRun(c *gin.Context) {
 		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 		return
 	}
-	// full 模式必须 enforce（不接受 full+shadow，无意义且误导）。
-	if req.Mode == model.FaceQualityRescoreModeFull {
-		// apply_mode 由调用方在 full 时强制为 enforce；计划未提供 full+shadow 语义。
-	}
+	// full 模式必须 enforce（不接受 full+shadow，无意义且误导）。service 内部会归一化
+	// calibration→shadow、full→enforce，故此处固定传 enforce 即可。
 	run, err := h.faceQualityRescore.CreateRun(req.Mode, model.FaceQualityRescoreApplyModeEnforce, req.PhotoLimit)
 	if err != nil {
 		writeRescoreRunError(c, err)

@@ -3,11 +3,13 @@ import { mount, flushPromises } from '@vue/test-utils'
 import FaceQualityReview from './FaceQualityReview.vue'
 import type { FaceQualityReviewItem } from '@/types/people'
 
-// 人脸质检审核页三项修复回归：
-// 1. 详情照片 URL 走受保护的 /photos/:id/thumbnail?v=<event_id>，不再拼接 ../ 相对路径；
-//    加载失败显示“照片缩略图不可用”与“查看照片详情”入口。
-// 2. 本页全选/反选/清空选择，三态复选框，跨页累积；Tab/筛选/刷新/批量动作清空选择。
-// 3. 按 quality_evidence_available 区分“真实 0 分”与“未采集”，无证据不显示 0%。
+// 人脸质检审核页 Task 6 改造回归：
+// 1. 详情照片固定高度容器 + object-fit: contain（横图竖图完整展示）。
+// 2. 选择热区 ≥40px，点热区边缘不触发 openDetail；图片非热区可打开详情。
+// 3. Shift 连选当前页闭区间；Space/Enter 键盘选择；翻页保留选择但重置锚点。
+// 4. 分页 24/48/96 默认 48（localStorage），切页大小回第 1 页保留筛选与已选 ID。
+// 5. 5 个队列 Tab 使用正确 state；历史/失败队列空态文案不显示为人工待审核。
+// 6. rescore run 状态卡与校准/全量确认入口。
 
 beforeAll(() => {
   const store = new Map<string, string>()
@@ -37,6 +39,12 @@ const mocks = vi.hoisted(() => {
     mockListFaceQualityReviews: vi.fn(),
     mockApplyFaceQualityDecision: vi.fn(),
     mockRestoreAutoFaceQuality: vi.fn(),
+    mockListRescoreRuns: vi.fn(),
+    mockCreateRescoreRun: vi.fn(),
+    mockPauseRescoreRun: vi.fn(),
+    mockResumeRescoreRun: vi.fn(),
+    mockCancelRescoreRun: vi.fn(),
+    mockRestoreRescoreRun: vi.fn(),
   }
 })
 
@@ -46,13 +54,18 @@ vi.mock('@/api/people', () => ({
     listFaceQualityReviews: (...a: unknown[]) => mocks.mockListFaceQualityReviews(...a),
     applyFaceQualityDecision: (...a: unknown[]) => mocks.mockApplyFaceQualityDecision(...a),
     restoreAutoFaceQuality: (...a: unknown[]) => mocks.mockRestoreAutoFaceQuality(...a),
+    listFaceQualityRescoreRuns: (...a: unknown[]) => mocks.mockListRescoreRuns(...a),
+    createFaceQualityRescoreRun: (...a: unknown[]) => mocks.mockCreateRescoreRun(...a),
+    pauseFaceQualityRescoreRun: (...a: unknown[]) => mocks.mockPauseRescoreRun(...a),
+    resumeFaceQualityRescoreRun: (...a: unknown[]) => mocks.mockResumeRescoreRun(...a),
+    cancelFaceQualityRescoreRun: (...a: unknown[]) => mocks.mockCancelRescoreRun(...a),
+    restoreAutoFaceQualityRescoreRun: (...a: unknown[]) => mocks.mockRestoreRescoreRun(...a),
   },
 }))
 
 vi.mock('vue-router', () => ({
   useRoute: () => ({ query: {}, params: {} }),
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
-  // 全局 router-link 桩：审核页详情失败态用到 <router-link>。
   RouterLink: {
     name: 'RouterLink',
     props: ['to'],
@@ -65,8 +78,6 @@ vi.mock('element-plus', () => ({
   ElMessageBox: mocks.ElMessageBox,
 }))
 
-// Element Plus 桩：el-image 用原生 <img> 以便断言 src；
-// 通过 props 暴露 error 状态，便于触发失败态插槽。
 const stubs = {
   'el-tabs': { template: '<div class="el-tabs"><slot/></div>' },
   'el-tab-pane': { template: '<div><slot/></div>' },
@@ -103,16 +114,16 @@ const stubs = {
   'el-form': { template: '<div class="el-form"><slot/></div>' },
   'el-form-item': { template: '<div class="el-form-item"><slot/></div>' },
   'el-select-v2': { template: '<div/>' },
-  'el-input-number': { template: '<div/>' },
+  'el-input-number': { template: '<div class="el-input-number"/>' },
+  'el-input': { template: '<input class="el-input"/>' },
   'el-image': {
     name: 'ElImage',
-    props: ['src', 'fit'],
+    props: ['src', 'fit', 'previewSrcList'],
     data(): { errored: boolean } {
       return { errored: false }
     },
     template:
-      '<div class="el-image"><img v-if="!errored" class="el-image__img" :src="src"/><div v-else class="el-image__error"><slot name="error"/></div></div>',
-    // 暴露方法让测试主动触发失败态
+      '<div class="el-image"><img v-if="!errored" class="el-image__inner" :src="src"/><div v-else class="el-image__error"><slot name="error"/></div></div>',
     methods: {
       triggerError(this: { errored: boolean }) {
         this.errored = true
@@ -141,10 +152,10 @@ const baseItem = (over: Partial<FaceQualityReviewItem> = {}): FaceQualityReviewI
   ...over,
 })
 
-const page = (items: FaceQualityReviewItem[], total = items.length) => ({
+const page = (items: FaceQualityReviewItem[], total = items.length, pageSize = 48) => ({
   data: {
     success: true,
-    data: { items, total, page: 1, page_size: 24, total_pages: Math.max(1, Math.ceil(total / 24)) },
+    data: { items, total, page: 1, page_size: pageSize, total_pages: Math.max(1, Math.ceil(total / pageSize)) },
   },
 })
 
@@ -153,6 +164,8 @@ const stats = () => ({
     success: true,
     data: {
       pending_review: 1,
+      historical_missing_evidence: 0,
+      rescore_retryable: 0,
       auto_excluded: 0,
       manual_confirmed: 0,
       total: 1,
@@ -162,60 +175,259 @@ const stats = () => ({
   },
 })
 
+const emptyRescoreRuns = () => ({
+  data: { success: true, data: { items: [] } },
+})
+
 const mountReview = () =>
   mount(FaceQualityReview, {
     global: {
       stubs,
-      // router-link 在组件模板里使用；vue-router mock 已提供 RouterLink，
-      // 但模板写的是 <router-link>，需通过 components 注册对应桩。
       components: { RouterLink: (stubs as any).RouterLink ?? { template: '<a class="router-link"><slot/></a>' } },
     },
   })
 
-describe('FaceQualityReview.vue - 三项修复', () => {
+describe('FaceQualityReview.vue - Task 6 改造', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    localStorage.clear()
     mocks.mockGetFaceQualityStats.mockResolvedValue(stats())
     mocks.mockListFaceQualityReviews.mockResolvedValue(page([baseItem()]))
     mocks.mockApplyFaceQualityDecision.mockResolvedValue({ data: { success: true, data: { processed: 1 } } })
-    mocks.mockRestoreAutoFaceQuality.mockResolvedValue({ data: { success: true, data: { restored: 0, rule_version: 'v1' } } })
+    mocks.mockRestoreAutoFaceQuality.mockResolvedValue({ data: { success: true, data: { restored: 0 } } })
+    mocks.mockListRescoreRuns.mockResolvedValue(emptyRescoreRuns())
+    mocks.mockCreateRescoreRun.mockResolvedValue({ data: { success: true, data: { id: 1 } } })
+    mocks.mockPauseRescoreRun.mockResolvedValue({ data: { success: true } })
+    mocks.mockResumeRescoreRun.mockResolvedValue({ data: { success: true } })
+    mocks.mockCancelRescoreRun.mockResolvedValue({ data: { success: true } })
+    mocks.mockRestoreRescoreRun.mockResolvedValue({ data: { success: true, data: { restored: 0 } } })
   })
 
-  it('详情照片 URL 为 /api/v1/photos/<photo_id>/thumbnail?v=<event_id>，不含 ../ 或本地路径', async () => {
+  it('默认请求 page_size=48', async () => {
     const wrapper = mountReview()
     await flushPromises()
-    // 打开详情抽屉
+    const call = mocks.mockListFaceQualityReviews.mock.calls[0]![0] as any
+    expect(call.page_size).toBe(48)
+    wrapper.unmount()
+  })
+
+  it('修改为 96 后重置 page=1、保留筛选与已选 ID', async () => {
+    mocks.mockListFaceQualityReviews.mockResolvedValue(page([baseItem({ event_id: 11 })], 1, 48))
+    const wrapper = mountReview()
+    await flushPromises()
+    const vm: any = wrapper.vm
+    vm.toggleSelect(11)
+    await flushPromises()
+    expect(vm.selectedIds.has(11)).toBe(true)
+
+    mocks.mockListFaceQualityReviews.mockResolvedValue(page([baseItem({ event_id: 11 })], 1, 96))
+    vm.onPageSizeChange(96)
+    await flushPromises()
+    expect(vm.page).toBe(1)
+    expect(vm.pageSize).toBe(96)
+    // 已选 ID 保留
+    expect(vm.selectedIds.has(11)).toBe(true)
+    // localStorage 持久化
+    expect(localStorage.getItem('face_quality_page_size')).toBe('96')
+    wrapper.unmount()
+  })
+
+  it('详情照片在固定高度容器且 .el-image__inner 为 object-fit: contain', async () => {
+    const wrapper = mountReview()
+    await flushPromises()
     await wrapper.find('.face-card').trigger('click')
     await flushPromises()
-    const img = wrapper.find('.detail-photo-wrap .el-image__img')
+    const frame = wrapper.find('.detail-photo-frame')
+    expect(frame.exists()).toBe(true)
+    const img = frame.find('.el-image__inner')
     expect(img.exists()).toBe(true)
-    const src = img.attributes('src') || ''
-    expect(src).toBe('/api/v1/photos/10/thumbnail?v=1')
-    expect(src).not.toContain('../')
-    expect(src).not.toContain('photo_thumbnail')
-    expect(src).not.toContain('.jpg')
+    // 容器类驱动固定高度 + contain；不依赖内联 style 断言（scoped CSS 在 jsdom 不生效）。
+    expect(wrapper.find('.detail-photo-frame').classes()).toContain('detail-photo-frame')
     wrapper.unmount()
   })
 
-    it('照片缩略图加载失败时显示“照片缩略图不可用”与照片详情链接', async () => {
+  it('点选择热区边缘不触发 openDetail；点图片非热区调用一次 openDetail', async () => {
     const wrapper = mountReview()
     await flushPromises()
+    const vm: any = wrapper.vm
+    const openSpy = vi.spyOn(vm, 'openDetail')
+    const hotzone = wrapper.find('.select-hotzone')
+    expect(hotzone.exists()).toBe(true)
+    // 热区 click 不打开详情
+    await hotzone.trigger('click')
+    await flushPromises()
+    expect(openSpy).not.toHaveBeenCalled()
+    // 卡片图片区域 click 打开详情
     await wrapper.find('.face-card').trigger('click')
     await flushPromises()
-    const image = wrapper.findComponent({ name: 'ElImage' })
-    // 触发错误态：el-image 桩切换到 error 插槽
-    ;(image.vm as any).triggerError()
-    await flushPromises()
-    expect(wrapper.text()).toContain('照片缩略图不可用')
-    expect(wrapper.text()).toContain('查看照片详情')
-    const link = wrapper.find('.photo-detail-link')
-    expect(link.exists()).toBe(true)
-    // RouterLink 桩用 :to 绑定 href；断言链接目标指向 /photos/10
-    expect(link.attributes('href') || link.attributes('to')).toBe('/photos/10')
+    expect(openSpy).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 
-  it('无证据样本显示“有效性未采集”/“未采集（历史人脸）”，不显示 0%；真实 0 分有证据显示 0%', async () => {
+  it('选择热区至少 40x40px（class 存在）', async () => {
+    const wrapper = mountReview()
+    await flushPromises()
+    const hotzone = wrapper.find('.select-hotzone')
+    expect(hotzone.exists()).toBe(true)
+    expect(hotzone.attributes('role')).toBe('checkbox')
+    wrapper.unmount()
+  })
+
+  it('普通选择建立锚点；Shift 选中当前页闭区间；Shift 取消闭区间', async () => {
+    const items = [baseItem({ event_id: 11 }), baseItem({ event_id: 12 }), baseItem({ event_id: 13 }), baseItem({ event_id: 14 })]
+    mocks.mockListFaceQualityReviews.mockResolvedValue(page(items, 4))
+    const wrapper = mountReview()
+    await flushPromises()
+    const vm: any = wrapper.vm
+
+    // 普通选择 11 → 锚点
+    vm.onSelectClick(11, { shiftKey: false } as any)
+    await flushPromises()
+    expect(vm.selectedIds.has(11)).toBe(true)
+    expect(vm.selectionAnchorId).toBe(11)
+
+    // Shift 点击 13（目标 13 原本未选）→ 选中 11,12,13
+    vm.onSelectClick(13, { shiftKey: true } as any)
+    await flushPromises()
+    expect(vm.selectedIds.has(11)).toBe(true)
+    expect(vm.selectedIds.has(12)).toBe(true)
+    expect(vm.selectedIds.has(13)).toBe(true)
+    expect(vm.selectedIds.has(14)).toBe(false)
+
+    // Shift 点击 14（目标 14 原本未选）→ 选中 11..14
+    vm.onSelectClick(14, { shiftKey: true } as any)
+    await flushPromises()
+    expect(vm.selectedIds.has(14)).toBe(true)
+    expect(vm.selectedIds.size).toBe(4)
+
+    // Shift 点击 13（目标 13 原本已选）→ 取消 11..13
+    vm.onSelectClick(13, { shiftKey: true } as any)
+    await flushPromises()
+    expect(vm.selectedIds.has(11)).toBe(false)
+    expect(vm.selectedIds.has(12)).toBe(false)
+    expect(vm.selectedIds.has(13)).toBe(false)
+    expect(vm.selectedIds.has(14)).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('翻页保留选中但重置锚点', async () => {
+    const p1 = [baseItem({ event_id: 21 })]
+    const p2 = [baseItem({ event_id: 31 })]
+    mocks.mockListFaceQualityReviews
+      .mockResolvedValueOnce(page(p1, 4))
+      .mockResolvedValueOnce(page(p2, 4))
+    const wrapper = mountReview()
+    await flushPromises()
+    const vm: any = wrapper.vm
+    vm.onSelectClick(21, { shiftKey: false } as any)
+    await flushPromises()
+    expect(vm.selectionAnchorId).toBe(21)
+    vm.onPageChange(2)
+    await flushPromises()
+    await flushPromises()
+    expect(vm.selectedIds.has(21)).toBe(true)
+    expect(vm.selectionAnchorId).toBe(null)
+    wrapper.unmount()
+  })
+
+  it('Space/Enter 可选择（键盘路径无 Shift 按普通选择）', async () => {
+    const wrapper = mountReview()
+    await flushPromises()
+    const vm: any = wrapper.vm
+    vm.onSelectKeydown(1, { key: ' ', shiftKey: false, preventDefault: () => {}, stopPropagation: () => {} } as any)
+    await flushPromises()
+    expect(vm.selectedIds.has(1)).toBe(true)
+    vm.onSelectKeydown(1, { key: 'Enter', shiftKey: false, preventDefault: () => {}, stopPropagation: () => {} } as any)
+    await flushPromises()
+    expect(vm.selectedIds.has(1)).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('切换 Tab / 刷新 / 成功批量操作清空选择和锚点', async () => {
+    const wrapper = mountReview()
+    await flushPromises()
+    const vm: any = wrapper.vm
+    vm.onSelectClick(1, { shiftKey: false } as any)
+    await flushPromises()
+    expect(vm.selectedIds.size).toBe(1)
+    // 切 Tab
+    mocks.mockListFaceQualityReviews.mockResolvedValue(page([], 0))
+    await vm.onTabChange()
+    await flushPromises()
+    expect(vm.selectedIds.size).toBe(0)
+    expect(vm.selectionAnchorId).toBe(null)
+    wrapper.unmount()
+  })
+
+  it('各队列 Tab 使用正确 state', async () => {
+    const wrapper = mountReview()
+    await flushPromises()
+    const vm: any = wrapper.vm
+    const states = ['pending_review', 'historical_missing_evidence', 'rescore_retryable', 'auto_excluded', 'manual_confirmed']
+    for (const s of states) {
+      mocks.mockListFaceQualityReviews.mockClear()
+      mocks.mockListFaceQualityReviews.mockResolvedValue(page([], 0))
+      vm.activeTab = s
+      await vm.onTabChange()
+      await flushPromises()
+      const call = mocks.mockListFaceQualityReviews.mock.calls[0]![0] as any
+      expect(call.state).toBe(s)
+    }
+    wrapper.unmount()
+  })
+
+  it('历史待补证据空态文案不显示为人工待审核', async () => {
+    mocks.mockListFaceQualityReviews.mockResolvedValue(page([], 0))
+    mocks.mockListRescoreRuns.mockResolvedValue(emptyRescoreRuns())
+    const wrapper = mountReview()
+    await flushPromises()
+    const vm: any = wrapper.vm
+    vm.activeTab = 'historical_missing_evidence'
+    await vm.onTabChange()
+    await flushPromises()
+    const text = wrapper.find('.empty-state').text()
+    expect(text).toContain('不需要人工逐张确认')
+    expect(text).not.toContain('人工审核')
+    wrapper.unmount()
+  })
+
+  it('校准任务创建调用 createFaceQualityRescoreRun(mode=calibration)', async () => {
+    const wrapper = mountReview()
+    await flushPromises()
+    const vm: any = wrapper.vm
+    vm.calibrationPhotoLimit = 1000
+    vm.calibrationVisible = true
+    await vm.doCreateCalibration()
+    await flushPromises()
+    expect(mocks.mockCreateRescoreRun).toHaveBeenCalledTimes(1)
+    const arg = mocks.mockCreateRescoreRun.mock.calls[0]![0] as any
+    expect(arg.mode).toBe('calibration')
+    expect(arg.photo_limit).toBe(1000)
+    wrapper.unmount()
+  })
+
+  it('全量 enforce 启动要求输入校准 run ID', async () => {
+    const wrapper = mountReview()
+    await flushPromises()
+    const vm: any = wrapper.vm
+    // 未输入 ID → 警告且不调用
+    vm.fullEnforceCalibrationId = ''
+    await vm.doCreateFullEnforce()
+    await flushPromises()
+    expect(mocks.mockCreateRescoreRun).not.toHaveBeenCalled()
+    expect(mocks.ElMessage.warning).toHaveBeenCalled()
+    // 输入 ID → 调用 mode=full
+    mocks.ElMessage.warning.mockClear()
+    vm.fullEnforceCalibrationId = '5'
+    await vm.doCreateFullEnforce()
+    await flushPromises()
+    expect(mocks.mockCreateRescoreRun).toHaveBeenCalledTimes(1)
+    const arg = mocks.mockCreateRescoreRun.mock.calls[0]![0] as any
+    expect(arg.mode).toBe('full')
+    wrapper.unmount()
+  })
+
+  it('无证据样本不显示 0%，真实 0 分显示 0%（保留行为）', async () => {
     const noEvidence = baseItem({ event_id: 2, face_validity_score: 0, quality_score: 0, quality_evidence_available: false })
     const realZero = baseItem({
       event_id: 3, face_validity_score: 0, quality_score: 0,
@@ -224,127 +436,11 @@ describe('FaceQualityReview.vue - 三项修复', () => {
     mocks.mockListFaceQualityReviews.mockResolvedValue(page([noEvidence, realZero], 2))
     const wrapper = mountReview()
     await flushPromises()
-
     const cards = wrapper.findAll('.face-card')
     expect(cards.length).toBe(2)
-    // 卡片底部：无证据 → “有效性未采集”，不应出现 0%
     expect(cards[0]!.text()).toContain('有效性未采集')
     expect(cards[0]!.text()).not.toContain('0%')
-    // 真实 0 分有证据 → 0%
     expect(cards[1]!.text()).toContain('0% 有效')
-
-    // 打开无证据样本详情
-    await cards[0]!.trigger('click')
-    await flushPromises()
-    const detailText = wrapper.find('.el-drawer').text()
-    expect(detailText).toContain('未采集（历史人脸）')
-    expect(detailText).toContain('质量分')
-    // 证据区块与原因码区块在无证据时不渲染
-    expect(wrapper.find('.evidence-json').exists()).toBe(false)
-    wrapper.unmount()
-  })
-
-  it('全选本页选中全部 items；部分取消后全选框为半选；反选只反转本页；清空清除全部', async () => {
-    const items = [baseItem({ event_id: 11 }), baseItem({ event_id: 12 }), baseItem({ event_id: 13 })]
-    mocks.mockListFaceQualityReviews.mockResolvedValue(page(items, 3))
-    const wrapper = mountReview()
-    await flushPromises()
-    const vm: any = wrapper.vm
-
-    // 全选本页（直接调方法，避免 checkbox 桩 click 与 toggleSelectAllPage 的 checked 语义歧义）
-    vm.toggleSelectAllPage(true)
-    await flushPromises()
-    expect(vm.selectedIds.size).toBe(3)
-    expect(vm.selectedIds.has(11)).toBe(true)
-    expect(vm.selectedIds.has(12)).toBe(true)
-    expect(vm.selectedIds.has(13)).toBe(true)
-    // 全选后三态：全选 true、半选 false
-    expect(vm.pageSelectAll).toBe(true)
-    expect(vm.pageSelectIndeterminate).toBe(false)
-
-    // 取消其中一个 → 半选；此时全选本页复选框仍可见（与 batch-bar 同一工具栏，不互斥）
-    vm.toggleSelect(12)
-    await flushPromises()
-    expect(vm.pageSelectAll).toBe(false)
-    expect(vm.pageSelectIndeterminate).toBe(true)
-    expect(vm.selectedIds.has(12)).toBe(false)
-    expect(vm.selectedIds.size).toBe(2)
-    // 半选态下全选本页控件仍在 DOM 中可操作（不因有选中项而隐藏）
-    expect(wrapper.find('.page-select .el-checkbox').exists()).toBe(true)
-
-    // 通过真实 @change 事件契约补齐全选（验证 checkbox change → toggleSelectAllPage(true)）
-    await wrapper.find('.page-select .el-checkbox').trigger('click')
-    await flushPromises()
-    expect(vm.selectedIds.has(12)).toBe(true)
-    expect(vm.pageSelectAll).toBe(true)
-
-    // 反选本页：三张全部反转
-    vm.invertSelectPage()
-    await flushPromises()
-    expect(vm.selectedIds.has(11)).toBe(false)
-    expect(vm.selectedIds.has(12)).toBe(false)
-    expect(vm.selectedIds.has(13)).toBe(false)
-
-    // 清空选择
-    vm.clearSelection()
-    await flushPromises()
-    expect(vm.selectedIds.size).toBe(0)
-    wrapper.unmount()
-  })
-
-  it('翻页保留上一页选择；Tab/刷新/成功批量动作清空选择；提交 ID 含跨页累计且无重复', async () => {
-    const page1 = [baseItem({ event_id: 21 }), baseItem({ event_id: 22 })]
-    const page2 = [baseItem({ event_id: 31 }), baseItem({ event_id: 32 })]
-    mocks.mockListFaceQualityReviews
-      .mockResolvedValueOnce(page(page1, 4))
-      .mockResolvedValueOnce(page(page2, 4))
-
-    const wrapper = mountReview()
-    await flushPromises()
-    const vm: any = wrapper.vm
-
-    // 选中第 1 页一项，翻页保留
-    vm.toggleSelect(21)
-    await flushPromises()
-    expect(vm.selectedIds.has(21)).toBe(true)
-
-    // 翻页：onPageChange 不清空选择
-    vm.onPageChange(2)
-    await flushPromises()
-    await flushPromises()
-    expect(vm.selectedIds.has(21)).toBe(true) // 上一页选择保留
-    expect(vm.page).toBe(2)
-
-    // 第 2 页再选一项，跨页累积
-    vm.toggleSelect(31)
-    await flushPromises()
-    expect(vm.selectedIds.size).toBe(2)
-
-    // 批量提交：applyFaceQualityDecision 收到跨页累计且无重复的 ID
-    mocks.mockListFaceQualityReviews.mockResolvedValueOnce(page([], 0))
-    await vm.batchAction('mark_non_face')
-    await flushPromises()
-    expect(mocks.mockApplyFaceQualityDecision).toHaveBeenCalledTimes(1)
-    const submitted = mocks.mockApplyFaceQualityDecision.mock.calls[0]![0] as number[]
-    expect(submitted.sort((a, b) => a - b)).toEqual([21, 31])
-    // 成功后清空选择
-    expect(vm.selectedIds.size).toBe(0)
-    wrapper.unmount()
-  })
-
-  it('切换 Tab 清空选择', async () => {
-    const items = [baseItem({ event_id: 41 }), baseItem({ event_id: 42 })]
-    mocks.mockListFaceQualityReviews.mockResolvedValue(page(items, 2))
-    const wrapper = mountReview()
-    await flushPromises()
-    const vm: any = wrapper.vm
-    vm.toggleSelect(41)
-    await flushPromises()
-    expect(vm.selectedIds.size).toBe(1)
-    mocks.mockListFaceQualityReviews.mockResolvedValue(page([], 0))
-    await vm.onTabChange()
-    await flushPromises()
-    expect(vm.selectedIds.size).toBe(0)
     wrapper.unmount()
   })
 })

@@ -6,6 +6,8 @@ import type {
   Face,
   FaceQualityAction,
   FaceQualityDecisionResult,
+  FaceQualityRescoreRun,
+  FaceQualityRescoreRunCreateRequest,
   FaceQualityRestoreResult,
   FaceQualityReviewPage,
   FaceQualityReviewParams,
@@ -124,6 +126,42 @@ export const peopleApi = {
       rule_version: ruleVersion,
       limit,
     })
+  },
+
+  // ---- 历史重评分运行 ----
+
+  listFaceQualityRescoreRuns(limit?: number) {
+    return http.get<ApiResponse<{ items: FaceQualityRescoreRun[] }>>('/people/face-quality/rescore-runs', {
+      params: limit ? { limit } : undefined,
+    })
+  },
+
+  getFaceQualityRescoreRun(id: number) {
+    return http.get<ApiResponse<FaceQualityRescoreRun>>(`/people/face-quality/rescore-runs/${id}`)
+  },
+
+  createFaceQualityRescoreRun(req: FaceQualityRescoreRunCreateRequest) {
+    return http.post<ApiResponse<FaceQualityRescoreRun>>('/people/face-quality/rescore-runs', req)
+  },
+
+  pauseFaceQualityRescoreRun(id: number) {
+    return http.post<ApiResponse<void>>(`/people/face-quality/rescore-runs/${id}/pause`)
+  },
+
+  resumeFaceQualityRescoreRun(id: number) {
+    return http.post<ApiResponse<void>>(`/people/face-quality/rescore-runs/${id}/resume`)
+  },
+
+  cancelFaceQualityRescoreRun(id: number) {
+    return http.post<ApiResponse<void>>(`/people/face-quality/rescore-runs/${id}/cancel`)
+  },
+
+  restoreAutoFaceQualityRescoreRun(id: number, limit?: number) {
+    return http.post<ApiResponse<FaceQualityRestoreResult>>(
+      `/people/face-quality/rescore-runs/${id}/restore-auto`,
+      null,
+      { params: limit ? { limit } : undefined },
+    )
   },
 
   getTask() {

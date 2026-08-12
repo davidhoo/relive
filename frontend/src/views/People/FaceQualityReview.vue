@@ -4,7 +4,8 @@
       <div class="page-title">
         <h2>人脸质检</h2>
         <span v-if="stats" class="page-subtitle">
-          待审核 {{ stats.pending_review }} · 自动隔离 {{ stats.auto_excluded }} · 已确认 {{ stats.manual_confirmed }}
+          待审核 {{ stats.pending_review }} · 待补证据 {{ stats.historical_missing_evidence }} ·
+          待重试 {{ stats.rescore_retryable }} · 自动隔离 {{ stats.auto_excluded }} · 已确认 {{ stats.manual_confirmed }}
         </span>
       </div>
       <div class="header-actions">
@@ -17,10 +18,39 @@
     </div>
 
     <el-tabs v-model="activeTab" class="quality-tabs" @tab-change="onTabChange">
-      <el-tab-pane label="待人工审核" name="pending_review" />
-      <el-tab-pane label="自动隔离" name="auto_excluded" />
-      <el-tab-pane label="已人工确认" name="manual_confirmed" />
+      <el-tab-pane :label="`待人工审核 (${stats?.pending_review ?? 0})`" name="pending_review" />
+      <el-tab-pane :label="`历史人脸待补证据 (${stats?.historical_missing_evidence ?? 0})`" name="historical_missing_evidence" />
+      <el-tab-pane :label="`待重试/处理异常 (${stats?.rescore_retryable ?? 0})`" name="rescore_retryable" />
+      <el-tab-pane :label="`自动隔离 (${stats?.auto_excluded ?? 0})`" name="auto_excluded" />
+      <el-tab-pane :label="`已人工确认 (${stats?.manual_confirmed ?? 0})`" name="manual_confirmed" />
     </el-tabs>
+
+    <!-- 历史补证据任务状态卡 -->
+    <div v-if="activeTab === 'historical_missing_evidence'" class="rescore-card">
+      <div class="rescore-card-header">
+        <span class="rescore-title">历史补证据任务</span>
+        <el-button size="small" type="primary" @click="openCalibrationDialog">启动校准任务</el-button>
+        <el-button
+          v-if="calibrationCompletedAvailable"
+          size="small"
+          type="danger"
+          @click="openFullEnforceDialog"
+        >启动全量 enforce</el-button>
+      </div>
+      <div v-if="latestRun" class="rescore-card-body">
+        <span>运行 #{{ latestRun.id }} · {{ rescoreModeLabel(latestRun.mode) }} · {{ rescoreStatusLabel(latestRun.status) }}</span>
+        <span>目标 {{ latestRun.target_face_count }} Face / {{ latestRun.target_photo_count }} 照片</span>
+        <span>已处理 {{ latestRun.processed_face_count }} · 灰区 {{ latestRun.review_required_count }} · 自动隔离 {{ latestRun.auto_excluded_count }} · 失败 {{ latestRun.retryable_count }}</span>
+        <span v-if="latestRun.last_error" class="rescore-error">{{ latestRun.last_error }}</span>
+        <div class="rescore-actions">
+          <el-button v-if="latestRun.status === 'running'" size="small" @click="pauseRun(latestRun.id)">暂停</el-button>
+          <el-button v-if="latestRun.status === 'paused'" size="small" type="primary" @click="resumeRun(latestRun.id)">继续</el-button>
+          <el-button v-if="latestRun.status === 'running' || latestRun.status === 'paused'" size="small" @click="cancelRun(latestRun.id)">取消</el-button>
+          <el-button v-if="latestRun.auto_excluded_count > 0" size="small" type="warning" @click="restoreRun(latestRun.id)">按本运行恢复自动隔离</el-button>
+        </div>
+      </div>
+      <div v-else class="rescore-empty">暂无运行。历史缺证据样本不需要人工逐张确认，可启动校准任务补齐模型证据。</div>
+    </div>
 
     <div class="filter-bar">
       <el-select v-model="filters.reason" placeholder="原因" clearable size="small" style="width: 140px" @change="reload">
@@ -31,16 +61,20 @@
         <el-option label="自动" value="auto" />
         <el-option label="人工" value="manual" />
       </el-select>
-      <el-date-picker
-        v-model="timeRange"
-        type="datetimerange"
-        range-separator="至"
-        start-placeholder="开始时间"
-        end-placeholder="结束时间"
-        size="small"
-        value-format="YYYY-MM-DDTHH:mm:ssZ"
-        @change="onTimeChange"
-      />
+      <div class="time-filter">
+        <span class="time-label">质检事件时间</span>
+        <el-date-picker
+          v-model="timeRange"
+          type="datetimerange"
+          range-separator="至"
+          start-placeholder="事件开始时间"
+          end-placeholder="事件结束时间"
+          size="small"
+          value-format="YYYY-MM-DDTHH:mm:ssZ"
+          @change="onTimeChange"
+        />
+        <span class="time-hint">不是照片拍摄时间</span>
+      </div>
       <div class="page-select">
         <el-checkbox
           :model-value="pageSelectAll"
@@ -59,7 +93,7 @@
     </div>
 
     <div v-loading="loading" class="card-grid">
-      <div v-if="items.length === 0 && !loading" class="empty-state">暂无样本</div>
+      <div v-if="items.length === 0 && !loading" class="empty-state">{{ emptyStateText }}</div>
       <div
         v-for="item in items"
         :key="item.event_id"
@@ -67,12 +101,18 @@
         :class="{ selected: selectedIds.has(item.event_id) }"
         @click="openDetail(item)"
       >
-        <el-checkbox
-          :model-value="selectedIds.has(item.event_id)"
-          class="card-checkbox"
-          @click.stop
-          @change="toggleSelect(item.event_id)"
-        />
+        <!-- 独立选择热区：可聚焦 button(role=checkbox)，≥40x40px，事件 stopPropagation 不触发 openDetail -->
+        <button
+          type="button"
+          class="select-hotzone"
+          role="checkbox"
+          :aria-checked="selectedIds.has(item.event_id) ? 'true' : 'false'"
+          :aria-label="`选择样本 ${item.event_id}`"
+          @click.stop="onSelectClick(item.event_id, $event)"
+          @keydown="onSelectKeydown(item.event_id, $event)"
+        >
+          <span class="select-mark" :class="{ checked: selectedIds.has(item.event_id) }">✓</span>
+        </button>
         <img v-if="item.face_id" :src="faceThumbnail(item.face_id)" :alt="`face-${item.event_id}`" class="card-thumb" />
         <div v-else class="card-thumb-placeholder">无裁剪</div>
         <div class="card-meta">
@@ -90,14 +130,16 @@
       </div>
     </div>
 
-    <div class="pager" v-if="total > pageSize">
+    <div class="pager" v-if="total > 0">
       <el-pagination
         background
-        layout="prev, pager, next"
+        layout="prev, pager, next, sizes"
         :total="total"
         :page-size="pageSize"
         :current-page="page"
+        :page-sizes="[24, 48, 96]"
         @current-change="onPageChange"
+        @size-change="onPageSizeChange"
       />
     </div>
 
@@ -106,11 +148,13 @@
       <div v-if="current" class="detail-content">
         <div class="detail-preview">
           <img v-if="current.face_id" :src="faceThumbnail(current.face_id)" class="detail-face" />
-          <div class="detail-photo-wrap">
+          <div class="detail-photo-frame">
             <el-image
               v-if="current.photo_id"
               :src="photoThumbnail(current.photo_id, current.event_id)"
               fit="contain"
+              :preview-src-list="previewSrcList"
+              preview-teleported
               class="detail-photo"
               @error="onPhotoError"
               @load="onPhotoLoad"
@@ -180,6 +224,34 @@
         <el-button type="primary" :loading="restoring" @click="doRestore">恢复</el-button>
       </template>
     </el-dialog>
+
+    <!-- 校准任务二次确认 -->
+    <el-dialog v-model="calibrationVisible" title="启动校准任务" width="460px">
+      <el-form label-width="100px">
+        <el-form-item label="照片上限">
+          <el-input-number v-model="calibrationPhotoLimit" :min="100" :max="100000" :step="1000" />
+        </el-form-item>
+      </el-form>
+      <div class="confirm-hint">只写证据，不自动排除。校准完成后人工核验结果，再决定是否启动全量 enforce。</div>
+      <template #footer>
+        <el-button @click="calibrationVisible = false">取消</el-button>
+        <el-button type="primary" :loading="creatingRun" @click="doCreateCalibration">启动校准</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 全量 enforce 二次确认 -->
+    <el-dialog v-model="fullEnforceVisible" title="启动全量 enforce" width="460px">
+      <el-form label-width="120px">
+        <el-form-item label="校准运行 ID">
+          <el-input v-model="fullEnforceCalibrationId" placeholder="输入已完成的校准 run ID" />
+        </el-form-item>
+      </el-form>
+      <div class="confirm-hint">仅高确定性非人脸/严重低质量会移出人物聚类；可按本运行恢复。不会自动启动后续运行。</div>
+      <template #footer>
+        <el-button @click="fullEnforceVisible = false">取消</el-button>
+        <el-button type="danger" :loading="creatingRun" @click="doCreateFullEnforce">启动全量 enforce</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -190,19 +262,30 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { peopleApi } from '@/api/people'
 import type {
   FaceQualityAction,
+  FaceQualityRescoreRun,
   FaceQualityReviewItem,
+  FaceQualityState,
   FaceQualityStats,
 } from '@/types/people'
 
 const route = useRoute()
 const apiBaseUrl = (import.meta as any).env?.VITE_API_BASE_URL || '/api/v1'
-const activeTab = ref<'pending_review' | 'auto_excluded' | 'manual_confirmed'>('pending_review')
+const activeTab = ref<FaceQualityState>('pending_review')
 const stats = ref<FaceQualityStats | null>(null)
 const items = ref<FaceQualityReviewItem[]>([])
 const loading = ref(false)
 const total = ref(0)
 const page = ref(1)
-const pageSize = 24
+
+const PAGE_SIZE_STORAGE_KEY = 'face_quality_page_size'
+const readStoredPageSize = (): number => {
+  try {
+    const v = localStorage.getItem(PAGE_SIZE_STORAGE_KEY)
+    if (v === '24' || v === '48' || v === '96') return Number(v)
+  } catch { /* ignore */ }
+  return 48
+}
+const pageSize = ref<number>(readStoredPageSize())
 
 const filters = reactive<{ reason: string; source: string; rule_version: string; start_time?: string; end_time?: string }>({
   reason: '',
@@ -211,6 +294,8 @@ const filters = reactive<{ reason: string; source: string; rule_version: string;
 })
 const timeRange = ref<[string, string] | null>(null)
 const selectedIds = ref<Set<number>>(new Set())
+// Shift 连选锚点：仅在当前 items 闭区间生效。翻页/切 Tab/筛选/批量成功/清空时重置。
+const selectionAnchorId = ref<number | null>(null)
 
 const detailVisible = ref(false)
 const current = ref<FaceQualityReviewItem | null>(null)
@@ -219,6 +304,15 @@ const restoreVisible = ref(false)
 const restoreRuleVersion = ref('')
 const restoreLimit = ref(500)
 const restoring = ref(false)
+
+// 历史重评分运行面板。
+const latestRun = ref<FaceQualityRescoreRun | null>(null)
+const calibrationCompletedAvailable = ref(false)
+const calibrationVisible = ref(false)
+const calibrationPhotoLimit = ref(1000)
+const fullEnforceVisible = ref(false)
+const fullEnforceCalibrationId = ref('')
+const creatingRun = ref(false)
 
 const ruleVersionOptions = computed(() => {
   if (!stats.value?.by_rule_version) return []
@@ -231,8 +325,23 @@ const faceThumbnail = (faceId: number) => `${apiBaseUrl}/faces/${faceId}/thumbna
 const photoThumbnail = (photoId: number, version: number) =>
   `${apiBaseUrl}/photos/${photoId}/thumbnail?v=${version}`
 
-// 证据可用性：后端依据 evidence_json 是否可解析决定。前端将缺失字段视为 false，
-// 防止前端先于后端部署时把 undefined 误当真而误显示 0 分。
+// 预览源使用受保护的 /photos/:id/image（非缩略图），不把文件路径暴露到 DOM。
+const previewSrcList = computed<string[]>(() => {
+  if (!current.value?.photo_id) return []
+  return [`${apiBaseUrl}/photos/${current.value.photo_id}/image`]
+})
+
+const emptyStateText = computed(() => {
+  if (activeTab.value === 'historical_missing_evidence') {
+    return '此类记录没有模型证据，不需要人工逐张确认。可启动校准任务补齐证据。'
+  }
+  if (activeTab.value === 'rescore_retryable') {
+    return '重评分遇到可重试技术问题或未匹配样本。修复条件后可重试。'
+  }
+  return '暂无样本'
+})
+
+// 证据可用性：后端依据 evidence_json 是否可解析决定。前端将缺失字段视为 false。
 const hasEvidence = (item: FaceQualityReviewItem) => item.quality_evidence_available === true
 
 const decisionLabel = (d: string) => ({
@@ -250,6 +359,12 @@ const decisionTagType = (d: string): 'success' | 'danger' | 'warning' | 'info' =
 }[d] as any) || 'info'
 
 const reasonLabel = (r: string) => ({ non_face: '非人脸', low_quality: '低质量' }[r] || r)
+
+const rescoreModeLabel = (m: string) => (m === 'calibration' ? '校准' : '全量')
+const rescoreStatusLabel = (s: string) => ({
+  queued: '排队', running: '运行中', paused: '已暂停',
+  completed: '已完成', failed: '失败', cancelled: '已取消',
+}[s] || s)
 
 const formatEvidence = (json: string) => {
   try {
@@ -279,7 +394,7 @@ const loadReviews = async () => {
       start_time: filters.start_time,
       end_time: filters.end_time,
       page: page.value,
-      page_size: pageSize,
+      page_size: pageSize.value,
     })
     const data = res.data.data
     if (data) {
@@ -293,6 +408,19 @@ const loadReviews = async () => {
   }
 }
 
+const loadRescoreRuns = async () => {
+  try {
+    const res = await peopleApi.listFaceQualityRescoreRuns(10)
+    const runs = res.data.data?.items ?? []
+    latestRun.value = runs.length > 0 ? runs[0]! : null
+    calibrationCompletedAvailable.value = runs.some(
+      r => r.mode === 'calibration' && r.status === 'completed',
+    )
+  } catch {
+    // 静默：面板不影响主流程。
+  }
+}
+
 const reload = async () => {
   page.value = 1
   clearSelection()
@@ -302,12 +430,26 @@ const reload = async () => {
 const onTabChange = async () => {
   page.value = 1
   clearSelection()
-  await loadReviews()
+  if (activeTab.value === 'historical_missing_evidence') {
+    await Promise.all([loadReviews(), loadRescoreRuns()])
+  } else {
+    await loadReviews()
+  }
 }
 
 const onPageChange = (p: number) => {
   page.value = p
-  // 翻页保留选择，允许跨已浏览页累积；批量提交原样传 Array.from(selectedIds)。
+  // 翻页保留选择，允许跨已浏览页累积；但重置 Shift 锚点。
+  selectionAnchorId.value = null
+  loadReviews()
+}
+
+const onPageSizeChange = (size: number) => {
+  pageSize.value = size
+  try { localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(size)) } catch { /* ignore */ }
+  // 切页大小：回第 1 页、保留筛选与已选 ID、重置 Shift 锚点。
+  page.value = 1
+  selectionAnchorId.value = null
   loadReviews()
 }
 
@@ -322,6 +464,8 @@ const onTimeChange = (val: [string, string] | null) => {
   reload()
 }
 
+// ---- 选择热区 + Shift 连选 ----
+
 const toggleSelect = (id: number) => {
   const next = new Set(selectedIds.value)
   if (next.has(id)) next.delete(id)
@@ -329,7 +473,60 @@ const toggleSelect = (id: number) => {
   selectedIds.value = next
 }
 
-// 本页全选三态：未选 / 半选 / 全选。基于当前 items 的 event_id，不含其他页。
+// 普通点击：切换并设为锚点。
+const onSelectClick = (id: number, ev: MouseEvent) => {
+  if (ev.shiftKey && selectionAnchorId.value !== null) {
+    shiftSelect(id)
+    return
+  }
+  toggleSelect(id)
+  selectionAnchorId.value = id
+}
+
+// Shift 点击：仅当锚点与目标都在当前 items 时，按 index 闭区间批量操作。
+const shiftSelect = (targetId: number) => {
+  const anchor = selectionAnchorId.value
+  if (anchor === null) {
+    toggleSelect(targetId)
+    selectionAnchorId.value = targetId
+    return
+  }
+  const ids = items.value.map(i => i.event_id)
+  const ai = ids.indexOf(anchor)
+  const ti = ids.indexOf(targetId)
+  if (ai < 0 || ti < 0) {
+    // 锚点或目标不在当前页 → 退化为普通选择。
+    toggleSelect(targetId)
+    selectionAnchorId.value = targetId
+    return
+  }
+  const lo = Math.min(ai, ti)
+  const hi = Math.max(ai, ti)
+  const range = ids.slice(lo, hi + 1)
+  const next = new Set(selectedIds.value)
+  // 目标原本未选 → 整段选中；原本已选 → 整段取消。
+  const targetSelected = next.has(targetId)
+  for (const id of range) {
+    if (targetSelected) next.delete(id)
+    else next.add(id)
+  }
+  selectedIds.value = next
+}
+
+// 键盘：Space/Enter 在热区聚焦时执行同一选择逻辑（无 Shift 按普通选择）。
+const onSelectKeydown = (id: number, ev: KeyboardEvent) => {
+  if (ev.key !== ' ' && ev.key !== 'Enter') return
+  ev.preventDefault()
+  ev.stopPropagation()
+  if (ev.shiftKey && selectionAnchorId.value !== null) {
+    shiftSelect(id)
+    return
+  }
+  toggleSelect(id)
+  selectionAnchorId.value = id
+}
+
+// 本页全选三态：基于当前 items 的 event_id，不含其他页。
 const pageEventIds = computed(() => items.value.map(i => i.event_id))
 const pageSelectAll = computed(() =>
   pageEventIds.value.length > 0 && pageEventIds.value.every(id => selectedIds.value.has(id)),
@@ -345,8 +542,8 @@ const toggleSelectAllPage = (checked: boolean) => {
     for (const id of pageEventIds.value) next.delete(id)
   }
   selectedIds.value = next
+  selectionAnchorId.value = null
 }
-// 反选本页：只反转当前 items 的选择状态，保留其他页选择。
 const invertSelectPage = () => {
   const next = new Set(selectedIds.value)
   for (const id of pageEventIds.value) {
@@ -354,9 +551,11 @@ const invertSelectPage = () => {
     else next.add(id)
   }
   selectedIds.value = next
+  selectionAnchorId.value = null
 }
 const clearSelection = () => {
   selectedIds.value = new Set()
+  selectionAnchorId.value = null
 }
 
 // 详情照片加载失败反馈。el-image 的 #error 插槽已提供占位，这里仅记录状态。
@@ -428,6 +627,98 @@ const doRestore = async () => {
   }
 }
 
+// ---- 历史重评分运行控制 ----
+
+const openCalibrationDialog = () => {
+  calibrationPhotoLimit.value = 1000
+  calibrationVisible.value = true
+}
+
+const doCreateCalibration = async () => {
+  creatingRun.value = true
+  try {
+    await peopleApi.createFaceQualityRescoreRun({
+      mode: 'calibration',
+      photo_limit: calibrationPhotoLimit.value,
+    })
+    ElMessage.success('校准任务已创建（只写证据，不自动排除）')
+    calibrationVisible.value = false
+    await loadRescoreRuns()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error?.message || '创建校准任务失败')
+  } finally {
+    creatingRun.value = false
+  }
+}
+
+const openFullEnforceDialog = () => {
+  fullEnforceCalibrationId.value = ''
+  fullEnforceVisible.value = true
+}
+
+const doCreateFullEnforce = async () => {
+  // 要求输入已完成的 calibration run ID。
+  if (!fullEnforceCalibrationId.value) {
+    ElMessage.warning('请输入已完成的校准运行 ID')
+    return
+  }
+  creatingRun.value = true
+  try {
+    await peopleApi.createFaceQualityRescoreRun({ mode: 'full' })
+    ElMessage.success('全量 enforce 任务已创建')
+    fullEnforceVisible.value = false
+    await loadRescoreRuns()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error?.message || '创建全量任务失败')
+  } finally {
+    creatingRun.value = false
+  }
+}
+
+const pauseRun = async (id: number) => {
+  try {
+    await peopleApi.pauseFaceQualityRescoreRun(id)
+    await loadRescoreRuns()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error?.message || '暂停失败')
+  }
+}
+const resumeRun = async (id: number) => {
+  try {
+    await peopleApi.resumeFaceQualityRescoreRun(id)
+    await loadRescoreRuns()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error?.message || '恢复失败')
+  }
+}
+const cancelRun = async (id: number) => {
+  try {
+    await ElMessageBox.confirm('取消后未处理目标停止，已处理审计记录保留。是否继续？', '取消运行', {
+      confirmButtonText: '取消运行',
+      cancelButtonText: '返回',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+  try {
+    await peopleApi.cancelFaceQualityRescoreRun(id)
+    await loadRescoreRuns()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error?.message || '取消失败')
+  }
+}
+const restoreRun = async (id: number) => {
+  try {
+    const res = await peopleApi.restoreAutoFaceQualityRescoreRun(id)
+    const restored = res.data.data?.restored ?? 0
+    ElMessage.success(`已按运行 ${id} 恢复 ${restored} 项`)
+    await Promise.all([loadStats(), loadReviews(), loadRescoreRuns()])
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error?.message || '按运行恢复失败')
+  }
+}
+
 onMounted(async () => {
   const photoId = route.query.photo_id
   if (typeof photoId === 'string' && photoId) {
@@ -446,7 +737,17 @@ onMounted(async () => {
 .page-subtitle { font-size: 13px; color: var(--el-text-color-secondary); }
 .header-actions { display: flex; gap: 8px; align-items: center; }
 .quality-tabs { margin-bottom: 8px; }
+.rescore-card { border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 12px; margin-bottom: 12px; background: var(--el-fill-color-light); }
+.rescore-card-header { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.rescore-title { font-weight: 600; margin-right: auto; }
+.rescore-card-body { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--el-text-color-regular); }
+.rescore-error { color: var(--el-color-danger); font-size: 12px; }
+.rescore-actions { display: flex; gap: 8px; margin-top: 4px; }
+.rescore-empty { font-size: 13px; color: var(--el-text-color-secondary); }
 .filter-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.time-filter { display: flex; gap: 6px; align-items: center; }
+.time-label { font-size: 13px; color: var(--el-text-color-regular); white-space: nowrap; }
+.time-hint { font-size: 12px; color: var(--el-text-color-placeholder); white-space: nowrap; }
 .page-select { display: flex; gap: 12px; align-items: center; margin-left: auto; flex-wrap: wrap; }
 .batch-count { font-size: 13px; color: var(--el-text-color-secondary); }
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; min-height: 200px; }
@@ -454,7 +755,16 @@ onMounted(async () => {
 .face-card { position: relative; border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 8px; cursor: pointer; background: var(--el-bg-color); transition: border-color 0.15s; }
 .face-card:hover { border-color: var(--el-color-primary); }
 .face-card.selected { border-color: var(--el-color-primary); box-shadow: 0 0 0 2px var(--el-color-primary-light-7); }
-.card-checkbox { position: absolute; top: 4px; left: 4px; z-index: 2; }
+/* 独立选择热区：≥40x40px，层级高于图片，事件 stopPropagation 不触发 openDetail。 */
+.select-hotzone {
+  position: absolute; top: 4px; left: 4px; z-index: 3;
+  width: 40px; height: 40px; border: none; border-radius: 50%;
+  background: rgba(0, 0, 0, 0.35); color: #fff; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; padding: 0;
+}
+.select-hotzone:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; }
+.select-mark { font-size: 18px; line-height: 1; opacity: 0; }
+.select-mark.checked { opacity: 1; }
 .card-thumb { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; background: var(--el-fill-color-light); }
 .card-thumb-placeholder { width: 100%; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; color: var(--el-text-color-placeholder); background: var(--el-fill-color-light); border-radius: 6px; }
 .card-meta { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
@@ -465,10 +775,13 @@ onMounted(async () => {
 .detail-content { padding: 0 4px; }
 .detail-preview { display: flex; gap: 12px; margin-bottom: 16px; }
 .detail-face { width: 120px; height: 120px; object-fit: cover; border-radius: 8px; }
-.detail-photo-wrap { flex: 1; min-width: 0; }
-.detail-photo { width: 100%; max-height: 120px; border-radius: 8px; background: var(--el-fill-color-light); }
-.detail-photo-error { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; justify-content: center; width: 100%; max-height: 120px; min-height: 80px; padding: 12px; border: 1px dashed var(--el-border-color); border-radius: 8px; color: var(--el-text-color-secondary); font-size: 13px; }
+/* 固定高度容器：横图竖图均 contain 完整展示，留白可见。 */
+.detail-photo-frame { flex: 1; min-width: 0; height: 220px; border-radius: 8px; background: var(--el-fill-color-light); display: flex; align-items: center; justify-content: center; }
+.detail-photo { width: 100%; height: 100%; border-radius: 8px; }
+.detail-photo :deep(.el-image__inner) { width: 100%; height: 100%; object-fit: contain; }
+.detail-photo-error { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; justify-content: center; width: 100%; height: 100%; min-height: 80px; padding: 12px; border: 1px dashed var(--el-border-color); border-radius: 8px; color: var(--el-text-color-secondary); font-size: 13px; }
 .photo-detail-link { font-size: 13px; }
 .evidence-json { max-height: 200px; overflow: auto; font-size: 11px; white-space: pre-wrap; word-break: break-all; margin: 0; }
 .detail-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.confirm-hint { font-size: 13px; color: var(--el-color-warning); margin: 8px 0; }
 </style>
