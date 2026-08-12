@@ -390,6 +390,9 @@ func TestListReviews_QualityEvidenceAvailable(t *testing.T) {
 		name        string
 		evidenceJSON string
 		realValidity float64 // 写入 Face.FaceValidityScore（默认 0）
+		origin       string
+		state        string
+		queryState   string
 		// 期望
 		wantAvailable bool
 	}{
@@ -397,18 +400,27 @@ func TestListReviews_QualityEvidenceAvailable(t *testing.T) {
 			name:          "历史无证据：默认 0 分 + 空 evidence_json",
 			evidenceJSON:  "",
 			realValidity:  0,
+			origin:        model.FaceQualityEvidenceOriginHistoricalBackfill,
+			state:         model.FaceQualityEvidenceStateMissing,
+			queryState:    "historical_missing_evidence",
 			wantAvailable: false,
 		},
 		{
 			name:          "模型真实 0 分：有效证据 + face_validity_score=0",
 			evidenceJSON:  mustMarshalEvidence(t, evidenceFor(0, 50, 80, "invalid_landmarks")),
 			realValidity:  0,
+			origin:        model.FaceQualityEvidenceOriginRealtime,
+			state:         model.FaceQualityEvidenceStateAvailable,
+			queryState:    "pending_review",
 			wantAvailable: true,
 		},
 		{
 			name:          "evidence_json 非法 JSON：按不可用处理，不报错",
 			evidenceJSON:  "{not valid json",
 			realValidity:  0,
+			origin:        model.FaceQualityEvidenceOriginRealtime,
+			state:         model.FaceQualityEvidenceStateAvailable,
+			queryState:    "pending_review",
 			wantAvailable: false,
 		},
 	}
@@ -434,13 +446,15 @@ func TestListReviews_QualityEvidenceAvailable(t *testing.T) {
 				BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2,
 				Decision: model.FaceQualityDecisionReviewRequired,
 				Source:   model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "test-v1",
-				EvidenceJSON: tc.evidenceJSON,
-				IsCurrent:    true,
+				EvidenceJSON:   tc.evidenceJSON,
+				EvidenceOrigin: tc.origin,
+				EvidenceState:  tc.state,
+				IsCurrent:      true,
 			}
 			require.NoError(t, db.Create(evt).Error)
 
 			fqs := NewFaceQualityService(svc)
-			page, err := fqs.ListReviews(model.FaceQualityReviewQuery{State: "pending_review", Page: 1, PageSize: 24})
+			page, err := fqs.ListReviews(model.FaceQualityReviewQuery{State: tc.queryState, Page: 1, PageSize: 24})
 			require.NoError(t, err) // 非法 JSON 不应让整页失败
 			require.Len(t, page.Items, 1)
 			assert.Equal(t, tc.wantAvailable, page.Items[0].QualityEvidenceAvailable)
@@ -455,4 +469,122 @@ func mustMarshalEvidence(t *testing.T, e *model.FaceQualityEvidence) string {
 	b, err := json.Marshal(e)
 	require.NoError(t, err)
 	return string(b)
+}
+
+// TestFaceQualityState_Partitioning 验证 5 个队列 Tab 互斥分流与统计：
+//   - pending_review 只含 evidence_state=available 的 review_required；
+//   - 历史缺证据不进 pending_review，进 historical_missing_evidence；
+//   - 重评分 retryable/unmatched 进 rescore_retryable；
+//   - 真实 0 分（available）仍计入 pending_review。
+func TestFaceQualityState_Partitioning(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, nil)
+	photo := &model.Photo{FilePath: "/t/p.jpg", FaceProcessStatus: model.FaceProcessStatusReady}
+	require.NoError(t, db.Create(photo).Error)
+	face := &model.Face{
+		PhotoID: photo.ID, BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		ClusterStatus:      model.FaceClusterStatusPending,
+		QualityRuleVersion: "v1", QualityModelVersion: "test-v1",
+	}
+	require.NoError(t, db.Create(face).Error)
+
+	// A: 历史缺证据（historical_backfill/missing）——不应进 pending_review。
+	a := &model.FaceQualityEvent{
+		PhotoID: photo.ID, FaceID: &face.ID,
+		BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionReviewRequired,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "test-v1",
+		EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalBackfill,
+		EvidenceState:  model.FaceQualityEvidenceStateMissing,
+		IsCurrent:      true,
+	}
+	require.NoError(t, db.Create(a).Error)
+
+	// B: 真实模型 0 分但 available——应进 pending_review。
+	b := &model.FaceQualityEvent{
+		PhotoID: photo.ID,
+		BBoxX: 0.4, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionReviewRequired,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "test-v1",
+		EvidenceJSON:   mustMarshalEvidence(t, evidenceFor(0, 50, 80, "invalid_landmarks")),
+		EvidenceOrigin: model.FaceQualityEvidenceOriginRealtime,
+		EvidenceState:  model.FaceQualityEvidenceStateAvailable,
+		IsCurrent:      true,
+	}
+	require.NoError(t, db.Create(b).Error)
+
+	// C: 重评分未匹配——进 rescore_retryable。
+	c := &model.FaceQualityEvent{
+		PhotoID: photo.ID,
+		BBoxX: 0.6, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionReviewRequired,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "test-v1",
+		EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalRescore,
+		EvidenceState:  model.FaceQualityEvidenceStateUnmatched,
+		IsCurrent:      true,
+	}
+	require.NoError(t, db.Create(c).Error)
+
+	// D: 自动排除 non_face——进 auto_excluded。
+	d := &model.FaceQualityEvent{
+		PhotoID: photo.ID,
+		BBoxX: 0.2, BBoxY: 0.5, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionNonFace, Reason: model.ExclusionReasonNonFace,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "test-v1",
+		EvidenceOrigin: model.FaceQualityEvidenceOriginRealtime,
+		EvidenceState:  model.FaceQualityEvidenceStateAvailable,
+		IsCurrent:      true,
+	}
+	require.NoError(t, db.Create(d).Error)
+
+	// E: 人工确认——进 manual_confirmed。
+	e := &model.FaceQualityEvent{
+		PhotoID: photo.ID,
+		BBoxX: 0.4, BBoxY: 0.5, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionAccepted,
+		Source:   model.FaceQualitySourceManual, RuleVersion: "v1", ModelVersion: "test-v1",
+		IsCurrent: true,
+	}
+	require.NoError(t, db.Create(e).Error)
+
+	fqs := NewFaceQualityService(svc)
+
+	// 统计互斥。
+	stats, err := fqs.GetStats()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), stats.PendingReview, "pending_review 只含 available 灰区")
+	assert.Equal(t, int64(1), stats.HistoricalMissingEvidence)
+	assert.Equal(t, int64(1), stats.RescoreRetryable)
+	assert.Equal(t, int64(1), stats.AutoExcluded)
+	assert.Equal(t, int64(1), stats.ManualConfirmed)
+
+	// pending_review 列表只含 B。
+	page, err := fqs.ListReviews(model.FaceQualityReviewQuery{State: "pending_review", Page: 1, PageSize: 50})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, b.ID, page.Items[0].EventID)
+	assert.True(t, page.Items[0].QualityEvidenceAvailable)
+
+	// historical_missing_evidence 列表只含 A。
+	page, err = fqs.ListReviews(model.FaceQualityReviewQuery{State: "historical_missing_evidence", Page: 1, PageSize: 50})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, a.ID, page.Items[0].EventID)
+
+	// rescore_retryable 列表只含 C。
+	page, err = fqs.ListReviews(model.FaceQualityReviewQuery{State: "rescore_retryable", Page: 1, PageSize: 50})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, c.ID, page.Items[0].EventID)
+
+	// auto_excluded 列表只含 D。
+	page, err = fqs.ListReviews(model.FaceQualityReviewQuery{State: "auto_excluded", Page: 1, PageSize: 50})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, d.ID, page.Items[0].EventID)
+
+	// manual_confirmed 列表只含 E。
+	page, err = fqs.ListReviews(model.FaceQualityReviewQuery{State: "manual_confirmed", Page: 1, PageSize: 50})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, e.ID, page.Items[0].EventID)
 }

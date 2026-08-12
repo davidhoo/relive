@@ -609,17 +609,21 @@ type FaceExclusionResult struct {
 
 // FaceQualityStatsResponse 质检全局统计。
 type FaceQualityStatsResponse struct {
-	PendingReview   int64            `json:"pending_review"`
-	AutoExcluded    int64            `json:"auto_excluded"`
-	ManualConfirmed int64            `json:"manual_confirmed"`
-	Total           int64            `json:"total"`
-	ByReason        map[string]int64 `json:"by_reason"`
-	ByRuleVersion   map[string]int64 `json:"by_rule_version"`
+	PendingReview             int64            `json:"pending_review"`
+	HistoricalMissingEvidence int64            `json:"historical_missing_evidence"`
+	RescoreRetryable          int64            `json:"rescore_retryable"`
+	AutoExcluded              int64            `json:"auto_excluded"`
+	ManualConfirmed           int64            `json:"manual_confirmed"`
+	Total                     int64            `json:"total"`
+	ByReason                  map[string]int64 `json:"by_reason"`
+	ByRuleVersion             map[string]int64 `json:"by_rule_version"`
 }
 
 // FaceQualityReviewQuery 审核页查询参数。
 type FaceQualityReviewQuery struct {
-	State       string `form:"state"`  // pending_review/auto_excluded/manual_confirmed
+	// state 为队列分流权威值：pending_review / historical_missing_evidence /
+	// rescore_retryable / auto_excluded / manual_confirmed。
+	State       string `form:"state"`
 	Reason      string `form:"reason"` // non_face/low_quality
 	Source      string `form:"source"` // auto/manual
 	RuleVersion string `form:"rule_version"`
@@ -655,6 +659,10 @@ type FaceQualityReviewItem struct {
 	FaceValidityScore float64    `json:"face_validity_score"`
 	QualityScore      float64    `json:"quality_score"`
 	EvidenceJSON      string     `json:"evidence_json,omitempty"`
+	// 证据来源/状态（向后兼容新增，旧客户端忽略）。
+	EvidenceOrigin string `json:"evidence_origin,omitempty"`
+	EvidenceState  string `json:"evidence_state,omitempty"`
+	RescoreRunID   *uint  `json:"rescore_run_id,omitempty"`
 	// QualityEvidenceAvailable 仅当 EvidenceJSON 非空且能反序列化为 FaceQualityEvidence 时为 true。
 	// 用于区分“模型真实评分（含 0 分）”与“历史回填无证据样本”，不依据数值字段推断。
 	QualityEvidenceAvailable bool `json:"quality_evidence_available"`

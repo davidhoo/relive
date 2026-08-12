@@ -17,20 +17,26 @@ type FaceQualityQuery struct {
 	// 当前是否最新结论：true 仅返回 is_current=true，false 仅返回 is_current=false，
 	// 零值忽略。
 	IsCurrent *bool
-	StartTime *time.Time
-	EndTime   *time.Time
-	Page      int
-	PageSize  int
+	// 证据来源/状态过滤（队列分流权威字段）。零值忽略。
+	EvidenceOrigin string
+	EvidenceState  string   // 单状态精确匹配
+	EvidenceStates []string // 多状态 OR 过滤
+	StartTime      *time.Time
+	EndTime        *time.Time
+	Page           int
+	PageSize       int
 }
 
 // FaceQualityStats 质检全局统计。
 type FaceQualityStats struct {
-	PendingReview   int64 `json:"pending_review"`   // review_required 且 is_current
-	AutoExcluded    int64 `json:"auto_excluded"`    // auto + (non_face|low_quality) + is_current
-	ManualConfirmed int64 `json:"manual_confirmed"` // manual + (non_face|low_quality|accepted) + is_current
-	Total           int64 `json:"total"`            // is_current 总数
-	ByReason        map[string]int64 `json:"by_reason"`
-	ByRuleVersion   map[string]int64 `json:"by_rule_version"`
+	PendingReview              int64 `json:"pending_review"` // 有真实模型证据的灰区（available + review_required + is_current）
+	HistoricalMissingEvidence  int64 `json:"historical_missing_evidence"` // 历史回填缺证据，待补证据
+	RescoreRetryable           int64 `json:"rescore_retryable"`           // 重评分可重试/未匹配
+	AutoExcluded               int64 `json:"auto_excluded"`               // auto + (non_face|low_quality) + is_current
+	ManualConfirmed            int64 `json:"manual_confirmed"`            // manual + (non_face|low_quality|accepted) + is_current
+	Total                      int64 `json:"total"`                      // is_current 总数
+	ByReason                   map[string]int64 `json:"by_reason"`
+	ByRuleVersion              map[string]int64 `json:"by_rule_version"`
 }
 
 // FaceQualityRepository 管理追加式质检审计表。
@@ -112,6 +118,15 @@ func (r *faceQualityRepository) List(q FaceQualityQuery) ([]*model.FaceQualityEv
 	if q.IsCurrent != nil {
 		tx = tx.Where("is_current = ?", *q.IsCurrent)
 	}
+	if q.EvidenceOrigin != "" {
+		tx = tx.Where("evidence_origin = ?", q.EvidenceOrigin)
+	}
+	if q.EvidenceState != "" {
+		tx = tx.Where("evidence_state = ?", q.EvidenceState)
+	}
+	if len(q.EvidenceStates) > 0 {
+		tx = tx.Where("evidence_state IN ?", q.EvidenceStates)
+	}
 	if q.StartTime != nil {
 		tx = tx.Where("created_at >= ?", *q.StartTime)
 	}
@@ -169,14 +184,48 @@ func (r *faceQualityRepository) Stats() (*FaceQualityStats, error) {
 		Group("decision").Scan(&decisionRows).Error; err != nil {
 		return nil, err
 	}
+	// review_required 总数（含历史缺证据）。pending_review 只计“有真实模型证据的灰区”，
+	// 在下方 evidence_state 维度里精确扣除 historical_missing/rescore_retryable。
+	var reviewRequiredTotal int64
 	for _, row := range decisionRows {
-		switch row.Bucket {
-		case model.FaceQualityDecisionReviewRequired:
-			stats.PendingReview = row.Count
-		case model.FaceQualityDecisionAccepted:
-			// accepted 不计入 auto/manual 分类
+		if row.Bucket == model.FaceQualityDecisionReviewRequired {
+			reviewRequiredTotal = row.Count
 		}
 	}
+
+	// 历史回填缺证据：historical_backfill + missing + is_current。
+	if err := r.db.Model(&model.FaceQualityEvent{}).
+		Where("is_current = ? AND evidence_origin = ? AND evidence_state = ?",
+			true,
+			model.FaceQualityEvidenceOriginHistoricalBackfill,
+			model.FaceQualityEvidenceStateMissing).
+		Count(&stats.HistoricalMissingEvidence).Error; err != nil {
+		return nil, err
+	}
+
+	// 重评分可重试/未匹配：historical_rescore + (retryable_error|unmatched) + is_current。
+	if err := r.db.Model(&model.FaceQualityEvent{}).
+		Where("is_current = ? AND evidence_origin = ? AND evidence_state IN ?",
+			true,
+			model.FaceQualityEvidenceOriginHistoricalRescore,
+			[]string{model.FaceQualityEvidenceStateRetryableError, model.FaceQualityEvidenceStateUnmatched}).
+		Count(&stats.RescoreRetryable).Error; err != nil {
+		return nil, err
+	}
+
+	// pending_review：有真实模型证据（evidence_state=available）的灰区 review_required。
+	// = review_required 总数 - 历史缺证据（historical_backfill/missing 必为 review_required）
+	//   - 重评分 retryable/unmatched（其当前态 decision 亦为 review_required，见 worker 写入规则）。
+	// 用 evidence_state=available 直接计数更精确，避免被未来新增的非 review_required 灰区污染。
+	if err := r.db.Model(&model.FaceQualityEvent{}).
+		Where("is_current = ? AND decision = ? AND evidence_state = ?",
+			true,
+			model.FaceQualityDecisionReviewRequired,
+			model.FaceQualityEvidenceStateAvailable).
+		Count(&stats.PendingReview).Error; err != nil {
+		return nil, err
+	}
+	_ = reviewRequiredTotal // 保留供调试，当前用 available 精确计数
 
 	// auto 排除数
 	if err := r.db.Model(&model.FaceQualityEvent{}).

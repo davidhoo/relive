@@ -204,12 +204,14 @@ func (f *faceQualityService) GetStats() (*model.FaceQualityStatsResponse, error)
 		return nil, err
 	}
 	return &model.FaceQualityStatsResponse{
-		PendingReview:   s.PendingReview,
-		AutoExcluded:    s.AutoExcluded,
-		ManualConfirmed: s.ManualConfirmed,
-		Total:           s.Total,
-		ByReason:        s.ByReason,
-		ByRuleVersion:   s.ByRuleVersion,
+		PendingReview:             s.PendingReview,
+		HistoricalMissingEvidence: s.HistoricalMissingEvidence,
+		RescoreRetryable:          s.RescoreRetryable,
+		AutoExcluded:              s.AutoExcluded,
+		ManualConfirmed:           s.ManualConfirmed,
+		Total:                     s.Total,
+		ByReason:                  s.ByReason,
+		ByRuleVersion:             s.ByRuleVersion,
 	}, nil
 }
 
@@ -260,14 +262,25 @@ func repositoryFaceQualityQuery(q model.FaceQualityReviewQuery) repository.FaceQ
 		Page:        q.Page,
 		PageSize:    q.PageSize,
 	}
-	// state 维度映射到 decision/source：审核页三个 Tab 用 state 区分。
-	// pending_review → decision=review_required
-	// auto_excluded → source=auto + decision IN (non_face, low_quality)
-	// manual_confirmed → source=manual
+	// state 维度映射到 decision/source + 证据来源/状态：审核页 5 个 Tab 用 state 区分。
+	// pending_review              → decision=review_required + evidence_state=available（有真实模型证据的灰区）
+	// historical_missing_evidence → evidence_origin=historical_backfill + evidence_state=missing
+	// rescore_retryable           → evidence_origin=historical_rescore + evidence_state IN (retryable_error, unmatched)
+	// auto_excluded               → source=auto + decision IN (non_face, low_quality)
+	// manual_confirmed            → source=manual
 	switch q.State {
 	case "pending_review":
 		repoQ.Decision = model.FaceQualityDecisionReviewRequired
 		repoQ.Source = ""
+		repoQ.EvidenceState = model.FaceQualityEvidenceStateAvailable
+	case "historical_missing_evidence":
+		repoQ.EvidenceOrigin = model.FaceQualityEvidenceOriginHistoricalBackfill
+		repoQ.EvidenceState = model.FaceQualityEvidenceStateMissing
+		repoQ.Decision = ""
+	case "rescore_retryable":
+		repoQ.EvidenceOrigin = model.FaceQualityEvidenceOriginHistoricalRescore
+		repoQ.EvidenceStates = []string{model.FaceQualityEvidenceStateRetryableError, model.FaceQualityEvidenceStateUnmatched}
+		repoQ.Decision = ""
 	case "auto_excluded":
 		repoQ.Source = model.FaceQualitySourceAuto
 		repoQ.Decisions = []string{model.FaceQualityDecisionNonFace, model.FaceQualityDecisionLowQuality}
@@ -309,6 +322,9 @@ func buildReviewItem(rec *model.FaceQualityEvent, people *peopleService) model.F
 		BBoxWidth:       rec.BBoxWidth,
 		BBoxHeight:      rec.BBoxHeight,
 		EvidenceJSON:    rec.EvidenceJSON,
+		EvidenceOrigin:  rec.EvidenceOrigin,
+		EvidenceState:   rec.EvidenceState,
+		RescoreRunID:    rec.RescoreRunID,
 	}
 
 	// 填充人脸裁剪路径与原图路径，便于审核页展示。
