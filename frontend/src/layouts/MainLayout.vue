@@ -105,6 +105,7 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowRight,
+  CircleCheck,
   Collection,
   Cpu,
   DataLine,
@@ -128,6 +129,7 @@ const systemStore = useSystemStore()
 // 侧边栏折叠状态
 const isCollapsed = ref(false)
 const menuIconMap = {
+  CircleCheck,
   DataLine,
   Picture,
   User,
@@ -162,6 +164,9 @@ const activeMenu = computed(() => {
   }
   if (path.startsWith('/people/')) {
     return '/people'
+  }
+  if (path.startsWith('/face-quality-review')) {
+    return '/face-quality-review'
   }
   if (path.startsWith('/events/')) {
     return '/events'

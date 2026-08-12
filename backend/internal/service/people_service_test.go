@@ -67,6 +67,7 @@ func setupPeopleServiceTestDB(t *testing.T) *gorm.DB {
 		&model.CannotLinkConstraint{},
 		&model.PeopleFeedbackEvent{},
 		&model.FaceExclusion{},
+		&model.FaceQualityEvent{},
 	))
 
 	t.Cleanup(func() {
@@ -85,8 +86,9 @@ func newPeopleServiceForTest(t *testing.T, client PeopleMLClient) (*peopleServic
 	db := setupPeopleServiceTestDB(t)
 	cfg := &config.Config{
 		People: config.PeopleConfig{
-			MLEndpoint: "http://ml-service",
-			Timeout:    5,
+			MLEndpoint:    "http://ml-service",
+			Timeout:       5,
+			FaceQualityMode: "disabled", // 测试用例用 fake mlclient，无 evidence；disabled 保证走原聚类语义
 		},
 	}
 

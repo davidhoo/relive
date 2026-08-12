@@ -123,6 +123,7 @@ type peopleService struct {
 	mergeJobRepo      repository.PeopleMergeJobRepository
 	cannotLinkRepo    repository.CannotLinkRepository
 	faceExclusionRepo repository.FaceExclusionRepository
+	faceQualityRepo   repository.FaceQualityRepository
 	feedbackEventRepo repository.PeopleFeedbackEventRepository
 	config            *config.Config
 	client            PeopleMLClient
@@ -411,6 +412,7 @@ func NewPeopleService(db *gorm.DB, photoRepo repository.PhotoRepository, faceRep
 		mergeJobRepo:      mergeJobRepo,
 		cannotLinkRepo:    cannotLinkRepo,
 		faceExclusionRepo: repository.NewFaceExclusionRepository(db),
+		faceQualityRepo:   repository.NewFaceQualityRepository(db),
 		config:            cfg,
 		client:            client,
 		runtimeService:    runtimeService,
@@ -2273,6 +2275,16 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 		exclusionRecords, _ = s.faceExclusionRepo.ListByPhotoID(photo.ID)
 	}
 
+	// 加载该照片当前有效的质检人工结论，按 bbox IoU 回填——重检后人工结论仍生效，
+	// 且新模型/规则不得无声覆盖人工接受/排除。优先级：人工 > 自动。
+	var manualQualityRecords []*model.FaceQualityEvent
+	if s.faceQualityRepo != nil {
+		manualQualityRecords, _ = s.faceQualityRepo.ListCurrentByPhotoID(photo.ID)
+	}
+	manualQualityRecords = filterManualQualityEvents(manualQualityRecords)
+
+	qualityMode := qualityModeFromConfig(s.qualityModeSetting())
+
 	// Build detection candidates for bbox matching
 	detectionCandidates := make([]bboxCandidate, len(result.Faces))
 	for i, detected := range result.Faces {
@@ -2284,8 +2296,10 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 		}
 	}
 	exclusionMatches := matchExclusionRecords(detectionCandidates, exclusionRecords)
+	qualityMatches := matchQualityRecords(detectionCandidates, manualQualityRecords)
 
 	faceCountForPhoto := 0
+	qualityEventsToWrite := make([]*model.FaceQualityEvent, 0, len(result.Faces))
 	for i, detected := range result.Faces {
 		embeddingPayload := model.EncodeEmbedding(detected.Embedding)
 		face := &model.Face{
@@ -2303,18 +2317,81 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 			ClusteredAt:   nil,
 		}
 
-		// Apply exclusion if matched
-		if rec, matched := exclusionMatches[i]; matched {
+		// 写入证据快照（便于审核页直接读取，避免 JOIN）。
+		ev := detected.Evidence
+		face.FaceValidityScore = 0
+		if ev != nil {
+			face.FaceValidityScore = ev.FaceValidityScore
+		}
+		face.QualityRuleVersion = qualityRuleVersionFromEvidence(ev)
+		face.QualityModelVersion = qualityModelVersionFromEvidence(ev)
+
+		// 1) 人工结论优先：按 bbox IoU 回填。
+		if mrec, matched := qualityMatches[i]; matched {
+			face.QualityReasonsCSV = mrec.ReasonCodes
+			face.QualityRuleVersion = mrec.RuleVersion
+			face.QualityModelVersion = mrec.ModelVersion
+			switch mrec.Decision {
+			case model.FaceQualityDecisionNonFace, model.FaceQualityDecisionLowQuality:
+				face.ClusterStatus = model.FaceClusterStatusExcluded
+				face.ExclusionReason = mrec.Reason
+				nowQ := time.Now()
+				face.ExcludedAt = &nowQ
+				if mrec.Decision == model.FaceQualityDecisionLowQuality {
+					faceCountForPhoto++
+				}
+			case model.FaceQualityDecisionAccepted:
+				// 人工接受：保持 pending，正常进入聚类。
+				faceCountForPhoto++
+			case model.FaceQualityDecisionReviewRequired:
+				face.ClusterStatus = model.FaceClusterStatusReviewRequired
+				// 待质检不计入 face_count，也不进入聚类。
+			}
+		} else if rec, matched := exclusionMatches[i]; matched {
+			// 2) 旧版 face_exclusions 兼容回填（无质检事件时的存量排除记录）。
 			face.ClusterStatus = model.FaceClusterStatusExcluded
 			face.ExclusionReason = rec.Reason
-			now := time.Now()
-			face.ExcludedAt = &now
+			nowQ := time.Now()
+			face.ExcludedAt = &nowQ
 			// non_face does not count toward face_count; low_quality does
 			if rec.Reason == model.ExclusionReasonLowQuality {
 				faceCountForPhoto++
 			}
 		} else {
-			faceCountForPhoto++
+			// 3) 无人工结论：跑自动质检策略引擎。
+			outcome := evaluateFaceQuality(ev, qualityMode)
+			face.QualityReasonsCSV = reasonCodesCSV(outcome.ReasonCodes)
+			switch outcome.Action {
+			case model.FaceQualityActionExclude:
+				face.ClusterStatus = model.FaceClusterStatusExcluded
+				face.ExclusionReason = outcome.Reason
+				nowQ := time.Now()
+				face.ExcludedAt = &nowQ
+				if outcome.Reason == model.ExclusionReasonLowQuality {
+					faceCountForPhoto++
+				}
+			case model.FaceQualityActionReviewRequired:
+				face.ClusterStatus = model.FaceClusterStatusReviewRequired
+				// 不计入 face_count，不进入聚类。
+			case model.FaceQualityActionAccept:
+				faceCountForPhoto++
+			}
+			// 追加自动质检事件（FaceID 在事务内创建 Face 后回填）。
+			qualityEventsToWrite = append(qualityEventsToWrite, &model.FaceQualityEvent{
+				PhotoID:      photo.ID,
+				BBoxX:        detected.BBox.X,
+				BBoxY:        detected.BBox.Y,
+				BBoxWidth:    detected.BBox.Width,
+				BBoxHeight:   detected.BBox.Height,
+				Decision:     outcome.Decision,
+				Reason:       outcome.Reason,
+				Source:       model.FaceQualitySourceAuto,
+				RuleVersion:  qualityRuleVersionFromEvidence(ev),
+				ModelVersion: qualityModelVersionFromEvidence(ev),
+				EvidenceJSON: marshalEvidence(ev),
+				ReasonCodes:  reasonCodesCSV(outcome.ReasonCodes),
+				IsCurrent:    true,
+			})
 		}
 		createdFaces = append(createdFaces, face)
 	}
@@ -2326,9 +2403,24 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 				return err
 			}
 
-			for _, face := range createdFaces {
+			// 旧质检事件失活（重检后旧结论不再 is_current）。
+			if s.faceQualityRepo != nil {
+				if err := s.faceQualityRepo.ClearCurrentByPhoto(tx, photo.ID); err != nil {
+					return fmt.Errorf("clear current quality events: %w", err)
+				}
+			}
+
+			for idx, face := range createdFaces {
 				if err := tx.Create(face).Error; err != nil {
 					return err
+				}
+				// 回填自动质检事件的 FaceID。
+				if idx < len(qualityEventsToWrite) && qualityEventsToWrite[idx] != nil {
+					fid := face.ID
+					qualityEventsToWrite[idx].FaceID = &fid
+					if err := tx.Create(qualityEventsToWrite[idx]).Error; err != nil {
+						return err
+					}
 				}
 			}
 
@@ -2427,12 +2519,39 @@ func convertMLResultToModel(result *mlclient.DetectFacesResponse) *model.PeopleD
 			Confidence:   f.Confidence,
 			QualityScore: f.QualityScore,
 			Embedding:    f.Embedding,
+			Evidence:     convertMLEvidence(f.Evidence),
 		}
 	}
 
 	return &model.PeopleDetectionResult{
 		Faces:            faces,
 		ProcessingTimeMS: result.ProcessingTimeMS,
+	}
+}
+
+// convertMLEvidence 把 mlclient.FaceQualityEvidence 转为 model.FaceQualityEvidence。
+// nil 时返回 nil（远程 worker 或旧版 ml-service 不返回 evidence 的兼容路径）。
+func convertMLEvidence(e *mlclient.FaceQualityEvidence) *model.FaceQualityEvidence {
+	if e == nil {
+		return nil
+	}
+	return &model.FaceQualityEvidence{
+		FaceValidityScore:     e.FaceValidityScore,
+		PixelWidth:            e.PixelWidth,
+		PixelHeight:           e.PixelHeight,
+		Sharpness:             e.Sharpness,
+		Brightness:            e.Brightness,
+		Contrast:              e.Contrast,
+		LandmarkCompleteness:  e.LandmarkCompleteness,
+		LandmarkGeometryScore: e.LandmarkGeometryScore,
+		Yaw:                   e.Yaw,
+		Pitch:                 e.Pitch,
+		Roll:                  e.Roll,
+		PoseEstimable:         e.PoseEstimable,
+		Occluded:              e.Occluded,
+		QualityReasons:        e.QualityReasons,
+		RuleVersion:           e.RuleVersion,
+		ModelVersion:          e.ModelVersion,
 	}
 }
 
@@ -4191,6 +4310,15 @@ func (s *peopleService) rejectIfHidden(personIDs ...uint) error {
 		}
 	}
 	return nil
+}
+
+// qualityModeSetting 返回质检上线开关（disabled/shadow/enforce）。
+// 优先读 config.People.FaceQualityMode；未配置时默认 enforce（首期高确定性新样本）。
+func (s *peopleService) qualityModeSetting() string {
+	if s.config != nil && s.config.People.FaceQualityMode != "" {
+		return s.config.People.FaceQualityMode
+	}
+	return "enforce"
 }
 
 // errPeopleSplitConflict 是 ErrPeopleSplitConflict 的内部别名，保留既有调用点与测试的

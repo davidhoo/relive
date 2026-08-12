@@ -27,6 +27,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'photos/:id', name: 'PhotoDetail', component: () => import('@/views/Photos/Detail.vue'), meta: { title: '照片详情', hidden: true } },
       { path: 'people', name: 'People', component: () => import('@/views/People/index.vue'), meta: { title: '人物管理', icon: 'User' } },
       { path: 'people/:id', name: 'PeopleDetail', component: () => import('@/views/People/Detail.vue'), meta: { title: '人物详情', hidden: true } },
+      { path: 'face-quality-review', name: 'FaceQualityReview', component: () => import('@/views/People/FaceQualityReview.vue'), meta: { title: '人脸质检', icon: 'CircleCheck' } },
       { path: 'analysis', name: 'Analysis', component: () => import('@/views/Analysis/index.vue'), meta: { title: 'AI 分析', icon: 'MagicStick' } },
       { path: 'thumbnails', name: 'Thumbnails', component: () => import('@/views/Thumbnails/index.vue'), meta: { title: '缩略图生成', icon: 'Files' } },
       { path: 'geocode', name: 'Geocode', component: () => import('@/views/Geocode/index.vue'), meta: { title: 'GPS 位置解析', icon: 'Location' } },

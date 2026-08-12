@@ -120,6 +120,9 @@ type PeopleConfig struct {
 	// IdentityProfileAnnRebuildDeltaThreshold 是 delta 占用比例阈值（0-1），
 	// 达到或超过时批末优先触发 ANN full rebuild 而非继续 activate。
 	IdentityProfileAnnRebuildDeltaThreshold float64 `yaml:"identity_profile_ann_rebuild_delta_threshold"`
+	// FaceQualityMode 人脸质检上线开关：disabled / shadow / enforce。
+	// disabled：停止新自动判定；shadow：仅产出候选不自动排除；enforce：高确定性新样本执行自动排除。
+	FaceQualityMode string `yaml:"face_quality_mode"`
 }
 
 const (

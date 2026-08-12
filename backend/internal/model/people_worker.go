@@ -42,6 +42,8 @@ type PeopleDetectionFace struct {
 	Confidence   float64     `json:"confidence"`
 	QualityScore float64     `json:"quality_score"`
 	Embedding    []float32   `json:"embedding"`
+	// 质检证据（远程 worker 结果可能不含；nil 时后端走兼容路径，标记可重试而非 non_face）。
+	Evidence *FaceQualityEvidence `json:"evidence,omitempty"`
 }
 
 // BoundingBox 人脸边界框

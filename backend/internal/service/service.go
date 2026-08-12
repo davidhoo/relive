@@ -37,6 +37,11 @@ type Services struct {
 	BackgroundLoadSampler *BackgroundLoadSampler     // 负载采样器（状态 API 用，advisory）
 	// PersonPhotoRepo 人物照片派生表仓库，供 person_photos 后台回填与 cursor 查询切换使用。
 	PersonPhotoRepo repository.PersonPhotoRepository
+	// FaceQuality 人脸质检审核服务（nil 表示未启用）。
+	FaceQuality FaceQualityService
+	// FaceQualityBackfill 存量质检审计后台任务（nil 表示未启用）。
+	// 在 main 启动时 Run()，foreground/I/O 高时暂停，服务重启从 app_config 进度继续。
+	FaceQualityBackfill *FaceQualityBackfill
 	// ProtoCacheRebuildStatus 返回 protoCache 分批 full rebuild 的只读进度快照（nil 表示无 rebuild）。
 	// 由 peopleService 注入，供后台状态 API 展示 rebuild 运行/暂停/进度/原因与 cold_building。
 	ProtoCacheRebuildStatus func() *model.ProtoCacheRebuildStatusResponse
@@ -122,6 +127,10 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	peopleSvc.(*peopleService).setMergeSuggestionDirtyHook(mergeSuggestionService.MarkDirty)
 	peopleSvc.(*peopleService).setANNCandidateFn(mergeSuggestionService.(*personMergeSuggestionService).FindCandidates)
 	peopleSvc.(*peopleService).SetFeedbackEventRepo(repos.FeedbackEvent)
+	// 人脸质检审核服务：复用 peopleService 的写入与受影响人物刷新能力。
+	faceQualitySvc := NewFaceQualityService(peopleSvc.(*peopleService))
+	// 存量质检审计后台任务：低并对历史 Face 生成质检候选与审计事件，不改人物归属。
+	faceQualityBackfill := NewFaceQualityBackfill(peopleSvc.(*peopleService), backgroundCoordinator, repos.Config)
 	// 后台任务治理：把统一准入控制器注入 peopleService（Task 8 起前台 mutation 通过它
 	// 注册 foreground scope）。Task 7 先注入；foreground scope 接管在 Task 8 完成。
 	peopleSvc.(*peopleService).SetBackgroundCoordinator(backgroundCoordinator)
@@ -262,6 +271,8 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		BackgroundCoordinator:   backgroundCoordinator,
 		BackgroundLoadSampler:   loadSampler,
 		PersonPhotoRepo:         repos.PersonPhoto,
+		FaceQuality:             faceQualitySvc,
+		FaceQualityBackfill:     faceQualityBackfill,
 		ProtoCacheRebuildStatus: peopleSvc.(*peopleService).ProtoCacheRebuildStatus,
 	}
 }

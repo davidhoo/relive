@@ -69,6 +69,9 @@ const (
 	FaceClusterStatusOutlier  = "outlier"
 	FaceClusterStatusManual   = "manual"
 	FaceClusterStatusExcluded = "excluded"
+	// FaceClusterStatusReviewRequired 待人工质检：不参与聚类，与 excluded 一样不进入人物聚合，
+	// 但语义不同——它是灰区样本，等待人工确认，照片详情页须提示“待质检”。
+	FaceClusterStatusReviewRequired = "review_required"
 )
 
 // 排除原因枚举
@@ -136,8 +139,129 @@ type Face struct {
 	// 排除相关字段（cluster_status = excluded 时使用）
 	ExclusionReason string     `gorm:"type:varchar(20);default:''" json:"exclusion_reason,omitempty"`
 	ExcludedAt      *time.Time `json:"excluded_at,omitempty"`
+
+	// 质检证据快照（face_quality_events 的冗余字段，便于审核页直接读取，避免 JOIN）。
+	// 由 ApplyDetectionResult 写入；人工改判不覆盖此处，历史由 face_quality_events 追加保留。
+	FaceValidityScore      float64 `gorm:"not null;default:0" json:"face_validity_score"`
+	QualityReasonsCSV      string  `gorm:"type:varchar(255);default:''" json:"quality_reasons,omitempty"`
+	QualityRuleVersion     string  `gorm:"type:varchar(20);default:''" json:"quality_rule_version,omitempty"`
+	QualityModelVersion    string  `gorm:"type:varchar(40);default:''" json:"quality_model_version,omitempty"`
 }
 
 func (Face) TableName() string {
 	return "faces"
+}
+
+// 质检最终动作枚举
+const (
+	FaceQualityActionAccept          = "accept"
+	FaceQualityActionExclude         = "exclude"
+	FaceQualityActionReviewRequired  = "review_required"
+)
+
+// 质检判定枚举（face_quality_events.decision）
+const (
+	FaceQualityDecisionAccepted       = "accepted"
+	FaceQualityDecisionNonFace        = "non_face"
+	FaceQualityDecisionLowQuality     = "low_quality"
+	FaceQualityDecisionReviewRequired = "review_required"
+)
+
+// 质检来源枚举
+const (
+	FaceQualitySourceAuto   = "auto"
+	FaceQualitySourceManual = "manual"
+)
+
+// 质检审核动作枚举（face_quality_events.review_action）
+const (
+	FaceQualityReviewActionConfirmExclude = "confirm_exclude"
+	FaceQualityReviewActionMarkNonFace    = "mark_non_face"
+	FaceQualityReviewActionMarkLowQuality = "mark_low_quality"
+	FaceQualityReviewActionAccept         = "accept"
+	FaceQualityReviewActionRestore        = "restore"
+)
+
+// FaceQualityEvent 追加式人脸质检审计表。
+// 每次判定/审核/恢复都写一行，不删除历史，保证可追溯与按规则版本回滚。
+type FaceQualityEvent struct {
+	ID        uint      `gorm:"primarykey" json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+
+	PhotoID      uint    `gorm:"not null;index:idx_fqe_photo" json:"photo_id"`
+	FaceID       *uint   `gorm:"index:idx_fqe_face" json:"face_id,omitempty"` // 最近匹配 Face ID，重检后回填
+	ExclusionID  *uint   `gorm:"index:idx_fqe_exclusion" json:"exclusion_id,omitempty"`
+	// 归一化人脸框：重检后按 photo_id + bbox IoU 匹配回填当前结论。
+	// gorm 默认 snake_case 会把 BBoxX 转成 b_box_x，这里用 column 显式指定为 bbox_x，
+	// 与 face_exclusions 表保持一致，便于跨表 IoU 查询复用同一列名。
+	BBoxX      float64 `gorm:"column:bbox_x;not null" json:"bbox_x"`
+	BBoxY      float64 `gorm:"column:bbox_y;not null" json:"bbox_y"`
+	BBoxWidth  float64 `gorm:"column:bbox_width;not null" json:"bbox_width"`
+	BBoxHeight float64 `gorm:"column:bbox_height;not null" json:"bbox_height"`
+
+	// 判定结果。
+	Decision string `gorm:"type:varchar(20);not null;index:idx_fqe_decision" json:"decision"`
+	Reason   string `gorm:"type:varchar(20);not null" json:"reason"` // non_face/low_quality/''（accepted/review_required 为空）
+	Source   string `gorm:"type:varchar(10);not null;index:idx_fqe_source" json:"source"` // auto/manual
+
+	// 版本与证据。
+	RuleVersion  string `gorm:"type:varchar(20);not null;index:idx_fqe_rule_version" json:"rule_version"`
+	ModelVersion string `gorm:"type:varchar(40);not null" json:"model_version"`
+	EvidenceJSON string `gorm:"type:text" json:"evidence_json,omitempty"`
+	ReasonCodes  string `gorm:"type:varchar(255);default:''" json:"reason_codes,omitempty"`
+
+	// 审核与恢复。
+	ReviewAction string     `gorm:"type:varchar(30);default:'';index:idx_fqe_review_action" json:"review_action,omitempty"`
+	ReviewedAt   *time.Time `json:"reviewed_at,omitempty"`
+	RestoredAt   *time.Time `json:"restored_at,omitempty"`
+
+	// 当前是否为该照片+人脸框的最新结论（重检后旧事件置 false，新事件置 true）。
+	// 用于审核页只取每个框的最新一条。
+	IsCurrent bool `gorm:"not null;default:false;index:idx_fqe_current" json:"is_current"`
+}
+
+func (FaceQualityEvent) TableName() string {
+	return "face_quality_events"
+}
+
+// IsValidQualityDecision 校验质检判定是否合法
+func IsValidQualityDecision(d string) bool {
+	return d == FaceQualityDecisionAccepted ||
+		d == FaceQualityDecisionNonFace ||
+		d == FaceQualityDecisionLowQuality ||
+		d == FaceQualityDecisionReviewRequired
+}
+
+// IsValidQualityReviewAction 校验审核动作是否合法
+func IsValidQualityReviewAction(a string) bool {
+	switch a {
+	case FaceQualityReviewActionConfirmExclude,
+		FaceQualityReviewActionMarkNonFace,
+		FaceQualityReviewActionMarkLowQuality,
+		FaceQualityReviewActionAccept,
+		FaceQualityReviewActionRestore:
+		return true
+	}
+	return false
+}
+
+// FaceQualityEvidence 质检证据的 Go 镜像（对应 ml-service FaceQualityEvidence JSON）
+type FaceQualityEvidence struct {
+	FaceValidityScore      float64   `json:"face_validity_score"`
+	PixelWidth             int       `json:"pixel_width"`
+	PixelHeight            int       `json:"pixel_height"`
+	Sharpness              float64   `json:"sharpness"`
+	Brightness             float64   `json:"brightness"`
+	Contrast               float64   `json:"contrast"`
+	LandmarkCompleteness   float64   `json:"landmark_completeness"`
+	LandmarkGeometryScore  float64   `json:"landmark_geometry_score"`
+	Yaw                    *float64  `json:"yaw,omitempty"`
+	Pitch                  *float64  `json:"pitch,omitempty"`
+	Roll                   *float64  `json:"roll,omitempty"`
+	PoseEstimable          bool      `json:"pose_estimable"`
+	Occluded               bool      `json:"occluded"`
+	QualityReasons         []string  `json:"quality_reasons"`
+	RuleVersion            string    `json:"rule_version"`
+	ModelVersion           string    `json:"model_version"`
 }

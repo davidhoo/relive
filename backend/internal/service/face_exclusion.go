@@ -72,6 +72,54 @@ type bboxCandidate struct {
 	x, y, w, h float64
 }
 
+// matchQualityRecords 把新检测框按 bbox IoU 匹配到既有质检人工结论。
+// 只匹配 source=manual 的事件，保证重检后人工结论仍生效，且新规则不得覆盖。
+// 每个 box 最多匹配一条人工事件，IoU 最高者胜。
+func matchQualityRecords(
+	detections []bboxCandidate,
+	records []*model.FaceQualityEvent,
+) map[int]*model.FaceQualityEvent {
+	if len(detections) == 0 || len(records) == 0 {
+		return nil
+	}
+	matched := make(map[int]*model.FaceQualityEvent)
+	usedRecords := make(map[uint]struct{})
+
+	for i, det := range detections {
+		bestIoU := exclusionIoUThreshold
+		var bestRecord *model.FaceQualityEvent
+		for _, rec := range records {
+			if _, used := usedRecords[rec.ID]; used {
+				continue
+			}
+			iou := bboxIoU(det.x, det.y, det.w, det.h, rec.BBoxX, rec.BBoxY, rec.BBoxWidth, rec.BBoxHeight)
+			if iou > bestIoU {
+				bestIoU = iou
+				bestRecord = rec
+			}
+		}
+		if bestRecord != nil {
+			matched[i] = bestRecord
+			usedRecords[bestRecord.ID] = struct{}{}
+		}
+	}
+	return matched
+}
+
+// filterManualQualityEvents 只保留人工来源的当前质检事件。
+func filterManualQualityEvents(records []*model.FaceQualityEvent) []*model.FaceQualityEvent {
+	if len(records) == 0 {
+		return nil
+	}
+	out := make([]*model.FaceQualityEvent, 0, len(records))
+	for _, r := range records {
+		if r != nil && r.Source == model.FaceQualitySourceManual {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // UpdateFaceExclusion marks faces as excluded or restores them.
 // When excluded=true, reason must be a valid exclusion reason ("non_face" or "low_quality").
 // The operation is atomic within a single write transaction.

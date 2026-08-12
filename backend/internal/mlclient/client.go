@@ -29,16 +29,40 @@ type BoundingBox struct {
 	Height float64 `json:"height"`
 }
 
+// FaceQualityEvidence 质检证据（对应 ml-service FaceQualityEvidence）。
+// 指针字段为零值时省略，向后兼容旧版 ml-service 不返回 evidence 的响应。
+type FaceQualityEvidence struct {
+	FaceValidityScore     float64   `json:"face_validity_score"`
+	PixelWidth            int       `json:"pixel_width"`
+	PixelHeight           int       `json:"pixel_height"`
+	Sharpness             float64   `json:"sharpness"`
+	Brightness            float64   `json:"brightness"`
+	Contrast              float64   `json:"contrast"`
+	LandmarkCompleteness  float64   `json:"landmark_completeness"`
+	LandmarkGeometryScore float64   `json:"landmark_geometry_score"`
+	Yaw                   *float64  `json:"yaw,omitempty"`
+	Pitch                 *float64  `json:"pitch,omitempty"`
+	Roll                  *float64  `json:"roll,omitempty"`
+	PoseEstimable         bool      `json:"pose_estimable"`
+	Occluded              bool      `json:"occluded"`
+	QualityReasons        []string  `json:"quality_reasons"`
+	RuleVersion           string    `json:"rule_version"`
+	ModelVersion          string    `json:"model_version"`
+}
+
 type DetectedFace struct {
-	BBox         BoundingBox `json:"bbox"`
-	Confidence   float64     `json:"confidence"`
-	QualityScore float64     `json:"quality_score"`
-	Embedding    []float32   `json:"embedding"`
+	BBox         BoundingBox           `json:"bbox"`
+	Confidence   float64               `json:"confidence"`
+	QualityScore float64               `json:"quality_score"`
+	Embedding    []float32             `json:"embedding"`
+	Evidence     *FaceQualityEvidence  `json:"evidence,omitempty"`
 }
 
 type DetectFacesResponse struct {
 	Faces            []DetectedFace `json:"faces"`
 	ProcessingTimeMS int            `json:"processing_time_ms"`
+	RuleVersion      string         `json:"rule_version,omitempty"`
+	ModelVersion     string         `json:"model_version,omitempty"`
 }
 
 func New(baseURL string, timeout time.Duration) *Client {

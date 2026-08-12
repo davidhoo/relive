@@ -35,3 +35,5 @@ def test_detect_faces_endpoint_shape(tmp_path: Path):
     assert "faces" in payload
     assert "processing_time_ms" in payload
     assert payload["faces"] == []
+    assert "rule_version" in payload
+    assert "model_version" in payload

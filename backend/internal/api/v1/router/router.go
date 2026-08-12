@@ -251,6 +251,16 @@ func Setup(db *gorm.DB, cfg *config.Config, appState *lifecycle.State) (*gin.Eng
 				people.GET("/identity-profiles/stats", handlers.People.GetIdentityProfileStats)
 				people.GET("/identity-profiles/decisions", handlers.People.ListIdentityProfileDecisions)
 
+				// 人脸质检审核接口：静态路由必须注册在 /:id 之前，避免
+				// face-quality 被解析成人物 ID。
+				people.GET("/face-quality/stats", handlers.People.GetFaceQualityStats)
+				people.GET("/face-quality/reviews", handlers.People.ListFaceQualityReviews)
+				people.GET("/face-quality/backfill/status", handlers.People.GetFaceQualityBackfillStatus)
+				people.POST("/face-quality/backfill/pause", handlers.People.PauseFaceQualityBackfill)
+				people.POST("/face-quality/backfill/resume", handlers.People.ResumeFaceQualityBackfill)
+				people.POST("/face-quality/restore-auto", handlers.People.RestoreAutoFaceQuality)
+				people.PATCH("/faces/quality-decision", handlers.People.ApplyFaceQualityDecision)
+
 				people.POST("/background/start", handlers.People.StartBackground)
 				people.POST("/background/stop", handlers.People.StopBackground)
 				people.POST("/rescan-by-path", handlers.People.RescanByPath)

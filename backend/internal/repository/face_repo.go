@@ -46,6 +46,9 @@ type FaceRepository interface {
 	ListByPersonIDSummary(personID uint) ([]*model.Face, error) // 排除 embedding，按 quality_score 排序
 	ListByPersonIDPaginated(personID uint, page, pageSize int) ([]*model.Face, int64, error)
 	ListByPersonIDCursor(personID uint, cursor *PersonFaceCursor, limit int) ([]*model.Face, bool, *PersonFaceCursor, error)
+	// ListUnprocessedForQuality 返回 id > afterID 且尚未有当前质检事件（is_current=true）
+	// 的 Face，按 id 升序，limit 控制批量大小。供存量质检审计后台任务分批扫描。
+	ListUnprocessedForQuality(afterID uint, limit int) ([]*model.Face, error)
 	ListByIDs(ids []uint) ([]*model.Face, error)
 	ListAssigned() ([]*model.Face, error)
 	ListAssignedPersonIDs() ([]uint, error)
@@ -292,6 +295,24 @@ func (r *faceRepository) ListPending(limit int) ([]*model.Face, error) {
 		query = query.Limit(limit)
 	}
 	err := query.Find(&faces).Error
+	return faces, err
+}
+
+// ListUnprocessedForQuality 返回 id > afterID 且尚未有当前质检事件（is_current=true）
+// 的 Face，按 id 升序。供存量质检审计后台任务分批扫描，避免重复处理。
+//
+// 用 NOT EXISTS 子查询过滤已有当前事件的 face；face_quality_events 在新库由 AutoMigrate
+// 创建，旧库由迁移补建，此处不假设表存在——调用方在表不存在时应跳过。
+func (r *faceRepository) ListUnprocessedForQuality(afterID uint, limit int) ([]*model.Face, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	var faces []*model.Face
+	err := r.db.Where("id > ?", afterID).
+		Where("NOT EXISTS (SELECT 1 FROM face_quality_events e WHERE e.face_id = faces.id AND e.is_current = ?)", true).
+		Order("id ASC").
+		Limit(limit).
+		Find(&faces).Error
 	return faces, err
 }
 

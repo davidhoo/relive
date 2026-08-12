@@ -217,6 +217,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.PersonIdentityCenterMember{},
 		&model.PeopleFeedbackEvent{},
 		&model.FaceExclusion{},
+		&model.FaceQualityEvent{},
 		&model.PeopleIdentityDecision{},
 		&model.PersonPhoto{},
 	}
@@ -295,6 +296,10 @@ func AutoMigrate(db *gorm.DB) error {
 		log.Printf("[database] warning: face exclusion columns migration failed: %v", err)
 	}
 
+	if err := migrateFaceQualityColumns(db); err != nil {
+		log.Printf("[database] warning: face quality columns migration failed: %v", err)
+	}
+
 	if err := migratePersonPhotosTable(db); err != nil {
 		log.Printf("[database] warning: person_photos migration failed: %v", err)
 	}
@@ -335,6 +340,41 @@ func migrateFaceExclusionColumns(db *gorm.DB) error {
 	}
 
 	log.Printf("[database] face exclusion columns added")
+	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
+	return nil
+}
+
+// migrateFaceQualityColumns 给 faces 表补充质检证据快照列，供审核页直接读取。
+// face_quality_events 表由 AutoMigrate 创建；此迁移仅补列，幂等。
+func migrateFaceQualityColumns(db *gorm.DB) error {
+	const migrationKey = "migration.face_quality_columns_v1"
+
+	var cfg model.AppConfig
+	if err := db.Where("key = ?", migrationKey).First(&cfg).Error; err == nil {
+		return nil
+	}
+
+	log.Printf("[database] adding face quality columns...")
+
+	type colSpec struct {
+		name string
+		ddl  string
+	}
+	specs := []colSpec{
+		{"face_validity_score", "ALTER TABLE faces ADD COLUMN face_validity_score REAL NOT NULL DEFAULT 0"},
+		{"quality_reasons", "ALTER TABLE faces ADD COLUMN quality_reasons VARCHAR(255) DEFAULT ''"},
+		{"quality_rule_version", "ALTER TABLE faces ADD COLUMN quality_rule_version VARCHAR(20) DEFAULT ''"},
+		{"quality_model_version", "ALTER TABLE faces ADD COLUMN quality_model_version VARCHAR(40) DEFAULT ''"},
+	}
+	for _, s := range specs {
+		if !db.Migrator().HasColumn(&model.Face{}, s.name) {
+			if err := db.Exec(s.ddl).Error; err != nil {
+				return fmt.Errorf("add %s column: %w", s.name, err)
+			}
+		}
+	}
+
+	log.Printf("[database] face quality columns added")
 	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
 	return nil
 }

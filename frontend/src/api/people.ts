@@ -4,6 +4,12 @@ import type { Photo } from '@/types/photo'
 import type {
   ExclusionReason,
   Face,
+  FaceQualityAction,
+  FaceQualityDecisionResult,
+  FaceQualityRestoreResult,
+  FaceQualityReviewPage,
+  FaceQualityReviewParams,
+  FaceQualityStats,
   PeopleBackgroundLogsResponse,
   PeopleListParams,
   PeopleMergeJob,
@@ -92,6 +98,31 @@ export const peopleApi = {
       face_ids: faceIds,
       excluded,
       reason: excluded ? reason : undefined,
+    })
+  },
+
+  // ---- 人脸质检审核 ----
+
+  getFaceQualityStats() {
+    return http.get<ApiResponse<FaceQualityStats>>('/people/face-quality/stats')
+  },
+
+  listFaceQualityReviews(params?: FaceQualityReviewParams) {
+    return http.get<ApiResponse<FaceQualityReviewPage>>('/people/face-quality/reviews', { params })
+  },
+
+  applyFaceQualityDecision(eventIds: number[], action: FaceQualityAction, reason?: string) {
+    return http.patch<ApiResponse<FaceQualityDecisionResult>>('/people/faces/quality-decision', {
+      event_ids: eventIds,
+      action,
+      reason,
+    })
+  },
+
+  restoreAutoFaceQuality(ruleVersion: string, limit?: number) {
+    return http.post<ApiResponse<FaceQualityRestoreResult>>('/people/face-quality/restore-auto', {
+      rule_version: ruleVersion,
+      limit,
     })
   },
 

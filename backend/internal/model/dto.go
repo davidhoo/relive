@@ -587,6 +587,9 @@ type PhotoPersonResponse struct {
 	TopPersonCategory string           `json:"top_person_category"`
 	People            []PersonResponse `json:"people"`
 	ExcludedFaces     []FaceResponse   `json:"excluded_faces,omitempty"`
+	// PendingReviewFaces 待质检样本（cluster_status=review_required）。
+	// 不参与聚类，照片详情页须明确提示“待质检”，与普通待识别区分。
+	PendingReviewFaces []FaceResponse `json:"pending_review_faces,omitempty"`
 }
 
 // UpdateFaceExclusionRequest 标记/恢复人脸排除状态
@@ -600,6 +603,91 @@ type UpdateFaceExclusionRequest struct {
 type FaceExclusionResult struct {
 	Updated int                   `json:"updated"`
 	Photos  []PhotoPersonResponse `json:"photos"`
+}
+
+// ---- 人脸质检审核 DTO ----
+
+// FaceQualityStatsResponse 质检全局统计。
+type FaceQualityStatsResponse struct {
+	PendingReview   int64            `json:"pending_review"`
+	AutoExcluded    int64            `json:"auto_excluded"`
+	ManualConfirmed int64            `json:"manual_confirmed"`
+	Total           int64            `json:"total"`
+	ByReason        map[string]int64 `json:"by_reason"`
+	ByRuleVersion   map[string]int64 `json:"by_rule_version"`
+}
+
+// FaceQualityReviewQuery 审核页查询参数。
+type FaceQualityReviewQuery struct {
+	State       string `form:"state"`        // pending_review/auto_excluded/manual_confirmed
+	Reason      string `form:"reason"`       // non_face/low_quality
+	Source      string `form:"source"`       // auto/manual
+	RuleVersion string `form:"rule_version"`
+	StartTime   string `form:"start_time"`   // RFC3339
+	EndTime     string `form:"end_time"`     // RFC3339
+	Page        int    `form:"page"`
+	PageSize    int    `form:"page_size"`
+}
+
+// FaceQualityReviewItem 单张人脸的审核卡片上下文。
+type FaceQualityReviewItem struct {
+	EventID           uint       `json:"event_id"`
+	PhotoID           uint       `json:"photo_id"`
+	FaceID            *uint      `json:"face_id,omitempty"`
+	Decision          string     `json:"decision"`
+	Reason            string     `json:"reason,omitempty"`
+	Source            string     `json:"source"`
+	RuleVersion       string     `json:"rule_version"`
+	ModelVersion      string     `json:"model_version"`
+	ReasonCodes       []string   `json:"reason_codes,omitempty"`
+	ReviewAction      string     `json:"review_action,omitempty"`
+	ReviewedAt        *time.Time `json:"reviewed_at,omitempty"`
+	RestoredAt        *time.Time `json:"restored_at,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	BBoxX             float64    `json:"bbox_x"`
+	BBoxY             float64    `json:"bbox_y"`
+	BBoxWidth         float64    `json:"bbox_width"`
+	BBoxHeight        float64    `json:"bbox_height"`
+	ThumbnailPath     string     `json:"thumbnail_path,omitempty"`
+	PhotoFilePath     string     `json:"photo_file_path,omitempty"`
+	PhotoThumbnail    string     `json:"photo_thumbnail,omitempty"`
+	FaceValidityScore float64    `json:"face_validity_score"`
+	QualityScore      float64    `json:"quality_score"`
+	EvidenceJSON      string     `json:"evidence_json,omitempty"`
+}
+
+// FaceQualityReviewPage 审核页分页响应。
+type FaceQualityReviewPage struct {
+	Items      []FaceQualityReviewItem `json:"items"`
+	Total      int64                   `json:"total"`
+	Page       int                     `json:"page"`
+	PageSize   int                     `json:"page_size"`
+	TotalPages int                     `json:"total_pages"`
+}
+
+// FaceQualityDecisionRequest 人工质检决策（批量）。
+type FaceQualityDecisionRequest struct {
+	EventIDs []uint `json:"event_ids" binding:"required,min=1"`
+	Action   string `json:"action" binding:"required"`
+	Reason   string `json:"reason,omitempty"` // confirm_exclude 时可指定，否则由 action 决定
+}
+
+// FaceQualityDecisionResult 质检决策结果。
+type FaceQualityDecisionResult struct {
+	Processed int `json:"processed"`
+}
+
+// FaceQualityRestoreRequest 按规则版本恢复自动排除。
+type FaceQualityRestoreRequest struct {
+	RuleVersion string `json:"rule_version" binding:"required"`
+	Limit       int    `json:"limit,omitempty"`
+}
+
+// FaceQualityRestoreResult 恢复结果。
+type FaceQualityRestoreResult struct {
+	Restored    int    `json:"restored"`
+	RuleVersion string `json:"rule_version"`
 }
 
 type UpdatePersonCategoryRequest struct {

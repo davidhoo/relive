@@ -240,6 +240,39 @@
                    >
                      恢复
                    </el-button>
+                   <el-button
+                     link
+                     size="small"
+                     @click="goToFaceQualityReview"
+                   >
+                     在质检页查看
+                   </el-button>
+                 </div>
+               </el-collapse-item>
+             </el-collapse>
+
+             <!-- 待质检样本 -->
+             <el-collapse v-if="pendingReviewFaces.length > 0" class="pending-review-faces-collapse">
+               <el-collapse-item :title="`待质检样本（${pendingReviewFaces.length}）`" name="pending_review">
+                 <div v-for="face in pendingReviewFaces" :key="face.id" class="excluded-face-item">
+                   <img
+                     :src="getFaceThumbnailUrl(face.id, String(imageVersion))"
+                     :alt="`pending-review-face-${face.id}`"
+                     class="excluded-face-thumb"
+                   />
+                   <div class="excluded-face-info">
+                     <el-tag size="small" type="info">待质检</el-tag>
+                     <span class="excluded-face-meta">
+                       置信度 {{ ((face.confidence ?? 0) * 100).toFixed(0) }}% · 质量 {{ ((face.quality_score ?? 0) * 100).toFixed(0) }}%
+                     </span>
+                   </div>
+                   <el-button
+                     link
+                     size="small"
+                     @click="goToFaceQualityReview"
+                   >
+                     在质检页查看
+                   </el-button>
                  </div>
                </el-collapse-item>
              </el-collapse>
@@ -511,6 +544,7 @@ const photoPeopleStatus = computed(() => photoPeople.value?.face_process_status 
 const photoFaceEntries = computed(() => flattenPhotoPeopleFaces(photoPeople.value))
 const photoPeopleCountTag = computed(() => getPhotoPeopleCountTag(photoPeople.value))
 const excludedFaces = computed(() => photoPeople.value?.excluded_faces || [])
+const pendingReviewFaces = computed(() => photoPeople.value?.pending_review_faces || [])
 const excluding = ref(false)
 // 统一管理所有轮询定时器，离开页面时清理
 const activeTimers: ReturnType<typeof setInterval | typeof setTimeout>[] = []
@@ -839,6 +873,11 @@ const handleRestoreFace = async (faceId: number) => {
   } finally {
     excluding.value = false
   }
+}
+
+// 跳转到人脸质检审核页（保留当前照片上下文，便于在质检页处理该照片样本）。
+const goToFaceQualityReview = () => {
+  router.push({ name: 'FaceQualityReview', query: { photo_id: String(photo.value?.id ?? '') } })
 }
 
 const loadPhotoPeople = async (photoId?: number) => {

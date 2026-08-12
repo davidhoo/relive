@@ -94,6 +94,7 @@ export interface PhotoPeopleResponse {
   top_person_category?: PersonCategory | ''
   people: Person[]
   excluded_faces?: Face[]
+  pending_review_faces?: Face[]
 }
 
 export type ExclusionReason = 'non_face' | 'low_quality'
@@ -101,6 +102,85 @@ export type ExclusionReason = 'non_face' | 'low_quality'
 export interface UpdateFaceExclusionResult {
   updated: number
   photos: PhotoPeopleResponse[]
+}
+
+// ---- 人脸质检审核 ----
+
+export type FaceQualityState = 'pending_review' | 'auto_excluded' | 'manual_confirmed'
+export type FaceQualityAction =
+  | 'confirm_exclude'
+  | 'mark_non_face'
+  | 'mark_low_quality'
+  | 'accept'
+  | 'restore'
+
+export interface FaceQualityStats {
+  pending_review: number
+  auto_excluded: number
+  manual_confirmed: number
+  total: number
+  by_reason: Record<string, number>
+  by_rule_version: Record<string, number>
+}
+
+export interface FaceQualityReasonStats {
+  reason: string
+  count: number
+}
+
+export interface FaceQualityReviewItem {
+  event_id: number
+  photo_id: number
+  face_id?: number
+  decision: string
+  reason?: string
+  source: string
+  rule_version: string
+  model_version: string
+  reason_codes?: string[]
+  review_action?: string
+  reviewed_at?: string
+  restored_at?: string
+  created_at: string
+  updated_at: string
+  bbox_x: number
+  bbox_y: number
+  bbox_width: number
+  bbox_height: number
+  thumbnail_path?: string
+  photo_file_path?: string
+  photo_thumbnail?: string
+  face_validity_score: number
+  quality_score: number
+  evidence_json?: string
+}
+
+export interface FaceQualityReviewPage {
+  items: FaceQualityReviewItem[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+}
+
+export interface FaceQualityReviewParams {
+  state?: FaceQualityState
+  reason?: string
+  source?: string
+  rule_version?: string
+  start_time?: string
+  end_time?: string
+  page?: number
+  page_size?: number
+}
+
+export interface FaceQualityDecisionResult {
+  processed: number
+}
+
+export interface FaceQualityRestoreResult {
+  restored: number
+  rule_version: string
 }
 
 export interface PersonMergeSuggestionTask {

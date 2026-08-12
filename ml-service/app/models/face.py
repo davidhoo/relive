@@ -6,7 +6,33 @@ import cv2
 import numpy as np
 
 from app.config import get_settings
-from app.schemas import BoundingBox, DetectFacesResponse, DetectedFace
+from app.schemas import (
+    BoundingBox,
+    DetectFacesResponse,
+    DetectedFace,
+    FACE_QUALITY_MODEL_VERSION,
+    FACE_QUALITY_RULE_VERSION,
+    FaceQualityEvidence,
+    QUALITY_REASON_BAD_GEOMETRY,
+    QUALITY_REASON_BLURRED,
+    QUALITY_REASON_EXTREME_POSE,
+    QUALITY_REASON_INVALID_LANDMARKS,
+    QUALITY_REASON_OCCLUDED,
+    QUALITY_REASON_OVEREXPOSED,
+    QUALITY_REASON_POSE_UNCERTAIN,
+    QUALITY_REASON_TOO_SMALL,
+    QUALITY_REASON_UNDEREXPOSED,
+)
+# 质检硬阈值（与 rule_version v1 绑定）。改动这些阈值须递增 FACE_QUALITY_RULE_VERSION。
+_MIN_FACE_PIXELS = 32  # 低于此像素尺寸直接判 too_small
+_SHARPNESS_BLUR_THRESHOLD = 80.0  # Laplacian 方差低于此判 blurred
+_BRIGHTNESS_OVEREXPOSED = 235.0
+_BRIGHTNESS_UNDEREXPOSED = 20.0
+_LANDMARK_COMPLETENESS_LOW = 0.6  # 关键点完整度低于此判 invalid_landmarks
+_LANDMARK_GEOMETRY_LOW = 0.5  # 几何合理性低于此判 bad_geometry
+_EXTREME_POSE_YAW = 75.0  # 偏航角绝对值超过此判 extreme_pose
+_FACE_VALIDITY_NON_FACE = 0.35  # 二次人脸验证低于此为高确定性非人脸
+_FACE_VALIDITY_UNCERTAIN = 0.6  # 介于非人脸阈值与此值之间为灰区
 
 
 class FaceDetector:
@@ -33,7 +59,12 @@ class FaceDetector:
             faces = self._detect_faces(frame, min_confidence, max_faces)
 
         elapsed_ms = int((time.perf_counter() - started_at) * 1000)
-        return DetectFacesResponse(faces=faces, processing_time_ms=max(elapsed_ms, 0))
+        return DetectFacesResponse(
+            faces=faces,
+            processing_time_ms=max(elapsed_ms, 0),
+            rule_version=FACE_QUALITY_RULE_VERSION,
+            model_version=FACE_QUALITY_MODEL_VERSION,
+        )
 
     def _load_image(self, *, image_path: str | None, image_base64: str | None) -> np.ndarray | None:
         if image_base64:
@@ -94,6 +125,7 @@ class FaceDetector:
             )
 
             embedding = self._extract_embedding(face_obj)
+            evidence = self._build_evidence(frame, face_obj, x1, y1, width, height, frame_width, frame_height, score)
             quality = self._estimate_quality(frame, x1, y1, width, height, frame_width, frame_height, score)
 
             faces.append(
@@ -102,6 +134,7 @@ class FaceDetector:
                     confidence=round(score, 6),
                     quality_score=quality,
                     embedding=embedding,
+                    evidence=evidence,
                 )
             )
             if len(faces) >= max_faces:
@@ -119,6 +152,167 @@ class FaceDetector:
         elif len(result) > self.embedding_size:
             result = result[: self.embedding_size]
         return [round(float(v), 6) for v in result]
+
+    def _build_evidence(
+        self,
+        frame: np.ndarray,
+        face_obj,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        frame_width: int,
+        frame_height: int,
+        score: float,
+    ) -> FaceQualityEvidence:
+        """构建单张人脸的结构化质检证据。
+
+        分层执行：
+        1. 图像质量计算（清晰度/亮度/对比度）；
+        2. 关键点完整性与几何合理性；
+        3. 姿态与遮挡估计；
+        4. 二次人脸验证（face_validity_score）独立于第一阶段检测置信度。
+
+        技术问题（图像读取/裁剪异常）不应伪装成 non_face——本函数始终返回证据，
+        face_validity_score 在无法验证时取检测置信度并标注 pose_estimable=False，
+        由后端策略引擎决定是否标记可重试失败。
+        """
+        reasons: list[str] = []
+
+        # --- 图像质量 ---
+        crop_bgr = frame[y : y + height, x : x + width]
+        if crop_bgr.size == 0:
+            # 裁剪异常：返回最小证据，face_validity 用检测分兜底，不杜撰原因码。
+            return FaceQualityEvidence(
+                face_validity_score=round(min(score, 1.0), 6),
+                pixel_width=width,
+                pixel_height=height,
+                sharpness=0.0,
+                brightness=0.0,
+                contrast=0.0,
+                landmark_completeness=0.0,
+                landmark_geometry_score=0.0,
+                pose_estimable=False,
+                quality_reasons=reasons,
+            )
+
+        crop_gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+        sharpness = float(cv2.Laplacian(crop_gray, cv2.CV_64F).var())
+        brightness = float(crop_gray.mean())
+        contrast = float(crop_gray.std())
+
+        if width < _MIN_FACE_PIXELS or height < _MIN_FACE_PIXELS:
+            reasons.append(QUALITY_REASON_TOO_SMALL)
+        if sharpness < _SHARPNESS_BLUR_THRESHOLD:
+            reasons.append(QUALITY_REASON_BLURRED)
+        if brightness >= _BRIGHTNESS_OVEREXPOSED:
+            reasons.append(QUALITY_REASON_OVEREXPOSED)
+        if brightness <= _BRIGHTNESS_UNDEREXPOSED:
+            reasons.append(QUALITY_REASON_UNDEREXPOSED)
+
+        # --- 关键点完整性与几何 ---
+        landmark_completeness = 1.0
+        landmark_geometry_score = 1.0
+        kps = getattr(face_obj, "kps", None)
+        # kps 可能是 None、空数组、或非 ndarray；统一转 ndarray 后判空。
+        kps_arr = np.asarray(kps) if kps is not None else np.empty((0,))
+        if kps_arr.size == 0 or kps_arr.ndim < 2 or kps_arr.shape[0] < 5:
+            landmark_completeness = 0.0
+            landmark_geometry_score = 0.0
+            reasons.append(QUALITY_REASON_INVALID_LANDMARKS)
+        else:
+            # 5 个关键点：左眼、右眼、鼻、左嘴角、右嘴角。
+            kps_arr = kps_arr.astype(np.float64)
+            # 完整性：坐标有限的比例。
+            finite = np.isfinite(kps_arr[:, 0]) & np.isfinite(kps_arr[:, 1])
+            landmark_completeness = round(float(finite.sum()) / 5.0, 6)
+            if landmark_completeness < _LANDMARK_COMPLETENESS_LOW:
+                reasons.append(QUALITY_REASON_INVALID_LANDMARKS)
+
+            # 几何合理性：左右眼间距应大于 0，且双眼大致水平（俯仰角合理）。
+            if finite[:2].all():
+                left_eye = kps_arr[0]
+                right_eye = kps_arr[1]
+                eye_dx = right_eye[0] - left_eye[0]
+                eye_dy = right_eye[1] - left_eye[1]
+                eye_dist = float(np.hypot(eye_dx, eye_dy))
+                if eye_dist <= 0:
+                    landmark_geometry_score = 0.0
+                    reasons.append(QUALITY_REASON_BAD_GEOMETRY)
+                else:
+                    # 双眼连线与水平线夹角（度）。过大说明姿态极端或检测错位。
+                    roll = float(np.degrees(np.arctan2(eye_dy, eye_dx)))
+                    if abs(roll) > 45:
+                        landmark_geometry_score = min(landmark_geometry_score, 0.3)
+                        reasons.append(QUALITY_REASON_BAD_GEOMETRY)
+                    # 几何分随眼距/框宽比衰减：眼距应占框宽相当比例。
+                    ratio = eye_dist / float(width) if width > 0 else 0.0
+                    landmark_geometry_score = round(min(1.0, max(0.0, ratio / 0.4)), 6)
+                    if landmark_geometry_score < _LANDMARK_GEOMETRY_LOW:
+                        reasons.append(QUALITY_REASON_BAD_GEOMETRY)
+            else:
+                landmark_geometry_score = 0.0
+                reasons.append(QUALITY_REASON_BAD_GEOMETRY)
+
+        # --- 姿态与遮挡 ---
+        pose = getattr(face_obj, "pose", None)
+        yaw: float | None = None
+        pitch: float | None = None
+        roll: float | None = None
+        pose_estimable = True
+        occluded = False
+        if isinstance(pose, np.ndarray) and pose.size >= 3:
+            yaw = round(float(pose[0]), 6)
+            pitch = round(float(pose[1]), 6)
+            roll = round(float(pose[2]), 6)
+            if abs(yaw) > _EXTREME_POSE_YAW:
+                reasons.append(QUALITY_REASON_EXTREME_POSE)
+        else:
+            # insightface buffalo_sc 默认不输出 pose，标注不可估计，避免误判。
+            pose_estimable = False
+
+        # 遮挡启发：关键点完整但几何分极低时视为疑似遮挡。
+        if landmark_geometry_score < 0.2 and landmark_completeness >= _LANDMARK_COMPLETENESS_LOW:
+            occluded = True
+            reasons.append(QUALITY_REASON_OCCLUDED)
+
+        # --- 二次人脸验证 ---
+        # det_score 是第一阶段检测置信度；embedding 非零长度说明 ArcFace 成功编码，
+        # 是“真实人脸”的二次佐证。结合关键点几何分给出 face_validity_score。
+        embedding_valid = bool(
+            getattr(face_obj, "normed_embedding", None) is not None
+            and np.asarray(face_obj.normed_embedding).size > 0
+        )
+        if not embedding_valid:
+            reasons.append(QUALITY_REASON_POSE_UNCERTAIN)
+
+        geometry_component = (landmark_completeness + landmark_geometry_score) / 2.0
+        # embedding 非空给 +0.2 佐证，几何分占 0.5，检测分占 0.3。
+        validity = 0.3 * min(max(score, 0.0), 1.0) + 0.5 * geometry_component
+        if embedding_valid:
+            validity += 0.2
+        face_validity_score = round(min(max(validity, 0.0), 1.0), 6)
+        # 高确定性非人脸与灰区的最终判定由后端策略引擎完成；此处只产出分值与原因码，
+        # 不在证据层杜撰 non_face 标签（避免技术问题被误判为非人脸）。
+
+        return FaceQualityEvidence(
+            face_validity_score=face_validity_score,
+            pixel_width=int(width),
+            pixel_height=int(height),
+            sharpness=round(sharpness, 6),
+            brightness=round(brightness, 6),
+            contrast=round(contrast, 6),
+            landmark_completeness=round(landmark_completeness, 6),
+            landmark_geometry_score=round(landmark_geometry_score, 6),
+            yaw=yaw,
+            pitch=pitch,
+            roll=roll,
+            pose_estimable=pose_estimable,
+            occluded=occluded,
+            quality_reasons=list(dict.fromkeys(reasons)),  # 去重保序
+            rule_version=FACE_QUALITY_RULE_VERSION,
+            model_version=FACE_QUALITY_MODEL_VERSION,
+        )
 
     def _estimate_quality(
         self,

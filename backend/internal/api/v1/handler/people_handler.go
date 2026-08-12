@@ -32,6 +32,11 @@ type PeopleHandler struct {
 	runtimeService         service.AnalysisRuntimeService
 	identityProfileService service.PersonIdentityProfileService
 	identityDecisionRepo   repository.PeopleIdentityDecisionRepository
+	// faceQualityService 人脸质检审核服务（stats/reviews/quality-decision/restore-auto）。
+	// nil 时相关接口返回 503（功能未启用）。
+	faceQualityService service.FaceQualityService
+	// faceQualityBackfill 存量质检审计后台任务（暂停/继续/进度接口）。nil 时返回 503。
+	faceQualityBackfill *service.FaceQualityBackfill
 	// backgroundCoordinator 让人物详情读请求（GetPerson/GetPersonPhotos/GetPersonFaces）
 	// 注册 foreground scope：执行期间 P2 自动后台任务暂停启动新批次，已运行任务在批次
 	// 边界让步，避免与详情页读请求争抢 NAS 磁盘。nil 时跳过注册（如测试）。
@@ -59,6 +64,16 @@ func NewPeopleHandler(service service.PeopleService, mergeSuggestionService serv
 // SetBackgroundCoordinator 注入后台任务准入控制器，供人物详情读请求注册 foreground scope。
 func (h *PeopleHandler) SetBackgroundCoordinator(c *service.BackgroundTaskCoordinator) {
 	h.backgroundCoordinator = c
+}
+
+// SetFaceQualityService 注入人脸质检审核服务。
+func (h *PeopleHandler) SetFaceQualityService(s service.FaceQualityService) {
+	h.faceQualityService = s
+}
+
+// SetFaceQualityBackfill 注入存量质检审计后台任务，供暂停/继续/进度接口使用。
+func (h *PeopleHandler) SetFaceQualityBackfill(b *service.FaceQualityBackfill) {
+	h.faceQualityBackfill = b
 }
 
 // SetPersonPhotoRepo 注入人物照片派生表仓库，供 cursor 分页在迁移完成后切换到索引查询。
@@ -1039,6 +1054,129 @@ func (h *PeopleHandler) UpdateFaceExclusion(c *gin.Context) {
 	})
 }
 
+// ---- 人脸质检审核接口 ----
+
+// GetFaceQualityStats 全局质检统计。
+func (h *PeopleHandler) GetFaceQualityStats(c *gin.Context) {
+	if h.faceQualityService == nil {
+		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检功能未启用")
+		return
+	}
+	stats, err := h.faceQualityService.GetStats()
+	if err != nil {
+		writePeopleError(c, http.StatusInternalServerError, "FACE_QUALITY_STATS_FAILED", err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Data: stats})
+}
+
+// ListFaceQualityReviews 审核页列表（支持 state/reason/source/rule_version/时间范围/分页）。
+func (h *PeopleHandler) ListFaceQualityReviews(c *gin.Context) {
+	if h.faceQualityService == nil {
+		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检功能未启用")
+		return
+	}
+	page, pageSize, ok := parsePagination(c)
+	if !ok {
+		return
+	}
+	q := model.FaceQualityReviewQuery{
+		State:       strings.TrimSpace(c.Query("state")),
+		Reason:      strings.TrimSpace(c.Query("reason")),
+		Source:      strings.TrimSpace(c.Query("source")),
+		RuleVersion: strings.TrimSpace(c.Query("rule_version")),
+		StartTime:   strings.TrimSpace(c.Query("start_time")),
+		EndTime:     strings.TrimSpace(c.Query("end_time")),
+		Page:        page,
+		PageSize:    pageSize,
+	}
+	page2, err := h.faceQualityService.ListReviews(q)
+	if err != nil {
+		writePeopleError(c, http.StatusInternalServerError, "FACE_QUALITY_LIST_FAILED", err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Data: page2})
+}
+
+// ApplyFaceQualityDecision 人工质检决策（批量确认排除/改判/接受/恢复）。
+func (h *PeopleHandler) ApplyFaceQualityDecision(c *gin.Context) {
+	if h.faceQualityService == nil {
+		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检功能未启用")
+		return
+	}
+	var req model.FaceQualityDecisionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+	if !model.IsValidQualityReviewAction(req.Action) {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_ACTION", "无效的审核动作")
+		return
+	}
+	result, err := h.faceQualityService.ApplyQualityDecision(req)
+	if err != nil {
+		writeServiceFailure(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "质检决策已应用", Data: result})
+}
+
+// RestoreAutoFaceQuality 按规则版本恢复自动排除的样本（回滚/阈值修正用）。
+func (h *PeopleHandler) RestoreAutoFaceQuality(c *gin.Context) {
+	if h.faceQualityService == nil {
+		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检功能未启用")
+		return
+	}
+	var req model.FaceQualityRestoreRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 500
+	}
+	result, err := h.faceQualityService.RestoreAuto(req.RuleVersion, limit)
+	if err != nil {
+		writeServiceFailure(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "已按规则版本恢复自动排除样本", Data: result})
+}
+
+// GetFaceQualityBackfillStatus 存量质检审计后台任务状态（进度/暂停态）。
+func (h *PeopleHandler) GetFaceQualityBackfillStatus(c *gin.Context) {
+	if h.faceQualityBackfill == nil {
+		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检审计任务未启用")
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Data: gin.H{
+		"paused":         h.faceQualityBackfill.IsPaused(),
+		"last_face_id":   h.faceQualityBackfill.Progress(),
+		"progress_key":   "migration.face_quality_backfill_v1",
+	}})
+}
+
+// PauseFaceQualityBackfill 暂停存量质检审计。
+func (h *PeopleHandler) PauseFaceQualityBackfill(c *gin.Context) {
+	if h.faceQualityBackfill == nil {
+		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检审计任务未启用")
+		return
+	}
+	h.faceQualityBackfill.Pause()
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "存量质检审计已暂停"})
+}
+
+// ResumeFaceQualityBackfill 恢复存量质检审计。
+func (h *PeopleHandler) ResumeFaceQualityBackfill(c *gin.Context) {
+	if h.faceQualityBackfill == nil {
+		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检审计任务未启用")
+		return
+	}
+	h.faceQualityBackfill.Resume()
+	c.JSON(http.StatusOK, model.Response{Success: true, Message: "存量质检审计已恢复"})
+}
+
 // buildPhotoPeopleResponse 复用 GetPhotoPeople 与 AssignFacePerson 的数据组装逻辑。
 func (h *PeopleHandler) buildPhotoPeopleResponse(photoID uint) (model.PhotoPersonResponse, error) {
 	photo, err := h.photoRepo.GetByID(photoID)
@@ -1059,9 +1197,16 @@ func (h *PeopleHandler) buildPhotoPeopleResponse(photoID uint) (model.PhotoPerso
 
 	facesByPerson := make(map[uint][]model.FaceResponse, len(personIDs))
 	var excludedFaces []model.FaceResponse
+	var pendingReviewFaces []model.FaceResponse
 	for _, face := range faces {
-		if face.ClusterStatus == model.FaceClusterStatusExcluded {
+		switch face.ClusterStatus {
+		case model.FaceClusterStatusExcluded:
 			excludedFaces = append(excludedFaces, faceToResponse(face))
+			continue
+		case model.FaceClusterStatusReviewRequired:
+			// 待质检样本单独输出，照片详情页据此提示“待质检”，
+			// 不与普通待识别（pending 无 person_id）混淆。
+			pendingReviewFaces = append(pendingReviewFaces, faceToResponse(face))
 			continue
 		}
 		if face.PersonID == nil || *face.PersonID == 0 {
@@ -1083,12 +1228,13 @@ func (h *PeopleHandler) buildPhotoPeopleResponse(photoID uint) (model.PhotoPerso
 	}
 
 	return model.PhotoPersonResponse{
-		PhotoID:           photo.ID,
-		FaceProcessStatus: photo.FaceProcessStatus,
-		FaceCount:         photo.FaceCount,
-		TopPersonCategory: photo.TopPersonCategory,
-		People:            respPeople,
-		ExcludedFaces:     excludedFaces,
+		PhotoID:            photo.ID,
+		FaceProcessStatus:  photo.FaceProcessStatus,
+		FaceCount:          photo.FaceCount,
+		TopPersonCategory:  photo.TopPersonCategory,
+		People:             respPeople,
+		ExcludedFaces:      excludedFaces,
+		PendingReviewFaces: pendingReviewFaces,
 	}, nil
 }
 
