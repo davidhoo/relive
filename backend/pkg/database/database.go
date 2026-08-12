@@ -306,6 +306,10 @@ func AutoMigrate(db *gorm.DB) error {
 		log.Printf("[database] warning: face quality evidence origin migration failed: %v", err)
 	}
 
+	if err := migrateFaceQualityRescoreRunMeta(db); err != nil {
+		log.Printf("[database] warning: face quality rescore run meta migration failed: %v", err)
+	}
+
 	if err := migratePersonPhotosTable(db); err != nil {
 		log.Printf("[database] warning: person_photos migration failed: %v", err)
 	}
@@ -466,6 +470,61 @@ func migrateFaceQualityEvidenceOrigin(db *gorm.DB) error {
 	}
 
 	// 写迁移标记（OnConflict 兜底，防止软删除残留导致唯一索引冲突）。
+	marker := model.AppConfig{Key: migrationKey, Value: "done"}
+	if err := db.Where("key = ?", migrationKey).FirstOrCreate(&marker).Error; err != nil {
+		return fmt.Errorf("write migration marker: %w", err)
+	}
+	return nil
+}
+
+// migrateFaceQualityRescoreRunMeta 修复既有运行元数据，使其反映真实的完成状态与最近错误。
+// 只更新 face_quality_rescore_runs 元数据，不触碰 Face、排除或审计证据。
+//
+// 修复内容（计划 §3.1，幂等）：
+//  1. status=completed 且 retryable_count>0 的运行 → completed_with_errors。
+//  2. last_error 为空时，从该运行任一失败 item 回填最近错误。
+//
+// 该修复必须使线上 #1（全失败、retryable_count=4733）在发布后显示为“完成但有错误”。
+func migrateFaceQualityRescoreRunMeta(db *gorm.DB) error {
+	const migrationKey = "migration.face_quality_rescore_run_meta_v1"
+
+	var existing model.AppConfig
+	if err := db.Where("key = ?", migrationKey).First(&existing).Error; err == nil {
+		return nil
+	}
+
+	if !db.Migrator().HasTable(&model.FaceQualityRescoreRun{}) {
+		return nil
+	}
+
+	log.Printf("[database] fixing face_quality_rescore_runs terminal status and last_error...")
+
+	// 1) status=completed 且 retryable_count>0 → completed_with_errors。
+	res := db.Exec(`UPDATE face_quality_rescore_runs
+		SET status = ?
+		WHERE status = ? AND retryable_count > 0`,
+		model.FaceQualityRescoreStatusCompletedWithError,
+		model.FaceQualityRescoreStatusCompleted)
+	if res.Error != nil {
+		return fmt.Errorf("fix completed_with_errors status: %w", res.Error)
+	}
+
+	// 2) last_error 为空的运行，从其最近一条失败 item 回填错误（子查询取 max(id) 的 last_error）。
+	res2 := db.Exec(`UPDATE face_quality_rescore_runs
+		SET last_error = (
+			SELECT last_error FROM face_quality_rescore_items
+			WHERE run_id = face_quality_rescore_runs.id AND last_error != ''
+			ORDER BY id DESC LIMIT 1
+		)
+		WHERE (last_error IS NULL OR last_error = '')
+		  AND EXISTS (
+			SELECT 1 FROM face_quality_rescore_items
+			WHERE run_id = face_quality_rescore_runs.id AND last_error != ''
+		  )`)
+	if res2.Error != nil {
+		return fmt.Errorf("backfill run last_error from items: %w", res2.Error)
+	}
+
 	marker := model.AppConfig{Key: migrationKey, Value: "done"}
 	if err := db.Where("key = ?", migrationKey).FirstOrCreate(&marker).Error; err != nil {
 		return fmt.Errorf("write migration marker: %w", err)

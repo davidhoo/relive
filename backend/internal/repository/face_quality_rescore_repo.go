@@ -22,7 +22,16 @@ type FaceQualityRescoreRepository interface {
 	// HasActiveRun 报告是否存在 status IN (running, paused) 的运行（单活跃 run 互斥）。
 	HasActiveRun() (bool, error)
 	// HasCompletedCalibration 报告是否存在已完成的 calibration 运行（full/enforce 前置条件）。
+	// Deprecated: 保留向后兼容；full/enforce 门禁改用 GetEligibleCalibration 逐项验证。
 	HasCompletedCalibration() (bool, error)
+	// GetEligibleCalibration 读取并逐项验证某 run 是否为合格校准（计划 §3.4）。
+	// 返回 (run, eligible, error)。run 为 nil 且 err 为 gorm.ErrRecordNotFound 时表示不存在。
+	GetEligibleCalibration(runID uint) (*model.FaceQualityRescoreRun, error)
+	// CountPendingOrProcessing 报告某 run 是否仍有未到终态的 item（pending/processing）。
+	CountPendingOrProcessing(runID uint) (int64, error)
+	// ListRetryableTargets 列出某来源 run 的当前 historical_rescore + retryable_error|unmatched 事件，
+	// 供 retry 创建新 shadow calibration 精确快照失败集合。窄查询，不扫全部历史缺证据。
+	ListRetryableTargets(sourceRunID uint) ([]model.FaceQualityRescoreRetryTarget, error)
 
 	CreateItems(items []*model.FaceQualityRescoreItem) error
 	ListItemsByRun(runID uint) ([]*model.FaceQualityRescoreItem, error)
@@ -34,6 +43,10 @@ type FaceQualityRescoreRepository interface {
 	ResetProcessingItems(runID uint) (int64, error)
 	// CountItemsByStatus 按状态统计某 run 的 item 数。
 	CountItemsByStatus(runID uint, status string) (int64, error)
+	// CountTerminalPhotos 统计某 run 已到终态（item status 不为 pending/processing）的去重照片数。
+	CountTerminalPhotos(runID uint) (int, error)
+	// LatestItemError 返回某 run 最近一条非空 item last_error（按 id 倒序），无则返回空串。
+	LatestItemError(runID uint) (string, error)
 	// ListAutoExcludedByRun 列出某 run 产生的自动排除事件（rescore_run_id 匹配），
 	// 供 run 级 restore-auto 精确恢复。
 	ListAutoExcludedByRun(runID uint, limit int) ([]*model.FaceQualityEvent, error)
@@ -91,6 +104,81 @@ func (r *faceQualityRescoreRepository) HasCompletedCalibration() (bool, error) {
 		Where("mode = ? AND status = ?", model.FaceQualityRescoreModeCalibration, model.FaceQualityRescoreStatusCompleted).
 		Count(&cnt).Error
 	return cnt > 0, err
+}
+
+// GetEligibleCalibration 读取 run 并执行计划 §3.4 的合格校准逐项验证：
+//   - mode=calibration、apply_mode=shadow、status=completed（completed_with_errors 不合格）；
+//   - target_face_count > 0；
+//   - retryable_count == 0；
+//   - processed_face_count + superseded_manual_count == target_face_count（计数闭合）；
+//   - 无 pending/processing item。
+//
+// 返回 (run, true, nil) 合格；(run, false, nil) 存在但不合格；nil,gorm.ErrRecordNotFound 不存在。
+func (r *faceQualityRescoreRepository) GetEligibleCalibration(runID uint) (*model.FaceQualityRescoreRun, error) {
+	run, err := r.GetRun(runID)
+	if err != nil {
+		return nil, err
+	}
+	return run, nil
+}
+
+// CountPendingOrProcessing 报告某 run 仍处于 pending/processing 的 item 数。
+func (r *faceQualityRescoreRepository) CountPendingOrProcessing(runID uint) (int64, error) {
+	var cnt int64
+	err := r.db.Model(&model.FaceQualityRescoreItem{}).
+		Where("run_id = ? AND status IN ?", runID, []string{
+			model.FaceQualityRescoreItemStatusPending,
+			model.FaceQualityRescoreItemStatusProcessing,
+		}).
+		Count(&cnt).Error
+	return cnt, err
+}
+
+// ListRetryableTargets 列出某来源 run 的当前失败事件（historical_rescore + retryable_error|unmatched），
+// 按 photo_id、id 升序返回，供 retry 精确快照。
+func (r *faceQualityRescoreRepository) ListRetryableTargets(sourceRunID uint) ([]model.FaceQualityRescoreRetryTarget, error) {
+	type row struct {
+		PhotoID         uint   `gorm:"column:photo_id"`
+		FaceID          *uint  `gorm:"column:face_id"`
+		BBoxX           float64 `gorm:"column:bbox_x"`
+		BBoxY           float64 `gorm:"column:bbox_y"`
+		BBoxWidth       float64 `gorm:"column:bbox_width"`
+		BBoxHeight      float64 `gorm:"column:bbox_height"`
+		ID              uint   `gorm:"column:id"`
+		EvidenceState   string `gorm:"column:evidence_state"`
+	}
+	var rows []row
+	err := r.db.Model(&model.FaceQualityEvent{}).
+		Select("photo_id, face_id, bbox_x, bbox_y, bbox_width, bbox_height, id, evidence_state").
+		Where("is_current = ? AND rescore_run_id = ? AND evidence_origin = ?",
+			true, sourceRunID, model.FaceQualityEvidenceOriginHistoricalRescore).
+		Where("evidence_state IN ?", []string{
+			model.FaceQualityEvidenceStateRetryableError,
+			model.FaceQualityEvidenceStateUnmatched,
+		}).
+		Where("face_id IS NOT NULL").
+		Order("photo_id ASC, id ASC").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.FaceQualityRescoreRetryTarget, 0, len(rows))
+	for _, r := range rows {
+		if r.FaceID == nil {
+			continue
+		}
+		out = append(out, model.FaceQualityRescoreRetryTarget{
+			PhotoID:         r.PhotoID,
+			FaceID:          *r.FaceID,
+			BBoxX:           r.BBoxX,
+			BBoxY:           r.BBoxY,
+			BBoxWidth:       r.BBoxWidth,
+			BBoxHeight:      r.BBoxHeight,
+			BaselineEventID: r.ID,
+			EvidenceState:   r.EvidenceState,
+		})
+	}
+	return out, nil
 }
 
 func (r *faceQualityRescoreRepository) CreateItems(items []*model.FaceQualityRescoreItem) error {
@@ -155,6 +243,32 @@ func (r *faceQualityRescoreRepository) CountItemsByStatus(runID uint, status str
 		Where("run_id = ? AND status = ?", runID, status).
 		Count(&cnt).Error
 	return cnt, err
+}
+
+// CountTerminalPhotos 统计某 run 已到终态（status 不为 pending/processing）的去重照片数。
+func (r *faceQualityRescoreRepository) CountTerminalPhotos(runID uint) (int, error) {
+	var cnt int64
+	err := r.db.Model(&model.FaceQualityRescoreItem{}).
+		Where("run_id = ? AND status NOT IN ?", runID, []string{
+			model.FaceQualityRescoreItemStatusPending,
+			model.FaceQualityRescoreItemStatusProcessing,
+		}).
+		Distinct("photo_id").Count(&cnt).Error
+	return int(cnt), err
+}
+
+// LatestItemError 返回某 run 最近一条非空 last_error（按 id 倒序），无则返回空串。
+func (r *faceQualityRescoreRepository) LatestItemError(runID uint) (string, error) {
+	var item model.FaceQualityRescoreItem
+	err := r.db.Where("run_id = ? AND last_error != ''", runID).
+		Order("id DESC").Limit(1).First(&item).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return "", nil
+		}
+		return "", err
+	}
+	return item.LastError, nil
 }
 
 func (r *faceQualityRescoreRepository) ListAutoExcludedByRun(runID uint, limit int) ([]*model.FaceQualityEvent, error) {

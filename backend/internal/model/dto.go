@@ -706,33 +706,39 @@ type FaceQualityRestoreResult struct {
 // FaceQualityRescoreRunCreateRequest 创建重评分运行请求。
 // mode=calibration 由服务端归一化为 apply_mode=shadow；mode=full 仅在 apply_mode=enforce
 // 且已存在 completed calibration 时接受。photo_limit>0 限制快照照片数（校准用）。
+// mode=full 时 calibration_run_id 必填，指向服务端验证通过的合格校准 run。
 type FaceQualityRescoreRunCreateRequest struct {
-	Mode       string `json:"mode" binding:"required,oneof=calibration full"`
-	PhotoLimit int    `json:"photo_limit,omitempty"`
+	Mode              string `json:"mode" binding:"required,oneof=calibration full"`
+	PhotoLimit        int    `json:"photo_limit,omitempty"`
+	CalibrationRunID  *uint  `json:"calibration_run_id,omitempty"`
 }
 
 // FaceQualityRescoreRunResponse 单个运行的只读视图。
 type FaceQualityRescoreRunResponse struct {
-	ID                  uint       `json:"id"`
-	Mode                string     `json:"mode"`
-	ApplyMode           string     `json:"apply_mode"`
-	Status              string     `json:"status"`
-	TargetPhotoCount    int        `json:"target_photo_count"`
-	TargetFaceCount     int        `json:"target_face_count"`
-	ProcessedPhotoCount int        `json:"processed_photo_count"`
-	ProcessedFaceCount  int        `json:"processed_face_count"`
-	AcceptedCount       int        `json:"accepted_count"`
-	ReviewRequiredCount int        `json:"review_required_count"`
-	AutoExcludedCount   int        `json:"auto_excluded_count"`
-	RetryableCount      int        `json:"retryable_count"`
-	LastError           string     `json:"last_error,omitempty"`
-	StartedAt           *time.Time `json:"started_at,omitempty"`
-	CompletedAt         *time.Time `json:"completed_at,omitempty"`
-	RuleVersion         string     `json:"rule_version"`
-	ModelVersion        string     `json:"model_version"`
-	PhotoLimit          int        `json:"photo_limit"`
-	CreatedAt           time.Time  `json:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at"`
+	ID                     uint       `json:"id"`
+	Mode                   string     `json:"mode"`
+	ApplyMode              string     `json:"apply_mode"`
+	Status                 string     `json:"status"`
+	TargetPhotoCount       int        `json:"target_photo_count"`
+	TargetFaceCount        int        `json:"target_face_count"`
+	ProcessedPhotoCount    int        `json:"processed_photo_count"`
+	ProcessedFaceCount     int        `json:"processed_face_count"`
+	AcceptedCount          int        `json:"accepted_count"`
+	ReviewRequiredCount    int        `json:"review_required_count"`
+	AutoExcludedCount      int        `json:"auto_excluded_count"`
+	RetryableCount         int        `json:"retryable_count"`
+	SupersededManualCount  int        `json:"superseded_manual_count"`
+	LastError              string     `json:"last_error,omitempty"`
+	StartedAt              *time.Time `json:"started_at,omitempty"`
+	CompletedAt            *time.Time `json:"completed_at,omitempty"`
+	RuleVersion            string     `json:"rule_version"`
+	ModelVersion           string     `json:"model_version"`
+	PhotoLimit             int        `json:"photo_limit"`
+	RetryOfRunID           *uint      `json:"retry_of_run_id,omitempty"`
+	CalibrationRunID       *uint      `json:"calibration_run_id,omitempty"`
+	EligibleForEnforce     bool       `json:"eligible_for_enforce"`
+	CreatedAt              time.Time  `json:"created_at"`
+	UpdatedAt              time.Time  `json:"updated_at"`
 }
 
 // FaceQualityRescoreRestoreRequest run 级恢复自动排除请求。

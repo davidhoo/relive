@@ -388,7 +388,7 @@ func (h *PeopleHandler) GetPersonFaces(c *gin.Context) {
 				Items:      resp,
 				HasMore:    hasMore,
 				NextCursor: nextCursorStr,
-		},
+			},
 		})
 		return
 	}
@@ -1158,9 +1158,9 @@ func (h *PeopleHandler) GetFaceQualityBackfillStatus(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, model.Response{Success: true, Data: gin.H{
-		"paused":         h.faceQualityBackfill.IsPaused(),
-		"last_face_id":   h.faceQualityBackfill.Progress(),
-		"progress_key":   "migration.face_quality_backfill_v1",
+		"paused":       h.faceQualityBackfill.IsPaused(),
+		"last_face_id": h.faceQualityBackfill.Progress(),
+		"progress_key": "migration.face_quality_backfill_v1",
 	}})
 }
 
@@ -1187,29 +1187,41 @@ func (h *PeopleHandler) ResumeFaceQualityBackfill(c *gin.Context) {
 // ---- 历史重评分运行接口 ----
 
 // rescoreRunResponse 把 model 转为 DTO 响应视图。
+// eligible_for_enforce 由本 handler 调用服务端判定填充（前端不得自行推断）。
 func rescoreRunResponse(r *model.FaceQualityRescoreRun) model.FaceQualityRescoreRunResponse {
 	return model.FaceQualityRescoreRunResponse{
-		ID:                  r.ID,
-		Mode:                r.Mode,
-		ApplyMode:           r.ApplyMode,
-		Status:              r.Status,
-		TargetPhotoCount:    r.TargetPhotoCount,
-		TargetFaceCount:     r.TargetFaceCount,
-		ProcessedPhotoCount: r.ProcessedPhotoCount,
-		ProcessedFaceCount:  r.ProcessedFaceCount,
-		AcceptedCount:       r.AcceptedCount,
-		ReviewRequiredCount: r.ReviewRequiredCount,
-		AutoExcludedCount:   r.AutoExcludedCount,
-		RetryableCount:      r.RetryableCount,
-		LastError:           r.LastError,
-		StartedAt:           r.StartedAt,
-		CompletedAt:         r.CompletedAt,
-		RuleVersion:         r.RuleVersion,
-		ModelVersion:        r.ModelVersion,
-		PhotoLimit:          r.PhotoLimit,
-		CreatedAt:           r.CreatedAt,
-		UpdatedAt:           r.UpdatedAt,
+		ID:                    r.ID,
+		Mode:                  r.Mode,
+		ApplyMode:             r.ApplyMode,
+		Status:                r.Status,
+		TargetPhotoCount:      r.TargetPhotoCount,
+		TargetFaceCount:       r.TargetFaceCount,
+		ProcessedPhotoCount:   r.ProcessedPhotoCount,
+		ProcessedFaceCount:    r.ProcessedFaceCount,
+		AcceptedCount:         r.AcceptedCount,
+		ReviewRequiredCount:   r.ReviewRequiredCount,
+		AutoExcludedCount:     r.AutoExcludedCount,
+		RetryableCount:        r.RetryableCount,
+		SupersededManualCount: r.SupersededManualCount,
+		LastError:             r.LastError,
+		StartedAt:             r.StartedAt,
+		CompletedAt:           r.CompletedAt,
+		RuleVersion:           r.RuleVersion,
+		ModelVersion:          r.ModelVersion,
+		PhotoLimit:            r.PhotoLimit,
+		RetryOfRunID:          r.RetryOfRunID,
+		CalibrationRunID:      r.CalibrationRunID,
+		EligibleForEnforce:    false, // 由调用方按服务端判定填充，默认 false
+		CreatedAt:             r.CreatedAt,
+		UpdatedAt:             r.UpdatedAt,
 	}
+}
+
+// rescoreRunResponseWithEligibility 填充 eligible_for_enforce（服务端逐项判定）。
+func rescoreRunResponseWithEligibility(r *model.FaceQualityRescoreRun, eligible bool) model.FaceQualityRescoreRunResponse {
+	resp := rescoreRunResponse(r)
+	resp.EligibleForEnforce = eligible
+	return resp
 }
 
 // CreateFaceQualityRescoreRun 创建历史重评分运行。
@@ -1226,7 +1238,12 @@ func (h *PeopleHandler) CreateFaceQualityRescoreRun(c *gin.Context) {
 	}
 	// full 模式必须 enforce（不接受 full+shadow，无意义且误导）。service 内部会归一化
 	// calibration→shadow、full→enforce，故此处固定传 enforce 即可。
-	run, err := h.faceQualityRescore.CreateRun(req.Mode, model.FaceQualityRescoreApplyModeEnforce, req.PhotoLimit)
+	// mode=full 时 calibration_run_id 必填，指向服务端验证通过的合格校准 run。
+	calibrationRunID := uint(0)
+	if req.CalibrationRunID != nil {
+		calibrationRunID = *req.CalibrationRunID
+	}
+	run, err := h.faceQualityRescore.CreateRun(req.Mode, model.FaceQualityRescoreApplyModeEnforce, req.PhotoLimit, calibrationRunID)
 	if err != nil {
 		writeRescoreRunError(c, err)
 		return
@@ -1251,7 +1268,7 @@ func (h *PeopleHandler) ListFaceQualityRescoreRuns(c *gin.Context) {
 	}
 	items := make([]model.FaceQualityRescoreRunResponse, 0, len(runs))
 	for _, r := range runs {
-		items = append(items, rescoreRunResponse(r))
+		items = append(items, rescoreRunResponseWithEligibility(r, h.faceQualityRescore.IsEligibleForEnforce(r.ID)))
 	}
 	c.JSON(http.StatusOK, model.Response{Success: true, Data: gin.H{"items": items}})
 }
@@ -1272,7 +1289,7 @@ func (h *PeopleHandler) GetFaceQualityRescoreRun(c *gin.Context) {
 		writeRescoreRunError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, model.Response{Success: true, Data: rescoreRunResponse(run)})
+	c.JSON(http.StatusOK, model.Response{Success: true, Data: rescoreRunResponseWithEligibility(run, h.faceQualityRescore.IsEligibleForEnforce(run.ID))})
 }
 
 // PauseFaceQualityRescoreRun 暂停运行。
@@ -1352,6 +1369,26 @@ func (h *PeopleHandler) RestoreAutoFaceQualityRescoreRun(c *gin.Context) {
 	c.JSON(http.StatusOK, model.Response{Success: true, Message: "已按运行恢复自动排除样本", Data: result})
 }
 
+// RetryFaceQualityRescoreRun 以来源 run 的当前失败事件创建新的 shadow calibration 重试运行。
+// 确认文案：只重试技术失败样本，仍为 shadow，不自动隔离。
+func (h *PeopleHandler) RetryFaceQualityRescoreRun(c *gin.Context) {
+	if h.faceQualityRescore == nil {
+		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检重评分功能未启用")
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid run id")
+		return
+	}
+	run, err := h.faceQualityRescore.RetryRun(uint(id))
+	if err != nil {
+		writeRescoreRunError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Data: rescoreRunResponse(run)})
+}
+
 // writeRescoreRunError 把重评分服务错误映射为统一响应与错误码。
 func writeRescoreRunError(c *gin.Context, err error) {
 	switch {
@@ -1359,6 +1396,12 @@ func writeRescoreRunError(c *gin.Context, err error) {
 		writePeopleError(c, http.StatusConflict, "RESCORE_RUN_CONFLICT", err.Error())
 	case errors.Is(err, service.ErrRescoreCalibrationRequired):
 		writePeopleError(c, http.StatusConflict, "RESCORE_CALIBRATION_REQUIRED", err.Error())
+	case errors.Is(err, service.ErrRescoreRetrySourceInvalid):
+		writePeopleError(c, http.StatusConflict, "RESCORE_RETRY_SOURCE_INVALID", err.Error())
+	case errors.Is(err, service.ErrRescoreRetrySourceNotCalibration),
+		errors.Is(err, service.ErrRescoreRetrySourceNotTerminal),
+		errors.Is(err, service.ErrRescoreRetryNoTargets):
+		writePeopleError(c, http.StatusConflict, "RESCORE_RETRY_SOURCE_INVALID", err.Error())
 	case errors.Is(err, service.ErrRescoreRunNotFound), errors.Is(err, gorm.ErrRecordNotFound):
 		writePeopleError(c, http.StatusNotFound, "RESCORE_NOT_FOUND", err.Error())
 	default:

@@ -16,12 +16,13 @@ const (
 
 // 历史重评分运行状态。
 const (
-	FaceQualityRescoreStatusQueued    = "queued"
-	FaceQualityRescoreStatusRunning   = "running"
-	FaceQualityRescoreStatusPaused    = "paused"
-	FaceQualityRescoreStatusCompleted = "completed"
-	FaceQualityRescoreStatusFailed    = "failed"
-	FaceQualityRescoreStatusCancelled = "cancelled"
+	FaceQualityRescoreStatusQueued             = "queued"
+	FaceQualityRescoreStatusRunning            = "running"
+	FaceQualityRescoreStatusPaused             = "paused"
+	FaceQualityRescoreStatusCompleted          = "completed"            // 无技术错误终态，可作为校准候选
+	FaceQualityRescoreStatusCompletedWithError = "completed_with_errors" // 队列耗尽但存在 retryable/unmatched，不能放行 full/enforce
+	FaceQualityRescoreStatusFailed             = "failed"
+	FaceQualityRescoreStatusCancelled          = "cancelled"
 )
 
 // 历史重评分 item 状态。
@@ -78,6 +79,15 @@ type FaceQualityRescoreRun struct {
 	// 校准选择策略/种子快照（calibration 时记录，便于复现）。
 	SelectionPolicy string `gorm:"type:varchar(32);default:''" json:"selection_policy,omitempty"`
 	PhotoLimit      int    `gorm:"not null;default:0" json:"photo_limit"`
+
+	// superseded_manual_count：worker 发现人工已覆盖而跳过的 Face 数（安全终态，无新增模型证据）。
+	SupersededManualCount int `gorm:"not null;default:0" json:"superseded_manual_count"`
+
+	// retry_of_run_id：本 run 重试的来源 run（仅 retry 创建的 shadow calibration 有值）。
+	RetryOfRunID *uint `gorm:"index:idx_fqr_run_retry_of" json:"retry_of_run_id,omitempty"`
+
+	// calibration_run_id：full/enforce run 引用并通过验证的合格校准 run（校准 run 为空）。
+	CalibrationRunID *uint `gorm:"index:idx_fqr_run_calibration" json:"calibration_run_id,omitempty"`
 }
 
 func (FaceQualityRescoreRun) TableName() string {
@@ -113,4 +123,16 @@ type FaceQualityRescoreItem struct {
 
 func (FaceQualityRescoreItem) TableName() string {
 	return "face_quality_rescore_items"
+}
+
+// FaceQualityRescoreRetryTarget 是 retry 创建新 run 时从来源 run 当前失败事件快照的单个目标。
+type FaceQualityRescoreRetryTarget struct {
+	PhotoID         uint
+	FaceID          uint
+	BBoxX           float64
+	BBoxY           float64
+	BBoxWidth       float64
+	BBoxHeight      float64
+	BaselineEventID uint
+	EvidenceState   string
 }

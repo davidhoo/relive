@@ -157,3 +157,68 @@ func TestFaceQualityRescoreRepo_ListAutoExcludedByRun(t *testing.T) {
 	require.Len(t, records, 1)
 	assert.Equal(t, model.FaceQualityDecisionNonFace, records[0].Decision)
 }
+
+// TestFaceQualityRescoreRepo_ListRetryableTargets 验证 retry 窄查询只取来源 run 的当前失败事件。
+func TestFaceQualityRescoreRepo_ListRetryableTargets(t *testing.T) {
+	db := newRescoreRepoTestDB(t)
+	repo := NewFaceQualityRescoreRepository(db)
+	srcRun := uint(1)
+	otherRun := uint(2)
+	face1 := uint(100)
+	face2 := uint(101)
+	face3 := uint(102)
+
+	// srcRun 的两个当前失败事件（retryable + unmatched）。
+	require.NoError(t, db.Create(&model.FaceQualityEvent{PhotoID: 1, FaceID: &face1, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Decision: model.FaceQualityDecisionReviewRequired, Source: model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "t", EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalRescore, EvidenceState: model.FaceQualityEvidenceStateRetryableError, RescoreRunID: &srcRun, IsCurrent: true}).Error)
+	require.NoError(t, db.Create(&model.FaceQualityEvent{PhotoID: 2, FaceID: &face2, BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2, Decision: model.FaceQualityDecisionReviewRequired, Source: model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "t", EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalRescore, EvidenceState: model.FaceQualityEvidenceStateUnmatched, RescoreRunID: &srcRun, IsCurrent: true}).Error)
+	// srcRun 的 available 事件（成功，不应列出）。
+	require.NoError(t, db.Create(&model.FaceQualityEvent{PhotoID: 3, FaceID: &face3, BBoxX: 0.3, BBoxY: 0.3, BBoxWidth: 0.2, BBoxHeight: 0.2, Decision: model.FaceQualityDecisionAccepted, Source: model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "t", EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalRescore, EvidenceState: model.FaceQualityEvidenceStateAvailable, RescoreRunID: &srcRun, IsCurrent: true}).Error)
+	// srcRun 的非当前失败事件（不应列出）。
+	require.NoError(t, db.Create(&model.FaceQualityEvent{PhotoID: 4, FaceID: &face1, BBoxX: 0.4, BBoxY: 0.4, BBoxWidth: 0.1, BBoxHeight: 0.1, Decision: model.FaceQualityDecisionReviewRequired, Source: model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "t", EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalRescore, EvidenceState: model.FaceQualityEvidenceStateRetryableError, RescoreRunID: &srcRun, IsCurrent: false}).Error)
+	// 其他 run 的失败事件（不应列出）。
+	require.NoError(t, db.Create(&model.FaceQualityEvent{PhotoID: 5, FaceID: &face1, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Decision: model.FaceQualityDecisionReviewRequired, Source: model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "t", EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalRescore, EvidenceState: model.FaceQualityEvidenceStateRetryableError, RescoreRunID: &otherRun, IsCurrent: true}).Error)
+
+	targets, err := repo.ListRetryableTargets(srcRun)
+	require.NoError(t, err)
+	require.Len(t, targets, 2, "只应列出 srcRun 的 2 个当前失败事件")
+	assert.Equal(t, face1, targets[0].FaceID)
+	assert.Equal(t, model.FaceQualityEvidenceStateRetryableError, targets[0].EvidenceState)
+	assert.Equal(t, face2, targets[1].FaceID)
+	assert.Equal(t, model.FaceQualityEvidenceStateUnmatched, targets[1].EvidenceState)
+	// BBox 与原始事件一致（非零框）。
+	assert.Equal(t, 0.1, targets[0].BBoxX)
+	assert.Equal(t, 0.2, targets[0].BBoxWidth)
+}
+
+// TestFaceQualityRescoreRepo_EligibleCalibration 验证 GetEligibleCalibration 取回 run（逐项验证在 service 层）。
+func TestFaceQualityRescoreRepo_EligibleCalibration(t *testing.T) {
+	db := newRescoreRepoTestDB(t)
+	repo := NewFaceQualityRescoreRepository(db)
+
+	// 合格 calibration：completed + 计数闭合 + 无 pending/processing。
+	run := &model.FaceQualityRescoreRun{
+		Mode: model.FaceQualityRescoreModeCalibration, ApplyMode: model.FaceQualityRescoreApplyModeShadow,
+		Status: model.FaceQualityRescoreStatusCompleted,
+		TargetFaceCount: 2, ProcessedFaceCount: 2, RetryableCount: 0,
+		RuleVersion: "v1", ModelVersion: "test-v1",
+	}
+	require.NoError(t, repo.CreateRun(run))
+	require.NoError(t, repo.CreateItems([]*model.FaceQualityRescoreItem{
+		{RunID: run.ID, PhotoID: 1, FaceID: 10, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, BaselineEventID: 1, Status: model.FaceQualityRescoreItemStatusProcessed},
+		{RunID: run.ID, PhotoID: 2, FaceID: 11, BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2, BaselineEventID: 2, Status: model.FaceQualityRescoreItemStatusProcessed},
+	}))
+
+	got, err := repo.GetEligibleCalibration(run.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, model.FaceQualityRescoreStatusCompleted, got.Status)
+
+	// 仍有 pending → CountPendingOrProcessing > 0。
+	pending, err := repo.CountPendingOrProcessing(run.ID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), pending)
+
+	// 不存在的 run → ErrRecordNotFound。
+	_, err = repo.GetEligibleCalibration(999)
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}

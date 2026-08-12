@@ -31,21 +31,27 @@
         <span class="rescore-title">历史补证据任务</span>
         <el-button size="small" type="primary" @click="openCalibrationDialog">启动校准任务</el-button>
         <el-button
-          v-if="calibrationCompletedAvailable"
+          v-if="eligibleCalibrationRuns.length > 0"
           size="small"
           type="danger"
           @click="openFullEnforceDialog"
         >启动全量 enforce</el-button>
       </div>
       <div v-if="latestRun" class="rescore-card-body">
-        <span>运行 #{{ latestRun.id }} · {{ rescoreModeLabel(latestRun.mode) }} · {{ rescoreStatusLabel(latestRun.status) }}</span>
+        <span>运行 #{{ latestRun.id }} · {{ rescoreModeLabel(latestRun.mode) }} · {{ rescoreStatusLabel(latestRun.status) }}<span v-if="latestRun.retry_of_run_id"> · 重试自 #{{ latestRun.retry_of_run_id }}</span></span>
         <span>目标 {{ latestRun.target_face_count }} Face / {{ latestRun.target_photo_count }} 照片</span>
-        <span>已处理 {{ latestRun.processed_face_count }} · 灰区 {{ latestRun.review_required_count }} · 自动隔离 {{ latestRun.auto_excluded_count }} · 失败 {{ latestRun.retryable_count }}</span>
+        <span>已获证据 {{ latestRun.processed_face_count }} · 人工覆盖 {{ latestRun.superseded_manual_count }} · 真实灰区 {{ latestRun.review_required_count }} · 自动隔离 {{ latestRun.auto_excluded_count }} · 待重试/未匹配 {{ latestRun.retryable_count }} · 终态照片 {{ latestRun.processed_photo_count }}</span>
         <span v-if="latestRun.last_error" class="rescore-error">{{ latestRun.last_error }}</span>
         <div class="rescore-actions">
           <el-button v-if="latestRun.status === 'running'" size="small" @click="pauseRun(latestRun.id)">暂停</el-button>
           <el-button v-if="latestRun.status === 'paused'" size="small" type="primary" @click="resumeRun(latestRun.id)">继续</el-button>
           <el-button v-if="latestRun.status === 'running' || latestRun.status === 'paused'" size="small" @click="cancelRun(latestRun.id)">取消</el-button>
+          <el-button
+            v-if="canRetryRun(latestRun)"
+            size="small"
+            type="warning"
+            @click="openRetryDialog(latestRun)"
+          >重试运行 #{{ latestRun.id }}</el-button>
           <el-button v-if="latestRun.auto_excluded_count > 0" size="small" type="warning" @click="restoreRun(latestRun.id)">按本运行恢复自动隔离</el-button>
         </div>
       </div>
@@ -239,17 +245,36 @@
       </template>
     </el-dialog>
 
-    <!-- 全量 enforce 二次确认 -->
+    <!-- 全量 enforce 二次确认：下拉选择后端 eligible_for_enforce=true 的校准 run -->
     <el-dialog v-model="fullEnforceVisible" title="启动全量 enforce" width="460px">
       <el-form label-width="120px">
-        <el-form-item label="校准运行 ID">
-          <el-input v-model="fullEnforceCalibrationId" placeholder="输入已完成的校准 run ID" />
+        <el-form-item label="合格校准运行">
+          <el-select v-model="fullEnforceCalibrationId" placeholder="选择已通过的校准运行" style="width: 100%">
+            <el-option
+              v-for="r in eligibleCalibrationRuns"
+              :key="r.id"
+              :label="`#${r.id} · 目标 ${r.target_face_count} Face · 已获证据 ${r.processed_face_count}`"
+              :value="r.id"
+            />
+          </el-select>
         </el-form-item>
       </el-form>
       <div class="confirm-hint">仅高确定性非人脸/严重低质量会移出人物聚类；可按本运行恢复。不会自动启动后续运行。</div>
       <template #footer>
         <el-button @click="fullEnforceVisible = false">取消</el-button>
-        <el-button type="danger" :loading="creatingRun" @click="doCreateFullEnforce">启动全量 enforce</el-button>
+        <el-button type="danger" :loading="creatingRun" :disabled="!fullEnforceCalibrationId" @click="doCreateFullEnforce">启动全量 enforce</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 按运行重试二次确认：只重试技术失败样本，仍为 shadow，不自动隔离 -->
+    <el-dialog v-model="retryVisible" title="重试运行" width="460px">
+      <div class="confirm-hint">
+        将基于运行 #{{ retrySourceRun?.id }} 的 {{ retrySourceRun?.retryable_count }} 条技术失败样本创建新的 shadow 校准运行。
+        只重试技术失败样本，仍为 shadow，不自动隔离。
+      </div>
+      <template #footer>
+        <el-button @click="retryVisible = false">取消</el-button>
+        <el-button type="primary" :loading="creatingRun" @click="doRetryRun">重试</el-button>
       </template>
     </el-dialog>
   </div>
@@ -307,12 +332,27 @@ const restoring = ref(false)
 
 // 历史重评分运行面板。
 const latestRun = ref<FaceQualityRescoreRun | null>(null)
-const calibrationCompletedAvailable = ref(false)
+const rescoreRuns = ref<FaceQualityRescoreRun[]>([])
 const calibrationVisible = ref(false)
 const calibrationPhotoLimit = ref(1000)
 const fullEnforceVisible = ref(false)
-const fullEnforceCalibrationId = ref('')
+const fullEnforceCalibrationId = ref<number | null>(null)
 const creatingRun = ref(false)
+const retryVisible = ref(false)
+const retrySourceRun = ref<FaceQualityRescoreRun | null>(null)
+
+// 后端裁决的合格校准 run（eligible_for_enforce=true）。前端不得以 status=completed 自行推断。
+const eligibleCalibrationRuns = computed(() =>
+  rescoreRuns.value.filter(r => r.eligible_for_enforce === true),
+)
+
+// 可重试的 run：calibration 且 completed/completed_with_errors 且有待重试样本。
+const canRetryRun = (r: FaceQualityRescoreRun | null): boolean => {
+  if (!r) return false
+  if (r.mode !== 'calibration') return false
+  if (r.status !== 'completed' && r.status !== 'completed_with_errors') return false
+  return r.retryable_count > 0
+}
 
 const ruleVersionOptions = computed(() => {
   if (!stats.value?.by_rule_version) return []
@@ -363,7 +403,8 @@ const reasonLabel = (r: string) => ({ non_face: '非人脸', low_quality: '低�
 const rescoreModeLabel = (m: string) => (m === 'calibration' ? '校准' : '全量')
 const rescoreStatusLabel = (s: string) => ({
   queued: '排队', running: '运行中', paused: '已暂停',
-  completed: '已完成', failed: '失败', cancelled: '已取消',
+  completed: '已完成', completed_with_errors: '完成但有错误',
+  failed: '失败', cancelled: '已取消',
 }[s] || s)
 
 const formatEvidence = (json: string) => {
@@ -412,10 +453,8 @@ const loadRescoreRuns = async () => {
   try {
     const res = await peopleApi.listFaceQualityRescoreRuns(10)
     const runs = res.data.data?.items ?? []
+    rescoreRuns.value = runs
     latestRun.value = runs.length > 0 ? runs[0]! : null
-    calibrationCompletedAvailable.value = runs.some(
-      r => r.mode === 'calibration' && r.status === 'completed',
-    )
   } catch {
     // 静默：面板不影响主流程。
   }
@@ -652,24 +691,48 @@ const doCreateCalibration = async () => {
 }
 
 const openFullEnforceDialog = () => {
-  fullEnforceCalibrationId.value = ''
+  fullEnforceCalibrationId.value = eligibleCalibrationRuns.value[0]?.id ?? null
   fullEnforceVisible.value = true
 }
 
 const doCreateFullEnforce = async () => {
-  // 要求输入已完成的 calibration run ID。
+  // 必须选择后端 eligible_for_enforce=true 的校准 run；服务端会再次验证。
   if (!fullEnforceCalibrationId.value) {
-    ElMessage.warning('请输入已完成的校准运行 ID')
+    ElMessage.warning('请选择已通过的校准运行')
     return
   }
   creatingRun.value = true
   try {
-    await peopleApi.createFaceQualityRescoreRun({ mode: 'full' })
+    await peopleApi.createFaceQualityRescoreRun({
+      mode: 'full',
+      calibration_run_id: fullEnforceCalibrationId.value,
+    })
     ElMessage.success('全量 enforce 任务已创建')
     fullEnforceVisible.value = false
     await loadRescoreRuns()
   } catch (e: any) {
+    // 展示服务端错误，不在前端绕过。
     ElMessage.error(e?.response?.data?.error?.message || '创建全量任务失败')
+  } finally {
+    creatingRun.value = false
+  }
+}
+
+const openRetryDialog = (run: FaceQualityRescoreRun) => {
+  retrySourceRun.value = run
+  retryVisible.value = true
+}
+
+const doRetryRun = async () => {
+  if (!retrySourceRun.value) return
+  creatingRun.value = true
+  try {
+    await peopleApi.retryFaceQualityRescoreRun(retrySourceRun.value.id)
+    ElMessage.success('重试运行已创建（shadow，不自动隔离）')
+    retryVisible.value = false
+    await loadRescoreRuns()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error?.message || '创建重试运行失败')
   } finally {
     creatingRun.value = false
   }

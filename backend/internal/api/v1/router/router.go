@@ -267,6 +267,7 @@ func Setup(db *gorm.DB, cfg *config.Config, appState *lifecycle.State) (*gin.Eng
 				people.POST("/face-quality/rescore-runs/:id/resume", handlers.People.ResumeFaceQualityRescoreRun)
 				people.POST("/face-quality/rescore-runs/:id/cancel", handlers.People.CancelFaceQualityRescoreRun)
 				people.POST("/face-quality/rescore-runs/:id/restore-auto", handlers.People.RestoreAutoFaceQualityRescoreRun)
+				people.POST("/face-quality/rescore-runs/:id/retry", handlers.People.RetryFaceQualityRescoreRun)
 				people.PATCH("/faces/quality-decision", handlers.People.ApplyFaceQualityDecision)
 
 				people.POST("/background/start", handlers.People.StartBackground)

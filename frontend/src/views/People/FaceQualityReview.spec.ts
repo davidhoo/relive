@@ -45,6 +45,7 @@ const mocks = vi.hoisted(() => {
     mockResumeRescoreRun: vi.fn(),
     mockCancelRescoreRun: vi.fn(),
     mockRestoreRescoreRun: vi.fn(),
+    mockRetryRescoreRun: vi.fn(),
   }
 })
 
@@ -60,6 +61,7 @@ vi.mock('@/api/people', () => ({
     resumeFaceQualityRescoreRun: (...a: unknown[]) => mocks.mockResumeRescoreRun(...a),
     cancelFaceQualityRescoreRun: (...a: unknown[]) => mocks.mockCancelRescoreRun(...a),
     restoreAutoFaceQualityRescoreRun: (...a: unknown[]) => mocks.mockRestoreRescoreRun(...a),
+    retryFaceQualityRescoreRun: (...a: unknown[]) => mocks.mockRetryRescoreRun(...a),
   },
 }))
 
@@ -201,6 +203,7 @@ describe('FaceQualityReview.vue - Task 6 改造', () => {
     mocks.mockResumeRescoreRun.mockResolvedValue({ data: { success: true } })
     mocks.mockCancelRescoreRun.mockResolvedValue({ data: { success: true } })
     mocks.mockRestoreRescoreRun.mockResolvedValue({ data: { success: true, data: { restored: 0 } } })
+    mocks.mockRetryRescoreRun.mockResolvedValue({ data: { success: true, data: { id: 2 } } })
   })
 
   it('默认请求 page_size=48', async () => {
@@ -406,24 +409,109 @@ describe('FaceQualityReview.vue - Task 6 改造', () => {
     wrapper.unmount()
   })
 
-  it('全量 enforce 启动要求输入校准 run ID', async () => {
+  it('全量 enforce 必须选择后端 eligible_for_enforce=true 的校准 run，提交含 calibration_run_id', async () => {
     const wrapper = mountReview()
     await flushPromises()
     const vm: any = wrapper.vm
-    // 未输入 ID → 警告且不调用
-    vm.fullEnforceCalibrationId = ''
+    // 未选择 → 警告且不调用
+    vm.fullEnforceCalibrationId = null
     await vm.doCreateFullEnforce()
     await flushPromises()
     expect(mocks.mockCreateRescoreRun).not.toHaveBeenCalled()
     expect(mocks.ElMessage.warning).toHaveBeenCalled()
-    // 输入 ID → 调用 mode=full
+    // 选择合格 ID → 调用 mode=full 且携带 calibration_run_id
     mocks.ElMessage.warning.mockClear()
-    vm.fullEnforceCalibrationId = '5'
+    vm.fullEnforceCalibrationId = 5
     await vm.doCreateFullEnforce()
     await flushPromises()
     expect(mocks.mockCreateRescoreRun).toHaveBeenCalledTimes(1)
     const arg = mocks.mockCreateRescoreRun.mock.calls[0]![0] as any
     expect(arg.mode).toBe('full')
+    expect(arg.calibration_run_id).toBe(5)
+    wrapper.unmount()
+  })
+
+  it('completed_with_errors + retryable=4733 显示完成但有错误、已获证据 0、待重试 4733，不显示灰区 4733，enforce 入口不可见', async () => {
+    const run1 = {
+      id: 1,
+      mode: 'calibration',
+      apply_mode: 'shadow',
+      status: 'completed_with_errors',
+      target_face_count: 4733,
+      target_photo_count: 1000,
+      processed_face_count: 0,
+      processed_photo_count: 1000,
+      accepted_count: 0,
+      review_required_count: 0,
+      auto_excluded_count: 0,
+      retryable_count: 4733,
+      superseded_manual_count: 0,
+      eligible_for_enforce: false,
+      rule_version: 'v1',
+      model_version: 'test-v1',
+      photo_limit: 1000,
+      created_at: '',
+      updated_at: '',
+    }
+    mocks.mockListRescoreRuns.mockResolvedValue({ data: { success: true, data: { items: [run1] } } })
+    const wrapper = mountReview()
+    await flushPromises()
+    const vm: any = wrapper.vm
+    vm.activeTab = 'historical_missing_evidence'
+    await vm.onTabChange()
+    await flushPromises()
+    const cardText = wrapper.find('.rescore-card').text()
+    expect(cardText).toContain('完成但有错误')
+    expect(cardText).toContain('待重试/未匹配 4733')
+    expect(cardText).toContain('已获证据 0')
+    // 不应把灰区显示为 4733（真实灰区=0）
+    expect(cardText).toContain('真实灰区 0')
+    // full/enforce 入口不可见（无 eligible run）
+    expect(wrapper.text()).not.toContain('启动全量 enforce')
+    // 可重试
+    expect(cardText).toContain('重试运行 #1')
+    wrapper.unmount()
+  })
+
+  it('点击重试 #1 调用 retry API，不调用普通 create 接口', async () => {
+    const run1 = {
+      id: 1,
+      mode: 'calibration',
+      apply_mode: 'shadow',
+      status: 'completed_with_errors',
+      target_face_count: 4733,
+      target_photo_count: 1000,
+      processed_face_count: 0,
+      processed_photo_count: 1000,
+      accepted_count: 0,
+      review_required_count: 0,
+      auto_excluded_count: 0,
+      retryable_count: 4733,
+      superseded_manual_count: 0,
+      eligible_for_enforce: false,
+      rule_version: 'v1',
+      model_version: 'test-v1',
+      photo_limit: 1000,
+      created_at: '',
+      updated_at: '',
+    }
+    mocks.mockListRescoreRuns.mockResolvedValue({ data: { success: true, data: { items: [run1] } } })
+    const wrapper = mountReview()
+    await flushPromises()
+    const vm: any = wrapper.vm
+    // 切到历史缺证据 Tab 触发 loadRescoreRuns，填充 latestRun。
+    vm.activeTab = 'historical_missing_evidence'
+    await vm.onTabChange()
+    await flushPromises()
+    // openRetryDialog 设置 retrySourceRun；doRetryRun 读取它调用 retry API。
+    expect(vm.latestRun).toBeTruthy()
+    vm.openRetryDialog(vm.latestRun)
+    expect(vm.retrySourceRun).toBeTruthy()
+    await vm.doRetryRun()
+    await flushPromises()
+    expect(mocks.mockRetryRescoreRun).toHaveBeenCalledTimes(1)
+    expect(mocks.mockRetryRescoreRun.mock.calls[0]![0]).toBe(1)
+    expect(mocks.mockCreateRescoreRun).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 

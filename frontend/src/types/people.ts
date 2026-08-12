@@ -206,6 +206,7 @@ export type FaceQualityRescoreStatus =
   | 'running'
   | 'paused'
   | 'completed'
+  | 'completed_with_errors'
   | 'failed'
   | 'cancelled'
 
@@ -222,12 +223,16 @@ export interface FaceQualityRescoreRun {
   review_required_count: number
   auto_excluded_count: number
   retryable_count: number
+  superseded_manual_count: number
   last_error?: string
   started_at?: string
   completed_at?: string
   rule_version: string
   model_version: string
   photo_limit: number
+  retry_of_run_id?: number
+  calibration_run_id?: number
+  eligible_for_enforce: boolean
   created_at: string
   updated_at: string
 }
@@ -235,6 +240,8 @@ export interface FaceQualityRescoreRun {
 export interface FaceQualityRescoreRunCreateRequest {
   mode: FaceQualityRescoreMode
   photo_limit?: number
+  // mode=full 时必填，指向服务端验证通过的合格校准 run。
+  calibration_run_id?: number
 }
 
 export interface PersonMergeSuggestionTask {

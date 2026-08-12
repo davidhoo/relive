@@ -16,20 +16,23 @@ import (
 
 // controllableRescoreService 按字段返回预设结果/错误，用于精确测试错误码映射。
 type controllableRescoreService struct {
-	createRunRun  *model.FaceQualityRescoreRun
-	createRunErr  error
-	getRunRun     *model.FaceQualityRescoreRun
-	getRunErr     error
-	listRuns      []*model.FaceQualityRescoreRun
-	listRunsErr   error
-	pauseErr      error
-	resumeErr     error
-	cancelErr     error
-	restoreResult *model.FaceQualityRestoreResult
-	restoreErr    error
+	createRunRun         *model.FaceQualityRescoreRun
+	createRunErr         error
+	getRunRun            *model.FaceQualityRescoreRun
+	getRunErr            error
+	listRuns             []*model.FaceQualityRescoreRun
+	listRunsErr          error
+	pauseErr             error
+	resumeErr            error
+	cancelErr            error
+	restoreResult        *model.FaceQualityRestoreResult
+	restoreErr           error
+	retryRun             *model.FaceQualityRescoreRun
+	retryErr             error
+	eligibleForEnforce   map[uint]bool
 }
 
-func (s *controllableRescoreService) CreateRun(mode, applyMode string, photoLimit int) (*model.FaceQualityRescoreRun, error) {
+func (s *controllableRescoreService) CreateRun(mode, applyMode string, photoLimit int, calibrationRunID uint) (*model.FaceQualityRescoreRun, error) {
 	return s.createRunRun, s.createRunErr
 }
 func (s *controllableRescoreService) GetRun(id uint) (*model.FaceQualityRescoreRun, error) {
@@ -43,6 +46,15 @@ func (s *controllableRescoreService) Resume(id uint) error { return s.resumeErr 
 func (s *controllableRescoreService) Cancel(id uint) error { return s.cancelErr }
 func (s *controllableRescoreService) RestoreAuto(runID uint, limit int) (*model.FaceQualityRestoreResult, error) {
 	return s.restoreResult, s.restoreErr
+}
+func (s *controllableRescoreService) RetryRun(sourceRunID uint) (*model.FaceQualityRescoreRun, error) {
+	return s.retryRun, s.retryErr
+}
+func (s *controllableRescoreService) IsEligibleForEnforce(runID uint) bool {
+	if s.eligibleForEnforce == nil {
+		return false
+	}
+	return s.eligibleForEnforce[runID]
 }
 func (s *controllableRescoreService) Run() {}
 
@@ -195,6 +207,70 @@ func TestRescoreHandler_InvalidModeReturns400(t *testing.T) {
 	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
 		map[string]interface{}{"mode": "bogus"}, nil)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// TestRescoreHandler_RetryReturnsNewRun retry 接口透传 source run id，返回新 shadow run。
+func TestRescoreHandler_RetryReturnsNewRun(t *testing.T) {
+	svc := &controllableRescoreService{
+		retryRun: &model.FaceQualityRescoreRun{
+			ID: 2, Mode: model.FaceQualityRescoreModeCalibration,
+			ApplyMode: model.FaceQualityRescoreApplyModeShadow,
+			Status:    model.FaceQualityRescoreStatusRunning,
+		},
+	}
+	h := newRescoreHandlerWith(svc)
+	rec := callRescoreHandler(t, h, h.RetryFaceQualityRescoreRun, nil,
+		gin.Params{{Key: "id", Value: "1"}})
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp struct {
+		Success bool                                `json:"success"`
+		Data    model.FaceQualityRescoreRunResponse `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.True(t, resp.Success)
+	assert.Equal(t, uint(2), resp.Data.ID)
+	assert.Equal(t, model.FaceQualityRescoreApplyModeShadow, resp.Data.ApplyMode)
+}
+
+// TestRescoreHandler_RetrySourceInvalidReturns409 来源 run 不合格返回 409。
+func TestRescoreHandler_RetrySourceInvalidReturns409(t *testing.T) {
+	svc := &controllableRescoreService{
+		retryErr: service.ErrRescoreRetrySourceInvalid,
+	}
+	h := newRescoreHandlerWith(svc)
+	rec := callRescoreHandler(t, h, h.RetryFaceQualityRescoreRun, nil,
+		gin.Params{{Key: "id", Value: "1"}})
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	var resp model.Response
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, "RESCORE_RETRY_SOURCE_INVALID", resp.Error.Code)
+}
+
+// TestRescoreHandler_RetryNotFoundReturns404 来源 run 不存在返回 404。
+func TestRescoreHandler_RetryNotFoundReturns404(t *testing.T) {
+	svc := &controllableRescoreService{
+		retryErr: service.ErrRescoreRunNotFound,
+	}
+	h := newRescoreHandlerWith(svc)
+	rec := callRescoreHandler(t, h, h.RetryFaceQualityRescoreRun, nil,
+		gin.Params{{Key: "id", Value: "999"}})
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+// TestRescoreHandler_FullRequiresCalibrationRunID full 缺 calibration_run_id 由 service 返回 409。
+func TestRescoreHandler_FullRequiresCalibrationRunID(t *testing.T) {
+	svc := &controllableRescoreService{
+		createRunErr: service.ErrRescoreCalibrationRequired,
+	}
+	h := newRescoreHandlerWith(svc)
+	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
+		map[string]interface{}{"mode": "full"}, nil)
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	var resp model.Response
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, "RESCORE_CALIBRATION_REQUIRED", resp.Error.Code)
 }
 
 // 编译期断言桩实现接口。

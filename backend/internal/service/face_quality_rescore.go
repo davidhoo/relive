@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -23,7 +24,8 @@ import (
 type FaceQualityRescoreService interface {
 	// CreateRun 创建运行。calibration 一律归一化为 shadow；full/enforce 需已完成 calibration。
 	// photo_limit>0 时限制快照照片数（校准用）。返回运行 ID 与实际快照计数。
-	CreateRun(mode, applyMode string, photoLimit int) (*model.FaceQualityRescoreRun, error)
+	// full/enforce 必须通过 calibrationRunID 指定服务端验证通过的合格校准 run（0 表示无）。
+	CreateRun(mode, applyMode string, photoLimit int, calibrationRunID uint) (*model.FaceQualityRescoreRun, error)
 	GetRun(id uint) (*model.FaceQualityRescoreRun, error)
 	ListRuns(limit int) ([]*model.FaceQualityRescoreRun, error)
 	Pause(id uint) error
@@ -31,14 +33,18 @@ type FaceQualityRescoreService interface {
 	Cancel(id uint) error
 	// RestoreAuto 恢复某 run 产生的自动排除（rescore_run_id 匹配），不影响实时/人工/其他 run。
 	RestoreAuto(runID uint, limit int) (*model.FaceQualityRestoreResult, error)
+	// RetryRun 以来源 run 的当前失败事件创建新的 shadow calibration 重试运行。
+	RetryRun(sourceRunID uint) (*model.FaceQualityRescoreRun, error)
+	// IsEligibleForEnforce 报告某 run 是否为可放行 full/enforce 的合格校准（计划 §3.4 逐项验证）。
+	IsEligibleForEnforce(runID uint) bool
 	// Run 启动 worker 循环（非阻塞）。服务重启后从 items 进度继续。
 	Run()
 }
 
 type faceQualityRescoreService struct {
-	people       *peopleService
-	repo         repository.FaceQualityRescoreRepository
-	coordinator  *BackgroundTaskCoordinator
+	people      *peopleService
+	repo        repository.FaceQualityRescoreRepository
+	coordinator *BackgroundTaskCoordinator
 
 	mu      sync.Mutex
 	running bool
@@ -54,7 +60,8 @@ func NewFaceQualityRescoreService(people *peopleService, repo repository.FaceQua
 }
 
 // CreateRun 创建运行并快照当前 historical_backfill + missing 的目标 Face 集合。
-func (s *faceQualityRescoreService) CreateRun(mode, applyMode string, photoLimit int) (*model.FaceQualityRescoreRun, error) {
+// full/enforce 必须通过 calibrationRunID 指定服务端验证通过的合格校准 run（Task 4 门禁）。
+func (s *faceQualityRescoreService) CreateRun(mode, applyMode string, photoLimit int, calibrationRunID uint) (*model.FaceQualityRescoreRun, error) {
 	if s.people == nil {
 		return nil, fmt.Errorf("people service not available")
 	}
@@ -70,15 +77,20 @@ func (s *faceQualityRescoreService) CreateRun(mode, applyMode string, photoLimit
 		return nil, fmt.Errorf("invalid apply_mode: %s", effectiveApplyMode)
 	}
 
-	// full/enforce 前置条件：已存在 completed calibration。
+	// full/enforce 门禁（计划 §3.4）：必须指定合格校准 run，服务端逐项验证。
+	var calibrationRun *model.FaceQualityRescoreRun
 	if mode == model.FaceQualityRescoreModeFull && effectiveApplyMode == model.FaceQualityRescoreApplyModeEnforce {
-		ok, err := s.repo.HasCompletedCalibration()
+		if calibrationRunID == 0 {
+			return nil, errCalibrationRequired
+		}
+		cal, ok, err := s.getEligibleCalibration(calibrationRunID)
 		if err != nil {
-			return nil, fmt.Errorf("check completed calibration: %w", err)
+			return nil, err
 		}
 		if !ok {
 			return nil, errCalibrationRequired
 		}
+		calibrationRun = cal
 	}
 
 	// 单活跃 run 互斥：同时只允许一个 running 或 paused。
@@ -114,6 +126,9 @@ func (s *faceQualityRescoreService) CreateRun(mode, applyMode string, photoLimit
 		ModelVersion:     modelVer,
 		SelectionPolicy:  "oldest_by_photo_id",
 		PhotoLimit:       photoLimit,
+	}
+	if calibrationRun != nil {
+		run.CalibrationRunID = &calibrationRun.ID
 	}
 
 	if err := s.people.executeWrite(func() error {
@@ -160,13 +175,13 @@ type rescoreTarget struct {
 func (s *faceQualityRescoreService) snapshotTargets(photoLimit int) ([]rescoreTarget, error) {
 	db := s.people.db
 	type row struct {
-		PhotoID         uint
-		FaceID          *uint
-		BBoxX           float64
-		BBoxY           float64
-		BBoxWidth       float64
-		BBoxHeight      float64
-		ID              uint
+		PhotoID    uint
+		FaceID     *uint
+		BBoxX      float64 `gorm:"column:bbox_x"`
+		BBoxY      float64 `gorm:"column:bbox_y"`
+		BBoxWidth  float64 `gorm:"column:bbox_width"`
+		BBoxHeight float64 `gorm:"column:bbox_height"`
+		ID         uint
 	}
 	baseWhere := db.Model(&model.FaceQualityEvent{}).
 		Where("is_current = ? AND evidence_origin = ? AND evidence_state = ?",
@@ -222,6 +237,29 @@ func countDistinctPhotos(targets []rescoreTarget) int {
 	return len(seen)
 }
 
+// isValidNormalizedBBox 校验归一化 BBox 合法：值有限，x/y∈[0,1]，width/height∈(0,1]，
+// 且 x+width、y+height 不超过 1。零框（width/height=0）非法——这正是 #1 零框 bug 必须阻断的形态。
+func isValidNormalizedBBox(x, y, w, h float64) bool {
+	if !(mathIsFinite(x) && mathIsFinite(y) && mathIsFinite(w) && mathIsFinite(h)) {
+		return false
+	}
+	if x < 0 || x > 1 || y < 0 || y > 1 {
+		return false
+	}
+	if w <= 0 || w > 1 || h <= 0 || h > 1 {
+		return false
+	}
+	if x+w > 1 || y+h > 1 {
+		return false
+	}
+	return true
+}
+
+// mathIsFinite 报告 v 是否为有限值（非 NaN/Inf）。math 包别名便于潜在测试替换。
+func mathIsFinite(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0)
+}
+
 func (s *faceQualityRescoreService) GetRun(id uint) (*model.FaceQualityRescoreRun, error) {
 	return s.repo.GetRun(id)
 }
@@ -263,7 +301,7 @@ func (s *faceQualityRescoreService) Cancel(id uint) error {
 	if err != nil {
 		return err
 	}
-	if run.Status == model.FaceQualityRescoreStatusCompleted || run.Status == model.FaceQualityRescoreStatusCancelled {
+	if run.Status == model.FaceQualityRescoreStatusCompleted || run.Status == model.FaceQualityRescoreStatusCompletedWithError || run.Status == model.FaceQualityRescoreStatusCancelled {
 		return nil
 	}
 	now := time.Now().UTC()
@@ -305,6 +343,141 @@ func (s *faceQualityRescoreService) RestoreAuto(runID uint, limit int) (*model.F
 		return nil, err
 	}
 	return &model.FaceQualityRestoreResult{Restored: restored}, nil
+}
+
+// RetryRun 以来源 run 的当前失败事件创建新的 shadow calibration 重试运行（计划 §3.3）。
+// 仅允许来源为 calibration、已 completed/completed_with_errors、且有当前失败事件的 run。
+// 空失败集合返回 409，不创建空 run。新 run 为 calibration+shadow，retry_of_run_id 指向来源。
+func (s *faceQualityRescoreService) RetryRun(sourceRunID uint) (*model.FaceQualityRescoreRun, error) {
+	if s.people == nil {
+		return nil, fmt.Errorf("people service not available")
+	}
+	src, err := s.repo.GetRun(sourceRunID)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, errRunNotFound
+		}
+		return nil, err
+	}
+	if src == nil {
+		return nil, errRunNotFound
+	}
+	if src.Mode != model.FaceQualityRescoreModeCalibration {
+		return nil, errRetrySourceNotCalibration
+	}
+	if src.Status != model.FaceQualityRescoreStatusCompleted &&
+		src.Status != model.FaceQualityRescoreStatusCompletedWithError {
+		return nil, errRetrySourceNotTerminal
+	}
+
+	// 只快照该来源 run 的当前失败事件。
+	retryTargets, err := s.repo.ListRetryableTargets(sourceRunID)
+	if err != nil {
+		return nil, fmt.Errorf("list retryable targets: %w", err)
+	}
+	if len(retryTargets) == 0 {
+		return nil, errRetryNoTargets
+	}
+
+	// 单活跃 run 互斥。
+	active, err := s.repo.HasActiveRun()
+	if err != nil {
+		return nil, fmt.Errorf("check active run: %w", err)
+	}
+	if active {
+		return nil, errRunConflict
+	}
+
+	now := time.Now().UTC()
+	ruleVer := qualityRuleVersionFromEvidence(nil)
+	modelVer := qualityModelVersionFromEvidence(nil)
+	if modelVer == "" {
+		modelVer = "insightface-buffalo-sc-v1"
+	}
+
+	// 校验 retry 快照的目标 BBox 合法（复用 snapshotTargets 同一规则）；非法的也保留进 run，
+	// 由 worker processOneBatch 在调 ML 前阻断为 retryable_error（保持审计链与计数一致）。
+	photoSet := make(map[uint]struct{}, len(retryTargets))
+	for _, t := range retryTargets {
+		photoSet[t.PhotoID] = struct{}{}
+	}
+
+	run := &model.FaceQualityRescoreRun{
+		Mode:             model.FaceQualityRescoreModeCalibration,
+		ApplyMode:        model.FaceQualityRescoreApplyModeShadow,
+		Status:           model.FaceQualityRescoreStatusQueued,
+		TargetPhotoCount: len(photoSet),
+		TargetFaceCount:  len(retryTargets),
+		RuleVersion:      ruleVer,
+		ModelVersion:     modelVer,
+		SelectionPolicy:  fmt.Sprintf("retry_of_run_%d", sourceRunID),
+		RetryOfRunID:     &sourceRunID,
+	}
+
+	if err := s.people.executeWrite(func() error {
+		if err := s.repo.CreateRun(run); err != nil {
+			return err
+		}
+		items := make([]*model.FaceQualityRescoreItem, 0, len(retryTargets))
+		for _, t := range retryTargets {
+			items = append(items, &model.FaceQualityRescoreItem{
+				RunID:           run.ID,
+				PhotoID:         t.PhotoID,
+				FaceID:          t.FaceID,
+				BBoxX:           t.BBoxX,
+				BBoxY:           t.BBoxY,
+				BBoxWidth:       t.BBoxWidth,
+				BBoxHeight:      t.BBoxHeight,
+				BaselineEventID: t.BaselineEventID,
+				Status:          model.FaceQualityRescoreItemStatusPending,
+			})
+		}
+		return s.repo.CreateItems(items)
+	}); err != nil {
+		return nil, err
+	}
+
+	run.StartedAt = &now
+	run.Status = model.FaceQualityRescoreStatusRunning
+	_ = s.people.executeWrite(func() error { return s.repo.UpdateRun(run) })
+	return run, nil
+}
+
+// getEligibleCalibration 执行计划 §3.4 的合格校准逐项验证（run 已由 repo 取回）。
+// 返回 (run, eligible, error)。
+func (s *faceQualityRescoreService) getEligibleCalibration(runID uint) (*model.FaceQualityRescoreRun, bool, error) {
+	run, err := s.repo.GetEligibleCalibration(runID)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, false, errRunNotFound
+		}
+		return nil, false, err
+	}
+	if run.Mode != model.FaceQualityRescoreModeCalibration ||
+		run.ApplyMode != model.FaceQualityRescoreApplyModeShadow ||
+		run.Status != model.FaceQualityRescoreStatusCompleted {
+		return run, false, nil
+	}
+	if run.TargetFaceCount <= 0 || run.RetryableCount != 0 {
+		return run, false, nil
+	}
+	if run.ProcessedFaceCount+run.SupersededManualCount != run.TargetFaceCount {
+		return run, false, nil
+	}
+	pendingOrProc, err := s.repo.CountPendingOrProcessing(runID)
+	if err != nil {
+		return run, false, err
+	}
+	if pendingOrProc > 0 {
+		return run, false, nil
+	}
+	return run, true, nil
+}
+
+// IsEligibleForEnforce 报告某 run 是否为合格校准（供 handler 列表/详情填充 eligible_for_enforce）。
+func (s *faceQualityRescoreService) IsEligibleForEnforce(runID uint) bool {
+	_, ok, err := s.getEligibleCalibration(runID)
+	return err == nil && ok
 }
 
 // Run 启动 worker 循环。按照片小批领取 item，调用 ScoreKnownFaces，写证据/审计/局部排除。
@@ -400,7 +573,17 @@ func (s *faceQualityRescoreService) processOneBatch(run *model.FaceQualityRescor
 		return true
 	}
 
-	// 构造目标列表（按 item 顺序）。
+	// 构造目标列表（按 item 顺序）。先验证所有 item 的归一化 BBox 合法：
+	// 任一非法（零框/越界）则该照片 item 整批写 retryable_error，事件转 historical_rescore + retryable_error，不调 ML。
+	for _, it := range items {
+		if !isValidNormalizedBBox(it.BBoxX, it.BBoxY, it.BBoxWidth, it.BBoxHeight) {
+			s.failItems(run, items,
+				fmt.Sprintf("invalid normalized bbox: x=%g y=%g w=%g h=%g", it.BBoxX, it.BBoxY, it.BBoxWidth, it.BBoxHeight),
+				model.FaceQualityRescoreItemStatusRetryableError, model.FaceQualityEvidenceStateRetryableError)
+			return true
+		}
+	}
+
 	targets := make([]mlclient.ScoreKnownFaceTarget, 0, len(items))
 	for _, it := range items {
 		targets = append(targets, mlclient.ScoreKnownFaceTarget{
@@ -512,10 +695,10 @@ func (s *faceQualityRescoreService) writeRescoreResult(run *model.FaceQualityRes
 			// 1) 只更新 Face 质检快照字段，不动 BBox/embedding/thumbnail/person_id/cluster_status。
 			// Face.QualityReasonsCSV 的 DB 列名是 quality_reasons_csv（GORM 默认 snake_case + CSV 后缀）。
 			updates := map[string]interface{}{
-				"face_validity_score":    result.Evidence.FaceValidityScore,
-				"quality_reasons_csv":    reasonCodesCSV(result.Evidence.QualityReasons),
-				"quality_rule_version":   qualityRuleVersionFromEvidence(mlEvidenceToModel(result.Evidence)),
-				"quality_model_version":  qualityModelVersionFromEvidence(mlEvidenceToModel(result.Evidence)),
+				"face_validity_score":   result.Evidence.FaceValidityScore,
+				"quality_reasons_csv":   reasonCodesCSV(result.Evidence.QualityReasons),
+				"quality_rule_version":  qualityRuleVersionFromEvidence(mlEvidenceToModel(result.Evidence)),
+				"quality_model_version": qualityModelVersionFromEvidence(mlEvidenceToModel(result.Evidence)),
 			}
 			if result.QualityScore != nil {
 				updates["quality_score"] = *result.QualityScore
@@ -624,7 +807,7 @@ func (s *faceQualityRescoreService) postExcludeRefresh(personIDs map[uint]struct
 		if len(personIDList) > 0 {
 			people.invalidateIdentityProfiles(IdentityProfileInvalidation{
 				DirtyPersonIDs: personIDList,
-				Reason:          "face_quality_rescore_exclude",
+				Reason:         "face_quality_rescore_exclude",
 			})
 			people.markProtoCacheDirty(personIDList, nil, "face_quality_rescore_exclude")
 		}
@@ -672,20 +855,35 @@ func (s *faceQualityRescoreService) failItems(run *model.FaceQualityRescoreRun, 
 }
 
 func (s *faceQualityRescoreService) refreshRunCounts(run *model.FaceQualityRescoreRun) {
+	// 计数重定义（计划 §3.1）：
+	//   processed_face_count 仅 item.status=processed（已获得模型证据），不再含 retryable/unmatched/superseded。
+	//   retryable_count = retryable + unmatched。
+	//   superseded_manual_count 单列。
+	//   review_required_count 只统计本 run 当前 evidence_state=available 且 decision=review_required 的真实灰区。
 	processed, _ := s.repo.CountItemsByStatus(run.ID, model.FaceQualityRescoreItemStatusProcessed)
 	retry, _ := s.repo.CountItemsByStatus(run.ID, model.FaceQualityRescoreItemStatusRetryableError)
 	unmatched, _ := s.repo.CountItemsByStatus(run.ID, model.FaceQualityRescoreItemStatusUnmatched)
 	superseded, _ := s.repo.CountItemsByStatus(run.ID, model.FaceQualityRescoreItemStatusSupersededManual)
-	run.ProcessedFaceCount = int(processed) + int(retry) + int(unmatched) + int(superseded)
+	run.ProcessedFaceCount = int(processed)
 	run.RetryableCount = int(retry) + int(unmatched)
+	run.SupersededManualCount = int(superseded)
 
-	// accepted/review_required/auto_excluded 从本 run 的审计事件统计。
+	// processed_photo_count：已到终态（非 pending/processing）的照片数。
+	processedPhoto, _ := s.repo.CountTerminalPhotos(run.ID)
+	run.ProcessedPhotoCount = processedPhoto
+
+	// accepted/review_required/auto_excluded 从本 run 的当前审计事件统计。
+	// 真实灰区只计 evidence_state=available 且 decision=review_required，排除 retryable/unmatched。
 	db := s.people.db
-	type cnt struct{ D string; C int64 }
+	type cnt struct {
+		D string
+		C int64
+	}
 	var rows []cnt
 	_ = db.Model(&model.FaceQualityEvent{}).
 		Select("decision as d, count(*) as c").
-		Where("rescore_run_id = ? AND is_current = ?", run.ID, true).
+		Where("rescore_run_id = ? AND is_current = ? AND evidence_state = ?",
+			run.ID, true, model.FaceQualityEvidenceStateAvailable).
 		Group("decision").Scan(&rows).Error
 	acc, rv, exc := 0, 0, 0
 	for _, r := range rows {
@@ -701,10 +899,17 @@ func (s *faceQualityRescoreService) refreshRunCounts(run *model.FaceQualityResco
 	run.AcceptedCount = acc
 	run.ReviewRequiredCount = rv
 	run.AutoExcludedCount = exc
+
+	// last_error：本 run 最近一条非空 item 错误。
+	if le, err := s.repo.LatestItemError(run.ID); err == nil {
+		run.LastError = le
+	}
+
 	_ = s.people.executeWrite(func() error { return s.repo.UpdateRun(run) })
 }
 
-// maybeCompleteRun 检查 run 是否全部 item 处理完（无 pending/processing），是则标 completed。
+// maybeCompleteRun 检查 run 是否全部 item 处理完（无 pending/processing），是则选择终态：
+// 无技术错误（retryable_count=0）→ completed；存在 retryable/unmatched → completed_with_errors。
 // 已被 Cancel/Failed 的 run 不覆盖（避免与人工取消竞态）。
 func (s *faceQualityRescoreService) maybeCompleteRun(run *model.FaceQualityRescoreRun) {
 	if run.Status == model.FaceQualityRescoreStatusCancelled || run.Status == model.FaceQualityRescoreStatusFailed {
@@ -721,8 +926,14 @@ func (s *faceQualityRescoreService) maybeCompleteRun(run *model.FaceQualityResco
 		if latest.Status != model.FaceQualityRescoreStatusRunning && latest.Status != model.FaceQualityRescoreStatusQueued {
 			return
 		}
+		// 先刷新计数，确保 retryable_count 反映最新失败 item。
+		s.refreshRunCounts(latest)
 		now := time.Now().UTC()
-		latest.Status = model.FaceQualityRescoreStatusCompleted
+		if latest.RetryableCount > 0 {
+			latest.Status = model.FaceQualityRescoreStatusCompletedWithError
+		} else {
+			latest.Status = model.FaceQualityRescoreStatusCompleted
+		}
 		latest.CompletedAt = &now
 		*run = *latest
 		_ = s.people.executeWrite(func() error { return s.repo.UpdateRun(latest) })
@@ -800,14 +1011,21 @@ var readFile = func(path string) ([]byte, error) {
 // errRunConflict / errCalibrationRequired / errRunNotFound 供 handler 映射 HTTP 状态码。
 // 导出为公共错误，handler 用 errors.Is 判定。
 var (
-	ErrRescoreRunConflict         = fmt.Errorf("an active rescore run already exists")
-	ErrRescoreCalibrationRequired = fmt.Errorf("a completed calibration run is required before full/enforce")
-	ErrRescoreRunNotFound         = fmt.Errorf("rescore run not found")
+	ErrRescoreRunConflict               = fmt.Errorf("an active rescore run already exists")
+	ErrRescoreCalibrationRequired       = fmt.Errorf("a completed calibration run is required before full/enforce")
+	ErrRescoreRunNotFound               = fmt.Errorf("rescore run not found")
+	ErrRescoreRetrySourceInvalid        = fmt.Errorf("retry source run is not a completed calibration with retryable failures")
+	ErrRescoreRetrySourceNotCalibration = fmt.Errorf("retry source run is not calibration mode")
+	ErrRescoreRetrySourceNotTerminal    = fmt.Errorf("retry source run is not in a terminal state")
+	ErrRescoreRetryNoTargets            = fmt.Errorf("retry source run has no current retryable failures")
 
 	// 内部别名，保持 service 内部引用不变。
-	errRunConflict         = ErrRescoreRunConflict
-	errCalibrationRequired = ErrRescoreCalibrationRequired
-	errRunNotFound         = ErrRescoreRunNotFound
+	errRunConflict               = ErrRescoreRunConflict
+	errCalibrationRequired       = ErrRescoreCalibrationRequired
+	errRunNotFound               = ErrRescoreRunNotFound
+	errRetrySourceNotCalibration = ErrRescoreRetrySourceNotCalibration
+	errRetrySourceNotTerminal    = ErrRescoreRetrySourceNotTerminal
+	errRetryNoTargets            = ErrRescoreRetryNoTargets
 )
 
 // 编译期断言：service 实现 interface。

@@ -585,3 +585,56 @@ func TestMigrateFaceQualityEvidenceOrigin(t *testing.T) {
 	require.NoError(t, db.First(&got, histMissing.ID).Error)
 	assert.Equal(t, model.FaceQualityEvidenceOriginHistoricalBackfill, got.EvidenceOrigin)
 }
+
+// TestMigrateFaceQualityRescoreRunMeta 验证既有运行元数据修复：
+//  1. status=completed 且 retryable_count>0 → completed_with_errors；
+//  2. last_error 为空时从失败 item 回填；
+//  3. 无失败的 completed 不变；幂等。
+func TestMigrateFaceQualityRescoreRunMeta(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.FaceQualityRescoreRun{}, &model.FaceQualityRescoreItem{}, &model.AppConfig{}))
+
+	// 1) 线上 #1 形态：completed + retryable_count=4733 + 空 last_error + 失败 item。
+	run1 := &model.FaceQualityRescoreRun{
+		Mode: model.FaceQualityRescoreModeCalibration, ApplyMode: model.FaceQualityRescoreApplyModeShadow,
+		Status: model.FaceQualityRescoreStatusCompleted, RetryableCount: 4733,
+		TargetFaceCount: 4733, RuleVersion: "v1", ModelVersion: "test-v1",
+	}
+	require.NoError(t, db.Create(run1).Error)
+	require.NoError(t, db.Create(&model.FaceQualityRescoreItem{
+		RunID: run1.ID, PhotoID: 1, FaceID: 100,
+		BBoxX: 0, BBoxY: 0, BBoxWidth: 0, BBoxHeight: 0,
+		Status: model.FaceQualityRescoreItemStatusRetryableError,
+		LastError: "score known faces returned status 422",
+	}).Error)
+
+	// 2) 干净的 completed 校准（无失败）—— 不应变。
+	run2 := &model.FaceQualityRescoreRun{
+		Mode: model.FaceQualityRescoreModeCalibration, ApplyMode: model.FaceQualityRescoreApplyModeShadow,
+		Status: model.FaceQualityRescoreStatusCompleted, RetryableCount: 0,
+		TargetFaceCount: 5, ProcessedFaceCount: 5, RuleVersion: "v1", ModelVersion: "test-v1",
+		LastError: "ok",
+	}
+	require.NoError(t, db.Create(run2).Error)
+
+	require.NoError(t, migrateFaceQualityRescoreRunMeta(db))
+
+	// run1 → completed_with_errors，last_error 从 item 回填。
+	var got1 model.FaceQualityRescoreRun
+	require.NoError(t, db.First(&got1, run1.ID).Error)
+	assert.Equal(t, model.FaceQualityRescoreStatusCompletedWithError, got1.Status)
+	assert.Equal(t, "score known faces returned status 422", got1.LastError)
+
+	// run2 不变。
+	var got2 model.FaceQualityRescoreRun
+	require.NoError(t, db.First(&got2, run2.ID).Error)
+	assert.Equal(t, model.FaceQualityRescoreStatusCompleted, got2.Status)
+	assert.Equal(t, "ok", got2.LastError)
+
+	// 幂等：再跑一次不报错、不变。
+	require.NoError(t, migrateFaceQualityRescoreRunMeta(db))
+	got1 = model.FaceQualityRescoreRun{}
+	require.NoError(t, db.First(&got1, run1.ID).Error)
+	assert.Equal(t, model.FaceQualityRescoreStatusCompletedWithError, got1.Status)
+}

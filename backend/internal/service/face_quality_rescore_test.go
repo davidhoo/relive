@@ -61,7 +61,7 @@ func TestRescore_CreateCalibrationFreezesTargets(t *testing.T) {
 	}
 
 	// photo_limit=2：只快照前 2 张照片。
-	run, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 2)
+	run, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 2, 0)
 	require.NoError(t, err)
 	assert.Equal(t, model.FaceQualityRescoreApplyModeShadow, run.ApplyMode)
 	assert.Equal(t, 2, run.TargetPhotoCount)
@@ -70,24 +70,99 @@ func TestRescore_CreateCalibrationFreezesTargets(t *testing.T) {
 	items, err := repo.ListItemsByRun(run.ID)
 	require.NoError(t, err)
 	require.Len(t, items, 2)
+	// 每个 item 的四个 BBox 必须与 baseline event 完全一致且 width/height > 0（复现零框 bug）。
 	for _, it := range items {
 		assert.Equal(t, model.FaceQualityRescoreItemStatusPending, it.Status)
+		assert.Equal(t, 0.2, it.BBoxX, "bbox_x must match baseline, got zero-frame bug")
+		assert.Equal(t, 0.2, it.BBoxY, "bbox_y must match baseline")
+		assert.Equal(t, 0.2, it.BBoxWidth, "bbox_width must be > 0, not zero")
+		assert.Equal(t, 0.2, it.BBoxHeight, "bbox_height must be > 0, not zero")
+		// 与 baseline 事件逐字段一致。
+		var baseline model.FaceQualityEvent
+		require.NoError(t, db.First(&baseline, it.BaselineEventID).Error)
+		assert.Equal(t, baseline.BBoxX, it.BBoxX)
+		assert.Equal(t, baseline.BBoxY, it.BBoxY)
+		assert.Equal(t, baseline.BBoxWidth, it.BBoxWidth)
+		assert.Equal(t, baseline.BBoxHeight, it.BBoxHeight)
 	}
+}
+
+// TestRescore_InvalidBBoxBlockedBeforeML 非法归一化 BBox 在调用 ML 前被阻断：
+// fake ML client 调用次数为 0；item 写 retryable_error；事件转 historical_rescore + retryable_error；
+// Face 人物归属与聚类状态不变。
+func TestRescore_InvalidBBoxBlockedBeforeML(t *testing.T) {
+	client := &rescoreFakeMLClient{resultsByFace: map[uint]mlclient.ScoreKnownFaceResult{}}
+	rs, svc, repo := newRescoreTestSvc(t, client)
+	db := svc.db
+
+	photo := &model.Photo{FilePath: "/t/p.jpg", FaceProcessStatus: model.FaceProcessStatusReady}
+	require.NoError(t, db.Create(photo).Error)
+	person := &model.Person{Category: model.PersonCategoryFamily}
+	require.NoError(t, db.Create(person).Error)
+	// Face 持有合法归一化框，但 baseline 事件故意写零框（模拟历史坏数据 / 零框 bug 残留）。
+	face := &model.Face{
+		PhotoID: photo.ID, PersonID: &person.ID,
+		BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		ClusterStatus: model.FaceClusterStatusAssigned,
+	}
+	require.NoError(t, db.Create(face).Error)
+	require.NoError(t, db.Create(&model.FaceQualityEvent{
+		PhotoID: photo.ID, FaceID: &face.ID,
+		BBoxX: 0.0, BBoxY: 0.0, BBoxWidth: 0.0, BBoxHeight: 0.0, // 非法零框
+		Decision: model.FaceQualityDecisionReviewRequired,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "test-v1",
+		EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalBackfill,
+		EvidenceState:  model.FaceQualityEvidenceStateMissing,
+		IsCurrent:      true,
+	}).Error)
+
+	run, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0)
+	require.NoError(t, err)
+
+	// 处理批次：非法 BBox 应在调 ML 前被阻断。
+	processed := rs.processOneBatch(run)
+	assert.True(t, processed)
+
+	// ML 从未被调用（无 resultsByFace 命中也无 unmatched 兜底）。
+	assert.Equal(t, 0, client.callCount, "ML must not be called for invalid bbox")
+
+	// item 为 retryable_error，last_error 提示非法 bbox。
+	items, err := repo.ListItemsByRun(run.ID)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, model.FaceQualityRescoreItemStatusRetryableError, items[0].Status)
+	assert.Contains(t, items[0].LastError, "invalid normalized bbox")
+
+	// 当前事件转 historical_rescore + retryable_error。
+	var cur model.FaceQualityEvent
+	require.NoError(t, db.Where("photo_id = ? AND is_current = ?", photo.ID, true).First(&cur).Error)
+	assert.Equal(t, model.FaceQualityEvidenceOriginHistoricalRescore, cur.EvidenceOrigin)
+	assert.Equal(t, model.FaceQualityEvidenceStateRetryableError, cur.EvidenceState)
+
+	// Face 人物归属与聚类状态不变。
+	var updated model.Face
+	require.NoError(t, db.First(&updated, face.ID).Error)
+	assert.Equal(t, model.FaceClusterStatusAssigned, updated.ClusterStatus)
+	require.NotNil(t, updated.PersonID)
+	assert.Equal(t, person.ID, *updated.PersonID)
+	var excCount int64
+	db.Model(&model.FaceExclusion{}).Where("source_face_id = ?", face.ID).Count(&excCount)
+	assert.Equal(t, int64(0), excCount)
 }
 
 // TestRescore_FullEnforceRequiresCompletedCalibration 无 completed calibration 时 full/enforce 返回错误。
 func TestRescore_FullEnforceRequiresCompletedCalibration(t *testing.T) {
 	rs, _, _ := newRescoreTestSvc(t, nil)
-	_, err := rs.CreateRun(model.FaceQualityRescoreModeFull, model.FaceQualityRescoreApplyModeEnforce, 0)
+	_, err := rs.CreateRun(model.FaceQualityRescoreModeFull, model.FaceQualityRescoreApplyModeEnforce, 0, 0)
 	assert.ErrorIs(t, err, errCalibrationRequired)
 }
 
 // TestRescore_SingleActiveRunConflict 已有 running run 时再创建返回冲突。
 func TestRescore_SingleActiveRunConflict(t *testing.T) {
 	rs, _, _ := newRescoreTestSvc(t, nil)
-	_, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0)
+	_, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0)
 	require.NoError(t, err)
-	_, err = rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0)
+	_, err = rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0)
 	assert.ErrorIs(t, err, errRunConflict)
 }
 
@@ -136,7 +211,7 @@ func TestRescore_ShadowNeverExcludes(t *testing.T) {
 		QualityScore: floatPtr(0.1),
 	}
 
-	run, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0)
+	run, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0)
 	require.NoError(t, err)
 
 	processed := rs.processOneBatch(run)
@@ -219,12 +294,26 @@ func TestRescore_EnforceExcludesHighConfidenceNonFace(t *testing.T) {
 	// 注意：不调用 processOneBatch——calibration shadow 会把 face 的 baseline 失活并写成
 	// available review_required，导致 full run 没法再从 missing 取到该目标。这里只把 run 标完成，
 	// 不处理 item，使 full run 仍能快照到原 missing 目标。
-	calib, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0)
+	calib, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0)
 	require.NoError(t, err)
 	calib.Status = model.FaceQualityRescoreStatusCompleted
+	// 伪造一个合格校准：target=1, processed=1, retryable=0, 无 pending/processing。
+	// 该 calibration 的 item 仍是 pending（未真正处理），为了让 full 通过门禁，
+	// 这里把 item 标 processed 以满足「无 pending/processing」与计数闭合。
+	calibItems, _ := repo.ListItemsByRun(calib.ID)
+	for _, it := range calibItems {
+		it.Status = model.FaceQualityRescoreItemStatusProcessed
+		require.NoError(t, repo.UpdateItem(it))
+	}
+	calib.TargetFaceCount = len(calibItems)
+	calib.ProcessedFaceCount = len(calibItems)
+	calib.RetryableCount = 0
 	now := time.Now().UTC()
 	calib.CompletedAt = &now
 	require.NoError(t, repo.UpdateRun(calib))
+
+	// full/enforce run 引用该合格校准 run。
+	calibID := calib.ID
 
 	// full/enforce run 重新快照当前 historical_backfill+missing 目标（即上面的 face）。
 	// 为同时验证「不影响其他 run」，再造一个属于 photo2 的 missing 目标，full run 会一并快照。
@@ -277,7 +366,7 @@ func TestRescore_EnforceExcludesHighConfidenceNonFace(t *testing.T) {
 		QualityScore: floatPtr(0.1),
 	}
 
-	run, err := rs.CreateRun(model.FaceQualityRescoreModeFull, model.FaceQualityRescoreApplyModeEnforce, 0)
+	run, err := rs.CreateRun(model.FaceQualityRescoreModeFull, model.FaceQualityRescoreApplyModeEnforce, 0, calibID)
 	require.NoError(t, err)
 	assert.Equal(t, model.FaceQualityRescoreApplyModeEnforce, run.ApplyMode)
 	require.Equal(t, 2, run.TargetFaceCount, "full run 应快照到 photo1+photo2 的 missing 目标")
@@ -341,7 +430,7 @@ func TestRescore_UnmatchedDoesNotExclude(t *testing.T) {
 		IsCurrent:      true,
 	}).Error)
 
-	run, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0)
+	run, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0)
 	require.NoError(t, err)
 	rs.processOneBatch(run)
 
@@ -392,7 +481,7 @@ func TestRescore_ManualConclusionSupersedesItem(t *testing.T) {
 	}
 	require.NoError(t, db.Create(baseline).Error)
 
-	run, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0)
+	run, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0)
 	require.NoError(t, err)
 
 	// 在 worker 处理前，人工把该 Face 接受（写 manual accepted 当前事件，baseline 失活）。
@@ -516,7 +605,7 @@ func TestRescore_PauseResumeResetProcessing(t *testing.T) {
 		IsCurrent:      true,
 	}).Error)
 
-	run, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0)
+	run, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0)
 	require.NoError(t, err)
 
 	// 领取一个 item（置 processing），模拟 worker 中途崩溃。
@@ -535,11 +624,317 @@ func TestRescore_PauseResumeResetProcessing(t *testing.T) {
 	assert.Equal(t, int64(0), processing)
 }
 
+// TestRescore_AllFailureRunIsCompletedWithErrors 全部 item retryable 的 run：
+// processed_face_count=0、review_required_count=0、retryable_count=target、last_error 非空、终态 completed_with_errors。
+func TestRescore_AllFailureRunIsCompletedWithErrors(t *testing.T) {
+	// ML 返回 error，使每个 item 走 retryable_error。
+	client := &rescoreFakeMLClient{resultsByFace: map[uint]mlclient.ScoreKnownFaceResult{}, err: fmt.Errorf("ml service 422 invalid bbox")}
+	rs, svc, repo := newRescoreTestSvc(t, client)
+	db := svc.db
+
+	for i := 0; i < 3; i++ {
+		photo := &model.Photo{FilePath: filepath.Join("/t", fmt.Sprintf("p%d.jpg", i)), FaceProcessStatus: model.FaceProcessStatusReady}
+		require.NoError(t, db.Create(photo).Error)
+		face := &model.Face{PhotoID: photo.ID, BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusAssigned}
+		require.NoError(t, db.Create(face).Error)
+		require.NoError(t, db.Create(&model.FaceQualityEvent{
+			PhotoID: photo.ID, FaceID: &face.ID,
+			BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2,
+			Decision: model.FaceQualityDecisionReviewRequired,
+			Source:   model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "test-v1",
+			EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalBackfill,
+			EvidenceState:  model.FaceQualityEvidenceStateMissing,
+			IsCurrent:      true,
+		}).Error)
+	}
+
+	run, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, 3, run.TargetFaceCount)
+
+	// 处理全部 3 个照片批次（每张照片 1 个 item）。
+	for i := 0; i < 3; i++ {
+		rs.processOneBatch(run)
+	}
+	// 触发完成判定。
+	rs.processOneBatch(run)
+
+	latest, err := repo.GetRun(run.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.FaceQualityRescoreStatusCompletedWithError, latest.Status, "全失败 run 应为 completed_with_errors，不是 completed")
+	assert.Equal(t, 0, latest.ProcessedFaceCount, "已获证据应为 0")
+	assert.Equal(t, 0, latest.ReviewRequiredCount, "真实灰区应为 0（失败项不计入）")
+	assert.Equal(t, 3, latest.RetryableCount, "待重试应为 target=3")
+	assert.NotEmpty(t, latest.LastError, "last_error 应从失败 item 回填")
+}
+
+// TestRescore_RetryableNotCountedAsReviewRequired retryable_error + decision=review_required 不计入灰区：
+// 只有 evidence_state=available 的 review_required 才算。
+func TestRescore_RetryableNotCountedAsReviewRequired(t *testing.T) {
+	client := &rescoreFakeMLClient{resultsByFace: map[uint]mlclient.ScoreKnownFaceResult{}, err: fmt.Errorf("ml down")}
+	rs, svc, repo := newRescoreTestSvc(t, client)
+	db := svc.db
+
+	photo := &model.Photo{FilePath: "/t/p.jpg", FaceProcessStatus: model.FaceProcessStatusReady}
+	require.NoError(t, db.Create(photo).Error)
+	face := &model.Face{PhotoID: photo.ID, BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusPending}
+	require.NoError(t, db.Create(face).Error)
+	require.NoError(t, db.Create(&model.FaceQualityEvent{
+		PhotoID: photo.ID, FaceID: &face.ID,
+		BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionReviewRequired,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "test-v1",
+		EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalBackfill,
+		EvidenceState:  model.FaceQualityEvidenceStateMissing,
+		IsCurrent:      true,
+	}).Error)
+
+	run, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0)
+	require.NoError(t, err)
+	rs.processOneBatch(run)
+
+	latest, err := repo.GetRun(run.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, latest.ReviewRequiredCount, "retryable 的 review_required 不应计入灰区")
+	assert.Equal(t, 1, latest.RetryableCount)
+}
+
+// TestRescore_RetryRunSnapshotsOnlyFailedEvents 来源 run 有两个 retryable、一个成功、一个 superseded：
+// 重试只快照当前 retryable 事件，新 run 为 shadow 且 retry_of_run_id 指向来源。
+func TestRescore_RetryRunSnapshotsOnlyFailedEvents(t *testing.T) {
+	rs, svc, repo := newRescoreTestSvc(t, nil)
+	db := svc.db
+
+	photo := &model.Photo{FilePath: "/t/p.jpg", FaceProcessStatus: model.FaceProcessStatusReady}
+	require.NoError(t, db.Create(photo).Error)
+	f1 := &model.Face{PhotoID: photo.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusPending}
+	f2 := &model.Face{PhotoID: photo.ID, BBoxX: 0.4, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusPending}
+	f3 := &model.Face{PhotoID: photo.ID, BBoxX: 0.1, BBoxY: 0.4, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusPending}
+	require.NoError(t, db.Create(f1).Error)
+	require.NoError(t, db.Create(f2).Error)
+	require.NoError(t, db.Create(f3).Error)
+
+	srcRun := uint(0)
+	// 两个当前失败事件（应被 retry 快照）。
+	require.NoError(t, db.Create(&model.FaceQualityEvent{PhotoID: photo.ID, FaceID: &f1.ID, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Decision: model.FaceQualityDecisionReviewRequired, Source: model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "t", EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalRescore, EvidenceState: model.FaceQualityEvidenceStateRetryableError, RescoreRunID: &srcRun, IsCurrent: true}).Error)
+	require.NoError(t, db.Create(&model.FaceQualityEvent{PhotoID: photo.ID, FaceID: &f2.ID, BBoxX: 0.4, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Decision: model.FaceQualityDecisionReviewRequired, Source: model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "t", EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalRescore, EvidenceState: model.FaceQualityEvidenceStateUnmatched, RescoreRunID: &srcRun, IsCurrent: true}).Error)
+	// 一个成功事件（不应被 retry 快照）。
+	require.NoError(t, db.Create(&model.FaceQualityEvent{PhotoID: photo.ID, FaceID: &f3.ID, BBoxX: 0.1, BBoxY: 0.4, BBoxWidth: 0.2, BBoxHeight: 0.2, Decision: model.FaceQualityDecisionAccepted, Source: model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "t", EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalRescore, EvidenceState: model.FaceQualityEvidenceStateAvailable, RescoreRunID: &srcRun, IsCurrent: true}).Error)
+
+	// 先建来源 run（calibration + completed_with_errors）。
+	src, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0)
+	require.NoError(t, err)
+	src.Status = model.FaceQualityRescoreStatusCompletedWithError
+	require.NoError(t, repo.UpdateRun(src))
+	// 把来源 run 的失败事件 rescore_run_id 更新为来源 run ID（创建时未关联）。
+	srcID := src.ID
+	for _, fid := range []uint{f1.ID, f2.ID, f3.ID} {
+		require.NoError(t, db.Model(&model.FaceQualityEvent{}).Where("face_id = ? AND rescore_run_id = 0", fid).Update("rescore_run_id", srcID).Error)
+	}
+
+	retry, err := rs.RetryRun(src.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.FaceQualityRescoreModeCalibration, retry.Mode)
+	assert.Equal(t, model.FaceQualityRescoreApplyModeShadow, retry.ApplyMode)
+	require.NotNil(t, retry.RetryOfRunID)
+	assert.Equal(t, src.ID, *retry.RetryOfRunID)
+	assert.Equal(t, 2, retry.TargetFaceCount, "只快照 2 个失败事件")
+	assert.Equal(t, 1, retry.TargetPhotoCount)
+
+	items, err := repo.ListItemsByRun(retry.ID)
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	// 验证 item 的 BBox 与原失败事件一致（非零框）。
+	for _, it := range items {
+		assert.Greater(t, it.BBoxWidth, 0.0)
+		assert.Greater(t, it.BBoxHeight, 0.0)
+	}
+}
+
+// TestRescore_RetryRunRejectsInvalidSource 来源不是 calibration / 仍在运行 / 无失败集合时返回错误，不创建 run。
+func TestRescore_RetryRunRejectsInvalidSource(t *testing.T) {
+	rs, svc, repo := newRescoreTestSvc(t, nil)
+	db := svc.db
+
+	// 1) 不存在 → errRunNotFound。
+	_, err := rs.RetryRun(999)
+	assert.ErrorIs(t, err, errRunNotFound)
+
+	// 2) full run（非 calibration）→ 拒绝。直接构造一个 full run 写入 DB，绕过 CreateRun 门禁。
+	photo := &model.Photo{FilePath: "/t/p.jpg", FaceProcessStatus: model.FaceProcessStatusReady}
+	require.NoError(t, db.Create(photo).Error)
+	full := &model.FaceQualityRescoreRun{
+		Mode: model.FaceQualityRescoreModeFull, ApplyMode: model.FaceQualityRescoreApplyModeEnforce,
+		Status: model.FaceQualityRescoreStatusCompleted, RuleVersion: "v1", ModelVersion: "test-v1",
+	}
+	require.NoError(t, repo.CreateRun(full))
+	_, err = rs.RetryRun(full.ID)
+	assert.ErrorIs(t, err, errRetrySourceNotCalibration)
+
+	// 3) 仍在运行的 calibration → 拒绝。
+	src2, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0)
+	require.NoError(t, err)
+	// src2 是 running 状态。
+	_, err = rs.RetryRun(src2.ID)
+	assert.ErrorIs(t, err, errRetrySourceNotTerminal)
+
+	// 4) completed 但无失败事件 → errRetryNoTargets。
+	require.NoError(t, rs.Cancel(src2.ID))
+	src3, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0)
+	require.NoError(t, err)
+	src3.Status = model.FaceQualityRescoreStatusCompleted
+	require.NoError(t, repo.UpdateRun(src3))
+	require.NoError(t, rs.Cancel(src3.ID))
+	src3.Status = model.FaceQualityRescoreStatusCompleted
+	require.NoError(t, repo.UpdateRun(src3))
+	_, err = rs.RetryRun(src3.ID)
+	assert.ErrorIs(t, err, errRetryNoTargets)
+}
+
+// TestRescore_FullRejectsCompletedWithErrors #1 形态（completed_with_errors 或 legacy completed+retryable>0）拒绝 full。
+func TestRescore_FullRejectsCompletedWithErrors(t *testing.T) {
+	rs, svc, repo := newRescoreTestSvc(t, nil)
+	_ = svc
+	// 直接构造一个 completed_with_errors 的 calibration。
+	src, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0)
+	require.NoError(t, err)
+	src.Status = model.FaceQualityRescoreStatusCompletedWithError
+	src.RetryableCount = 100
+	require.NoError(t, repo.UpdateRun(src))
+
+	_, err = rs.CreateRun(model.FaceQualityRescoreModeFull, model.FaceQualityRescoreApplyModeEnforce, 0, src.ID)
+	assert.ErrorIs(t, err, errCalibrationRequired)
+
+	// legacy completed + retryable>0 也拒绝。
+	src2, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0)
+	require.NoError(t, err)
+	src2.Status = model.FaceQualityRescoreStatusCompleted
+	src2.RetryableCount = 5
+	require.NoError(t, repo.UpdateRun(src2))
+	_, err = rs.CreateRun(model.FaceQualityRescoreModeFull, model.FaceQualityRescoreApplyModeEnforce, 0, src2.ID)
+	assert.ErrorIs(t, err, errCalibrationRequired)
+}
+
+// TestRescore_FullAcceptsEligibleCalibration 合格 shadow calibration 可创建 full，且 calibration_run_id 被持久化。
+func TestRescore_FullAcceptsEligibleCalibration(t *testing.T) {
+	rs, svc, repo := newRescoreTestSvc(t, nil)
+	db := svc.db
+
+	photo := &model.Photo{FilePath: "/t/p.jpg", FaceProcessStatus: model.FaceProcessStatusReady}
+	require.NoError(t, db.Create(photo).Error)
+	face := &model.Face{PhotoID: photo.ID, BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusPending}
+	require.NoError(t, db.Create(face).Error)
+	require.NoError(t, db.Create(&model.FaceQualityEvent{
+		PhotoID: photo.ID, FaceID: &face.ID,
+		BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionReviewRequired,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "test-v1",
+		EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalBackfill,
+		EvidenceState:  model.FaceQualityEvidenceStateMissing,
+		IsCurrent:      true,
+	}).Error)
+
+	calib, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0)
+	require.NoError(t, err)
+	// 伪造合格：处理 item 为 processed，计数闭合。
+	items, _ := repo.ListItemsByRun(calib.ID)
+	for _, it := range items {
+		it.Status = model.FaceQualityRescoreItemStatusProcessed
+		require.NoError(t, repo.UpdateItem(it))
+	}
+	calib.Status = model.FaceQualityRescoreStatusCompleted
+	calib.TargetFaceCount = len(items)
+	calib.ProcessedFaceCount = len(items)
+	calib.RetryableCount = 0
+	require.NoError(t, repo.UpdateRun(calib))
+
+	// full 引用合格 calibration。
+	full, err := rs.CreateRun(model.FaceQualityRescoreModeFull, model.FaceQualityRescoreApplyModeEnforce, 0, calib.ID)
+	require.NoError(t, err)
+	require.NotNil(t, full.CalibrationRunID)
+	assert.Equal(t, calib.ID, *full.CalibrationRunID)
+}
+
+// TestRescore_FullRejectsEmptyOrUnclosedCalibration 空校准 / 仍有 pending / 计数不闭合均拒绝。
+func TestRescore_FullRejectsEmptyOrUnclosedCalibration(t *testing.T) {
+	rs, _, repo := newRescoreTestSvc(t, nil)
+
+	// 1) 空校准（target=0）：建一个 completed calibration 但 target_face_count=0。
+	empty, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0)
+	require.NoError(t, err)
+	empty.Status = model.FaceQualityRescoreStatusCompleted
+	empty.TargetFaceCount = 0
+	empty.ProcessedFaceCount = 0
+	empty.RetryableCount = 0
+	require.NoError(t, repo.UpdateRun(empty))
+	_, err = rs.CreateRun(model.FaceQualityRescoreModeFull, model.FaceQualityRescoreApplyModeEnforce, 0, empty.ID)
+	assert.ErrorIs(t, err, errCalibrationRequired, "空校准应拒绝")
+
+	// 2) 仍有 pending item。
+	unclosed := &model.FaceQualityRescoreRun{
+		Mode: model.FaceQualityRescoreModeCalibration, ApplyMode: model.FaceQualityRescoreApplyModeShadow,
+		Status: model.FaceQualityRescoreStatusCompleted, TargetFaceCount: 1, ProcessedFaceCount: 1,
+		RetryableCount: 0, RuleVersion: "v1", ModelVersion: "test-v1",
+	}
+	require.NoError(t, repo.CreateRun(unclosed))
+	require.NoError(t, repo.CreateItems([]*model.FaceQualityRescoreItem{
+		{RunID: unclosed.ID, PhotoID: 1, FaceID: 10, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, BaselineEventID: 1, Status: model.FaceQualityRescoreItemStatusPending},
+	}))
+	_, err = rs.CreateRun(model.FaceQualityRescoreModeFull, model.FaceQualityRescoreApplyModeEnforce, 0, unclosed.ID)
+	assert.ErrorIs(t, err, errCalibrationRequired, "仍有 pending 应拒绝")
+}
+
+// TestRescore_IsEligibleForEnforce 报告合格/不合格校准。
+func TestRescore_IsEligibleForEnforce(t *testing.T) {
+	rs, svc, repo := newRescoreTestSvc(t, nil)
+	db := svc.db
+
+	// 合格 calibration：target=1, processed=1, retryable=0, 无 pending。
+	photo := &model.Photo{FilePath: "/t/p.jpg", FaceProcessStatus: model.FaceProcessStatusReady}
+	require.NoError(t, db.Create(photo).Error)
+	face := &model.Face{PhotoID: photo.ID, BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusPending}
+	require.NoError(t, db.Create(face).Error)
+	require.NoError(t, db.Create(&model.FaceQualityEvent{
+		PhotoID: photo.ID, FaceID: &face.ID,
+		BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionReviewRequired,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "test-v1",
+		EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalBackfill,
+		EvidenceState:  model.FaceQualityEvidenceStateMissing,
+		IsCurrent:      true,
+	}).Error)
+	calib, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0)
+	require.NoError(t, err)
+	items, _ := repo.ListItemsByRun(calib.ID)
+	for _, it := range items {
+		it.Status = model.FaceQualityRescoreItemStatusProcessed
+		require.NoError(t, repo.UpdateItem(it))
+	}
+	calib.Status = model.FaceQualityRescoreStatusCompleted
+	calib.TargetFaceCount = len(items)
+	calib.ProcessedFaceCount = len(items)
+	calib.RetryableCount = 0
+	require.NoError(t, repo.UpdateRun(calib))
+	assert.True(t, rs.IsEligibleForEnforce(calib.ID))
+
+	// completed_with_errors 不合格。
+	bad, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0)
+	require.NoError(t, err)
+	bad.Status = model.FaceQualityRescoreStatusCompletedWithError
+	bad.RetryableCount = 10
+	require.NoError(t, repo.UpdateRun(bad))
+	assert.False(t, rs.IsEligibleForEnforce(bad.ID))
+
+	// 不存在 → false。
+	assert.False(t, rs.IsEligibleForEnforce(99999))
+}
+
 // rescoreFakeMLClient 可控的 ScoreKnownFaces 桩：按 face_id 返回预设结果，或全部 unmatched。
 type rescoreFakeMLClient struct {
 	resultsByFace map[uint]mlclient.ScoreKnownFaceResult
 	unmatched     bool
 	err           error
+	callCount     int
 }
 
 func (c *rescoreFakeMLClient) DetectFaces(ctx context.Context, req mlclient.DetectFacesRequest) (*mlclient.DetectFacesResponse, error) {
@@ -547,6 +942,7 @@ func (c *rescoreFakeMLClient) DetectFaces(ctx context.Context, req mlclient.Dete
 }
 
 func (c *rescoreFakeMLClient) ScoreKnownFaces(ctx context.Context, req mlclient.ScoreKnownFacesRequest) (*mlclient.ScoreKnownFacesResponse, error) {
+	c.callCount++
 	if c.err != nil {
 		return nil, c.err
 	}

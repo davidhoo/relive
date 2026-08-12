@@ -164,6 +164,14 @@ export const peopleApi = {
     )
   },
 
+  // 按来源 run 重试：只快照该 run 的当前失败事件，创建新的 shadow calibration。
+  retryFaceQualityRescoreRun(id: number) {
+    return http.post<ApiResponse<FaceQualityRescoreRun>>(
+      `/people/face-quality/rescore-runs/${id}/retry`,
+      null,
+    )
+  },
+
   getTask() {
     return http.get<ApiResponse<PeopleTask | null>>('/people/task')
   },
