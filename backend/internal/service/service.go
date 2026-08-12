@@ -42,6 +42,9 @@ type Services struct {
 	// FaceQualityBackfill 存量质检审计后台任务（nil 表示未启用）。
 	// 在 main 启动时 Run()，foreground/I/O 高时暂停，服务重启从 app_config 进度继续。
 	FaceQualityBackfill *FaceQualityBackfill
+	// FaceQualityRescore 历史重评分运行管理服务（nil 表示未启用）。
+	// 在 main 启动时 Run() worker 循环，foreground/iowait/cooldown 让步，单 run 互斥。
+	FaceQualityRescore FaceQualityRescoreService
 	// ProtoCacheRebuildStatus 返回 protoCache 分批 full rebuild 的只读进度快照（nil 表示无 rebuild）。
 	// 由 peopleService 注入，供后台状态 API 展示 rebuild 运行/暂停/进度/原因与 cold_building。
 	ProtoCacheRebuildStatus func() *model.ProtoCacheRebuildStatusResponse
@@ -131,6 +134,9 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	faceQualitySvc := NewFaceQualityService(peopleSvc.(*peopleService))
 	// 存量质检审计后台任务：低并对历史 Face 生成质检候选与审计事件，不改人物归属。
 	faceQualityBackfill := NewFaceQualityBackfill(peopleSvc.(*peopleService), backgroundCoordinator, repos.Config)
+	// 历史重评分运行管理：可暂停/恢复进度的 run + 目标快照，调用 score-known-faces 补证据。
+	faceQualityRescoreRepo := repository.NewFaceQualityRescoreRepository(db)
+	faceQualityRescoreSvc := NewFaceQualityRescoreService(peopleSvc.(*peopleService), faceQualityRescoreRepo, backgroundCoordinator)
 	// 后台任务治理：把统一准入控制器注入 peopleService（Task 8 起前台 mutation 通过它
 	// 注册 foreground scope）。Task 7 先注入；foreground scope 接管在 Task 8 完成。
 	peopleSvc.(*peopleService).SetBackgroundCoordinator(backgroundCoordinator)
@@ -273,6 +279,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		PersonPhotoRepo:         repos.PersonPhoto,
 		FaceQuality:             faceQualitySvc,
 		FaceQualityBackfill:     faceQualityBackfill,
+		FaceQualityRescore:      faceQualityRescoreSvc,
 		ProtoCacheRebuildStatus: peopleSvc.(*peopleService).ProtoCacheRebuildStatus,
 	}
 }

@@ -94,6 +94,13 @@ func main() {
 		services.FaceQualityBackfill.Run()
 	}
 
+	// 启动历史人脸质检重评分 worker（P2 automatic：foreground/iowait/cooldown 让步，
+	// 单 run 互斥，进程重启 processing item 回到 pending 不丢失进度）。绝不调用
+	// ApplyDetectionResult，不删除重建 Face，不全库重聚类。
+	if services.FaceQualityRescore != nil {
+		services.FaceQualityRescore.Run()
+	}
+
 	// 启动定时任务调度器
 	services.Scheduler.Start()
 	defer services.Scheduler.Stop()

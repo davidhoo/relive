@@ -176,16 +176,6 @@ func (r *faceQualityRepository) Stats() (*FaceQualityStats, error) {
 		return nil, err
 	}
 
-	// 按判定统计（用于 by_reason/by_rule_version 之外无直接用途，这里仅保留查询不阻断）。
-	var decisionRows []countRow
-	if err := r.db.Model(&model.FaceQualityEvent{}).
-		Select("decision as bucket, count(*) as count").
-		Where("is_current = ?", true).
-		Group("decision").Scan(&decisionRows).Error; err != nil {
-		return nil, err
-	}
-	_ = decisionRows
-
 	// 历史回填缺证据：historical_backfill + missing + is_current。
 	if err := r.db.Model(&model.FaceQualityEvent{}).
 		Where("is_current = ? AND evidence_origin = ? AND evidence_state = ?",

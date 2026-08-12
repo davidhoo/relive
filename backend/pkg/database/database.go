@@ -218,6 +218,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.PeopleFeedbackEvent{},
 		&model.FaceExclusion{},
 		&model.FaceQualityEvent{},
+		&model.FaceQualityRescoreRun{},
+		&model.FaceQualityRescoreItem{},
 		&model.PeopleIdentityDecision{},
 		&model.PersonPhoto{},
 	}

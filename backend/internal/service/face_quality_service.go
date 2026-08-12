@@ -756,3 +756,131 @@ func (f *faceQualityService) RestoreAuto(ruleVersion string, limit int) (*model.
 		RuleVersion: ruleVersion,
 	}, nil
 }
+
+// restoreAutoRecords 是 RestoreAuto 的内部实现，接受预查询的记录列表。
+// rescore run 级恢复复用它，传入 ListAutoExcludedByRun 的结果（rescore_run_id 匹配），
+// 保证只恢复本 run 的自动排除，不影响实时/人工/其他 run。reason 用于局部刷新日志。
+func (f *faceQualityService) restoreAutoRecords(records []*model.FaceQualityEvent, reason string) (int, error) {
+	if f.people == nil {
+		return 0, fmt.Errorf("people service not available")
+	}
+	if len(records) == 0 {
+		return 0, nil
+	}
+
+	people := f.people
+	now := time.Now()
+	restored := 0
+	affectedPersonIDs := make(map[uint]struct{})
+	affectedPhotoIDs := make(map[uint]struct{})
+
+	if err := people.executeWrite(func() error {
+		return people.db.Transaction(func(tx *gorm.DB) error {
+			for _, rec := range records {
+				if rec.FaceID == nil {
+					continue
+				}
+				faceID := *rec.FaceID
+
+				var faceBefore model.Face
+				if err := tx.Where("id = ?", faceID).First(&faceBefore).Error; err != nil {
+					if err == gorm.ErrRecordNotFound {
+						continue
+					}
+					return fmt.Errorf("load face %d before restore: %w", faceID, err)
+				}
+				if faceBefore.PersonID != nil && *faceBefore.PersonID != 0 {
+					affectedPersonIDs[*faceBefore.PersonID] = struct{}{}
+				}
+
+				if err := tx.Where("photo_id = ? AND source_face_id = ?", rec.PhotoID, faceID).
+					Delete(&model.FaceExclusion{}).Error; err != nil {
+					return fmt.Errorf("delete exclusion for face %d: %w", faceID, err)
+				}
+
+				// Face 回 pending（不恢复旧 person_id，与既有产品语义一致）。
+				if err := tx.Model(&model.Face{}).Where("id = ?", faceID).Updates(map[string]interface{}{
+					"person_id":          nil,
+					"cluster_status":     model.FaceClusterStatusPending,
+					"cluster_score":      0,
+					"manual_locked":      false,
+					"manual_lock_reason": "",
+					"manual_locked_at":   nil,
+					"exclusion_reason":   "",
+					"excluded_at":        nil,
+					"retry_count":        0,
+					"clustered_at":       nil,
+					"updated_at":         now,
+				}).Error; err != nil {
+					return fmt.Errorf("restore face %d: %w", faceID, err)
+				}
+
+				// 旧事件失活。
+				if err := tx.Model(&model.FaceQualityEvent{}).
+					Where("photo_id = ? AND ABS(bbox_x - ?) < 0.001 AND ABS(bbox_y - ?) < 0.001 AND is_current = ?",
+						rec.PhotoID, rec.BBoxX, rec.BBoxY, true).
+					Update("is_current", false).Error; err != nil {
+					return fmt.Errorf("clear current events for face %d: %w", faceID, err)
+				}
+
+				newEvent := model.FaceQualityEvent{
+					PhotoID:      rec.PhotoID,
+					FaceID:       rec.FaceID,
+					BBoxX:        rec.BBoxX,
+					BBoxY:        rec.BBoxY,
+					BBoxWidth:    rec.BBoxWidth,
+					BBoxHeight:   rec.BBoxHeight,
+					Decision:     model.FaceQualityDecisionAccepted,
+					Source:       model.FaceQualitySourceManual,
+					RuleVersion:  rec.RuleVersion,
+					ModelVersion: rec.ModelVersion,
+					EvidenceJSON: rec.EvidenceJSON,
+					ReasonCodes:  rec.ReasonCodes,
+					ReviewAction: model.FaceQualityReviewActionRestore,
+					RestoredAt:   &now,
+					IsCurrent:    true,
+				}
+				if err := tx.Create(&newEvent).Error; err != nil {
+					return fmt.Errorf("create restore event for face %d: %w", faceID, err)
+				}
+
+				affectedPhotoIDs[rec.PhotoID] = struct{}{}
+				restored++
+			}
+			return nil
+		})
+	}); err != nil {
+		return 0, err
+	}
+
+	personIDList := make([]uint, 0, len(affectedPersonIDs))
+	for pid := range affectedPersonIDs {
+		personIDList = append(personIDList, pid)
+	}
+	for _, pid := range personIDList {
+		if err := people.syncPersonState(pid); err != nil {
+			logger.Warnf("syncPersonState after %s for person %d: %v", reason, pid, err)
+		}
+	}
+	photoIDList := make([]uint, 0, len(affectedPhotoIDs))
+	for pid := range affectedPhotoIDs {
+		photoIDList = append(photoIDList, pid)
+	}
+	if len(photoIDList) > 0 {
+		if err := people.executeWrite(func() error {
+			return people.photoRepo.RecomputeTopPersonCategory(photoIDList)
+		}); err != nil {
+			logger.Warnf("recompute top person category after %s: %v", reason, err)
+		}
+		if len(personIDList) > 0 {
+			people.invalidateIdentityProfiles(IdentityProfileInvalidation{
+				DirtyPersonIDs: personIDList,
+				Reason:          reason,
+			})
+			people.markProtoCacheDirty(personIDList, nil, reason)
+		}
+		people.markMergeSuggestionsDirty(reason)
+		people.invalidateStatsCache()
+	}
+	return restored, nil
+}

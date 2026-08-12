@@ -83,6 +83,8 @@ func setupPeopleServiceTestDB(t *testing.T) *gorm.DB {
 		&model.PeopleFeedbackEvent{},
 		&model.FaceExclusion{},
 		&model.FaceQualityEvent{},
+		&model.FaceQualityRescoreRun{},
+		&model.FaceQualityRescoreItem{},
 	))
 
 	t.Cleanup(func() {

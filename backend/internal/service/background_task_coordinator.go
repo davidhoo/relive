@@ -37,6 +37,9 @@ const (
 	// 经 coordinator 准入 + coalescing，foreground active / iowait_high / cooldown 时保持
 	// pending 不执行；用户显式 StartClustering/StartRebuild 仍走 P1 user，不被拒绝。
 	BackgroundTaskEventClustering BackgroundTaskClass = "event_clustering"
+	// BackgroundTaskFaceQualityRescore：历史人脸质检重评分 worker（P2 automatic）。
+	// 受前台/cooldown/iowait 背压约束，单 run 互斥（DedupeKey 按 run ID）。
+	BackgroundTaskFaceQualityRescore BackgroundTaskClass = "face_quality_rescore"
 )
 
 // BackgroundTaskRequest 描述一次后台任务准入请求。
