@@ -85,3 +85,48 @@ class DetectFacesResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+
+
+# ---- 已知框重评分（score-known-faces）----
+# 该接口只对历史重评分 worker 内部使用，不暴露给浏览器。
+# 请求给出已旋转校正展示图 + 一组目标归一化 BBox，ML 端在同一张图上运行
+# InsightFace 检测，用既有 _build_evidence 生成证据，再与目标框做一对一最高 IoU 匹配。
+# 阈值与后端 exclusionIoUThreshold=0.3 一致。无匹配/读图失败/推理异常返回具体非判定状态，
+# 不得伪造空证据或自动判为非人脸。
+
+
+class ScoreKnownFaceTarget(BaseModel):
+    """单个重评分目标：一个已知人脸框。"""
+
+    face_id: int
+    bbox: BoundingBox
+
+
+class ScoreKnownFacesRequest(BaseModel):
+    image_base64: str
+    targets: list[ScoreKnownFaceTarget] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_targets(self) -> "ScoreKnownFacesRequest":
+        if not self.image_base64:
+            raise ValueError("image_base64 is required")
+        return self
+
+
+class ScoreKnownFaceResult(BaseModel):
+    """单个目标的重评分结果，按请求 target 顺序返回。"""
+
+    face_id: int
+    # matched: 找到 IoU>=阈值的一对一匹配并产出证据。
+    # unmatched: 未找到匹配框（不得当作 non_face）。
+    # error: 图像读取/推理/证据构造异常（可重试）。
+    status: str
+    matched_iou: float | None = None
+    evidence: FaceQualityEvidence | None = None
+    quality_score: float | None = None
+
+
+class ScoreKnownFacesResponse(BaseModel):
+    results: list[ScoreKnownFaceResult]
+    rule_version: str = FACE_QUALITY_RULE_VERSION
+    model_version: str = FACE_QUALITY_MODEL_VERSION

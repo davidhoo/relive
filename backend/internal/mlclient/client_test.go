@@ -110,3 +110,106 @@ func TestClientDetectFacesDecodesResponse(t *testing.T) {
 		t.Fatalf("expected embedding length 3, got %d", len(resp.Faces[0].Embedding))
 	}
 }
+
+func TestClientScoreKnownFacesBuildsRequest(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotRequest ScoreKnownFacesRequest
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&gotRequest); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		iou := 0.81
+		_ = json.NewEncoder(w).Encode(ScoreKnownFacesResponse{
+			Results: []ScoreKnownFaceResult{
+				{
+					FaceID:     42,
+					Status:     "matched",
+					MatchedIoU: &iou,
+					Evidence: &FaceQualityEvidence{
+						FaceValidityScore: 0.93,
+						RuleVersion:       "v1",
+					},
+				},
+			},
+			RuleVersion:  "v1",
+			ModelVersion: "insightface-buffalo-sc-v1",
+		})
+	}))
+	defer server.Close()
+
+	client := New(server.URL, 2*time.Second)
+	resp, err := client.ScoreKnownFaces(context.Background(), ScoreKnownFacesRequest{
+		ImageBase64: "base64data",
+		Targets: []ScoreKnownFaceTarget{
+			{FaceID: 42, BBox: BoundingBox{X: 0.12, Y: 0.20, Width: 0.18, Height: 0.25}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("score known faces: %v", err)
+	}
+
+	if gotMethod != http.MethodPost {
+		t.Fatalf("expected POST, got %s", gotMethod)
+	}
+	if gotPath != "/api/v1/score-known-faces" {
+		t.Fatalf("expected /api/v1/score-known-faces, got %s", gotPath)
+	}
+	if gotRequest.ImageBase64 != "base64data" {
+		t.Fatalf("expected image_base64 forwarded, got %q", gotRequest.ImageBase64)
+	}
+	if len(gotRequest.Targets) != 1 || gotRequest.Targets[0].FaceID != 42 {
+		t.Fatalf("expected one target face_id=42, got %+v", gotRequest.Targets)
+	}
+
+	if len(resp.Results) != 1 {
+		t.Fatalf("expected one result, got %d", len(resp.Results))
+	}
+	if resp.Results[0].Status != "matched" {
+		t.Fatalf("expected matched, got %s", resp.Results[0].Status)
+	}
+	if resp.Results[0].MatchedIoU == nil || *resp.Results[0].MatchedIoU != 0.81 {
+		t.Fatalf("expected matched_iou 0.81")
+	}
+	if resp.Results[0].Evidence == nil || resp.Results[0].Evidence.FaceValidityScore != 0.93 {
+		t.Fatalf("expected evidence face_validity_score 0.93")
+	}
+	if resp.RuleVersion != "v1" {
+		t.Fatalf("expected rule_version v1, got %s", resp.RuleVersion)
+	}
+}
+
+func TestClientScoreKnownFacesTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := New(server.URL, 10*time.Millisecond)
+	_, err := client.ScoreKnownFaces(context.Background(), ScoreKnownFacesRequest{
+		ImageBase64: "x",
+		Targets:     []ScoreKnownFaceTarget{{FaceID: 1, BBox: BoundingBox{X: 0.1, Y: 0.1, Width: 0.2, Height: 0.2}}},
+	})
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+}
+
+func TestClientScoreKnownFacesNon2xx(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	client := New(server.URL, time.Second)
+	_, err := client.ScoreKnownFaces(context.Background(), ScoreKnownFacesRequest{
+		ImageBase64: "x",
+		Targets:     []ScoreKnownFaceTarget{{FaceID: 1, BBox: BoundingBox{X: 0.1, Y: 0.1, Width: 0.2, Height: 0.2}}},
+	})
+	if err == nil {
+		t.Fatal("expected error on 500")
+	}
+}

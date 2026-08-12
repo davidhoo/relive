@@ -44,6 +44,21 @@ func (c *fakePeopleMLClient) DetectFaces(ctx context.Context, req mlclient.Detec
 	return &mlclient.DetectFacesResponse{}, nil
 }
 
+// ScoreKnownFaces 满足 PeopleMLClient 接口；测试默认返回空响应（无匹配）。
+func (c *fakePeopleMLClient) ScoreKnownFaces(ctx context.Context, req mlclient.ScoreKnownFacesRequest) (*mlclient.ScoreKnownFacesResponse, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
+	results := make([]mlclient.ScoreKnownFaceResult, 0, len(req.Targets))
+	for _, t := range req.Targets {
+		results = append(results, mlclient.ScoreKnownFaceResult{
+			FaceID: t.FaceID,
+			Status: "unmatched",
+		})
+	}
+	return &mlclient.ScoreKnownFacesResponse{Results: results}, nil
+}
+
 func setupPeopleServiceTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 

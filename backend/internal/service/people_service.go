@@ -71,6 +71,7 @@ const (
 
 type PeopleMLClient interface {
 	DetectFaces(ctx context.Context, request mlclient.DetectFacesRequest) (*mlclient.DetectFacesResponse, error)
+	ScoreKnownFaces(ctx context.Context, request mlclient.ScoreKnownFacesRequest) (*mlclient.ScoreKnownFacesResponse, error)
 }
 
 type PeopleService interface {

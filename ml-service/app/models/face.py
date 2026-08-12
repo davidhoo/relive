@@ -22,6 +22,8 @@ from app.schemas import (
     QUALITY_REASON_POSE_UNCERTAIN,
     QUALITY_REASON_TOO_SMALL,
     QUALITY_REASON_UNDEREXPOSED,
+    ScoreKnownFaceResult,
+    ScoreKnownFacesResponse,
 )
 # 质检硬阈值（与 rule_version v1 绑定）。改动这些阈值须递增 FACE_QUALITY_RULE_VERSION。
 _MIN_FACE_PIXELS = 32  # 低于此像素尺寸直接判 too_small
@@ -33,6 +35,9 @@ _LANDMARK_GEOMETRY_LOW = 0.5  # 几何合理性低于此判 bad_geometry
 _EXTREME_POSE_YAW = 75.0  # 偏航角绝对值超过此判 extreme_pose
 _FACE_VALIDITY_NON_FACE = 0.35  # 二次人脸验证低于此为高确定性非人脸
 _FACE_VALIDITY_UNCERTAIN = 0.6  # 介于非人脸阈值与此值之间为灰区
+
+# 已知框重评分：目标框与检测框的一对一最高 IoU 匹配阈值，与后端 exclusionIoUThreshold=0.3 一致。
+_SCORE_KNOWN_FACES_IOU_THRESHOLD = 0.3
 
 
 class FaceDetector:
@@ -62,6 +67,143 @@ class FaceDetector:
         return DetectFacesResponse(
             faces=faces,
             processing_time_ms=max(elapsed_ms, 0),
+            rule_version=FACE_QUALITY_RULE_VERSION,
+            model_version=FACE_QUALITY_MODEL_VERSION,
+        )
+
+    def score_known_faces(
+        self,
+        *,
+        image_base64: str,
+        targets: list,
+    ) -> ScoreKnownFacesResponse:
+        """对一组已知目标框在同一张展示图上重评分。
+
+        流程：
+        1. 加载已旋转校正的展示图（仅 base64，不接受原始文件路径，避免坐标系错配）；
+        2. 在该图上运行 InsightFace 检测，复用 _build_evidence 生成证据；
+        3. 把检测框与目标框做一对一最高 IoU 匹配（阈值 _SCORE_KNOWN_FACES_IOU_THRESHOLD）；
+        4. 命中的目标返回 matched + 证据；未命中返回 unmatched；图像读取/推理异常返回 error。
+
+        绝不把 unmatched / 读图失败 / 推理异常当作 non_face——这些只能进入可重试技术状态。
+        """
+        started_at = time.perf_counter()
+        results: list[ScoreKnownFaceResult] = []
+
+        frame = self._load_image(image_path=None, image_base64=image_base64)
+
+        # 目标顺序固定；逐个初始化为 unmatched，命中后覆盖。
+        target_results: list[ScoreKnownFaceResult] = [
+            ScoreKnownFaceResult(face_id=int(t.face_id), status="unmatched") for t in targets
+        ]
+
+        # 图像读取失败：所有目标标 error（可重试），不伪装判定。
+        if frame is None:
+            for i in range(len(target_results)):
+                target_results[i] = ScoreKnownFaceResult(
+                    face_id=target_results[i].face_id, status="error"
+                )
+            _ = int((time.perf_counter() - started_at) * 1000)
+            return ScoreKnownFacesResponse(
+                results=target_results,
+                rule_version=FACE_QUALITY_RULE_VERSION,
+                model_version=FACE_QUALITY_MODEL_VERSION,
+            )
+
+        frame_height, frame_width = frame.shape[:2]
+        if frame_width == 0 or frame_height == 0 or not targets:
+            return ScoreKnownFacesResponse(
+                results=target_results,
+                rule_version=FACE_QUALITY_RULE_VERSION,
+                model_version=FACE_QUALITY_MODEL_VERSION,
+            )
+
+        # 运行检测。推理异常 → 所有目标 error。
+        try:
+            detected = self.app.get(frame)
+        except Exception:
+            for i in range(len(target_results)):
+                target_results[i] = ScoreKnownFaceResult(
+                    face_id=target_results[i].face_id, status="error"
+                )
+            return ScoreKnownFacesResponse(
+                results=target_results,
+                rule_version=FACE_QUALITY_RULE_VERSION,
+                model_version=FACE_QUALITY_MODEL_VERSION,
+            )
+
+        if not detected:
+            return ScoreKnownFacesResponse(
+                results=target_results,
+                rule_version=FACE_QUALITY_RULE_VERSION,
+                model_version=FACE_QUALITY_MODEL_VERSION,
+            )
+
+        detected = sorted(detected, key=lambda f: float(f.det_score), reverse=True)
+
+        # 预计算每个检测框的归一化 bbox + 像素裁剪坐标 + 证据。
+        det_entries: list[dict] = []
+        for face_obj in detected:
+            score = float(face_obj.det_score)
+            x1, y1, x2, y2 = face_obj.bbox.astype(int)
+            x1 = max(0, x1)
+            y1 = max(0, y1)
+            x2 = min(frame_width, x2)
+            y2 = min(frame_height, y2)
+            width = x2 - x1
+            height = y2 - y1
+            if width <= 0 or height <= 0:
+                continue
+            bbox = BoundingBox(
+                x=round(x1 / frame_width, 6),
+                y=round(y1 / frame_height, 6),
+                width=round(width / frame_width, 6),
+                height=round(height / frame_height, 6),
+            )
+            evidence = self._build_evidence(
+                frame, face_obj, x1, y1, width, height, frame_width, frame_height, score
+            )
+            quality = self._estimate_quality(
+                frame, x1, y1, width, height, frame_width, frame_height, score
+            )
+            det_entries.append(
+                {
+                    "bbox": bbox,
+                    "evidence": evidence,
+                    "quality": quality,
+                    "used": False,
+                }
+            )
+
+        # 一对一最高 IoU 匹配：目标按原顺序，每个检测框最多被一个目标占用。
+        used_det = [False] * len(det_entries)
+        for idx, target in enumerate(targets):
+            best_iou = _SCORE_KNOWN_FACES_IOU_THRESHOLD
+            best_det = -1
+            tb = target.bbox
+            for di, entry in enumerate(det_entries):
+                if used_det[di]:
+                    continue
+                iou = _bbox_iou(
+                    tb.x, tb.y, tb.width, tb.height,
+                    entry["bbox"].x, entry["bbox"].y, entry["bbox"].width, entry["bbox"].height,
+                )
+                if iou > best_iou:
+                    best_iou = iou
+                    best_det = di
+            if best_det >= 0:
+                used_det[best_det] = True
+                entry = det_entries[best_det]
+                target_results[idx] = ScoreKnownFaceResult(
+                    face_id=int(target.face_id),
+                    status="matched",
+                    matched_iou=round(best_iou, 6),
+                    evidence=entry["evidence"],
+                    quality_score=round(float(entry["quality"]), 6),
+                )
+
+        return ScoreKnownFacesResponse(
+            results=target_results,
             rule_version=FACE_QUALITY_RULE_VERSION,
             model_version=FACE_QUALITY_MODEL_VERSION,
         )
@@ -376,3 +518,20 @@ class FaceDetector:
         if device == "cuda":
             return ["CUDAExecutionProvider", "CPUExecutionProvider"]
         return ["CPUExecutionProvider"]
+
+
+def _bbox_iou(ax: float, ay: float, aw: float, ah: float, bx: float, by: float, bw: float, bh: float) -> float:
+    """两个归一化 bbox 的 IoU。与后端 service.bboxIoU 算法一致。"""
+    if aw <= 0 or ah <= 0 or bw <= 0 or bh <= 0:
+        return 0.0
+    inter_x1 = max(ax, bx)
+    inter_y1 = max(ay, by)
+    inter_x2 = min(ax + aw, bx + bw)
+    inter_y2 = min(ay + ah, by + bh)
+    if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
+        return 0.0
+    inter_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+    union_area = aw * ah + bw * bh - inter_area
+    if union_area <= 0:
+        return 0.0
+    return inter_area / union_area
