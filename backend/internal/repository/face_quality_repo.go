@@ -176,7 +176,7 @@ func (r *faceQualityRepository) Stats() (*FaceQualityStats, error) {
 		return nil, err
 	}
 
-	// 按判定统计
+	// 按判定统计（用于 by_reason/by_rule_version 之外无直接用途，这里仅保留查询不阻断）。
 	var decisionRows []countRow
 	if err := r.db.Model(&model.FaceQualityEvent{}).
 		Select("decision as bucket, count(*) as count").
@@ -184,14 +184,7 @@ func (r *faceQualityRepository) Stats() (*FaceQualityStats, error) {
 		Group("decision").Scan(&decisionRows).Error; err != nil {
 		return nil, err
 	}
-	// review_required 总数（含历史缺证据）。pending_review 只计“有真实模型证据的灰区”，
-	// 在下方 evidence_state 维度里精确扣除 historical_missing/rescore_retryable。
-	var reviewRequiredTotal int64
-	for _, row := range decisionRows {
-		if row.Bucket == model.FaceQualityDecisionReviewRequired {
-			reviewRequiredTotal = row.Count
-		}
-	}
+	_ = decisionRows
 
 	// 历史回填缺证据：historical_backfill + missing + is_current。
 	if err := r.db.Model(&model.FaceQualityEvent{}).
@@ -214,9 +207,7 @@ func (r *faceQualityRepository) Stats() (*FaceQualityStats, error) {
 	}
 
 	// pending_review：有真实模型证据（evidence_state=available）的灰区 review_required。
-	// = review_required 总数 - 历史缺证据（historical_backfill/missing 必为 review_required）
-	//   - 重评分 retryable/unmatched（其当前态 decision 亦为 review_required，见 worker 写入规则）。
-	// 用 evidence_state=available 直接计数更精确，避免被未来新增的非 review_required 灰区污染。
+	// 历史 missing 与 rescore retryable/unmatched 因 state 不同已被排除，不混入人工审核。
 	if err := r.db.Model(&model.FaceQualityEvent{}).
 		Where("is_current = ? AND decision = ? AND evidence_state = ?",
 			true,
@@ -225,7 +216,6 @@ func (r *faceQualityRepository) Stats() (*FaceQualityStats, error) {
 		Count(&stats.PendingReview).Error; err != nil {
 		return nil, err
 	}
-	_ = reviewRequiredTotal // 保留供调试，当前用 available 精确计数
 
 	// auto 排除数
 	if err := r.db.Model(&model.FaceQualityEvent{}).

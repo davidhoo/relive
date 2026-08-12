@@ -449,6 +449,20 @@ func migrateFaceQualityEvidenceOrigin(db *gorm.DB) error {
 		return fmt.Errorf("backfill historical missing evidence marker: %w", res.Error)
 	}
 
+	// 4) 回填旧实时记录的 evidence_state：有可解析 evidence_json 但 evidence_state='' 的
+	//    is_current 记录，一律标为 available（这些是早期实时检测写入、未填新字段的行；
+	//    它们有真实模型证据，应留在 pending_review，而非因空 state 漏出所有队列）。
+	//    evidence_origin 不猜（留空），仅修复队列分流所需的 state。
+	res2 := db.Exec(`UPDATE face_quality_events
+		SET evidence_state = ?
+		WHERE is_current = 1
+		  AND TRIM(COALESCE(evidence_json, '')) != ''
+		  AND evidence_state = ''`,
+		model.FaceQualityEvidenceStateAvailable)
+	if res2.Error != nil {
+		return fmt.Errorf("backfill available evidence state for legacy rows: %w", res2.Error)
+	}
+
 	// 写迁移标记（OnConflict 兜底，防止软删除残留导致唯一索引冲突）。
 	marker := model.AppConfig{Key: migrationKey, Value: "done"}
 	if err := db.Where("key = ?", migrationKey).FirstOrCreate(&marker).Error; err != nil {

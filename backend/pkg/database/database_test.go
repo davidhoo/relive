@@ -521,6 +521,20 @@ func TestMigrateFaceQualityEvidenceOrigin(t *testing.T) {
 	}
 	require.NoError(t, db.Create(notCurrent).Error)
 
+	// 5) 早期实时记录：有 evidence_json、decision=review_required、evidence_state=''（旧库遗留）。
+	//    迁移应把 state 回填为 available，使其留在 pending_review，不被漏出所有队列。
+	legacyRealtime := &model.FaceQualityEvent{
+		PhotoID: 5,
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionReviewRequired,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "test-v1",
+		EvidenceJSON:   `{"face_validity_score":0.55,"pixel_width":60}`,
+		EvidenceOrigin: "",
+		EvidenceState:  "",
+		IsCurrent:      true,
+	}
+	require.NoError(t, db.Create(legacyRealtime).Error)
+
 	require.NoError(t, migrateFaceQualityEvidenceOrigin(db))
 
 	// 历史缺证据 → historical_backfill/missing
@@ -529,16 +543,25 @@ func TestMigrateFaceQualityEvidenceOrigin(t *testing.T) {
 	assert.Equal(t, model.FaceQualityEvidenceOriginHistoricalBackfill, got.EvidenceOrigin)
 	assert.Equal(t, model.FaceQualityEvidenceStateMissing, got.EvidenceState)
 
-	// 真实 0 分有证据：origin/state 仍为空（实时由写入路径填，迁移只标 missing 集合）。
+	// 真实 0 分有证据：origin 不猜（留空），但 evidence_state 应回填为 available，
+	// 使其留在 pending_review，而非因空 state 漏出所有队列。
 	got = model.FaceQualityEvent{}
 	require.NoError(t, db.First(&got, realZero.ID).Error)
 	assert.Equal(t, "", got.EvidenceOrigin)
-	assert.Equal(t, "", got.EvidenceState)
+	assert.Equal(t, model.FaceQualityEvidenceStateAvailable, got.EvidenceState)
 
-	// 人工事件不受影响。
+	// 早期实时记录：state 回填 available，origin 仍空（不猜）。
+	got = model.FaceQualityEvent{}
+	require.NoError(t, db.First(&got, legacyRealtime.ID).Error)
+	assert.Equal(t, "", got.EvidenceOrigin)
+	assert.Equal(t, model.FaceQualityEvidenceStateAvailable, got.EvidenceState)
+
+	// 人工事件：有 evidence_json 时 state 也回填 available；origin 不猜。
 	got = model.FaceQualityEvent{}
 	require.NoError(t, db.First(&got, manualEvt.ID).Error)
 	assert.Equal(t, "", got.EvidenceOrigin)
+	// manualEvt 的 evidence_json 为空，state 保持空（不属 available/missing 任一标记集）。
+	assert.Equal(t, "", got.EvidenceState)
 
 	// 非当前不受影响。
 	got = model.FaceQualityEvent{}
