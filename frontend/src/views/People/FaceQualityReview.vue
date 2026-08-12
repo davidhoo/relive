@@ -41,12 +41,20 @@
         value-format="YYYY-MM-DDTHH:mm:ssZ"
         @change="onTimeChange"
       />
-      <div class="batch-bar" v-if="selectedIds.size > 0">
-        <span class="batch-count">已选 {{ selectedIds.size }} 项</span>
-        <el-button size="small" type="danger" @click="batchAction('mark_non_face')">改为非人脸</el-button>
-        <el-button size="small" type="warning" @click="batchAction('mark_low_quality')">改为低质量</el-button>
-        <el-button size="small" type="primary" @click="batchAction('accept')">确认可识别</el-button>
-        <el-button size="small" plain @click="selectedIds.clear()">取消选择</el-button>
+      <div class="page-select">
+        <el-checkbox
+          :model-value="pageSelectAll"
+          :indeterminate="pageSelectIndeterminate"
+          @change="toggleSelectAllPage"
+        >
+          全选本页（{{ items.length }}）
+        </el-checkbox>
+        <el-button size="small" plain @click="invertSelectPage" :disabled="items.length === 0">反选本页</el-button>
+        <span v-if="selectedIds.size > 0" class="batch-count">已选 {{ selectedIds.size }} 项（跨页累计）</span>
+        <el-button v-if="selectedIds.size > 0" size="small" type="danger" @click="batchAction('mark_non_face')">改为非人脸</el-button>
+        <el-button v-if="selectedIds.size > 0" size="small" type="warning" @click="batchAction('mark_low_quality')">改为低质量</el-button>
+        <el-button v-if="selectedIds.size > 0" size="small" type="primary" @click="batchAction('accept')">确认可识别</el-button>
+        <el-button v-if="selectedIds.size > 0" size="small" plain @click="clearSelection">清空选择</el-button>
       </div>
     </div>
 
@@ -75,7 +83,8 @@
           <el-tag size="small" type="info">{{ item.source === 'auto' ? '自动' : '人工' }}</el-tag>
         </div>
         <div class="card-footer">
-          <span>{{ (item.face_validity_score * 100).toFixed(0) }}% 有效</span>
+          <span v-if="hasEvidence(item)">{{ (item.face_validity_score * 100).toFixed(0) }}% 有效</span>
+          <span v-else class="card-na">有效性未采集</span>
           <span class="card-rule">{{ item.rule_version }}</span>
         </div>
       </div>
@@ -97,15 +106,42 @@
       <div v-if="current" class="detail-content">
         <div class="detail-preview">
           <img v-if="current.face_id" :src="faceThumbnail(current.face_id)" class="detail-face" />
-          <img v-if="current.photo_thumbnail" :src="photoThumbUrl(current.photo_thumbnail)" class="detail-photo" />
+          <div class="detail-photo-wrap">
+            <el-image
+              v-if="current.photo_id"
+              :src="photoThumbnail(current.photo_id, current.event_id)"
+              fit="contain"
+              class="detail-photo"
+              @error="onPhotoError"
+              @load="onPhotoLoad"
+            >
+              <template #error>
+                <div class="detail-photo-error">
+                  <span>照片缩略图不可用</span>
+                  <router-link :to="`/photos/${current.photo_id}`" class="photo-detail-link">查看照片详情</router-link>
+                </div>
+              </template>
+            </el-image>
+            <div v-else class="detail-photo-error">
+              <span>照片缩略图不可用</span>
+            </div>
+          </div>
         </div>
         <el-descriptions :column="1" border size="small">
           <el-descriptions-item label="判定">{{ decisionLabel(current.decision) }}</el-descriptions-item>
           <el-descriptions-item label="原因" v-if="current.reason">{{ reasonLabel(current.reason) }}</el-descriptions-item>
           <el-descriptions-item label="来源">{{ current.source === 'auto' ? '自动' : '人工' }}</el-descriptions-item>
-          <el-descriptions-item label="有效性">{{ (current.face_validity_score * 100).toFixed(1) }}%</el-descriptions-item>
-          <el-descriptions-item label="质量分">{{ (current.quality_score * 100).toFixed(1) }}%</el-descriptions-item>
-          <el-descriptions-item label="原因码">{{ (current.reason_codes || []).join(', ') || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="有效性">
+            <span v-if="hasEvidence(current)">{{ (current.face_validity_score * 100).toFixed(1) }}%</span>
+            <span v-else>未采集（历史人脸）</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="质量分">
+            <span v-if="hasEvidence(current)">{{ (current.quality_score * 100).toFixed(1) }}%</span>
+            <span v-else>未采集</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="原因码" v-if="hasEvidence(current) && current.reason_codes && current.reason_codes.length">
+            {{ current.reason_codes.join(', ') }}
+          </el-descriptions-item>
           <el-descriptions-item label="规则版本">{{ current.rule_version }}</el-descriptions-item>
           <el-descriptions-item label="模型版本">{{ current.model_version || '—' }}</el-descriptions-item>
           <el-descriptions-item label="人脸框">
@@ -113,7 +149,7 @@
             w={{ current.bbox_width.toFixed(3) }} h={{ current.bbox_height.toFixed(3) }}
           </el-descriptions-item>
           <el-descriptions-item label="时间">{{ current.created_at }}</el-descriptions-item>
-          <el-descriptions-item label="证据" v-if="current.evidence_json">
+          <el-descriptions-item label="证据" v-if="hasEvidence(current) && current.evidence_json">
             <pre class="evidence-json">{{ formatEvidence(current.evidence_json) }}</pre>
           </el-descriptions-item>
         </el-descriptions>
@@ -160,7 +196,6 @@ import type {
 
 const route = useRoute()
 const apiBaseUrl = (import.meta as any).env?.VITE_API_BASE_URL || '/api/v1'
-
 const activeTab = ref<'pending_review' | 'auto_excluded' | 'manual_confirmed'>('pending_review')
 const stats = ref<FaceQualityStats | null>(null)
 const items = ref<FaceQualityReviewItem[]>([])
@@ -191,7 +226,14 @@ const ruleVersionOptions = computed(() => {
 })
 
 const faceThumbnail = (faceId: number) => `${apiBaseUrl}/faces/${faceId}/thumbnail?v=${faceId}`
-const photoThumbUrl = (path: string) => `${apiBaseUrl}/../${path}`
+// 详情照片走受权限保护的 /photos/:id/thumbnail 接口（后端负责授权/HEIC 回退/被动生成/缓存）。
+// version 仅用于浏览器缓存隔离，使用 event_id；后端忽略该查询参数，不新增路由。
+const photoThumbnail = (photoId: number, version: number) =>
+  `${apiBaseUrl}/photos/${photoId}/thumbnail?v=${version}`
+
+// 证据可用性：后端依据 evidence_json 是否可解析决定。前端将缺失字段视为 false，
+// 防止前端先于后端部署时把 undefined 误当真而误显示 0 分。
+const hasEvidence = (item: FaceQualityReviewItem) => item.quality_evidence_available === true
 
 const decisionLabel = (d: string) => ({
   accepted: '已接受',
@@ -253,18 +295,19 @@ const loadReviews = async () => {
 
 const reload = async () => {
   page.value = 1
-  selectedIds.value.clear()
+  clearSelection()
   await Promise.all([loadStats(), loadReviews()])
 }
 
 const onTabChange = async () => {
   page.value = 1
-  selectedIds.value.clear()
+  clearSelection()
   await loadReviews()
 }
 
 const onPageChange = (p: number) => {
   page.value = p
+  // 翻页保留选择，允许跨已浏览页累积；批量提交原样传 Array.from(selectedIds)。
   loadReviews()
 }
 
@@ -286,8 +329,44 @@ const toggleSelect = (id: number) => {
   selectedIds.value = next
 }
 
+// 本页全选三态：未选 / 半选 / 全选。基于当前 items 的 event_id，不含其他页。
+const pageEventIds = computed(() => items.value.map(i => i.event_id))
+const pageSelectAll = computed(() =>
+  pageEventIds.value.length > 0 && pageEventIds.value.every(id => selectedIds.value.has(id)),
+)
+const pageSelectIndeterminate = computed(() =>
+  !pageSelectAll.value && pageEventIds.value.some(id => selectedIds.value.has(id)),
+)
+const toggleSelectAllPage = (checked: boolean) => {
+  const next = new Set(selectedIds.value)
+  if (checked) {
+    for (const id of pageEventIds.value) next.add(id)
+  } else {
+    for (const id of pageEventIds.value) next.delete(id)
+  }
+  selectedIds.value = next
+}
+// 反选本页：只反转当前 items 的选择状态，保留其他页选择。
+const invertSelectPage = () => {
+  const next = new Set(selectedIds.value)
+  for (const id of pageEventIds.value) {
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+  }
+  selectedIds.value = next
+}
+const clearSelection = () => {
+  selectedIds.value = new Set()
+}
+
+// 详情照片加载失败反馈。el-image 的 #error 插槽已提供占位，这里仅记录状态。
+const detailPhotoError = ref(false)
+const onPhotoError = () => { detailPhotoError.value = true }
+const onPhotoLoad = () => { detailPhotoError.value = false }
+
 const openDetail = (item: FaceQualityReviewItem) => {
   current.value = item
+  detailPhotoError.value = false
   detailVisible.value = true
 }
 
@@ -295,7 +374,7 @@ const applyDecision = async (eventIds: number[], action: FaceQualityAction) => {
   try {
     await peopleApi.applyFaceQualityDecision(eventIds, action)
     ElMessage.success('已应用')
-    selectedIds.value.clear()
+    clearSelection()
     detailVisible.value = false
     await Promise.all([loadStats(), loadReviews()])
   } catch (e: any) {
@@ -368,7 +447,7 @@ onMounted(async () => {
 .header-actions { display: flex; gap: 8px; align-items: center; }
 .quality-tabs { margin-bottom: 8px; }
 .filter-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
-.batch-bar { display: flex; gap: 8px; align-items: center; margin-left: auto; }
+.page-select { display: flex; gap: 12px; align-items: center; margin-left: auto; flex-wrap: wrap; }
 .batch-count { font-size: 13px; color: var(--el-text-color-secondary); }
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; min-height: 200px; }
 .empty-state { grid-column: 1 / -1; text-align: center; color: var(--el-text-color-secondary); padding: 48px 0; }
@@ -380,12 +459,16 @@ onMounted(async () => {
 .card-thumb-placeholder { width: 100%; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; color: var(--el-text-color-placeholder); background: var(--el-fill-color-light); border-radius: 6px; }
 .card-meta { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .card-footer { display: flex; justify-content: space-between; font-size: 12px; color: var(--el-text-color-secondary); margin-top: 4px; }
+.card-na { color: var(--el-text-color-placeholder); font-style: italic; }
 .card-rule { font-family: monospace; }
 .pager { display: flex; justify-content: center; margin-top: 16px; }
 .detail-content { padding: 0 4px; }
 .detail-preview { display: flex; gap: 12px; margin-bottom: 16px; }
 .detail-face { width: 120px; height: 120px; object-fit: cover; border-radius: 8px; }
-.detail-photo { flex: 1; max-height: 120px; object-fit: cover; border-radius: 8px; }
+.detail-photo-wrap { flex: 1; min-width: 0; }
+.detail-photo { width: 100%; max-height: 120px; border-radius: 8px; background: var(--el-fill-color-light); }
+.detail-photo-error { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; justify-content: center; width: 100%; max-height: 120px; min-height: 80px; padding: 12px; border: 1px dashed var(--el-border-color); border-radius: 8px; color: var(--el-text-color-secondary); font-size: 13px; }
+.photo-detail-link { font-size: 13px; }
 .evidence-json { max-height: 200px; overflow: auto; font-size: 11px; white-space: pre-wrap; word-break: break-all; margin: 0; }
 .detail-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 </style>

@@ -153,6 +153,9 @@ export interface FaceQualityReviewItem {
   face_validity_score: number
   quality_score: number
   evidence_json?: string
+  // 仅当 evidence_json 非空且可解析为质检证据时为 true。
+  // 区分“模型真实评分（含 0 分）”与“历史回填无证据样本”。缺失字段按 false 处理。
+  quality_evidence_available: boolean
 }
 
 export interface FaceQualityReviewPage {

@@ -325,7 +325,24 @@ func buildReviewItem(rec *model.FaceQualityEvent, people *peopleService) model.F
 			item.PhotoThumbnail = photo.ThumbnailPath
 		}
 	}
+	// 证据可用性仅由 EvidenceJSON 是否能反序列化为 FaceQualityEvidence 决定，
+	// 不依据分数、规则版本或判定状态推断。模型真实输出 0 分时证据仍存在 → true；
+	// 历史回填无证据 JSON → false。解析失败按不可用处理，且不影响整页列表请求。
+	item.QualityEvidenceAvailable = evidenceAvailable(rec.EvidenceJSON)
 	return item
+}
+
+// evidenceAvailable 判断 evidence_json 是否携带可用的质检证据。
+// 空字符串或无法反序列化为 FaceQualityEvidence 时返回 false。
+func evidenceAvailable(evidenceJSON string) bool {
+	if strings.TrimSpace(evidenceJSON) == "" {
+		return false
+	}
+	var ev model.FaceQualityEvidence
+	if err := json.Unmarshal([]byte(evidenceJSON), &ev); err != nil {
+		return false
+	}
+	return true
 }
 
 func splitReasonCodes(csv string) []string {

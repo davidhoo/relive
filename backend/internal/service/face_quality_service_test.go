@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -376,3 +377,82 @@ func TestRestoreAuto_AtomicRestoreWithAudit(t *testing.T) {
 
 // 临时变量防 lint。
 var _ = time.Now
+
+// TestListReviews_QualityEvidenceAvailable 覆盖质检证据可用性的三种读取语义：
+//  1. 历史回填样本：Face 两分数为默认 0 且事件 evidence_json 为空 → quality_evidence_available=false，
+//     数值为零不改变该结论（不得把“未采集”误显示为 0% 有效）。
+//  2. 模型真实输出 0 分：evidence_json 可解析为 FaceQualityEvidence 且 face_validity_score=0 → true，
+//     证明真实零分不会被隐藏。
+//  3. evidence_json 非空但 JSON 非法：接口成功返回，该条 quality_evidence_available=false，
+//     单条坏数据不应使整页 500。
+func TestListReviews_QualityEvidenceAvailable(t *testing.T) {
+	cases := []struct {
+		name        string
+		evidenceJSON string
+		realValidity float64 // 写入 Face.FaceValidityScore（默认 0）
+		// 期望
+		wantAvailable bool
+	}{
+		{
+			name:          "历史无证据：默认 0 分 + 空 evidence_json",
+			evidenceJSON:  "",
+			realValidity:  0,
+			wantAvailable: false,
+		},
+		{
+			name:          "模型真实 0 分：有效证据 + face_validity_score=0",
+			evidenceJSON:  mustMarshalEvidence(t, evidenceFor(0, 50, 80, "invalid_landmarks")),
+			realValidity:  0,
+			wantAvailable: true,
+		},
+		{
+			name:          "evidence_json 非法 JSON：按不可用处理，不报错",
+			evidenceJSON:  "{not valid json",
+			realValidity:  0,
+			wantAvailable: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, db := newPeopleServiceForTest(t, nil)
+			photo := &model.Photo{FilePath: "/t/p.jpg", FaceProcessStatus: model.FaceProcessStatusReady}
+			require.NoError(t, db.Create(photo).Error)
+
+			face := &model.Face{
+				PhotoID:            photo.ID,
+				BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2,
+				ClusterStatus:        model.FaceClusterStatusPending,
+				FaceValidityScore:    tc.realValidity,
+				QualityRuleVersion:   "v1",
+				QualityModelVersion:  "test-v1",
+			}
+			require.NoError(t, db.Create(face).Error)
+
+			evt := &model.FaceQualityEvent{
+				PhotoID: photo.ID, FaceID: &face.ID,
+				BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2,
+				Decision: model.FaceQualityDecisionReviewRequired,
+				Source:   model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "test-v1",
+				EvidenceJSON: tc.evidenceJSON,
+				IsCurrent:    true,
+			}
+			require.NoError(t, db.Create(evt).Error)
+
+			fqs := NewFaceQualityService(svc)
+			page, err := fqs.ListReviews(model.FaceQualityReviewQuery{State: "pending_review", Page: 1, PageSize: 24})
+			require.NoError(t, err) // 非法 JSON 不应让整页失败
+			require.Len(t, page.Items, 1)
+			assert.Equal(t, tc.wantAvailable, page.Items[0].QualityEvidenceAvailable)
+			// 数值字段仍按 Face 填充（兼容旧客户端），但可用性由证据 JSON 决定。
+			assert.Equal(t, tc.realValidity, page.Items[0].FaceValidityScore)
+		})
+	}
+}
+
+// mustMarshalEvidence 把证据序列化为 JSON 字符串，供测试构造 evidence_json。
+func mustMarshalEvidence(t *testing.T, e *model.FaceQualityEvidence) string {
+	b, err := json.Marshal(e)
+	require.NoError(t, err)
+	return string(b)
+}

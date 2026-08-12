@@ -619,12 +619,12 @@ type FaceQualityStatsResponse struct {
 
 // FaceQualityReviewQuery 审核页查询参数。
 type FaceQualityReviewQuery struct {
-	State       string `form:"state"`        // pending_review/auto_excluded/manual_confirmed
-	Reason      string `form:"reason"`       // non_face/low_quality
-	Source      string `form:"source"`       // auto/manual
+	State       string `form:"state"`  // pending_review/auto_excluded/manual_confirmed
+	Reason      string `form:"reason"` // non_face/low_quality
+	Source      string `form:"source"` // auto/manual
 	RuleVersion string `form:"rule_version"`
-	StartTime   string `form:"start_time"`   // RFC3339
-	EndTime     string `form:"end_time"`     // RFC3339
+	StartTime   string `form:"start_time"` // RFC3339
+	EndTime     string `form:"end_time"`   // RFC3339
 	Page        int    `form:"page"`
 	PageSize    int    `form:"page_size"`
 }
@@ -655,6 +655,9 @@ type FaceQualityReviewItem struct {
 	FaceValidityScore float64    `json:"face_validity_score"`
 	QualityScore      float64    `json:"quality_score"`
 	EvidenceJSON      string     `json:"evidence_json,omitempty"`
+	// QualityEvidenceAvailable 仅当 EvidenceJSON 非空且能反序列化为 FaceQualityEvidence 时为 true。
+	// 用于区分“模型真实评分（含 0 分）”与“历史回填无证据样本”，不依据数值字段推断。
+	QualityEvidenceAvailable bool `json:"quality_evidence_available"`
 }
 
 // FaceQualityReviewPage 审核页分页响应。
