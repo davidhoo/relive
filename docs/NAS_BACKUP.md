@@ -208,6 +208,17 @@ RESTORE.txt
 
 ---
 
+## v2 验证器恢复的 preflight/restore 引用
+
+人脸质检 v2（`independent_v2`）恢复涉及 YuNet 验证器资产与 rescore run #3 的受控恢复，完整 runbook 见
+`docs/plans/2026-08-13-face-quality-v2-recovery-and-pause-race-repair.md` 的「实施与上线记录」段。本工具与之衔接的要点：
+
+- **备份时机**：在执行条件 SQL 把 run #3 落为 `paused` **之前**，先用 `make backup-nas` 生成已校验备份。备份是回滚的唯一安全来源。
+- **恢复前置条件**：恢复**必须先停止 `relive` 后端**（见上节）。v2 恢复额外要求模型缺失/摘要失败时**不得回退 v1、不得恢复或 enforce #3**——仅在明确授权下用已校验备份恢复。
+- **不替代构建期校验**：YuNet 模型缺失或摘要失败时，不得用数据库备份/恢复绕过 `scripts/fetch-yunet-model.sh` + Dockerfile `sha256sum -c` 的构建期门禁。
+
+---
+
 ## 故障排查
 
 | 现象 | 排查 |
