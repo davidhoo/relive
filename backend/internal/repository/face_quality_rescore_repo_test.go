@@ -198,7 +198,7 @@ func TestFaceQualityRescoreRepo_EligibleCalibration(t *testing.T) {
 	// 合格 calibration：completed + 计数闭合 + 无 pending/processing。
 	run := &model.FaceQualityRescoreRun{
 		Mode: model.FaceQualityRescoreModeCalibration, ApplyMode: model.FaceQualityRescoreApplyModeShadow,
-		Status: model.FaceQualityRescoreStatusCompleted,
+		Status:          model.FaceQualityRescoreStatusCompleted,
 		TargetFaceCount: 2, ProcessedFaceCount: 2, RetryableCount: 0,
 		RuleVersion: "v1", ModelVersion: "test-v1",
 	}
@@ -311,3 +311,123 @@ func TestFaceQualityRescoreRepo_ListV2SnapshotTargets(t *testing.T) {
 	assert.Len(t, limited, 1, "限 1 张照片应只命中 photo 1 的 Face A")
 }
 
+// TestFaceQualityRescoreRepo_UpdateRunProgress 验证 UpdateRunProgress 只写统计字段，
+// 绝不触碰 status/started_at/completed_at——这是 worker 进度刷新不覆盖暂停竞态的核心保证。
+func TestFaceQualityRescoreRepo_UpdateRunProgress(t *testing.T) {
+	db := newRescoreRepoTestDB(t)
+	repo := NewFaceQualityRescoreRepository(db)
+	started := time.Now().UTC().Add(-1 * time.Hour)
+	run := &model.FaceQualityRescoreRun{
+		Mode: model.FaceQualityRescoreModeCalibration, ApplyMode: model.FaceQualityRescoreApplyModeShadow,
+		Status: model.FaceQualityRescoreStatusRunning, RuleVersion: "v1", ModelVersion: "test-v1",
+		StartedAt: &started,
+	}
+	require.NoError(t, repo.CreateRun(run))
+
+	// worker 刷新统计。
+	require.NoError(t, repo.UpdateRunProgress(run.ID, FaceQualityRescoreRunProgress{
+		ProcessedFaceCount: 7, ProcessedPhotoCount: 5, AcceptedCount: 4,
+		ReviewRequiredCount: 2, AutoExcludedCount: 0, RetryableCount: 1,
+		SupersededManualCount: 0, LastError: "boom",
+	}))
+
+	got, err := repo.GetRun(run.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 7, got.ProcessedFaceCount)
+	assert.Equal(t, 5, got.ProcessedPhotoCount)
+	assert.Equal(t, 4, got.AcceptedCount)
+	assert.Equal(t, 2, got.ReviewRequiredCount)
+	assert.Equal(t, 1, got.RetryableCount)
+	assert.Equal(t, "boom", got.LastError)
+
+	// status/started_at 不得被改。
+	assert.Equal(t, model.FaceQualityRescoreStatusRunning, got.Status, "UpdateRunProgress 不得改 status")
+	require.NotNil(t, got.StartedAt)
+	assert.WithinDuration(t, started, *got.StartedAt, time.Second, "UpdateRunProgress 不得改 started_at")
+	assert.Nil(t, got.CompletedAt, "UpdateRunProgress 不得写 completed_at")
+}
+
+// TestFaceQualityRescoreRepo_TransitionRunStatus 验证条件状态转换：仅当当前 status ∈ from
+// 时写 to，命中返回 true；状态已被并发方改变时返回 false，不覆盖。
+func TestFaceQualityRescoreRepo_TransitionRunStatus(t *testing.T) {
+	db := newRescoreRepoTestDB(t)
+	repo := NewFaceQualityRescoreRepository(db)
+	run := &model.FaceQualityRescoreRun{
+		Mode: model.FaceQualityRescoreModeCalibration, ApplyMode: model.FaceQualityRescoreApplyModeShadow,
+		Status: model.FaceQualityRescoreStatusRunning, RuleVersion: "v1", ModelVersion: "test-v1",
+	}
+	require.NoError(t, repo.CreateRun(run))
+
+	// running -> paused：命中。
+	ok, err := repo.TransitionRunStatus(run.ID,
+		[]string{model.FaceQualityRescoreStatusRunning, model.FaceQualityRescoreStatusQueued},
+		model.FaceQualityRescoreStatusPaused, nil)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	got, _ := repo.GetRun(run.ID)
+	assert.Equal(t, model.FaceQualityRescoreStatusPaused, got.Status)
+
+	// 再 running -> paused：当前是 paused，不在 from（running|queued）→ false，状态不变。
+	ok, err = repo.TransitionRunStatus(run.ID,
+		[]string{model.FaceQualityRescoreStatusRunning, model.FaceQualityRescoreStatusQueued},
+		model.FaceQualityRescoreStatusPaused, nil)
+	require.NoError(t, err)
+	assert.False(t, ok, "已 paused 不得再次命中 running|queued->paused")
+	got, _ = repo.GetRun(run.ID)
+	assert.Equal(t, model.FaceQualityRescoreStatusPaused, got.Status)
+
+	// paused -> running：命中。
+	ok, err = repo.TransitionRunStatus(run.ID,
+		[]string{model.FaceQualityRescoreStatusPaused},
+		model.FaceQualityRescoreStatusRunning, nil)
+	require.NoError(t, err)
+	assert.True(t, ok)
+
+	// completedAt 随终态写入。
+	completeAt := time.Now().UTC()
+	ok, err = repo.TransitionRunStatus(run.ID,
+		[]string{model.FaceQualityRescoreStatusRunning},
+		model.FaceQualityRescoreStatusCompletedWithError, &completeAt)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	got, _ = repo.GetRun(run.ID)
+	assert.Equal(t, model.FaceQualityRescoreStatusCompletedWithError, got.Status)
+	require.NotNil(t, got.CompletedAt)
+}
+
+// TestFaceQualityRescoreRepo_ClaimNextPhotoItemsWhenRunning 验证领取门禁：
+// run.status=running 时正常领取并置 processing；非 running（paused/cancelled）时返回空集不领任何 item。
+func TestFaceQualityRescoreRepo_ClaimNextPhotoItemsWhenRunning(t *testing.T) {
+	db := newRescoreRepoTestDB(t)
+	repo := NewFaceQualityRescoreRepository(db)
+	run := &model.FaceQualityRescoreRun{
+		Mode: model.FaceQualityRescoreModeCalibration, ApplyMode: model.FaceQualityRescoreApplyModeShadow,
+		Status: model.FaceQualityRescoreStatusRunning, RuleVersion: "v1", ModelVersion: "test-v1",
+	}
+	require.NoError(t, repo.CreateRun(run))
+	require.NoError(t, repo.CreateItems([]*model.FaceQualityRescoreItem{
+		{RunID: run.ID, PhotoID: 1, FaceID: 10, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Status: model.FaceQualityRescoreItemStatusPending},
+		{RunID: run.ID, PhotoID: 2, FaceID: 11, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, Status: model.FaceQualityRescoreItemStatusPending},
+	}))
+
+	// running：领取 photo 1 的 item。
+	batch1, err := repo.ClaimNextPhotoItemsWhenRunning(run.ID)
+	require.NoError(t, err)
+	require.Len(t, batch1, 1)
+	assert.Equal(t, model.FaceQualityRescoreItemStatusProcessing, batch1[0].Status)
+
+	// 暂停 run。
+	_, err = repo.TransitionRunStatus(run.ID,
+		[]string{model.FaceQualityRescoreStatusRunning},
+		model.FaceQualityRescoreStatusPaused, nil)
+	require.NoError(t, err)
+
+	// paused：返回空集，photo 2 的 item 仍 pending。
+	batch2, err := repo.ClaimNextPhotoItemsWhenRunning(run.ID)
+	require.NoError(t, err)
+	assert.Empty(t, batch2, "暂停中的 run 不得领取下一批")
+	pending, _ := repo.CountItemsByStatus(run.ID, model.FaceQualityRescoreItemStatusPending)
+	assert.Equal(t, int64(1), pending, "photo 2 仍 pending")
+	processing, _ := repo.CountItemsByStatus(run.ID, model.FaceQualityRescoreItemStatusProcessing)
+	assert.Equal(t, int64(1), processing)
+}

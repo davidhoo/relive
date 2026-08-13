@@ -1413,6 +1413,8 @@ func writeRescoreRunError(c *gin.Context, err error) {
 		writePeopleError(c, http.StatusNotFound, "RESCORE_NOT_FOUND", err.Error())
 	case errors.Is(err, service.ErrRescoreRestoreLegacyV1NotAllowed):
 		writePeopleError(c, http.StatusConflict, "RESCORE_RESTORE_LEGACY_V1_NOT_ALLOWED", err.Error())
+	case errors.Is(err, service.ErrRescoreV2VerifierUnavailable):
+		writePeopleError(c, http.StatusConflict, "FACE_QUALITY_VERIFIER_UNAVAILABLE", err.Error())
 	default:
 		if strings.Contains(strings.ToLower(err.Error()), "not found") {
 			writePeopleError(c, http.StatusNotFound, "RESCORE_NOT_FOUND", err.Error())

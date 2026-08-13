@@ -363,13 +363,12 @@ func (r *faceQualityRescoreRepository) ClaimNextPhotoItems(runID uint) ([]*model
 func (r *faceQualityRescoreRepository) ClaimNextPhotoItemsWhenRunning(runID uint) ([]*model.FaceQualityRescoreItem, error) {
 	var items []*model.FaceQualityRescoreItem
 	err := r.db.Transaction(func(tx *gorm.DB) error {
+		// 断言 run.status='running'。Pluck 无记录时不返回 ErrRecordNotFound，status 留空串，
+		// 自然落入「非 running」分支返回空集——故无需特殊处理 ErrRecordNotFound。
 		var status string
 		if err := tx.Model(&model.FaceQualityRescoreRun{}).
 			Where("id = ?", runID).
 			Pluck("status", &status).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
-				return nil
-			}
 			return err
 		}
 		if status != model.FaceQualityRescoreStatusRunning {

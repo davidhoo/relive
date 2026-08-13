@@ -72,19 +72,24 @@ func (s *faceQualityRescoreService) transitionRunStatus(runID uint, from []strin
 	return ok, err
 }
 
-// ensureV2VerifierReady 在创建/恢复 v2 run 前校验 ML 验证器就绪。
-// 任务 §3 将实现基于 mlclient.Health 的真实门禁；当前为占位：
-// legacy_v1 永远放行，independent_v2 暂不阻断（Task 3 补齐后必须 200+verifier_available=true 才放行）。
-// 门禁必须在任何快照、item 重置或数据库写入之前发生，故置于 Resume/CreateRun 早期路径。
-func (s *faceQualityRescoreService) ensureV2VerifierReady(run *model.FaceQualityRescoreRun) error {
-	if run == nil {
+// ensureV2VerifierReady 在创建/恢复/重试 v2 run 前校验 ML 验证器就绪。
+// 仅 pipeline_version=independent_v2 调用 mlclient.Health；任何 503/非预期 identity/
+// 解析错误/timeout/nil client 一律映射为 errV2VerifierUnavailable，不向浏览器暴露底层路径。
+// 门禁必须在快照、item 状态重置与任意数据库写入之前发生，故置于 CreateRun/Resume/RetryRun 早期。
+// legacy_v1 永远放行（v1 同源评分不依赖独立验证器）。
+func (s *faceQualityRescoreService) ensureV2VerifierReady(pipelineVersion string) error {
+	if pipelineVersion != model.FaceQualityRescorePipelineIndependentV2 {
 		return nil
 	}
-	if run.PipelineVersion != model.FaceQualityRescorePipelineIndependentV2 {
-		return nil
+	if s.people == nil || s.people.client == nil {
+		return errV2VerifierUnavailable
 	}
-	// TODO(task3): 调 s.people.client.Health(ctx)，仅 200+status=ok+verifier_available=true+identity=yunet/2023mar 放行，
-	// 否则返回 errV2VerifierUnavailable。在此处加，先于 ResetProcessingItems 与状态转换。
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := s.people.client.Health(ctx)
+	if err != nil || res == nil || !res.Ready {
+		return errV2VerifierUnavailable
+	}
 	return nil
 }
 
@@ -109,6 +114,12 @@ func (s *faceQualityRescoreService) CreateRun(mode, applyMode string, photoLimit
 		effectiveApplyMode = model.FaceQualityRescoreApplyModeShadow
 	} else if !model.IsValidRescoreApplyMode(effectiveApplyMode) {
 		return nil, fmt.Errorf("invalid apply_mode: %s", effectiveApplyMode)
+	}
+
+	// v2 readiness 门禁（任务 §3）：independent_v2 run 在任何 DB 读写前校验 ML 验证器就绪，
+	// 不可用直接拒绝，不创建 run/item。legacy_v1 放行。
+	if err := s.ensureV2VerifierReady(pipelineVersion); err != nil {
+		return nil, err
 	}
 
 	// full/enforce 门禁（计划 §3.4）：必须指定合格校准 run，服务端逐项验证。
@@ -365,9 +376,9 @@ func (s *faceQualityRescoreService) Resume(id uint) error {
 	if run.Status != model.FaceQualityRescoreStatusPaused {
 		return fmt.Errorf("run %d not paused (status=%s)", id, run.Status)
 	}
-	// v2 readiness 门禁（任务 §3）：验证器不可用时不允许恢复 v2 run，
+	// v2 readiness 门禁：验证器不可用时不允许恢复 v2 run，
 	// 且不重置任何 processing item。legacy v1 无此门禁。
-	if err := s.ensureV2VerifierReady(run); err != nil {
+	if err := s.ensureV2VerifierReady(run.PipelineVersion); err != nil {
 		return err
 	}
 	// 重启时把 processing item 回到 pending（不丢失进度）。
@@ -482,6 +493,12 @@ func (s *faceQualityRescoreService) RetryRun(sourceRunID uint) (*model.FaceQuali
 		return nil, errRetrySourceNotTerminal
 	}
 
+	// v2 readiness 门禁：来源为 independent_v2 时，retry run 同样是 v2，必须在任何 DB 读写前
+	// 校验验证器就绪。不可用则不创建 retry run。legacy_v1 来源放行。
+	if err := s.ensureV2VerifierReady(src.PipelineVersion); err != nil {
+		return nil, err
+	}
+
 	// 只快照该来源 run 的当前失败事件。
 	retryTargets, err := s.repo.ListRetryableTargets(sourceRunID)
 	if err != nil {
@@ -503,7 +520,13 @@ func (s *faceQualityRescoreService) RetryRun(sourceRunID uint) (*model.FaceQuali
 	now := time.Now().UTC()
 	ruleVer := qualityRuleVersionFromEvidence(nil)
 	modelVer := qualityModelVersionFromEvidence(nil)
-	if modelVer == "" {
+	// retry run 继承来源管线：v2 retry 仍为 v2（face_quality_v2 / yunet-v1），不回退 v1。
+	pipelineVersion := src.PipelineVersion
+	targetScope := src.TargetScope
+	if pipelineVersion == model.FaceQualityRescorePipelineIndependentV2 {
+		ruleVer = model.FaceQualityRescoreRuleVersionV2
+		modelVer = "yunet-v1"
+	} else if modelVer == "" {
 		modelVer = "insightface-buffalo-sc-v1"
 	}
 
@@ -524,6 +547,8 @@ func (s *faceQualityRescoreService) RetryRun(sourceRunID uint) (*model.FaceQuali
 		ModelVersion:     modelVer,
 		SelectionPolicy:  fmt.Sprintf("retry_of_run_%d", sourceRunID),
 		RetryOfRunID:     &sourceRunID,
+		PipelineVersion:  pipelineVersion,
+		TargetScope:      targetScope,
 	}
 
 	if err := s.people.executeWrite(func() error {
@@ -1495,6 +1520,7 @@ var (
 	ErrRescoreRetrySourceNotTerminal    = fmt.Errorf("retry source run is not in a terminal state")
 	ErrRescoreRetryNoTargets            = fmt.Errorf("retry source run has no current retryable failures")
 	ErrRescoreRestoreLegacyV1NotAllowed = fmt.Errorf("restore-auto is only allowed for independent_v2 runs")
+	ErrRescoreV2VerifierUnavailable     = fmt.Errorf("v2 verifier unavailable; deploy a verified YuNet model before creating/resuming/retrying independent_v2 runs")
 
 	// 内部别名，保持 service 内部引用不变。
 	errRunConflict               = ErrRescoreRunConflict
@@ -1504,6 +1530,7 @@ var (
 	errRetrySourceNotTerminal    = ErrRescoreRetrySourceNotTerminal
 	errRetryNoTargets            = ErrRescoreRetryNoTargets
 	errRestoreLegacyV1NotAllowed = ErrRescoreRestoreLegacyV1NotAllowed
+	errV2VerifierUnavailable     = ErrRescoreV2VerifierUnavailable
 )
 
 // 编译期断言：service 实现 interface。

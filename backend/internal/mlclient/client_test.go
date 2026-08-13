@@ -227,16 +227,16 @@ func TestClientVerifyKnownFaceCropsBuildsRequest(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(VerifyKnownFaceCropsResponse{
 			Results: []VerifyKnownFaceCropResult{
 				{
-					FaceID:               7,
-					VerificationStatus:   "no_face",
-					VerifierScore:        0.12,
-					VerifierName:         "yunet",
-					VerifierVersion:      "opencv-yunet-2023mar",
-					PrimaryDetectorScore: 0.4,
-					FaceBoxWidthPx:       50,
-					FaceBoxHeightPx:      50,
+					FaceID:                7,
+					VerificationStatus:    "no_face",
+					VerifierScore:         0.12,
+					VerifierName:          "yunet",
+					VerifierVersion:       "opencv-yunet-2023mar",
+					PrimaryDetectorScore:  0.4,
+					FaceBoxWidthPx:        50,
+					FaceBoxHeightPx:       50,
 					EvidenceSchemaVersion: "independent_v2",
-					ReasonCodes:          []string{"input_too_small"},
+					ReasonCodes:           []string{"input_too_small"},
 				},
 			},
 			RuleVersion:  "face_quality_v2",
@@ -276,5 +276,93 @@ func TestClientVerifyKnownFaceCropsBuildsRequest(t *testing.T) {
 	}
 	if resp.Results[0].EvidenceSchemaVersion != "independent_v2" {
 		t.Fatalf("expected evidence_schema_version=independent_v2, got %s", resp.Results[0].EvidenceSchemaVersion)
+	}
+}
+
+func TestClientHealthReady(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/health" || r.Method != http.MethodGet {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(MLHealthResponse{
+			Status:            "ok",
+			VerifierAvailable: true,
+			VerifierName:      MLHealthVerifierNameExpected,
+			VerifierVersion:   MLHealthVerifierVersionExpected,
+		})
+	}))
+	defer server.Close()
+
+	client := New(server.URL, time.Second)
+	res, err := client.Health(context.Background())
+	if err != nil {
+		t.Fatalf("health: %v", err)
+	}
+	if !res.Ready {
+		t.Fatalf("expected ready=true, got %+v", res)
+	}
+	if res.VerifierName != MLHealthVerifierNameExpected {
+		t.Fatalf("expected verifier_name %s, got %s", MLHealthVerifierNameExpected, res.VerifierName)
+	}
+}
+
+func TestClientHealthUnreadyOn503Degraded(t *testing.T) {
+	// 复现 NAS #3 根因：模型缺失时 ML health 返回 503 + degraded + verifier_available=false。
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(MLHealthResponse{
+			Status:            "degraded",
+			VerifierAvailable: false,
+			VerifierName:      MLHealthVerifierNameExpected,
+			VerifierVersion:   MLHealthVerifierVersionExpected,
+		})
+	}))
+	defer server.Close()
+
+	client := New(server.URL, time.Second)
+	res, err := client.Health(context.Background())
+	if err != nil {
+		t.Fatalf("503 should not return transport error, got %v", err)
+	}
+	if res.Ready {
+		t.Fatalf("expected ready=false on 503 degraded, got %+v", res)
+	}
+}
+
+func TestClientHealthUnreadyOnIdentityMismatch(t *testing.T) {
+	// 防御：health 200 + available=true 但验证器 identity 被替换（如 2026may）→ 未就绪。
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(MLHealthResponse{
+			Status:            "ok",
+			VerifierAvailable: true,
+			VerifierName:      "yunet",
+			VerifierVersion:   "opencv-yunet-2026may", // 非预期版本
+		})
+	}))
+	defer server.Close()
+
+	client := New(server.URL, time.Second)
+	res, err := client.Health(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Ready {
+		t.Fatalf("expected ready=false on identity mismatch, got %+v", res)
+	}
+}
+
+func TestClientHealthTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := New(server.URL, 10*time.Millisecond)
+	_, err := client.Health(context.Background())
+	if err == nil {
+		t.Fatal("expected timeout error")
 	}
 }

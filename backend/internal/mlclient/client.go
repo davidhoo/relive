@@ -32,30 +32,30 @@ type BoundingBox struct {
 // FaceQualityEvidence 质检证据（对应 ml-service FaceQualityEvidence）。
 // 指针字段为零值时省略，向后兼容旧版 ml-service 不返回 evidence 的响应。
 type FaceQualityEvidence struct {
-	FaceValidityScore     float64   `json:"face_validity_score"`
-	PixelWidth            int       `json:"pixel_width"`
-	PixelHeight           int       `json:"pixel_height"`
-	Sharpness             float64   `json:"sharpness"`
-	Brightness            float64   `json:"brightness"`
-	Contrast              float64   `json:"contrast"`
-	LandmarkCompleteness  float64   `json:"landmark_completeness"`
-	LandmarkGeometryScore float64   `json:"landmark_geometry_score"`
-	Yaw                   *float64  `json:"yaw,omitempty"`
-	Pitch                 *float64  `json:"pitch,omitempty"`
-	Roll                  *float64  `json:"roll,omitempty"`
-	PoseEstimable         bool      `json:"pose_estimable"`
-	Occluded              bool      `json:"occluded"`
-	QualityReasons        []string  `json:"quality_reasons"`
-	RuleVersion           string    `json:"rule_version"`
-	ModelVersion          string    `json:"model_version"`
+	FaceValidityScore     float64  `json:"face_validity_score"`
+	PixelWidth            int      `json:"pixel_width"`
+	PixelHeight           int      `json:"pixel_height"`
+	Sharpness             float64  `json:"sharpness"`
+	Brightness            float64  `json:"brightness"`
+	Contrast              float64  `json:"contrast"`
+	LandmarkCompleteness  float64  `json:"landmark_completeness"`
+	LandmarkGeometryScore float64  `json:"landmark_geometry_score"`
+	Yaw                   *float64 `json:"yaw,omitempty"`
+	Pitch                 *float64 `json:"pitch,omitempty"`
+	Roll                  *float64 `json:"roll,omitempty"`
+	PoseEstimable         bool     `json:"pose_estimable"`
+	Occluded              bool     `json:"occluded"`
+	QualityReasons        []string `json:"quality_reasons"`
+	RuleVersion           string   `json:"rule_version"`
+	ModelVersion          string   `json:"model_version"`
 }
 
 type DetectedFace struct {
-	BBox         BoundingBox           `json:"bbox"`
-	Confidence   float64               `json:"confidence"`
-	QualityScore float64               `json:"quality_score"`
-	Embedding    []float32             `json:"embedding"`
-	Evidence     *FaceQualityEvidence  `json:"evidence,omitempty"`
+	BBox         BoundingBox          `json:"bbox"`
+	Confidence   float64              `json:"confidence"`
+	QualityScore float64              `json:"quality_score"`
+	Embedding    []float32            `json:"embedding"`
+	Evidence     *FaceQualityEvidence `json:"evidence,omitempty"`
 }
 
 type DetectFacesResponse struct {
@@ -70,7 +70,7 @@ type DetectFacesResponse struct {
 
 // ScoreKnownFaceTarget 单个重评分目标：一个已知人脸框（归一化）。
 type ScoreKnownFaceTarget struct {
-	FaceID uint       `json:"face_id"`
+	FaceID uint        `json:"face_id"`
 	BBox   BoundingBox `json:"bbox"`
 }
 
@@ -82,11 +82,11 @@ type ScoreKnownFacesRequest struct {
 
 // ScoreKnownFaceResult 单个目标的重评分结果，按请求 target 顺序返回。
 type ScoreKnownFaceResult struct {
-	FaceID      uint                `json:"face_id"`
-	Status      string              `json:"status"` // matched / unmatched / error
-	MatchedIoU  *float64            `json:"matched_iou,omitempty"`
-	Evidence    *FaceQualityEvidence `json:"evidence,omitempty"`
-	QualityScore *float64           `json:"quality_score,omitempty"`
+	FaceID       uint                 `json:"face_id"`
+	Status       string               `json:"status"` // matched / unmatched / error
+	MatchedIoU   *float64             `json:"matched_iou,omitempty"`
+	Evidence     *FaceQualityEvidence `json:"evidence,omitempty"`
+	QualityScore *float64             `json:"quality_score,omitempty"`
 }
 
 // ScoreKnownFacesResponse 历史重评分响应。
@@ -103,14 +103,14 @@ type ScoreKnownFacesResponse struct {
 
 // VerifyKnownFaceCropTarget 单个 v2 复核目标。
 type VerifyKnownFaceCropTarget struct {
-	FaceID              uint   `json:"face_id"`
-	ContextCropBase64   string `json:"context_crop_base64"` // 上下文裁剪 JPEG Base64
-	FaceBoxWidthPx      int    `json:"face_box_width_px"`   // 原图人脸框实际宽
-	FaceBoxHeightPx     int    `json:"face_box_height_px"`  // 原图人脸框实际高
+	FaceID            uint   `json:"face_id"`
+	ContextCropBase64 string `json:"context_crop_base64"` // 上下文裁剪 JPEG Base64
+	FaceBoxWidthPx    int    `json:"face_box_width_px"`   // 原图人脸框实际宽
+	FaceBoxHeightPx   int    `json:"face_box_height_px"`  // 原图人脸框实际高
 	// FaceBoxOffsetX/Y 人脸框左上角在上下文裁剪中的像素偏移。
 	// ML 端用此精确定位人脸框区域计算原图质量指标，不得用裁剪中心近似。
-	FaceBoxOffsetX       int    `json:"face_box_offset_x"`
-	FaceBoxOffsetY       int    `json:"face_box_offset_y"`
+	FaceBoxOffsetX       int     `json:"face_box_offset_x"`
+	FaceBoxOffsetY       int     `json:"face_box_offset_y"`
 	PrimaryDetectorScore float64 `json:"primary_detector_score"` // 主检测置信度
 }
 
@@ -132,22 +132,22 @@ type V2QualityFeatures struct {
 // VerifyKnownFaceCropResult 单个目标的 v2 复核结果，按请求 target 顺序返回。
 // VerificationStatus: face / no_face / uncertain / error。
 type VerifyKnownFaceCropResult struct {
-	FaceID               uint               `json:"face_id"`
-	VerificationStatus   string             `json:"verification_status"`
-	VerifierScore        float64            `json:"verifier_score"`
-	VerifierName         string             `json:"verifier_name"`
-	VerifierVersion      string             `json:"verifier_version"`
-	OriginalWidth        int                `json:"original_width"`
-	OriginalHeight       int                `json:"original_height"`
-	FaceBoxWidthPx       int                `json:"face_box_width_px"`
-	FaceBoxHeightPx      int                `json:"face_box_height_px"`
-	ContextCropWidthPx   int                `json:"context_crop_width_px"`
-	ContextCropHeightPx  int                `json:"context_crop_height_px"`
-	ContextExpandRatio   float64            `json:"context_expand_ratio"`
-	PrimaryDetectorScore float64            `json:"primary_detector_score"`
-	Quality              *V2QualityFeatures `json:"quality,omitempty"`
-	ReasonCodes          []string           `json:"reason_codes,omitempty"`
-	EvidenceSchemaVersion string            `json:"evidence_schema_version"`
+	FaceID                uint               `json:"face_id"`
+	VerificationStatus    string             `json:"verification_status"`
+	VerifierScore         float64            `json:"verifier_score"`
+	VerifierName          string             `json:"verifier_name"`
+	VerifierVersion       string             `json:"verifier_version"`
+	OriginalWidth         int                `json:"original_width"`
+	OriginalHeight        int                `json:"original_height"`
+	FaceBoxWidthPx        int                `json:"face_box_width_px"`
+	FaceBoxHeightPx       int                `json:"face_box_height_px"`
+	ContextCropWidthPx    int                `json:"context_crop_width_px"`
+	ContextCropHeightPx   int                `json:"context_crop_height_px"`
+	ContextExpandRatio    float64            `json:"context_expand_ratio"`
+	PrimaryDetectorScore  float64            `json:"primary_detector_score"`
+	Quality               *V2QualityFeatures `json:"quality,omitempty"`
+	ReasonCodes           []string           `json:"reason_codes,omitempty"`
+	EvidenceSchemaVersion string             `json:"evidence_schema_version"`
 }
 
 // VerifyKnownFaceCropsResponse v2 独立复核响应，按 face_id 一一对应。
@@ -155,6 +155,70 @@ type VerifyKnownFaceCropsResponse struct {
 	Results      []VerifyKnownFaceCropResult `json:"results"`
 	RuleVersion  string                      `json:"rule_version,omitempty"`
 	ModelVersion string                      `json:"model_version,omitempty"`
+}
+
+// ---- ML 服务健康（v2 readiness 门禁）----
+// 后端在创建/恢复/重试 independent_v2 run 前调用 Health，仅当验证器可用才放行。
+// 任何 503/非预期 identity/解析错误/timeout 都映射为 Ready=false，由 service 层吞成
+// errV2VerifierUnavailable，不向浏览器暴露底层路径或原始异常。
+
+// MLHealthResponse 镜像 ml-service 的 HealthResponse。
+type MLHealthResponse struct {
+	Status            string `json:"status"`
+	VerifierAvailable bool   `json:"verifier_available"`
+	VerifierName      string `json:"verifier_name"`
+	VerifierVersion   string `json:"verifier_version"`
+}
+
+// 预期 v2 验证器 identity。与 ml-service schemas.YUNET_VERIFIER_NAME/VERSION 对齐。
+const (
+	MLHealthVerifierNameExpected    = "yunet"
+	MLHealthVerifierVersionExpected = "opencv-yunet-2023mar"
+)
+
+// MLHealthResult 是从 ML 健康响应推导的就绪判定。Ready=true 仅当 HTTP 200、status=ok、
+// verifier_available=true 且 identity 匹配预期契约。
+type MLHealthResult struct {
+	Ready             bool
+	Status            string
+	VerifierAvailable bool
+	VerifierName      string
+	VerifierVersion   string
+}
+
+// Health 调用 ML 服务 /api/v1/health，返回就绪判定。
+// 仅当 HTTP 200 + status=ok + verifier_available=true + identity=yunet/opencv-yunet-2023mar
+// 时 Ready=true。任何其他情况（含 503 degraded、identity 不符、解析/网络错误）返回 Ready=false，
+// 调用方据此阻断 v2 run。transport 错误以 error 返回，调用方统一吞为「未就绪」。
+func (c *Client) Health(ctx context.Context) (*MLHealthResult, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/health", nil)
+	if err != nil {
+		return nil, fmt.Errorf("build health request: %w", err)
+	}
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("call health: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var hr MLHealthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&hr); err != nil {
+		return nil, fmt.Errorf("decode health response: %w", err)
+	}
+
+	ready := resp.StatusCode == http.StatusOK &&
+		hr.Status == "ok" &&
+		hr.VerifierAvailable &&
+		hr.VerifierName == MLHealthVerifierNameExpected &&
+		hr.VerifierVersion == MLHealthVerifierVersionExpected
+
+	return &MLHealthResult{
+		Ready:             ready,
+		Status:            hr.Status,
+		VerifierAvailable: hr.VerifierAvailable,
+		VerifierName:      hr.VerifierName,
+		VerifierVersion:   hr.VerifierVersion,
+	}, nil
 }
 
 func New(baseURL string, timeout time.Duration) *Client {

@@ -73,6 +73,8 @@ type PeopleMLClient interface {
 	DetectFaces(ctx context.Context, request mlclient.DetectFacesRequest) (*mlclient.DetectFacesResponse, error)
 	ScoreKnownFaces(ctx context.Context, request mlclient.ScoreKnownFacesRequest) (*mlclient.ScoreKnownFacesResponse, error)
 	VerifyKnownFaceCrops(ctx context.Context, request mlclient.VerifyKnownFaceCropsRequest) (*mlclient.VerifyKnownFaceCropsResponse, error)
+	// Health 查询 ML 服务验证器就绪状态。v2 run 创建/恢复/重试前用它做 readiness 门禁。
+	Health(ctx context.Context) (*mlclient.MLHealthResult, error)
 }
 
 type PeopleService interface {

@@ -16,20 +16,20 @@ import (
 
 // controllableRescoreService 按字段返回预设结果/错误，用于精确测试错误码映射。
 type controllableRescoreService struct {
-	createRunRun         *model.FaceQualityRescoreRun
-	createRunErr         error
-	getRunRun            *model.FaceQualityRescoreRun
-	getRunErr            error
-	listRuns             []*model.FaceQualityRescoreRun
-	listRunsErr          error
-	pauseErr             error
-	resumeErr            error
-	cancelErr            error
-	restoreResult        *model.FaceQualityRestoreResult
-	restoreErr           error
-	retryRun             *model.FaceQualityRescoreRun
-	retryErr             error
-	eligibleForEnforce   map[uint]bool
+	createRunRun       *model.FaceQualityRescoreRun
+	createRunErr       error
+	getRunRun          *model.FaceQualityRescoreRun
+	getRunErr          error
+	listRuns           []*model.FaceQualityRescoreRun
+	listRunsErr        error
+	pauseErr           error
+	resumeErr          error
+	cancelErr          error
+	restoreResult      *model.FaceQualityRestoreResult
+	restoreErr         error
+	retryRun           *model.FaceQualityRescoreRun
+	retryErr           error
+	eligibleForEnforce map[uint]bool
 }
 
 func (s *controllableRescoreService) CreateRun(mode, applyMode string, photoLimit int, calibrationRunID uint, pipelineVersion string) (*model.FaceQualityRescoreRun, error) {
@@ -85,8 +85,8 @@ func TestRescoreHandler_CalibrationForcesShadow(t *testing.T) {
 	svc := &controllableRescoreService{
 		createRunRun: &model.FaceQualityRescoreRun{
 			ID: 1, Mode: model.FaceQualityRescoreModeCalibration,
-			ApplyMode: model.FaceQualityRescoreApplyModeShadow,
-			Status:    model.FaceQualityRescoreStatusRunning,
+			ApplyMode:       model.FaceQualityRescoreApplyModeShadow,
+			Status:          model.FaceQualityRescoreStatusRunning,
 			TargetFaceCount: 5,
 		},
 	}
@@ -95,7 +95,7 @@ func TestRescoreHandler_CalibrationForcesShadow(t *testing.T) {
 		map[string]interface{}{"mode": "calibration", "photo_limit": 1000}, nil)
 	require.Equal(t, http.StatusOK, rec.Code)
 	var resp struct {
-		Success bool                              `json:"success"`
+		Success bool                                `json:"success"`
 		Data    model.FaceQualityRescoreRunResponse `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
@@ -173,8 +173,8 @@ func TestRescoreHandler_RestoreAutoDoesNotAffectOtherRuns(t *testing.T) {
 		gin.Params{{Key: "id", Value: "7"}})
 	require.Equal(t, http.StatusOK, rec.Code)
 	var resp struct {
-		Success bool                            `json:"success"`
-		Data    model.FaceQualityRestoreResult  `json:"data"`
+		Success bool                           `json:"success"`
+		Data    model.FaceQualityRestoreResult `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	assert.True(t, resp.Success)
@@ -273,6 +273,36 @@ func TestRescoreHandler_FullRequiresCalibrationRunID(t *testing.T) {
 	assert.Equal(t, "RESCORE_CALIBRATION_REQUIRED", resp.Error.Code)
 }
 
+// TestRescoreHandler_VerifierUnavailableReturns409 v2 验证器不可用时 create 返回稳定 409 +
+// FACE_QUALITY_VERIFIER_UNAVAILABLE，而非伪成功或 500。
+func TestRescoreHandler_VerifierUnavailableReturns409(t *testing.T) {
+	svc := &controllableRescoreService{
+		createRunErr: service.ErrRescoreV2VerifierUnavailable,
+	}
+	h := newRescoreHandlerWith(svc)
+	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
+		map[string]interface{}{"mode": "calibration"}, nil)
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	var resp model.Response
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, "FACE_QUALITY_VERIFIER_UNAVAILABLE", resp.Error.Code)
+}
+
+// TestRescoreHandler_RetryVerifierUnavailableReturns409 v2 retry 验证器不可用同样映射 409。
+func TestRescoreHandler_RetryVerifierUnavailableReturns409(t *testing.T) {
+	svc := &controllableRescoreService{
+		retryErr: service.ErrRescoreV2VerifierUnavailable,
+	}
+	h := newRescoreHandlerWith(svc)
+	rec := callRescoreHandler(t, h, h.RetryFaceQualityRescoreRun, nil,
+		gin.Params{{Key: "id", Value: "3"}})
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	var resp model.Response
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, "FACE_QUALITY_VERIFIER_UNAVAILABLE", resp.Error.Code)
+}
+
 // 编译期断言桩实现接口。
 var _ service.FaceQualityRescoreService = (*controllableRescoreService)(nil)
-

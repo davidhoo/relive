@@ -21,6 +21,11 @@ import (
 // 并注入可控行为的 fakePeopleMLClient。
 func newRescoreTestSvc(t *testing.T, client PeopleMLClient) (*faceQualityRescoreService, *peopleService, repository.FaceQualityRescoreRepository) {
 	t.Helper()
+	// nil 时注入默认 ready 的 fake client，使 v2 happy-path 测试无需显式构造 client；
+	// v2 verifier-unavailable 测试显式传 healthReady=false/healthErr 的 client。
+	if client == nil {
+		client = &rescoreFakeMLClient{healthReady: true}
+	}
 	svc, db := newPeopleServiceForTest(t, client)
 	repo := repository.NewFaceQualityRescoreRepository(db)
 	coord := NewBackgroundTaskCoordinator()
@@ -1055,6 +1060,8 @@ func TestRescore_IsEligibleForEnforce(t *testing.T) {
 // block 非空时 ScoreKnownFaces 在返回前等待其关闭，用于复现 worker 持有首批 item 为 processing
 // 期间并发暂停/取消的竞态。entered 非空时进入 ScoreKnownFaces 即非阻塞发一笔信号，供测试
 // 确定性等待「item 已领取为 processing」后再触发暂停/取消，避免轮询竞态。
+// healthReady/healthErr 控制 Health() 返回，供 v2 readiness 门禁测试（默认 false=未就绪；
+// v2 happy-path 测试显式置 true）。
 type rescoreFakeMLClient struct {
 	resultsByFace       map[uint]mlclient.ScoreKnownFaceResult
 	verifyResultsByFace map[uint]mlclient.VerifyKnownFaceCropResult
@@ -1063,10 +1070,28 @@ type rescoreFakeMLClient struct {
 	callCount           int
 	block               chan struct{}
 	entered             chan struct{}
+	healthReady         bool
+	healthErr           error
+	healthCalls         int
 }
 
 func (c *rescoreFakeMLClient) DetectFaces(ctx context.Context, req mlclient.DetectFacesRequest) (*mlclient.DetectFacesResponse, error) {
 	return &mlclient.DetectFacesResponse{}, nil
+}
+
+// Health 满足 PeopleMLClient；healthErr 非 nil 时模拟网络/超时错误，否则按 healthReady 返回。
+func (c *rescoreFakeMLClient) Health(ctx context.Context) (*mlclient.MLHealthResult, error) {
+	c.healthCalls++
+	if c.healthErr != nil {
+		return nil, c.healthErr
+	}
+	return &mlclient.MLHealthResult{
+		Ready:             c.healthReady,
+		Status:            map[bool]string{true: "ok", false: "degraded"}[c.healthReady],
+		VerifierAvailable: c.healthReady,
+		VerifierName:      mlclient.MLHealthVerifierNameExpected,
+		VerifierVersion:   mlclient.MLHealthVerifierVersionExpected,
+	}, nil
 }
 
 func (c *rescoreFakeMLClient) ScoreKnownFaces(ctx context.Context, req mlclient.ScoreKnownFacesRequest) (*mlclient.ScoreKnownFacesResponse, error) {
@@ -1149,7 +1174,7 @@ func TestRescore_V2ShadowWritesIndependentV2Evidence(t *testing.T) {
 	writeTestJPEG(t, jpgPath, 200, 200)
 
 	// 默认 verify 返回 no_face + 主检测分低（Face.Confidence=0.3）→ 期望 non_face 候选。
-	client := &rescoreFakeMLClient{}
+	client := &rescoreFakeMLClient{healthReady: true}
 	rs, svc, repo := newRescoreTestSvc(t, client)
 	db := svc.db
 
@@ -1192,7 +1217,7 @@ func TestRescore_V2EnforceAutoExcludesNonFace(t *testing.T) {
 	jpgPath := filepath.Join(dir, "p.jpg")
 	writeTestJPEG(t, jpgPath, 200, 200)
 
-	client := &rescoreFakeMLClient{} // 默认 no_face
+	client := &rescoreFakeMLClient{healthReady: true} // 默认 no_face, v2 验证器就绪
 	rs, svc, repo := newRescoreTestSvc(t, client)
 	db := svc.db
 
@@ -1266,4 +1291,132 @@ func TestRescore_RestoreAutoRejectsLegacyV1Run(t *testing.T) {
 	require.NoError(t, repo.CreateRun(run))
 	_, err := rs.RestoreAuto(run.ID, 0)
 	assert.ErrorIs(t, err, errRestoreLegacyV1NotAllowed)
+}
+
+// ---- 任务 3：v2 readiness 门禁 ----
+
+// TestRescore_CreateV2BlockedWhenVerifierUnavailable 验证器不可用时 CreateRun(v2) 返回
+// errV2VerifierUnavailable，不创建任何 run/item。门禁发生在 DB 写入前。
+func TestRescore_CreateV2BlockedWhenVerifierUnavailable(t *testing.T) {
+	client := &rescoreFakeMLClient{healthReady: false}
+	rs, svc, repo := newRescoreTestSvc(t, client)
+	db := svc.db
+	// 一个无 manual/v2 事件的 Face → v2 快照目标。
+	photo := &model.Photo{FilePath: "/t/p.jpg", FaceProcessStatus: model.FaceProcessStatusReady}
+	require.NoError(t, db.Create(photo).Error)
+	face := &model.Face{PhotoID: photo.ID, BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusPending}
+	require.NoError(t, db.Create(face).Error)
+
+	_, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0, model.FaceQualityRescorePipelineIndependentV2)
+	assert.ErrorIs(t, err, errV2VerifierUnavailable)
+	assert.Greater(t, client.healthCalls, 0, "v2 create 必须查询 health")
+
+	// 无 run 创建。
+	runs, err := repo.ListRuns(repository.FaceQualityRescoreRunQuery{Limit: 10})
+	require.NoError(t, err)
+	assert.Empty(t, runs, "验证器不可用不得创建 run")
+}
+
+// TestRescore_ResumeV2BlockedWhenVerifierUnavailable 验证器不可用时 Resume(v2) 返回
+// errV2VerifierUnavailable，run 保持 paused，且既有 processing item 不得被提前重置为 pending。
+func TestRescore_ResumeV2BlockedWhenVerifierUnavailable(t *testing.T) {
+	client := &rescoreFakeMLClient{healthReady: false}
+	rs, _, repo := newRescoreTestSvc(t, client)
+	// 直接构造 paused v2 run + 一条 processing item（绕过 CreateRun 门禁）。
+	run := &model.FaceQualityRescoreRun{
+		Mode: model.FaceQualityRescoreModeCalibration, ApplyMode: model.FaceQualityRescoreApplyModeShadow,
+		Status:      model.FaceQualityRescoreStatusPaused,
+		RuleVersion: model.FaceQualityRescoreRuleVersionV2, ModelVersion: "yunet-v1",
+		PipelineVersion: model.FaceQualityRescorePipelineIndependentV2, TargetScope: model.RescoreTargetScopeV2,
+		TargetFaceCount: 1,
+	}
+	require.NoError(t, repo.CreateRun(run))
+	require.NoError(t, repo.CreateItems([]*model.FaceQualityRescoreItem{
+		{RunID: run.ID, PhotoID: 1, FaceID: 10, BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2, Status: model.FaceQualityRescoreItemStatusProcessing},
+	}))
+
+	err := rs.Resume(run.ID)
+	assert.ErrorIs(t, err, errV2VerifierUnavailable)
+
+	// 仍 paused；processing item 未被重置为 pending。
+	latest, _ := repo.GetRun(run.ID)
+	assert.Equal(t, model.FaceQualityRescoreStatusPaused, latest.Status)
+	proc, _ := repo.CountItemsByStatus(run.ID, model.FaceQualityRescoreItemStatusProcessing)
+	assert.Equal(t, int64(1), proc, "验证器不可用时不得重置 processing item")
+	pend, _ := repo.CountItemsByStatus(run.ID, model.FaceQualityRescoreItemStatusPending)
+	assert.Equal(t, int64(0), pend)
+}
+
+// TestRescore_RetryV2BlockedWhenVerifierUnavailable v2 来源 run 的 RetryRun 在验证器
+// 不可用时不创建 retry run。门禁发生在 ListRetryableTargets/HasActiveRun/CreateRun 之前。
+func TestRescore_RetryV2BlockedWhenVerifierUnavailable(t *testing.T) {
+	client := &rescoreFakeMLClient{healthReady: false}
+	rs, svc, repo := newRescoreTestSvc(t, client)
+	db := svc.db
+	// 直接构造 v2 calibration 终态 run + 一条当前 retryable 失败事件。
+	src := &model.FaceQualityRescoreRun{
+		Mode: model.FaceQualityRescoreModeCalibration, ApplyMode: model.FaceQualityRescoreApplyModeShadow,
+		Status:      model.FaceQualityRescoreStatusCompletedWithError,
+		RuleVersion: model.FaceQualityRescoreRuleVersionV2, ModelVersion: "yunet-v1",
+		PipelineVersion: model.FaceQualityRescorePipelineIndependentV2, TargetScope: model.RescoreTargetScopeV2,
+	}
+	require.NoError(t, repo.CreateRun(src))
+	srcID := src.ID
+	photo := &model.Photo{FilePath: "/t/p.jpg", FaceProcessStatus: model.FaceProcessStatusReady}
+	require.NoError(t, db.Create(photo).Error)
+	face := &model.Face{PhotoID: photo.ID, BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusPending}
+	require.NoError(t, db.Create(face).Error)
+	require.NoError(t, db.Create(&model.FaceQualityEvent{
+		PhotoID: photo.ID, FaceID: &face.ID,
+		BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionReviewRequired,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: "face_quality_v2", ModelVersion: "yunet-v1",
+		EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalRescore,
+		EvidenceState:  model.FaceQualityEvidenceStateRetryableError,
+		RescoreRunID:   &srcID, IsCurrent: true,
+	}).Error)
+
+	_, err := rs.RetryRun(src.ID)
+	assert.ErrorIs(t, err, errV2VerifierUnavailable)
+	assert.Greater(t, client.healthCalls, 0, "v2 retry 必须查询 health")
+
+	// 无 retry run 创建（仅 src）。
+	runs, err := repo.ListRuns(repository.FaceQualityRescoreRunQuery{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	assert.Equal(t, src.ID, runs[0].ID, "验证器不可用不得创建 retry run")
+}
+
+// TestRescore_V1UnaffectedByVerifierGate 验证器不可用时 v1 create/resume 仍正常工作，
+// 且不查询 health 门禁（legacy v1 不依赖独立验证器）。
+func TestRescore_V1UnaffectedByVerifierGate(t *testing.T) {
+	client := &rescoreFakeMLClient{healthReady: false, resultsByFace: map[uint]mlclient.ScoreKnownFaceResult{}}
+	rs, svc, repo := newRescoreTestSvc(t, client)
+	db := svc.db
+	// v1 目标：historical_backfill + missing 事件。
+	photo := &model.Photo{FilePath: "/t/p.jpg", FaceProcessStatus: model.FaceProcessStatusReady}
+	require.NoError(t, db.Create(photo).Error)
+	face := &model.Face{PhotoID: photo.ID, BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusPending}
+	require.NoError(t, db.Create(face).Error)
+	require.NoError(t, db.Create(&model.FaceQualityEvent{
+		PhotoID: photo.ID, FaceID: &face.ID,
+		BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionReviewRequired,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "test-v1",
+		EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalBackfill,
+		EvidenceState:  model.FaceQualityEvidenceStateMissing, IsCurrent: true,
+	}).Error)
+
+	run, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0, model.FaceQualityRescorePipelineLegacyV1)
+	require.NoError(t, err)
+	assert.Equal(t, 0, client.healthCalls, "v1 create 不得查询 health")
+
+	// v1 Resume 也不查询 health：claim 一项 processing 后 pause 再 resume。
+	items, err := repo.ClaimNextPhotoItems(run.ID)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.NoError(t, rs.Pause(run.ID))
+	callsBefore := client.healthCalls
+	require.NoError(t, rs.Resume(run.ID))
+	assert.Equal(t, callsBefore, client.healthCalls, "v1 resume 不得查询 health")
 }
