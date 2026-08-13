@@ -25,7 +25,8 @@ type FaceQualityRescoreService interface {
 	// CreateRun 创建运行。calibration 一律归一化为 shadow；full/enforce 需已完成 calibration。
 	// photo_limit>0 时限制快照照片数（校准用）。返回运行 ID 与实际快照计数。
 	// full/enforce 必须通过 calibrationRunID 指定服务端验证通过的合格校准 run（0 表示无）。
-	CreateRun(mode, applyMode string, photoLimit int, calibrationRunID uint) (*model.FaceQualityRescoreRun, error)
+	// pipelineVersion: legacy_v1（v1 同源 score-known-faces）/ independent_v2（v2 独立验证器）。
+	CreateRun(mode, applyMode string, photoLimit int, calibrationRunID uint, pipelineVersion string) (*model.FaceQualityRescoreRun, error)
 	GetRun(id uint) (*model.FaceQualityRescoreRun, error)
 	ListRuns(limit int) ([]*model.FaceQualityRescoreRun, error)
 	Pause(id uint) error
@@ -59,14 +60,19 @@ func NewFaceQualityRescoreService(people *peopleService, repo repository.FaceQua
 	}
 }
 
-// CreateRun 创建运行并快照当前 historical_backfill + missing 的目标 Face 集合。
+// CreateRun 创建运行并快照目标 Face 集合。
+// pipelineVersion=legacy_v1：从 historical_backfill+missing 事件选目标（v1 同源）。
+// pipelineVersion=independent_v2：从全部无 manual 结论、无 independent_v2 事件的 Face 选目标（v2 独立）。
 // full/enforce 必须通过 calibrationRunID 指定服务端验证通过的合格校准 run（Task 4 门禁）。
-func (s *faceQualityRescoreService) CreateRun(mode, applyMode string, photoLimit int, calibrationRunID uint) (*model.FaceQualityRescoreRun, error) {
+func (s *faceQualityRescoreService) CreateRun(mode, applyMode string, photoLimit int, calibrationRunID uint, pipelineVersion string) (*model.FaceQualityRescoreRun, error) {
 	if s.people == nil {
 		return nil, fmt.Errorf("people service not available")
 	}
 	if !model.IsValidRescoreMode(mode) {
 		return nil, fmt.Errorf("invalid mode: %s", mode)
+	}
+	if !model.IsValidRescorePipelineVersion(pipelineVersion) {
+		return nil, fmt.Errorf("invalid pipeline_version: %s", pipelineVersion)
 	}
 
 	// 校准一律归一化为 shadow，忽略调用方传入的 apply_mode。
@@ -83,7 +89,7 @@ func (s *faceQualityRescoreService) CreateRun(mode, applyMode string, photoLimit
 		if calibrationRunID == 0 {
 			return nil, errCalibrationRequired
 		}
-		cal, ok, err := s.getEligibleCalibration(calibrationRunID)
+		cal, ok, err := s.getEligibleCalibration(calibrationRunID, pipelineVersion)
 		if err != nil {
 			return nil, err
 		}
@@ -102,8 +108,8 @@ func (s *faceQualityRescoreService) CreateRun(mode, applyMode string, photoLimit
 		return nil, errRunConflict
 	}
 
-	// 快照目标 Face 集合：当前 historical_backfill + missing 的事件，按 photo 分组。
-	targets, err := s.snapshotTargets(photoLimit)
+	// 快照目标 Face 集合：v1 走 historical_backfill+missing 事件；v2 走全部无 manual/v2 结论的 Face。
+	targets, err := s.snapshotTargets(photoLimit, pipelineVersion)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot targets: %w", err)
 	}
@@ -111,9 +117,17 @@ func (s *faceQualityRescoreService) CreateRun(mode, applyMode string, photoLimit
 	now := time.Now().UTC()
 	ruleVer := qualityRuleVersionFromEvidence(nil) // "v1"
 	modelVer := qualityModelVersionFromEvidence(nil)
-	if modelVer == "" {
+	if pipelineVersion == model.FaceQualityRescorePipelineIndependentV2 {
+		ruleVer = model.FaceQualityRescoreRuleVersionV2 // "face_quality_v2"
+		modelVer = "yunet-v1"
+	} else if modelVer == "" {
 		// 与 ml-service FACE_QUALITY_MODEL_VERSION 对齐；测试环境可能为空，留 schema 默认。
 		modelVer = "insightface-buffalo-sc-v1"
+	}
+
+	targetScope := model.RescoreTargetScopeV1
+	if pipelineVersion == model.FaceQualityRescorePipelineIndependentV2 {
+		targetScope = model.RescoreTargetScopeV2
 	}
 
 	run := &model.FaceQualityRescoreRun{
@@ -126,6 +140,8 @@ func (s *faceQualityRescoreService) CreateRun(mode, applyMode string, photoLimit
 		ModelVersion:     modelVer,
 		SelectionPolicy:  "oldest_by_photo_id",
 		PhotoLimit:       photoLimit,
+		PipelineVersion:  pipelineVersion,
+		TargetScope:      targetScope,
 	}
 	if calibrationRun != nil {
 		run.CalibrationRunID = &calibrationRun.ID
@@ -170,9 +186,31 @@ type rescoreTarget struct {
 	BaselineEventID uint
 }
 
-// snapshotTargets 查询当前 historical_backfill + missing 的 is_current 事件，
-// 按 photo_id 升序、photo_limit 截断后返回。
-func (s *faceQualityRescoreService) snapshotTargets(photoLimit int) ([]rescoreTarget, error) {
+// snapshotTargets 快照目标 Face 集合。
+// pipelineVersion=legacy_v1：当前 historical_backfill + missing 的 is_current 事件，按 photo 升序。
+// pipelineVersion=independent_v2：全部无 manual 结论、无 independent_v2 事件的 Face（repo.ListV2SnapshotTargets）。
+func (s *faceQualityRescoreService) snapshotTargets(photoLimit int, pipelineVersion string) ([]rescoreTarget, error) {
+	if pipelineVersion == model.FaceQualityRescorePipelineIndependentV2 {
+		v2Targets, err := s.repo.ListV2SnapshotTargets(photoLimit)
+		if err != nil {
+			return nil, err
+		}
+		targets := make([]rescoreTarget, 0, len(v2Targets))
+		for _, t := range v2Targets {
+			targets = append(targets, rescoreTarget{
+				PhotoID:         t.PhotoID,
+				FaceID:          t.FaceID,
+				BBoxX:           t.BBoxX,
+				BBoxY:           t.BBoxY,
+				BBoxWidth:       t.BBoxWidth,
+				BBoxHeight:      t.BBoxHeight,
+				BaselineEventID: t.BaselineEventID,
+			})
+		}
+		return targets, nil
+	}
+
+	// legacy_v1：historical_backfill + missing 事件。
 	db := s.people.db
 	type row struct {
 		PhotoID    uint
@@ -312,6 +350,9 @@ func (s *faceQualityRescoreService) Cancel(id uint) error {
 
 // RestoreAuto 恢复某 run 产生的自动排除。复用 faceQualityService 的恢复事务逻辑，
 // 但事件来源限定 rescore_run_id=runID，不影响实时/人工/其他 run。
+//
+// 任务 §6：restore-auto 只能恢复 pipeline_version=independent_v2 的 run 产生的自动事件。
+// legacy_v1 run 的自动排除不得通过本接口恢复（v1 同源证据不得驱动 v2 自动隔离/恢复）。
 func (s *faceQualityRescoreService) RestoreAuto(runID uint, limit int) (*model.FaceQualityRestoreResult, error) {
 	if s.people == nil {
 		return nil, fmt.Errorf("people service not available")
@@ -322,6 +363,9 @@ func (s *faceQualityRescoreService) RestoreAuto(runID uint, limit int) (*model.F
 	}
 	if run == nil {
 		return nil, errRunNotFound
+	}
+	if run.PipelineVersion != model.FaceQualityRescorePipelineIndependentV2 {
+		return nil, errRestoreLegacyV1NotAllowed
 	}
 	if limit <= 0 {
 		limit = 5000
@@ -445,7 +489,11 @@ func (s *faceQualityRescoreService) RetryRun(sourceRunID uint) (*model.FaceQuali
 
 // getEligibleCalibration 执行计划 §3.4 的合格校准逐项验证（run 已由 repo 取回）。
 // 返回 (run, eligible, error)。
-func (s *faceQualityRescoreService) getEligibleCalibration(runID uint) (*model.FaceQualityRescoreRun, bool, error) {
+//
+// v2 门禁（任务 §3）：full/enforce run 必须引用 pipeline_version 与自身一致且合格的校准 run。
+// v2 full→v2 calib、v1 full→v1 calib 均允许（v1 路径保留但不再作为 v2 校准来源）；
+// 跨管线引用（v2 full→v1 calib）拒绝——v1 同源证据不得驱动 v2 自动隔离。
+func (s *faceQualityRescoreService) getEligibleCalibration(runID uint, fullPipeline string) (*model.FaceQualityRescoreRun, bool, error) {
 	run, err := s.repo.GetEligibleCalibration(runID)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -456,6 +504,10 @@ func (s *faceQualityRescoreService) getEligibleCalibration(runID uint) (*model.F
 	if run.Mode != model.FaceQualityRescoreModeCalibration ||
 		run.ApplyMode != model.FaceQualityRescoreApplyModeShadow ||
 		run.Status != model.FaceQualityRescoreStatusCompleted {
+		return run, false, nil
+	}
+	// 管线一致性：calibration 必须与 full run 同管线。v2 full 不得引用 v1 calib。
+	if run.PipelineVersion != fullPipeline {
 		return run, false, nil
 	}
 	if run.TargetFaceCount <= 0 || run.RetryableCount != 0 {
@@ -475,8 +527,9 @@ func (s *faceQualityRescoreService) getEligibleCalibration(runID uint) (*model.F
 }
 
 // IsEligibleForEnforce 报告某 run 是否为合格校准（供 handler 列表/详情填充 eligible_for_enforce）。
+// 仅 independent_v2 校准可作为 v2 enforce 来源（任务 §3）。
 func (s *faceQualityRescoreService) IsEligibleForEnforce(runID uint) bool {
-	_, ok, err := s.getEligibleCalibration(runID)
+	_, ok, err := s.getEligibleCalibration(runID, model.FaceQualityRescorePipelineIndependentV2)
 	return err == nil && ok
 }
 
@@ -547,6 +600,14 @@ func (s *faceQualityRescoreService) currentRunnableRun() (*model.FaceQualityResc
 
 // processOneBatch 领取并处理一个照片的 item 小批。返回是否有 item 被处理。
 func (s *faceQualityRescoreService) processOneBatch(run *model.FaceQualityRescoreRun) bool {
+	if run.PipelineVersion == model.FaceQualityRescorePipelineIndependentV2 {
+		return s.processOneBatchV2(run)
+	}
+	return s.processOneBatchV1(run)
+}
+
+// processOneBatchV1 v1 同源链路：score-known-faces（historical_backfill+missing 目标）。
+func (s *faceQualityRescoreService) processOneBatchV1(run *model.FaceQualityRescoreRun) bool {
 	items, err := s.repo.ClaimNextPhotoItems(run.ID)
 	if err != nil {
 		logger.Warnf("face_quality rescore run %d: claim items: %v", run.ID, err)
@@ -680,6 +741,332 @@ func (s *faceQualityRescoreService) isSupersededByManual(item *model.FaceQuality
 	return false, nil
 }
 
+// ---- v2 独立复核 worker 路径 ----
+
+// processOneBatchV2 领取并处理一个照片的 item 小批（v2 独立验证器链路）。
+// 每张人脸单独裁剪原图上下文 → VerifyKnownFaceCrops → evaluateFaceQualityV2 → 写 v2 证据/审计/排除。
+// 严禁调用 ProcessForAI(1024,85) 或 ScoreKnownFaces。
+func (s *faceQualityRescoreService) processOneBatchV2(run *model.FaceQualityRescoreRun) bool {
+	items, err := s.repo.ClaimNextPhotoItems(run.ID)
+	if err != nil {
+		logger.Warnf("face_quality rescore v2 run %d: claim items: %v", run.ID, err)
+		return false
+	}
+	if len(items) == 0 {
+		s.maybeCompleteRun(run)
+		return false
+	}
+
+	// 该照片所有 item 共用同一原图文件。
+	photoID := items[0].PhotoID
+	photo, err := s.people.photoRepo.GetByID(photoID)
+	if err != nil || photo == nil {
+		s.failItems(run, items, fmt.Sprintf("load photo %d: %v", photoID, err), model.FaceQualityRescoreItemStatusRetryableError, model.FaceQualityEvidenceStateRetryableError)
+		return true
+	}
+
+	// 先验证所有 item 的归一化 BBox 合法：任一非法则整批 retryable_error。
+	for _, it := range items {
+		if !isValidNormalizedBBox(it.BBoxX, it.BBoxY, it.BBoxWidth, it.BBoxHeight) {
+			s.failItems(run, items,
+				fmt.Sprintf("invalid normalized bbox: x=%g y=%g w=%g h=%g", it.BBoxX, it.BBoxY, it.BBoxWidth, it.BBoxHeight),
+				model.FaceQualityRescoreItemStatusRetryableError, model.FaceQualityEvidenceStateRetryableError)
+			return true
+		}
+	}
+
+	// 逐 item 裁剪原图上下文。裁剪失败（读图/EXIF/旋转）→ 该 item technical_error。
+	type prepared struct {
+		item  *model.FaceQualityRescoreItem
+		crops *V2FaceCrops
+	}
+	preps := make([]prepared, 0, len(items))
+	for _, it := range items {
+		crops, cerr := PrepareV2FaceCrops(photo.FilePath, photo.ManualRotation, it.BBoxX, it.BBoxY, it.BBoxWidth, it.BBoxHeight)
+		if cerr != nil || crops == nil || crops.ContextCropBase64 == "" {
+			it.Status = model.FaceQualityRescoreItemStatusRetryableError
+			it.LastError = truncateErr(fmt.Sprintf("prepare v2 crops: %v", cerr))
+			it.AttemptCount++
+			_ = s.people.executeWrite(func() error { return s.repo.UpdateItem(it) })
+			s.markBaselineEventFailed(it, model.FaceQualityEvidenceStateRetryableError)
+			continue
+		}
+		preps = append(preps, prepared{item: it, crops: crops})
+	}
+
+	if len(preps) == 0 {
+		s.refreshRunCounts(run)
+		return true
+	}
+
+	// 构造 v2 验证目标（按 prep 顺序）。
+	targets := make([]mlclient.VerifyKnownFaceCropTarget, 0, len(preps))
+	for _, p := range preps {
+		targets = append(targets, mlclient.VerifyKnownFaceCropTarget{
+			FaceID:              p.item.FaceID,
+			ContextCropBase64:   p.crops.ContextCropBase64,
+			FaceBoxWidthPx:      p.crops.FaceBoxWidthPx,
+			FaceBoxHeightPx:     p.crops.FaceBoxHeightPx,
+			FaceBoxOffsetX:      p.crops.FaceBoxOffsetX,
+			FaceBoxOffsetY:      p.crops.FaceBoxOffsetY,
+			PrimaryDetectorScore: 0, // 历史样本主检测分：v2 从 Face.Confidence 取，下方填充
+		})
+	}
+
+	// 填充主检测分：从 Face.Confidence 读（历史样本的原始检测置信度）。
+	faceIDs := make([]uint, 0, len(preps))
+	for _, p := range preps {
+		faceIDs = append(faceIDs, p.item.FaceID)
+	}
+	confMap := s.loadFaceConfidences(faceIDs)
+	for i := range targets {
+		if c, ok := confMap[targets[i].FaceID]; ok {
+			targets[i].PrimaryDetectorScore = c
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	resp, err := s.people.client.VerifyKnownFaceCrops(ctx, mlclient.VerifyKnownFaceCropsRequest{Targets: targets})
+	if err != nil {
+		// 整批 ML 调用失败：所有已准备 item 标 retryable_error。
+		for _, p := range preps {
+			p.item.Status = model.FaceQualityRescoreItemStatusRetryableError
+			p.item.LastError = truncateErr(fmt.Sprintf("ml verify known face crops: %v", err))
+			p.item.AttemptCount++
+			_ = s.people.executeWrite(func() error { return s.repo.UpdateItem(p.item) })
+			s.markBaselineEventFailed(p.item, model.FaceQualityEvidenceStateRetryableError)
+		}
+		s.refreshRunCounts(run)
+		return true
+	}
+
+	for i, p := range preps {
+		result := resp.Results[i]
+		s.applyV2Result(run, p.item, p.crops, result)
+	}
+	s.refreshRunCounts(run)
+	return true
+}
+
+// loadFaceConfidences 批量读取 Face.Confidence（主检测分）。
+func (s *faceQualityRescoreService) loadFaceConfidences(faceIDs []uint) map[uint]float64 {
+	out := make(map[uint]float64, len(faceIDs))
+	if len(faceIDs) == 0 {
+		return out
+	}
+	var faces []model.Face
+	if err := s.people.db.Where("id IN ?", faceIDs).Find(&faces).Error; err != nil {
+		logger.Warnf("load face confidences: %v", err)
+		return out
+	}
+	for _, f := range faces {
+		out[f.ID] = f.Confidence
+	}
+	return out
+}
+
+// applyV2Result 把单个 v2 验证结果写入 item + 审计事件 + 必要排除。
+func (s *faceQualityRescoreService) applyV2Result(run *model.FaceQualityRescoreRun, item *model.FaceQualityRescoreItem, crops *V2FaceCrops, result mlclient.VerifyKnownFaceCropResult) {
+	// 验证器 error → technical_error（不伪装判定）。
+	if result.VerificationStatus == "error" {
+		item.Status = model.FaceQualityRescoreItemStatusRetryableError
+		item.LastError = truncateErr("verifier error: " + strings.Join(result.ReasonCodes, ","))
+		_ = s.people.executeWrite(func() error { return s.repo.UpdateItem(item) })
+		s.markBaselineEventFailed(item, model.FaceQualityEvidenceStateRetryableError)
+		return
+	}
+
+	// 人工结论优先：baseline 是否仍是当前结论。
+	superseded, err := s.isSupersededByManual(item)
+	if err != nil {
+		logger.Warnf("face_quality rescore v2 item %d: check superseded: %v", item.ID, err)
+	}
+	if superseded {
+		item.Status = model.FaceQualityRescoreItemStatusSupersededManual
+		_ = s.people.executeWrite(func() error { return s.repo.UpdateItem(item) })
+		return
+	}
+
+	item.Status = model.FaceQualityRescoreItemStatusProcessed
+
+	// 构建 v2 evidence（原图尺寸/裁剪尺寸由后端 crops 填充，ML 端 original_* 留 0）。
+	ev := buildV2Evidence(crops, result, v2QualityOutcome{})
+
+	// 阈值从 config 读取（D 轮：未配置时回退默认）。
+	outcome := evaluateFaceQualityV2(ev, run.ApplyMode, s.v2Thresholds())
+
+	// 把建议决策回填进 evidence（shadow 模式下保存系统建议，enforce 留空）。
+	ev.SuggestedDecision = outcome.SuggestedDecision
+
+	s.writeV2RescoreResult(run, item, ev, outcome)
+	_ = s.people.executeWrite(func() error { return s.repo.UpdateItem(item) })
+}
+
+// buildV2Evidence 把 crops + ML 验证结果 + 策略 outcome 合并为 FaceQualityEvidenceV2
+// （原图尺寸由后端填充；shadow 模式下 SuggestedDecision 保存系统建议决策供校准抽样）。
+func buildV2Evidence(crops *V2FaceCrops, r mlclient.VerifyKnownFaceCropResult, outcome v2QualityOutcome) *model.FaceQualityEvidenceV2 {
+	ev := &model.FaceQualityEvidenceV2{
+		EvidenceSchemaVersion: "independent_v2",
+		PrimaryDetectorScore:  r.PrimaryDetectorScore,
+		VerificationStatus:    r.VerificationStatus,
+		VerifierScore:         r.VerifierScore,
+		VerifierName:          r.VerifierName,
+		VerifierVersion:       r.VerifierVersion,
+		OriginalWidth:         crops.OriginalWidth,
+		OriginalHeight:        crops.OriginalHeight,
+		FaceBoxWidthPx:        crops.FaceBoxWidthPx,
+		FaceBoxHeightPx:       crops.FaceBoxHeightPx,
+		ContextCropWidthPx:    crops.ContextCropWidthPx,
+		ContextCropHeightPx:   crops.ContextCropHeightPx,
+		ContextExpandRatio:    contextExpandRatio,
+		ReasonCodes:           append([]string{}, r.ReasonCodes...),
+		SuggestedDecision:     outcome.SuggestedDecision,
+		RuleVersion:           model.FaceQualityRescoreRuleVersionV2,
+		ModelVersion:          r.VerifierVersion,
+	}
+	if r.Quality != nil {
+		ev.SharpnessNorm = r.Quality.SharpnessNorm
+		ev.BrightnessNorm = r.Quality.BrightnessNorm
+		ev.ContrastNorm = r.Quality.ContrastNorm
+		ev.Occluded = r.Quality.Occluded
+		ev.QualityDomain = r.Quality.QualityDomain
+		ev.QualityVersion = r.Quality.QualityVersion
+	}
+	return ev
+}
+
+// writeV2RescoreResult 写 v2 证据快照 + 审计事件 + 必要排除事务。
+// 与 v1 writeRescoreResult 结构一致，但事件 evidence_pipeline=independent_v2，
+// evidence 用 FaceQualityEvidenceV2，并检测旧自动结论冲突。
+func (s *faceQualityRescoreService) writeV2RescoreResult(run *model.FaceQualityRescoreRun, item *model.FaceQualityRescoreItem, ev *model.FaceQualityEvidenceV2, outcome v2QualityOutcome) {
+	people := s.people
+	evJSON := marshalV2Evidence(ev)
+	now := time.Now().UTC()
+
+	affectedPersonIDs := make(map[uint]struct{})
+	affectedPhotoIDs := make(map[uint]struct{})
+
+	// 检测旧自动结论冲突：v2 accepted 或与旧自动理由冲突 → review_required + auto_decision_conflict。
+	// v2 不得自动恢复已被自动隔离的 Face。
+	decision := outcome.Decision
+	reason := outcome.Reason
+	reasonCodes := append([]string{}, outcome.ReasonCodes...)
+	if conflict := s.detectV2AutoConflict(item, decision); conflict {
+		decision = model.FaceQualityDecisionReviewRequired
+		reason = ""
+		reasonCodes = append(reasonCodes, "auto_decision_conflict")
+	}
+
+	if err := people.executeWrite(func() error {
+		return people.db.Transaction(func(tx *gorm.DB) error {
+			// 1) 旧 baseline 事件失活。
+			if item.BaselineEventID != 0 {
+				if err := tx.Model(&model.FaceQualityEvent{}).
+					Where("id = ?", item.BaselineEventID).
+					Update("is_current", false).Error; err != nil {
+					return fmt.Errorf("clear baseline event %d: %w", item.BaselineEventID, err)
+				}
+			}
+
+			// 2) 写 v2 审计事件。
+			evt := &model.FaceQualityEvent{
+				PhotoID:          item.PhotoID,
+				FaceID:           &item.FaceID,
+				BBoxX:            item.BBoxX,
+				BBoxY:            item.BBoxY,
+				BBoxWidth:        item.BBoxWidth,
+				BBoxHeight:       item.BBoxHeight,
+				Decision:         decision,
+				Reason:           reason,
+				Source:           model.FaceQualitySourceAuto,
+				RuleVersion:      run.RuleVersion,
+				ModelVersion:     run.ModelVersion,
+				EvidenceJSON:     evJSON,
+				ReasonCodes:      reasonCodesCSV(reasonCodes),
+				EvidenceOrigin:   model.FaceQualityEvidenceOriginHistoricalRescore,
+				EvidenceState:    model.FaceQualityEvidenceStateAvailable,
+				EvidencePipeline: model.FaceQualityEvidencePipelineIndependentV2,
+				RescoreRunID:     &run.ID,
+				IsCurrent:        true,
+			}
+			if err := tx.Create(evt).Error; err != nil {
+				return fmt.Errorf("create v2 rescore event: %w", err)
+			}
+
+			// 3) 排除事务（仅 enforce 高确定性 non_face/low_quality）。
+			exclude := (decision == model.FaceQualityDecisionNonFace || decision == model.FaceQualityDecisionLowQuality) &&
+				run.ApplyMode == model.FaceQualityRescoreApplyModeEnforce
+			if exclude {
+				var faceBefore model.Face
+				if err := tx.Where("id = ?", item.FaceID).First(&faceBefore).Error; err != nil {
+					return fmt.Errorf("load face %d before exclude: %w", item.FaceID, err)
+				}
+				if faceBefore.PersonID != nil && *faceBefore.PersonID != 0 {
+					affectedPersonIDs[*faceBefore.PersonID] = struct{}{}
+				}
+				if err := upsertExclusionTx(tx, item.PhotoID, item.FaceID, reason, item.BBoxX, item.BBoxY, item.BBoxWidth, item.BBoxHeight, now); err != nil {
+					return err
+				}
+				if err := tx.Model(&model.Face{}).Where("id = ?", item.FaceID).Updates(map[string]interface{}{
+					"person_id":        nil,
+					"cluster_status":   model.FaceClusterStatusExcluded,
+					"cluster_score":    0,
+					"exclusion_reason": reason,
+					"excluded_at":      &now,
+					"updated_at":       now,
+				}).Error; err != nil {
+					return fmt.Errorf("exclude face %d: %w", item.FaceID, err)
+				}
+			}
+			affectedPhotoIDs[item.PhotoID] = struct{}{}
+			return nil
+		})
+	}); err != nil {
+		logger.Warnf("face_quality rescore v2 item %d: write result: %v", item.ID, err)
+		item.Status = model.FaceQualityRescoreItemStatusRetryableError
+		item.LastError = err.Error()
+		return
+	}
+
+	s.postExcludeRefresh(affectedPersonIDs, affectedPhotoIDs)
+}
+
+// detectV2AutoConflict 检测 v2 判定是否与该 Face 的旧自动结论冲突。
+// v2 不得自动恢复已被自动隔离的 Face：若 v2 判 accepted 但 Face 当前是 auto 排除态，
+// 或 v2 判 non_face/low_quality 与旧 auto 理由不同，视为冲突 → review_required。
+func (s *faceQualityRescoreService) detectV2AutoConflict(item *model.FaceQualityRescoreItem, v2Decision string) bool {
+	var face model.Face
+	if err := s.people.db.Where("id = ?", item.FaceID).First(&face).Error; err != nil {
+		return false
+	}
+	// Face 当前是自动排除态（excluded + auto reason），v2 想判 accepted → 冲突（不得自动恢复）。
+	if face.ClusterStatus == model.FaceClusterStatusExcluded && face.ExclusionReason != "" {
+		if v2Decision == model.FaceQualityDecisionAccepted {
+			return true
+		}
+		// v2 判的排除理由与旧理由不同 → 冲突。
+		if (v2Decision == model.FaceQualityDecisionNonFace && face.ExclusionReason != model.ExclusionReasonNonFace) ||
+			(v2Decision == model.FaceQualityDecisionLowQuality && face.ExclusionReason != model.ExclusionReasonLowQuality) {
+			return true
+		}
+	}
+	return false
+}
+
+// marshalV2Evidence 把 v2 证据序列化为 JSON。失败返回空串。
+func marshalV2Evidence(e *model.FaceQualityEvidenceV2) string {
+	if e == nil {
+		return ""
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		logger.Warnf("marshal v2 face quality evidence: %v", err)
+		return ""
+	}
+	return string(b)
+}
+
 // writeRescoreResult 写证据快照 + 审计事件 + 必要的排除事务。
 // accepted/review_required 保留 person_id/cluster_status；exclude 仅 enforce 时复用排除事务。
 func (s *faceQualityRescoreService) writeRescoreResult(run *model.FaceQualityRescoreRun, item *model.FaceQualityRescoreItem, result mlclient.ScoreKnownFaceResult, outcome qualityOutcome) {
@@ -738,6 +1125,7 @@ func (s *faceQualityRescoreService) writeRescoreResult(run *model.FaceQualityRes
 				ReasonCodes:    reasonCodesCSV(outcome.ReasonCodes),
 				EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalRescore,
 				EvidenceState:  model.FaceQualityEvidenceStateAvailable,
+				EvidencePipeline: model.FaceQualityEvidencePipelineLegacyV1,
 				RescoreRunID:   &run.ID,
 				IsCurrent:      true,
 			}
@@ -1018,6 +1406,7 @@ var (
 	ErrRescoreRetrySourceNotCalibration = fmt.Errorf("retry source run is not calibration mode")
 	ErrRescoreRetrySourceNotTerminal    = fmt.Errorf("retry source run is not in a terminal state")
 	ErrRescoreRetryNoTargets            = fmt.Errorf("retry source run has no current retryable failures")
+	ErrRescoreRestoreLegacyV1NotAllowed = fmt.Errorf("restore-auto is only allowed for independent_v2 runs")
 
 	// 内部别名，保持 service 内部引用不变。
 	errRunConflict               = ErrRescoreRunConflict
@@ -1026,6 +1415,7 @@ var (
 	errRetrySourceNotCalibration = ErrRescoreRetrySourceNotCalibration
 	errRetrySourceNotTerminal    = ErrRescoreRetrySourceNotTerminal
 	errRetryNoTargets            = ErrRescoreRetryNoTargets
+	errRestoreLegacyV1NotAllowed = ErrRescoreRestoreLegacyV1NotAllowed
 )
 
 // 编译期断言：service 实现 interface。

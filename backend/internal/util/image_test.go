@@ -90,3 +90,49 @@ func TestShouldRefreshThumbnailCacheWhenJPEGOrientationChangesDisplayAspect(t *t
 		t.Fatal("expected stale landscape cache to refresh for portrait JPEG")
 	}
 }
+
+func TestOrientImageForVerification_EXIFAndManualRotation(t *testing.T) {
+	tempDir := t.TempDir()
+	sourcePath := filepath.Join(tempDir, "source.jpg")
+
+	// 4×2 横图，注入 EXIF Orientation=6（需顺时针 90° 校正 → 2×4 竖图）。
+	source := image.NewNRGBA(image.Rect(0, 0, 4, 2))
+	f, err := os.Create(sourcePath)
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	if err := jpeg.Encode(f, source, &jpeg.Options{Quality: 95}); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	f.Close()
+
+	originalExtractEXIF := extractEXIFFunc
+	extractEXIFFunc = func(path string) (*EXIFData, error) {
+		if path == sourcePath {
+			return &EXIFData{Orientation: 6}, nil
+		}
+		return &EXIFData{}, nil
+	}
+	defer func() { extractEXIFFunc = originalExtractEXIF }()
+
+	// 仅 EXIF 校正：4×2 → 2×4。
+	img, w, h, err := OrientImageForVerification(sourcePath, 0)
+	if err != nil {
+		t.Fatalf("orient: %v", err)
+	}
+	if w != 2 || h != 4 {
+		t.Fatalf("EXIF orientation=6 expected 2x4, got %dx%d", w, h)
+	}
+
+	// 叠加 manual_rotation=90：2×4 → 4×2。
+	_, w2, h2, err := OrientImageForVerification(sourcePath, 90)
+	if err != nil {
+		t.Fatalf("orient with rotation: %v", err)
+	}
+	if w2 != 4 || h2 != 2 {
+		t.Fatalf("EXIF=6 + manual 90 expected 4x2, got %dx%d", w2, h2)
+	}
+
+	// 不应在 1024px 上缩放：原图校正后仍为原始维度级别，无降采样。
+	_ = img
+}

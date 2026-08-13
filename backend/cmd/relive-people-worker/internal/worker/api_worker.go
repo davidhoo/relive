@@ -422,7 +422,7 @@ func (w *PeopleWorker) detectFaces(imageData []byte, imagePath string) ([]model.
 	reqBody := map[string]interface{}{
 		"image_base64":   imageBase64,
 		"image_path":     imagePath,
-		"min_confidence": 0.5,
+		"min_confidence": w.config.GetFaceDetectionMinConfidence(),
 		"max_faces":      20,
 	}
 

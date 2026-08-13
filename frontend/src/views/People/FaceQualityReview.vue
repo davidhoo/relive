@@ -38,9 +38,9 @@
         >启动全量 enforce</el-button>
       </div>
       <div v-if="latestRun" class="rescore-card-body">
-        <span>运行 #{{ latestRun.id }} · {{ rescoreModeLabel(latestRun.mode) }} · {{ rescoreStatusLabel(latestRun.status) }}<span v-if="latestRun.retry_of_run_id"> · 重试自 #{{ latestRun.retry_of_run_id }}</span></span>
+        <span>运行 #{{ latestRun.id }} · {{ rescoreModeLabel(latestRun.mode) }} · {{ rescoreStatusLabel(latestRun.status) }}<span v-if="latestRun.retry_of_run_id"> · 重试自 #{{ latestRun.retry_of_run_id }}</span> · 管线 {{ pipelineLabel(latestRun.pipeline_version) }} · 范围 {{ scopeLabel(latestRun.target_scope) }}</span>
         <span>目标 {{ latestRun.target_face_count }} Face / {{ latestRun.target_photo_count }} 照片</span>
-        <span>已获证据 {{ latestRun.processed_face_count }} · 人工覆盖 {{ latestRun.superseded_manual_count }} · 真实灰区 {{ latestRun.review_required_count }} · 自动隔离 {{ latestRun.auto_excluded_count }} · 待重试/未匹配 {{ latestRun.retryable_count }} · 终态照片 {{ latestRun.processed_photo_count }}</span>
+        <span>已获证据 {{ latestRun.processed_face_count }} · 人工覆盖 {{ latestRun.superseded_manual_count }} · 真实灰区 {{ latestRun.review_required_count }} · 自动隔离 {{ latestRun.auto_excluded_count }} · 待重试/未匹配 {{ latestRun.retryable_count }} · 终态照片 {{ latestRun.processed_photo_count }}<span v-if="latestRun.eligible_for_enforce"> · ✅ 可作为 v2 enforce 校准</span><span v-else-if="latestRun.pipeline_version === 'legacy_v1'"> · ⚠️ v1 不可作为 v2 enforce 校准</span></span>
         <span v-if="latestRun.last_error" class="rescore-error">{{ latestRun.last_error }}</span>
         <div class="rescore-actions">
           <el-button v-if="latestRun.status === 'running'" size="small" @click="pauseRun(latestRun.id)">暂停</el-button>
@@ -129,7 +129,9 @@
           <el-tag size="small" type="info">{{ item.source === 'auto' ? '自动' : '人工' }}</el-tag>
         </div>
         <div class="card-footer">
-          <span v-if="hasEvidence(item)">{{ (item.face_validity_score * 100).toFixed(0) }}% 有效</span>
+          <span v-if="isV2(item)" class="card-v2">v2 独立复核</span>
+          <span v-else-if="isLegacy(item)" class="card-legacy">v1 同源</span>
+          <span v-else-if="hasEvidence(item)">{{ (item.face_validity_score * 100).toFixed(0) }}% 有效</span>
           <span v-else class="card-na">有效性未采集</span>
           <span class="card-rule">{{ item.rule_version }}</span>
         </div>
@@ -203,6 +205,56 @@
             <pre class="evidence-json">{{ formatEvidence(current.evidence_json) }}</pre>
           </el-descriptions-item>
         </el-descriptions>
+
+        <!-- v2 独立复核证据：四组结构化证据，不再压成单一有效性百分比 -->
+        <div v-if="isV2(current)" class="v2-evidence">
+          <div class="v2-evidence-title">独立复核证据（independent_v2）</div>
+          <el-descriptions :column="1" border size="small">
+            <el-descriptions-item label="主检测分">
+              {{ (current.evidence_v2!.primary_detector_score * 100).toFixed(1) }}%
+              <span class="v2-hint">（准入线 65%，低于此值的新检测不持久化）</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="独立复核">
+              <el-tag size="small" :type="verifierTagType(current.evidence_v2!.verification_status)">
+                {{ verifierStatusLabel(current.evidence_v2!.verification_status) }}
+              </el-tag>
+              <span class="v2-score">置信度 {{ (current.evidence_v2!.verifier_score * 100).toFixed(1) }}%</span>
+              <span class="v2-model">{{ current.evidence_v2!.verifier_name }} {{ current.evidence_v2!.verifier_version }}</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="原图人脸框">
+              {{ current.evidence_v2!.face_box_width_px }} × {{ current.evidence_v2!.face_box_height_px }} px
+              <span class="v2-hint">（原图 {{ current.evidence_v2!.original_width }} × {{ current.evidence_v2!.original_height }} px）</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="上下文裁剪">
+              {{ current.evidence_v2!.context_crop_width_px }} × {{ current.evidence_v2!.context_crop_height_px }} px
+              <span class="v2-hint">（扩展比例 {{ current.evidence_v2!.context_expand_ratio }}）</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="质量特征">
+              清晰度 {{ current.evidence_v2!.sharpness_norm?.toFixed(2) ?? '—' }} ·
+              亮度 {{ current.evidence_v2!.brightness_norm?.toFixed(1) ?? '—' }} ·
+              对比度 {{ current.evidence_v2!.contrast_norm?.toFixed(2) ?? '—' }} ·
+              遮挡 {{ current.evidence_v2!.occluded ? '是' : '否' }}
+              <div class="v2-hint">计算域：{{ current.evidence_v2!.quality_domain || '—' }} · 版本 {{ current.evidence_v2!.quality_version || '—' }}</div>
+            </el-descriptions-item>
+            <el-descriptions-item label="原因码" v-if="current.evidence_v2!.reason_codes && current.evidence_v2!.reason_codes.length">
+              {{ current.evidence_v2!.reason_codes.join(', ') }}
+            </el-descriptions-item>
+            <el-descriptions-item label="系统建议" v-if="current.suggested_decision">
+              <el-tag size="small" type="warning">{{ decisionLabel(current.suggested_decision) }}</el-tag>
+              <span class="v2-hint">（shadow 校准建议，已降级为待审核）</span>
+            </el-descriptions-item>
+          </el-descriptions>
+        </div>
+        <!-- legacy_v1 旧版同源指标：仅供历史追溯，不得作为人工判断依据 -->
+        <el-alert
+          v-else-if="isLegacy(current)"
+          class="legacy-alert"
+          type="info"
+          :closable="false"
+          show-icon
+          title="旧版同源指标（legacy_v1），仅供历史追溯"
+          description="此证据由 v1 score-known-faces 在已旋转展示缩略图上复用同一套 InsightFace 检测产生，属同源启发式证据，不得作为是否为脸的人工判断依据。"
+        />
 
         <div class="detail-actions">
           <el-button size="small" type="danger" @click="singleAction('mark_non_face')">改为非人脸</el-button>
@@ -384,6 +436,17 @@ const emptyStateText = computed(() => {
 // 证据可用性：后端依据 evidence_json 是否可解析决定。前端将缺失字段视为 false。
 const hasEvidence = (item: FaceQualityReviewItem) => item.quality_evidence_available === true
 
+// v2 独立复核证据：evidence_pipeline=independent_v2 且后端已解析出 evidence_v2。
+const isV2 = (item: FaceQualityReviewItem) =>
+  item.evidence_pipeline === 'independent_v2' && !!item.evidence_v2
+// legacy_v1 旧版同源指标：仅供历史追溯。
+const isLegacy = (item: FaceQualityReviewItem) => item.evidence_pipeline === 'legacy_v1'
+
+const verifierStatusLabel = (s: string) =>
+  ({ face: '确认为脸', no_face: '未检测到脸', uncertain: '无法可靠判断', error: '验证失败' } as Record<string, string>)[s] ?? s
+const verifierTagType = (s: string): 'success' | 'info' | 'warning' | 'danger' =>
+  ({ face: 'success', no_face: 'danger', uncertain: 'warning', error: 'warning' } as Record<string, 'success' | 'info' | 'warning' | 'danger'>)[s] ?? 'info'
+
 const decisionLabel = (d: string) => ({
   accepted: '已接受',
   non_face: '非人脸',
@@ -406,6 +469,13 @@ const rescoreStatusLabel = (s: string) => ({
   completed: '已完成', completed_with_errors: '完成但有错误',
   failed: '失败', cancelled: '已取消',
 }[s] || s)
+
+const pipelineLabel = (p?: string) =>
+  p === 'independent_v2' ? 'v2 独立复核' : p === 'legacy_v1' ? 'v1 同源' : (p || '—')
+const scopeLabel = (s?: string) =>
+  s === 'all_non_manual_faces_without_independent_v2' ? '全部无人工/v2 结论'
+  : s === 'historical_backfill_missing' ? '历史缺证据'
+  : (s || '—')
 
 const formatEvidence = (json: string) => {
   try {
@@ -834,6 +904,14 @@ onMounted(async () => {
 .card-footer { display: flex; justify-content: space-between; font-size: 12px; color: var(--el-text-color-secondary); margin-top: 4px; }
 .card-na { color: var(--el-text-color-placeholder); font-style: italic; }
 .card-rule { font-family: monospace; }
+.card-v2 { color: var(--el-color-success); font-weight: 600; }
+.card-legacy { color: var(--el-text-color-secondary); font-style: italic; }
+.v2-evidence { margin-top: 16px; }
+.v2-evidence-title { font-weight: 600; margin-bottom: 8px; color: var(--el-color-success); }
+.v2-hint { color: var(--el-text-color-secondary); font-size: 12px; margin-left: 4px; }
+.v2-score { margin-left: 8px; font-family: monospace; }
+.v2-model { margin-left: 8px; font-size: 12px; color: var(--el-text-color-secondary); }
+.legacy-alert { margin-top: 16px; }
 .pager { display: flex; justify-content: center; margin-top: 16px; }
 .detail-content { padding: 0 4px; }
 .detail-preview { display: flex; gap: 12px; margin-bottom: 16px; }

@@ -638,3 +638,73 @@ func TestMigrateFaceQualityRescoreRunMeta(t *testing.T) {
 	require.NoError(t, db.First(&got1, run1.ID).Error)
 	assert.Equal(t, model.FaceQualityRescoreStatusCompletedWithError, got1.Status)
 }
+
+func TestMigrateFaceQualityEvidencePipeline(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.FaceQualityEvent{}, &model.AppConfig{}))
+
+	// 旧行 evidence_pipeline=''（旧库遗留）。
+	legacy := &model.FaceQualityEvent{
+		PhotoID: 1, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionReviewRequired,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "test-v1",
+		EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalBackfill,
+		IsCurrent:      true,
+	}
+	require.NoError(t, db.Create(legacy).Error)
+
+	// 已显式填 independent_v2 的行不应被覆盖（模拟新写入路径）。
+	v2 := &model.FaceQualityEvent{
+		PhotoID: 2, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionNonFace,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: "face_quality_v2", ModelVersion: "yunet-v1",
+		EvidenceOrigin:  model.FaceQualityEvidenceOriginHistoricalRescore,
+		EvidencePipeline: model.FaceQualityEvidencePipelineIndependentV2,
+		IsCurrent:        true,
+	}
+	require.NoError(t, db.Create(v2).Error)
+
+	require.NoError(t, migrateFaceQualityEvidencePipeline(db))
+
+	var gotLegacy model.FaceQualityEvent
+	require.NoError(t, db.First(&gotLegacy, legacy.ID).Error)
+	assert.Equal(t, model.FaceQualityEvidencePipelineLegacyV1, gotLegacy.EvidencePipeline)
+
+	var gotV2 model.FaceQualityEvent
+	require.NoError(t, db.First(&gotV2, v2.ID).Error)
+	assert.Equal(t, model.FaceQualityEvidencePipelineIndependentV2, gotV2.EvidencePipeline)
+
+	// 幂等。
+	require.NoError(t, migrateFaceQualityEvidencePipeline(db))
+	gotLegacy = model.FaceQualityEvent{}
+	require.NoError(t, db.First(&gotLegacy, legacy.ID).Error)
+	assert.Equal(t, model.FaceQualityEvidencePipelineLegacyV1, gotLegacy.EvidencePipeline)
+}
+
+func TestMigrateFaceQualityRescoreRunPipeline(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.FaceQualityRescoreRun{}, &model.AppConfig{}))
+
+	// 旧 v1 运行：无 pipeline_version/target_scope。
+	v1Run := &model.FaceQualityRescoreRun{
+		Mode: model.FaceQualityRescoreModeCalibration, ApplyMode: model.FaceQualityRescoreApplyModeShadow,
+		Status: model.FaceQualityRescoreStatusCompleted, TargetFaceCount: 5,
+		RuleVersion: "v1", ModelVersion: "test-v1",
+	}
+	require.NoError(t, db.Create(v1Run).Error)
+
+	require.NoError(t, migrateFaceQualityRescoreRunPipeline(db))
+
+	var got model.FaceQualityRescoreRun
+	require.NoError(t, db.First(&got, v1Run.ID).Error)
+	assert.Equal(t, model.FaceQualityRescorePipelineLegacyV1, got.PipelineVersion)
+	assert.Equal(t, model.RescoreTargetScopeV1, got.TargetScope)
+
+	// 幂等。
+	require.NoError(t, migrateFaceQualityRescoreRunPipeline(db))
+	got = model.FaceQualityRescoreRun{}
+	require.NoError(t, db.First(&got, v1Run.ID).Error)
+	assert.Equal(t, model.FaceQualityRescorePipelineLegacyV1, got.PipelineVersion)
+}

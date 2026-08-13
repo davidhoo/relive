@@ -123,6 +123,20 @@ type PeopleConfig struct {
 	// FaceQualityMode 人脸质检上线开关：disabled / shadow / enforce。
 	// disabled：停止新自动判定；shadow：仅产出候选不自动排除；enforce：高确定性新样本执行自动排除。
 	FaceQualityMode string `yaml:"face_quality_mode"`
+
+	// ---- v2 独立复核阈值（rule_version=face_quality_v2）----
+	// 调整须变更规则版本并重新完成 shadow 校准；不向浏览器暴露可写入口。
+	// FaceDetectionMinConfidence 主检测准入线：低于此值的新检测不持久化为 Face。初始 0.65。
+	FaceDetectionMinConfidence float64 `yaml:"face_detection_min_confidence"`
+	// FaceQualityV2MinOriginalShortEdge 原图人脸框最小短边（px）。低于此值的历史样本，
+	// 验证器未确认是脸时只能 review_required，不能自动 non_face。初始 48。
+	FaceQualityV2MinOriginalShortEdge int `yaml:"face_quality_v2_min_original_short_edge"`
+	// FaceQualityV2LowQualitySharpness 归一化清晰度低于此判 low_quality（shadow 校准后填入）。
+	FaceQualityV2LowQualitySharpness float64 `yaml:"face_quality_v2_low_quality_sharpness"`
+	// FaceQualityV2LowQualityBrightnessHi 亮度高于此判过曝 low_quality（0-255）。
+	FaceQualityV2LowQualityBrightnessHi float64 `yaml:"face_quality_v2_low_quality_brightness_hi"`
+	// FaceQualityV2LowQualityBrightnessLo 亮度低于此判欠曝 low_quality（0-255）。
+	FaceQualityV2LowQualityBrightnessLo float64 `yaml:"face_quality_v2_low_quality_brightness_lo"`
 }
 
 const (
@@ -381,6 +395,9 @@ func Load(path string) (*Config, error) {
 			IdentityProfileDirtyBatchSize:           defaultIdentityProfileDirtyBatchSize,
 			IdentityProfileSliceBudgetMs:            defaultIdentityProfileSliceBudgetMs,
 			IdentityProfileAnnRebuildDeltaThreshold: defaultIdentityProfileAnnDeltaThresh,
+			// v2 独立复核阈值初始值（受 rule_version=face_quality_v2 管理）。
+			FaceDetectionMinConfidence:             0.65,
+			FaceQualityV2MinOriginalShortEdge:       48,
 		},
 	}
 
@@ -588,6 +605,23 @@ func (c *Config) Validate() error {
 		c.People.IdentityProfileAnnRebuildDeltaThreshold <= 0 ||
 		c.People.IdentityProfileAnnRebuildDeltaThreshold > 1 {
 		return fmt.Errorf("people.identity_profile_ann_rebuild_delta_threshold must be in (0,1]")
+	}
+
+	// v2 阈值严格范围校验（0/未设置时回退默认，不强制；显式设置须在合法范围）。
+	if c.People.FaceDetectionMinConfidence < 0 || c.People.FaceDetectionMinConfidence > 1 {
+		return fmt.Errorf("people.face_detection_min_confidence must be between 0 and 1")
+	}
+	if c.People.FaceQualityV2MinOriginalShortEdge < 0 {
+		return fmt.Errorf("people.face_quality_v2_min_original_short_edge must be >= 0")
+	}
+	if c.People.FaceQualityV2LowQualitySharpness < 0 {
+		return fmt.Errorf("people.face_quality_v2_low_quality_sharpness must be >= 0")
+	}
+	if c.People.FaceQualityV2LowQualityBrightnessHi < 0 || c.People.FaceQualityV2LowQualityBrightnessHi > 255 {
+		return fmt.Errorf("people.face_quality_v2_low_quality_brightness_hi must be between 0 and 255")
+	}
+	if c.People.FaceQualityV2LowQualityBrightnessLo < 0 || c.People.FaceQualityV2LowQualityBrightnessLo > 255 {
+		return fmt.Errorf("people.face_quality_v2_low_quality_brightness_lo must be between 0 and 255")
 	}
 
 	return nil

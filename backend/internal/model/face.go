@@ -184,6 +184,24 @@ const (
 	FaceQualityEvidenceOriginHistoricalRescore = "historical_rescore"
 )
 
+// 证据管线枚举（evidence_pipeline）：区分证据由哪条验证链路产生。
+// v1 的 ScoreKnownFaces 在已旋转展示缩略图上复用同一套 InsightFace 检测，属同源启发式证据；
+// v2 使用独立验证器（YuNet）+ 原图裁剪，是独立复核证据。两者不可混用为同一结论依据。
+const (
+	// FaceQualityEvidencePipelineLegacyV1 v1 同源启发式证据（score-known-faces）。
+	// 仅保留供历史追溯，不得作为 v2 自动隔离或人工判断依据。
+	FaceQualityEvidencePipelineLegacyV1 = "legacy_v1"
+	// FaceQualityEvidencePipelineIndependentV2 v2 独立验证器 + 原图裁剪证据。
+	// v2 历史自动隔离唯一允许使用的校准来源。
+	FaceQualityEvidencePipelineIndependentV2 = "independent_v2"
+)
+
+// IsValidEvidencePipeline 校验证据管线是否合法
+func IsValidEvidencePipeline(s string) bool {
+	return s == FaceQualityEvidencePipelineLegacyV1 ||
+		s == FaceQualityEvidencePipelineIndependentV2
+}
+
 // 证据状态枚举（evidence_state）：审核队列分流的权威字段，不能由分数推断。
 const (
 	// FaceQualityEvidenceStateAvailable 已有可解析的模型证据（含真实 0 分）。
@@ -255,6 +273,10 @@ type FaceQualityEvent struct {
 	// migrateFaceQualityEvidenceOrigin 以原生 SQL 创建，便于带 id DESC 方向。
 	EvidenceOrigin string `gorm:"type:varchar(32);default:''" json:"evidence_origin,omitempty"`
 	EvidenceState  string `gorm:"type:varchar(24);default:''" json:"evidence_state,omitempty"`
+	// EvidencePipeline 证据管线：legacy_v1 / independent_v2。
+	// v2 审核接口不得把 legacy_v1 字段映射成 v2 结论。新实时检测与历史复核必须显式填写，
+	// 不允许留空（旧行由迁移标记为 legacy_v1）。
+	EvidencePipeline string `gorm:"type:varchar(20);not null;default:'legacy_v1'" json:"evidence_pipeline,omitempty"`
 	// RescoreRunID 产生该次历史重评分结论的运行 ID；实时与旧回填为空。
 	RescoreRunID *uint `gorm:"index:idx_fqe_rescore_run" json:"rescore_run_id,omitempty"`
 
@@ -311,4 +333,50 @@ type FaceQualityEvidence struct {
 	QualityReasons         []string  `json:"quality_reasons"`
 	RuleVersion            string    `json:"rule_version"`
 	ModelVersion           string    `json:"model_version"`
+}
+
+// FaceQualityEvidenceV2 独立复核证据（evidence_pipeline=independent_v2）。
+// 所有尺寸/质量指标都在「EXIF 方向校正 + manual_rotation 叠加」的原图上计算，
+// 不得用缩略图或 ProcessForAI(1024,85) 压缩图的尺寸覆盖。缩略图尺寸不得替代这些字段。
+type FaceQualityEvidenceV2 struct {
+	EvidenceSchemaVersion string `json:"evidence_schema_version"` // 固定 "independent_v2"
+
+	// 主检测（InsightFace buffalo_sc）置信度。
+	PrimaryDetectorScore float64 `json:"primary_detector_score"`
+
+	// 独立验证器（YuNet）结果。
+	VerificationStatus string  `json:"verification_status"` // face / no_face / uncertain / error
+	VerifierScore      float64 `json:"verifier_score"`
+	VerifierName       string  `json:"verifier_name"`
+	VerifierVersion    string  `json:"verifier_version"`
+
+	// 原图（方向校正后）尺寸。
+	OriginalWidth  int `json:"original_width"`
+	OriginalHeight int `json:"original_height"`
+	// 人脸框在原图中的实际宽/高（像素）。
+	FaceBoxWidthPx  int `json:"face_box_width_px"`
+	FaceBoxHeightPx int `json:"face_box_height_px"`
+	// 上下文裁剪（人脸框四周各扩展 100%，超出边界裁切）宽/高（像素）。
+	ContextCropWidthPx  int     `json:"context_crop_width_px"`
+	ContextCropHeightPx int     `json:"context_crop_height_px"`
+	ContextExpandRatio  float64 `json:"context_expand_ratio"` // 扩展比例，固定 1.0（四周各 100%）
+
+	// 原图人脸框质量特征（统一到固定短边归一化后计算，标明计算域与版本）。
+	SharpnessNorm   float64 `json:"sharpness_norm"`   // Laplacian 清晰度（归一化后）
+	BrightnessNorm  float64 `json:"brightness_norm"`  // 亮度
+	ContrastNorm    float64 `json:"contrast_norm"`    // 对比度
+	Occluded        bool    `json:"occluded"`         // 遮挡/几何可用性
+	QualityDomain   string  `json:"quality_domain"`   // 计算域说明，如 "original_face_box_norm_to_96"
+	QualityVersion  string  `json:"quality_version"`  // 质量特征计算版本
+
+	// 原因码（auto_decision_conflict / too_small_unconfirmed / verifier_uncertain / ...）。
+	ReasonCodes []string `json:"reason_codes,omitempty"`
+
+	// SuggestedDecision shadow 模式下对可自动隔离样本保存的建议决策（non_face/low_quality）。
+	// shadow 一律写 review_required，但 evidence 保存系统「想做什么」供人工校准抽样判断阈值。
+	// enforce 模式留空（决策即最终决策，无需建议）。
+	SuggestedDecision string `json:"suggested_decision,omitempty"`
+
+	RuleVersion  string `json:"rule_version"`
+	ModelVersion string `json:"model_version"`
 }

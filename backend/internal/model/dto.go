@@ -663,6 +663,17 @@ type FaceQualityReviewItem struct {
 	EvidenceOrigin string `json:"evidence_origin,omitempty"`
 	EvidenceState  string `json:"evidence_state,omitempty"`
 	RescoreRunID   *uint  `json:"rescore_run_id,omitempty"`
+	// EvidencePipeline 证据管线：legacy_v1 / independent_v2。
+	// legacy_v1 记录仅展示「旧版同源指标，仅供历史追溯」，不得作为人工判断有效性/质量分的依据。
+	// independent_v2 记录展示 EvidenceV2 的四组结构化证据。
+	EvidencePipeline string `json:"evidence_pipeline,omitempty"`
+	// EvidenceV2 v2 独立复核的结构化证据（仅 evidence_pipeline=independent_v2 时非 nil）。
+	// 包含主检测分、独立验证器结果/版本、原图人脸框/上下文裁剪尺寸、归一化质量特征、建议决策。
+	// 不得把它再次压成单一「有效性」百分比。
+	EvidenceV2 *FaceQualityEvidenceV2 `json:"evidence_v2,omitempty"`
+	// SuggestedDecision shadow 校准的系统建议决策（non_face/low_quality）。
+	// 审核页展示「系统建议 X 但降级为 review_required」，供人工校准阈值。
+	SuggestedDecision string `json:"suggested_decision,omitempty"`
 	// QualityEvidenceAvailable 仅当 EvidenceJSON 非空且能反序列化为 FaceQualityEvidence 时为 true。
 	// 用于区分“模型真实评分（含 0 分）”与“历史回填无证据样本”，不依据数值字段推断。
 	QualityEvidenceAvailable bool `json:"quality_evidence_available"`
@@ -711,6 +722,8 @@ type FaceQualityRescoreRunCreateRequest struct {
 	Mode              string `json:"mode" binding:"required,oneof=calibration full"`
 	PhotoLimit        int    `json:"photo_limit,omitempty"`
 	CalibrationRunID  *uint  `json:"calibration_run_id,omitempty"`
+	// PipelineVersion 证据管线：legacy_v1 / independent_v2。未填默认 independent_v2（本任务主链路）。
+	PipelineVersion string `json:"pipeline_version,omitempty"`
 }
 
 // FaceQualityRescoreRunResponse 单个运行的只读视图。
@@ -736,6 +749,10 @@ type FaceQualityRescoreRunResponse struct {
 	PhotoLimit             int        `json:"photo_limit"`
 	RetryOfRunID           *uint      `json:"retry_of_run_id,omitempty"`
 	CalibrationRunID       *uint      `json:"calibration_run_id,omitempty"`
+	// PipelineVersion 证据管线：legacy_v1 / independent_v2。
+	PipelineVersion        string     `json:"pipeline_version"`
+	// TargetScope 目标快照范围语义。
+	TargetScope            string     `json:"target_scope"`
 	EligibleForEnforce     bool       `json:"eligible_for_enforce"`
 	CreatedAt              time.Time  `json:"created_at"`
 	UpdatedAt              time.Time  `json:"updated_at"`

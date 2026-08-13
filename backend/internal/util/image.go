@@ -273,6 +273,22 @@ func normalizeImageForDisplay(filePath string, img image.Image) image.Image {
 	return NormalizeOrientation(img, exifData.Orientation)
 }
 
+// OrientImageForVerification 生成「自动 EXIF 方向校正 + 叠加 manual_rotation」的方向一致原图。
+// 这是 v2 人脸独立复核的基准图像：归一化 BBox 的坐标系与之对齐。
+// HEIC 由 OpenImage/解码器内部已做方向变换，此处不再二次校正（与 normalizeImageForDisplay 一致）；
+// 非 HEIC 先按 EXIF Orientation 校正，再叠加用户手动旋转。
+// 返回校正后图像及其宽高。不得对该图像做 1024px 缩放（v2 硬约束）。
+func OrientImageForVerification(filePath string, manualRotation int) (image.Image, int, int, error) {
+	img, err := OpenImage(filePath)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	img = normalizeImageForDisplay(filePath, img)
+	img = ApplyManualRotation(img, manualRotation)
+	bounds := img.Bounds()
+	return img, bounds.Dx(), bounds.Dy(), nil
+}
+
 func readHEIFTransformInfo(filePath string) (heifTransformInfo, error) {
 	file, err := os.Open(filePath)
 	if err != nil {

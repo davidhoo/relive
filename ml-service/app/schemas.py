@@ -130,3 +130,78 @@ class ScoreKnownFacesResponse(BaseModel):
     results: list[ScoreKnownFaceResult]
     rule_version: str = FACE_QUALITY_RULE_VERSION
     model_version: str = FACE_QUALITY_MODEL_VERSION
+
+
+# ---- v2 独立复核（verify-known-face-crops）----
+# 该接口只对历史复核 worker 内部使用，不暴露给浏览器。
+# 请求按 Face 传输「以人脸框为中心、四周各扩展 100%」的上下文裁剪 Base64、face_id、
+# 原图人脸框宽高与主检测分。ML 端用独立验证器（YuNet）判定 face/no_face/uncertain/error，
+# 并在原图人脸框上计算质量特征。任何单条错误只影响对应 item。
+# 不得把 error/uncertain 当作 non_face——这些只能进入待重试/待人工审核状态。
+
+# v2 证据 schema 版本。
+EVIDENCE_SCHEMA_VERSION_V2 = "independent_v2"
+
+# v2 规则/模型版本（独立于 v1）。
+FACE_QUALITY_V2_RULE_VERSION = "face_quality_v2"
+YUNET_VERIFIER_NAME = "yunet"
+YUNET_VERIFIER_VERSION = "opencv-yunet-2023mar"
+
+
+class V2QualityFeatures(BaseModel):
+    """原图人脸框质量特征（统一到固定短边归一化后计算，标明计算域与版本）。"""
+
+    sharpness_norm: float = Field(ge=0)
+    brightness_norm: float = Field(ge=0, le=255)
+    contrast_norm: float = Field(ge=0)
+    occluded: bool = False
+    quality_domain: str
+    quality_version: str
+
+
+class VerifyKnownFaceCropTarget(BaseModel):
+    """单个 v2 复核目标。"""
+
+    face_id: int
+    context_crop_base64: str
+    face_box_width_px: int = Field(ge=0)
+    face_box_height_px: int = Field(ge=0)
+    # 人脸框左上角在上下文裁剪中的像素偏移；ML 端用此精确定位人脸框区域计算原图质量指标。
+    face_box_offset_x: int = Field(default=0, ge=0)
+    face_box_offset_y: int = Field(default=0, ge=0)
+    primary_detector_score: float = Field(ge=0, le=1)
+
+
+class VerifyKnownFaceCropsRequest(BaseModel):
+    targets: list[VerifyKnownFaceCropTarget] = Field(default_factory=list)
+
+
+class VerifyKnownFaceCropResult(BaseModel):
+    """单个目标的 v2 复核结果，按请求 target 顺序返回。"""
+
+    face_id: int
+    # face: 独立验证器在裁剪副本中检测到足够置信且位于目标中心区域的脸。
+    # no_face: 成功推理但无可靠脸。
+    # uncertain: 输入短边不足模型最小可判尺寸或结果边界。
+    # error: 加载/推理/解码异常（可重试）。
+    verification_status: str
+    verifier_score: float = 0.0
+    verifier_name: str = YUNET_VERIFIER_NAME
+    verifier_version: str = YUNET_VERIFIER_VERSION
+    original_width: int = 0
+    original_height: int = 0
+    face_box_width_px: int = 0
+    face_box_height_px: int = 0
+    context_crop_width_px: int = 0
+    context_crop_height_px: int = 0
+    context_expand_ratio: float = 1.0
+    primary_detector_score: float = 0.0
+    quality: V2QualityFeatures | None = None
+    reason_codes: list[str] = Field(default_factory=list)
+    evidence_schema_version: str = EVIDENCE_SCHEMA_VERSION_V2
+
+
+class VerifyKnownFaceCropsResponse(BaseModel):
+    results: list[VerifyKnownFaceCropResult]
+    rule_version: str = FACE_QUALITY_V2_RULE_VERSION
+    model_version: str = YUNET_VERIFIER_VERSION

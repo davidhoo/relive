@@ -32,6 +32,10 @@ type FaceQualityRescoreRepository interface {
 	// ListRetryableTargets 列出某来源 run 的当前 historical_rescore + retryable_error|unmatched 事件，
 	// 供 retry 创建新 shadow calibration 精确快照失败集合。窄查询，不扫全部历史缺证据。
 	ListRetryableTargets(sourceRunID uint) ([]model.FaceQualityRescoreRetryTarget, error)
+	// ListV2SnapshotTargets 选择没有当前 source=manual 结论、且没有当前 evidence_pipeline=independent_v2
+	// 事件的 Face（以 faces.id 为主体）。这是 v2 历史快照的目标集合，不限于 historical_backfill + missing。
+	// photoLimit>0 时按 photo_id 升序限制快照照片数（校准用）。
+	ListV2SnapshotTargets(photoLimit int) ([]model.FaceQualityRescoreRetryTarget, error)
 
 	CreateItems(items []*model.FaceQualityRescoreItem) error
 	ListItemsByRun(runID uint) ([]*model.FaceQualityRescoreItem, error)
@@ -177,6 +181,88 @@ func (r *faceQualityRescoreRepository) ListRetryableTargets(sourceRunID uint) ([
 			BaselineEventID: r.ID,
 			EvidenceState:   r.EvidenceState,
 		})
+	}
+	return out, nil
+}
+
+// ListV2SnapshotTargets 选择 v2 历史快照目标集合（以 faces.id 为主体）：
+//   - 没有 is_current=true 且 source=manual 的质检事件（人工结论优先，跳过）；
+//   - 没有 is_current=true 且 evidence_pipeline=independent_v2 的质检事件（避免重复 v2 复核）。
+//
+// 已自动隔离而没有人工最终结论的 Face 仍进入快照（由 service 层决定不自动恢复，
+// 冲突时写 review_required + auto_decision_conflict）。
+// 返回每个 Face 的归一化 BBox 及其当前 baseline 事件 ID（无当前事件则 BaselineEventID=0）。
+// photoLimit>0 时按 photo_id 升序限制快照照片数（校准用）。
+//
+// 注意：faces 表的 BBox 列由 GORM 默认 snake_case 映射为 b_box_x（Face 模型未显式 column），
+// 而 face_quality_events 显式指定为 bbox_x。这里用 faces.b_box_x 引用前者。
+func (r *faceQualityRescoreRepository) ListV2SnapshotTargets(photoLimit int) ([]model.FaceQualityRescoreRetryTarget, error) {
+	type row struct {
+		PhotoID         uint    `gorm:"column:photo_id"`
+		FaceID          uint    `gorm:"column:face_id"`
+		BBoxX           float64 `gorm:"column:bbox_x"`
+		BBoxY           float64 `gorm:"column:bbox_y"`
+		BBoxWidth       float64 `gorm:"column:bbox_width"`
+		BBoxHeight      float64 `gorm:"column:bbox_height"`
+		BaselineEventID *uint   `gorm:"column:baseline_event_id"`
+	}
+
+	// photoLimit 限制：先取满足条件的去重 photo_id 子集，再限定到这些 photo。
+	// 用 NOT EXISTS 而非 NOT IN：NOT IN 在 SQLite 上易退化为全表扫描，
+	// idx_fqe_evidence_pipeline (face_id, evidence_pipeline, is_current) 对 NOT EXISTS 子查询更友好。
+	basePhotoIDs := r.db.Model(&model.Face{}).
+		Where("NOT EXISTS (SELECT 1 FROM face_quality_events mq WHERE mq.face_id = faces.id "+
+			"AND mq.is_current = ? AND mq.source = ?)",
+			true, model.FaceQualitySourceManual).
+		Where("NOT EXISTS (SELECT 1 FROM face_quality_events vq WHERE vq.face_id = faces.id "+
+			"AND vq.is_current = ? AND vq.evidence_pipeline = ?)",
+			true, model.FaceQualityEvidencePipelineIndependentV2)
+
+	if photoLimit > 0 {
+		var photoIDs []uint
+		if err := basePhotoIDs.Session(&gorm.Session{}).
+			Distinct("photo_id").
+			Order("photo_id ASC").
+			Limit(photoLimit).
+			Pluck("photo_id", &photoIDs).Error; err != nil {
+			return nil, err
+		}
+		if len(photoIDs) == 0 {
+			return nil, nil
+		}
+		basePhotoIDs = basePhotoIDs.Where("faces.photo_id IN ?", photoIDs)
+	}
+
+	var rows []row
+	// 以 faces 为驱动表 LEFT JOIN 当前事件取 baseline（每个 face 至多一条 is_current 事件；
+	// 若多条，取 id 最大者作为 baseline）。
+	err := basePhotoIDs.Session(&gorm.Session{}).
+		Select("faces.photo_id AS photo_id, faces.id AS face_id, faces.b_box_x AS bbox_x, " +
+			"faces.b_box_y AS bbox_y, faces.b_box_width AS bbox_width, faces.b_box_height AS bbox_height, " +
+			"cur.id AS baseline_event_id").
+		Joins("LEFT JOIN face_quality_events cur ON cur.face_id = faces.id AND cur.is_current = ? "+
+			"AND cur.id = (SELECT MAX(id) FROM face_quality_events WHERE face_id = faces.id AND is_current = ?)",
+			true, true).
+		Order("faces.photo_id ASC, faces.id ASC").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]model.FaceQualityRescoreRetryTarget, 0, len(rows))
+	for _, r := range rows {
+		t := model.FaceQualityRescoreRetryTarget{
+			PhotoID:    r.PhotoID,
+			FaceID:     r.FaceID,
+			BBoxX:      r.BBoxX,
+			BBoxY:      r.BBoxY,
+			BBoxWidth:  r.BBoxWidth,
+			BBoxHeight: r.BBoxHeight,
+		}
+		if r.BaselineEventID != nil {
+			t.BaselineEventID = *r.BaselineEventID
+		}
+		out = append(out, t)
 	}
 	return out, nil
 }

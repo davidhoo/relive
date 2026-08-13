@@ -14,6 +14,29 @@ const (
 	FaceQualityRescoreApplyModeEnforce = "enforce" // 高置信非人脸/严重低质量自动隔离
 )
 
+// 证据管线枚举（与 model.FaceQualityEvidencePipeline* 对齐，避免跨包字符串散落）。
+const (
+	FaceQualityRescorePipelineLegacyV1       = "legacy_v1"
+	FaceQualityRescorePipelineIndependentV2  = "independent_v2"
+)
+
+// v2 规则版本字符串（rule_version=face_quality_v2）。
+const FaceQualityRescoreRuleVersionV2 = "face_quality_v2"
+
+// 目标快照范围语义。
+const (
+	// RescoreTargetScopeV1 v1 仅扫描 historical_backfill + missing 事件。
+	RescoreTargetScopeV1 = "historical_backfill_missing"
+	// RescoreTargetScopeV2 v2 以 faces.id 为主体，选择无当前 manual 结论且无 independent_v2 事件的 Face。
+	RescoreTargetScopeV2 = "all_non_manual_faces_without_independent_v2"
+)
+
+// IsValidRescorePipelineVersion 校验运行管线版本是否合法
+func IsValidRescorePipelineVersion(s string) bool {
+	return s == FaceQualityRescorePipelineLegacyV1 ||
+		s == FaceQualityRescorePipelineIndependentV2
+}
+
 // 历史重评分运行状态。
 const (
 	FaceQualityRescoreStatusQueued             = "queued"
@@ -76,6 +99,14 @@ type FaceQualityRescoreRun struct {
 	RuleVersion  string `gorm:"type:varchar(20);not null" json:"rule_version"`
 	ModelVersion string `gorm:"type:varchar(40);not null" json:"model_version"`
 
+	// PipelineVersion 证据管线：legacy_v1 / independent_v2。
+	// v2 任务创建的运行固定为 independent_v2；v1 历史运行迁移为 legacy_v1，
+	// 不可作为 v2 enforce 校准来源。
+	PipelineVersion string `gorm:"type:varchar(20);not null;default:'legacy_v1';index:idx_fqr_run_pipeline" json:"pipeline_version"`
+	// TargetScope 目标快照范围语义。v2 固定为 all_non_manual_faces_without_independent_v2；
+	// v1 历史运行迁移为 historical_backfill_missing（仅扫描 historical_backfill + missing）。
+	TargetScope string `gorm:"type:varchar(64);not null;default:''" json:"target_scope"`
+
 	// 校准选择策略/种子快照（calibration 时记录，便于复现）。
 	SelectionPolicy string `gorm:"type:varchar(32);default:''" json:"selection_policy,omitempty"`
 	PhotoLimit      int    `gorm:"not null;default:0" json:"photo_limit"`
@@ -136,3 +167,8 @@ type FaceQualityRescoreRetryTarget struct {
 	BaselineEventID uint
 	EvidenceState   string
 }
+
+// FaceQualityV2SnapshotTarget v2 历史快照目标复用 FaceQualityRescoreRetryTarget（字段集合一致：
+// Face ID、归一化 BBox、当前 baseline 事件 ID）。v2 快照场景不携带 EvidenceState（留空）。
+// 起别名避免后来人误以为 v2 快照属于 retry 语义。
+type FaceQualityV2SnapshotTarget = FaceQualityRescoreRetryTarget

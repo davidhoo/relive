@@ -143,6 +143,188 @@ func qualityModeFromConfig(mode string) string {
 	}
 }
 
+// ---- v2 独立复核策略 ----
+//
+// evaluateFaceQualityV2 只接受 FaceQualityEvidenceV2（独立验证器 + 原图裁剪证据），
+// 不得读取或折算旧 FaceValidityScore / QualityScore。优先保证 non_face 的精度：
+// 任一证据不足 → review_required，绝不错误自动隔离真实脸。
+//
+// 阈值受 rule_version=face_quality_v2 版本管理；初始值见 v2QualityThresholds 默认，
+// shadow 校准定标后由配置覆盖。模糊/遮挡/曝光初始阈值保守，宁可漏判 low_quality 也不错判 non_face。
+
+// v2QualityThresholds v2 策略阈值。零值字段用默认。
+type v2QualityThresholds struct {
+	// 主检测准入线：低于此值的新检测不持久化；历史 non_face 自动判定要求 primary < 此值。
+	FaceDetectionMinConfidence float64
+	// 原图人脸框最小短边：低于此值的历史样本，验证器未确认是脸时只能 review_required。
+	MinOriginalShortEdge int
+	// low_quality 自动判定阈值（仅在 verification_status=face 时生效）。
+	LowQualitySharpness   float64 // 归一化清晰度低于此 → low_quality
+	LowQualityBrightnessHi float64 // 亮度高于此 → 过曝 low_quality
+	LowQualityBrightnessLo float64 // 亮度低于此 → 欠曝 low_quality
+}
+
+// defaultV2QualityThresholds v2 初始默认阈值。改动须递增 face_quality_v2 rule_version 并重跑 shadow。
+//
+// MinOriginalShortEdge=48 与任务书初始值一致。
+// 模糊/曝光阈值保守：shadow 校准前宁可不自动判 low_quality，也不误隔离。
+func defaultV2QualityThresholds() v2QualityThresholds {
+	return v2QualityThresholds{
+		FaceDetectionMinConfidence: 0.65,
+		MinOriginalShortEdge:       48,
+		LowQualitySharpness:        0.0, // 初始 0：shadow 校准前不按清晰度自动判 low_quality
+		LowQualityBrightnessHi:     300.0,
+		LowQualityBrightnessLo:     -1.0, // 初始不触发
+	}
+}
+
+// v2Thresholds 从 PeopleConfig 读取 v2 阈值；未配置或越界时回退默认值。
+// 阈值受 rule_version=face_quality_v2 版本管理，调整须重跑 shadow 校准。
+func (s *faceQualityRescoreService) v2Thresholds() v2QualityThresholds {
+	th := defaultV2QualityThresholds()
+	if s.people == nil || s.people.config == nil {
+		return th
+	}
+	pc := s.people.config.People
+	if pc.FaceDetectionMinConfidence > 0 && pc.FaceDetectionMinConfidence <= 1 {
+		th.FaceDetectionMinConfidence = pc.FaceDetectionMinConfidence
+	}
+	if pc.FaceQualityV2MinOriginalShortEdge > 0 {
+		th.MinOriginalShortEdge = pc.FaceQualityV2MinOriginalShortEdge
+	}
+	if pc.FaceQualityV2LowQualitySharpness > 0 {
+		th.LowQualitySharpness = pc.FaceQualityV2LowQualitySharpness
+	}
+	if pc.FaceQualityV2LowQualityBrightnessHi > 0 {
+		th.LowQualityBrightnessHi = pc.FaceQualityV2LowQualityBrightnessHi
+	}
+	if pc.FaceQualityV2LowQualityBrightnessLo >= 0 {
+		th.LowQualityBrightnessLo = pc.FaceQualityV2LowQualityBrightnessLo
+	}
+	return th
+}
+
+// v2QualityOutcome v2 策略判定结果。Shadow 建议决策（suggested）与最终决策（Decision）分离：
+// shadow 模式对可自动隔离样本写 review_required + suggested，enforce 模式用 suggested。
+type v2QualityOutcome struct {
+	Decision  string // accepted / non_face / low_quality / review_required
+	Reason    string // non_face / low_quality / ''
+	ReasonCodes []string
+	// SuggestedDecision shadow 模式下对可自动隔离样本保存的建议决策（non_face/low_quality），
+	// 供 full/enforce 同快照运行时复用。非建议场景为空。
+	SuggestedDecision string
+}
+
+// evaluateFaceQualityV2 基于 FaceQualityEvidenceV2 判定。
+// mode: shadow / enforce / disabled。shadow 模式对可自动隔离样本降级为 review_required，
+// 同时在 SuggestedDecision 保存建议决策，绝不改 person_id/cluster_status。
+//
+// 判定优先级（优先 non_face 精度）：
+//  1. verification_status=error / uncertain / no_evidence → review_required 或技术失败（由调用方区分）；
+//  2. primary_detector_score < 准入线 AND verification_status=no_face AND 原图短边 >= 48 AND 无技术错误 → non_face；
+//  3. verification_status=face AND 原图质量不达标（极小/极模糊/严重遮挡/曝光异常）→ low_quality；
+//  4. verification_status=face AND 质量达标 → accepted；
+//  5. 其余（主/独立分歧、极小未确认框）→ review_required。
+func evaluateFaceQualityV2(ev *model.FaceQualityEvidenceV2, mode string, th v2QualityThresholds) v2QualityOutcome {
+	disabled := mode == "disabled"
+
+	// 无证据或验证器异常/不确定 → 灰区，不自动隔离。
+	// （技术失败的 evidence_state 区分由调用方在 worker 层处理，这里只做策略判定。）
+	if ev == nil {
+		return v2QualityOutcome{Decision: model.FaceQualityDecisionReviewRequired}
+	}
+	if ev.VerificationStatus == "error" || ev.VerificationStatus == "uncertain" {
+		return v2QualityOutcome{
+			Decision:    model.FaceQualityDecisionReviewRequired,
+			ReasonCodes: append([]string{}, ev.ReasonCodes...),
+		}
+	}
+
+	// 原图人脸框短边。
+	faceShortEdge := ev.FaceBoxWidthPx
+	if ev.FaceBoxHeightPx < faceShortEdge {
+		faceShortEdge = ev.FaceBoxHeightPx
+	}
+
+	// ---- non_face 自动判定（精度优先）----
+	// 仅当：主检测分 < 准入线 + 验证器 no_face + 原图短边 >= 48 + 无技术错误。
+	if ev.VerificationStatus == "no_face" &&
+		ev.PrimaryDetectorScore < th.FaceDetectionMinConfidence &&
+		faceShortEdge >= th.MinOriginalShortEdge {
+		if disabled {
+			return v2QualityOutcome{Decision: model.FaceQualityDecisionAccepted, ReasonCodes: append([]string{}, ev.ReasonCodes...)}
+		}
+		out := v2QualityOutcome{
+			Decision:          model.FaceQualityDecisionNonFace,
+			Reason:            model.ExclusionReasonNonFace,
+			ReasonCodes:       append([]string{}, ev.ReasonCodes...),
+			SuggestedDecision: model.FaceQualityDecisionNonFace,
+		}
+		if mode == "shadow" {
+			out.Decision = model.FaceQualityDecisionReviewRequired
+			out.Reason = ""
+		}
+		return out
+	}
+
+	// no_face 但主检测分 >= 准入线（主/独立分歧）→ review_required，不自动 non_face。
+	if ev.VerificationStatus == "no_face" {
+		codes := append(append([]string{}, ev.ReasonCodes...), "detector_verifier_disagreement")
+		return v2QualityOutcome{Decision: model.FaceQualityDecisionReviewRequired, ReasonCodes: codes}
+	}
+
+	// no_face 且原图短边 < 48（极小未确认框）→ review_required，不自动 non_face。
+	// （上面的 no_face 分支已覆盖：主分<准入线但短边<48 落到这里。）
+
+	// ---- low_quality 自动判定（仅 verification_status=face）----
+	if ev.VerificationStatus == "face" {
+		// 质量不达标判定：极小 / 极模糊 / 严重遮挡 / 严重曝光异常。
+		lowQ := false
+		var codes []string
+		if faceShortEdge < th.MinOriginalShortEdge {
+			lowQ = true
+			codes = append(codes, "too_small_original")
+		}
+		if ev.SharpnessNorm < th.LowQualitySharpness {
+			lowQ = true
+			codes = append(codes, "blurred")
+		}
+		if ev.Occluded {
+			lowQ = true
+			codes = append(codes, "occluded")
+		}
+		if ev.BrightnessNorm >= th.LowQualityBrightnessHi {
+			lowQ = true
+			codes = append(codes, "overexposed")
+		}
+		if ev.BrightnessNorm <= th.LowQualityBrightnessLo {
+			lowQ = true
+			codes = append(codes, "underexposed")
+		}
+		if lowQ {
+			if disabled {
+				return v2QualityOutcome{Decision: model.FaceQualityDecisionAccepted, ReasonCodes: append([]string{}, ev.ReasonCodes...)}
+			}
+			out := v2QualityOutcome{
+				Decision:          model.FaceQualityDecisionLowQuality,
+				Reason:            model.ExclusionReasonLowQuality,
+				ReasonCodes:       append(append([]string{}, ev.ReasonCodes...), codes...),
+				SuggestedDecision: model.FaceQualityDecisionLowQuality,
+			}
+			if mode == "shadow" {
+				out.Decision = model.FaceQualityDecisionReviewRequired
+				out.Reason = ""
+			}
+			return out
+		}
+		// 质量达标 → accepted。
+		return v2QualityOutcome{Decision: model.FaceQualityDecisionAccepted, ReasonCodes: append([]string{}, ev.ReasonCodes...)}
+	}
+
+	// 其余状态（含未知 verification_status）→ review_required。
+	return v2QualityOutcome{Decision: model.FaceQualityDecisionReviewRequired, ReasonCodes: append([]string{}, ev.ReasonCodes...)}
+}
+
 // marshalEvidence 把证据序列化为 JSON 字符串存入审计表。失败时返回空串不阻塞。
 func marshalEvidence(e *model.FaceQualityEvidence) string {
 	if e == nil {
@@ -325,6 +507,17 @@ func buildReviewItem(rec *model.FaceQualityEvent, people *peopleService) model.F
 		EvidenceOrigin:  rec.EvidenceOrigin,
 		EvidenceState:   rec.EvidenceState,
 		RescoreRunID:    rec.RescoreRunID,
+		EvidencePipeline: rec.EvidencePipeline,
+	}
+
+	// v2 证据解析：仅 evidence_pipeline=independent_v2 时反序列化 FaceQualityEvidenceV2。
+	// v2 审核接口不得把旧 legacy_v1 字段映射成 v2 结论——legacy 记录 EvidenceV2 留 nil，
+	// 前端显示「旧版同源指标，仅供历史追溯」。
+	if rec.EvidencePipeline == model.FaceQualityEvidencePipelineIndependentV2 {
+		if ev2, ok := parseV2Evidence(rec.EvidenceJSON); ok {
+			item.EvidenceV2 = ev2
+			item.SuggestedDecision = ev2.SuggestedDecision
+		}
 	}
 
 	// 填充人脸裁剪路径与原图路径，便于审核页展示。
@@ -359,6 +552,19 @@ func evidenceAvailable(evidenceJSON string) bool {
 		return false
 	}
 	return true
+}
+
+// parseV2Evidence 把 evidence_json 反序列化为 FaceQualityEvidenceV2。
+// 解析失败返回 (nil, false)；调用方据此决定是否展示 v2 结构化证据。
+func parseV2Evidence(evidenceJSON string) (*model.FaceQualityEvidenceV2, bool) {
+	if strings.TrimSpace(evidenceJSON) == "" {
+		return nil, false
+	}
+	var ev model.FaceQualityEvidenceV2
+	if err := json.Unmarshal([]byte(evidenceJSON), &ev); err != nil {
+		return nil, false
+	}
+	return &ev, true
 }
 
 func splitReasonCodes(csv string) []string {
@@ -437,6 +643,8 @@ func (f *faceQualityService) ApplyQualityDecision(req model.FaceQualityDecisionR
 					ReasonCodes:   rec.ReasonCodes,
 					ReviewAction:  req.Action,
 					ReviewedAt:    &now,
+					// 人工结论继承原记录的证据管线，保留 v2 记录的人工覆盖可追溯性。
+					EvidencePipeline: rec.EvidencePipeline,
 					IsCurrent:     true,
 				}
 				if req.Action == model.FaceQualityReviewActionRestore {
@@ -705,6 +913,8 @@ func (f *faceQualityService) RestoreAuto(ruleVersion string, limit int) (*model.
 					ReasonCodes:  rec.ReasonCodes,
 					ReviewAction: model.FaceQualityReviewActionRestore,
 					RestoredAt:   &now,
+					// 人工恢复继承原记录的证据管线。
+					EvidencePipeline: rec.EvidencePipeline,
 					IsCurrent:    true,
 				}
 				if err := tx.Create(&newEvent).Error; err != nil {
@@ -838,6 +1048,8 @@ func (f *faceQualityService) restoreAutoRecords(records []*model.FaceQualityEven
 					ReasonCodes:  rec.ReasonCodes,
 					ReviewAction: model.FaceQualityReviewActionRestore,
 					RestoredAt:   &now,
+					// 人工恢复继承原记录的证据管线。
+					EvidencePipeline: rec.EvidencePipeline,
 					IsCurrent:    true,
 				}
 				if err := tx.Create(&newEvent).Error; err != nil {

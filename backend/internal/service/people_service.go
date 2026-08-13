@@ -72,6 +72,7 @@ const (
 type PeopleMLClient interface {
 	DetectFaces(ctx context.Context, request mlclient.DetectFacesRequest) (*mlclient.DetectFacesResponse, error)
 	ScoreKnownFaces(ctx context.Context, request mlclient.ScoreKnownFacesRequest) (*mlclient.ScoreKnownFacesResponse, error)
+	VerifyKnownFaceCrops(ctx context.Context, request mlclient.VerifyKnownFaceCropsRequest) (*mlclient.VerifyKnownFaceCropsResponse, error)
 }
 
 type PeopleService interface {
@@ -2143,7 +2144,7 @@ func (s *peopleService) detectFacesLocally(photo *model.Photo) (*mlclient.Detect
 	result, detectErr := s.client.DetectFaces(context.Background(), mlclient.DetectFacesRequest{
 		ImagePath:     imagePath,
 		ImageBase64:   imageBase64,
-		MinConfidence: 0.5,
+		MinConfidence: s.faceDetectionMinConfidence(),
 		MaxFaces:      20,
 	})
 	if detectErr != nil {
@@ -2205,6 +2206,10 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 			})
 		}
 	}()
+
+	// v2 严格准入（任务 §D3）：主检测过线的候选在持久化前执行独立验证。
+	// no_face 不创建 Face（从候选剔除）；uncertain/error 按规则标记 review_required（保留但不进聚类）。
+	result.Faces = s.filterDetectionsByIndependentVerification(photo, result.Faces)
 
 	if len(result.Faces) == 0 {
 		s.appendBackgroundLog(fmt.Sprintf("照片 #%d 无人脸", photo.ID))
@@ -2360,7 +2365,18 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 			}
 		} else {
 			// 3) 无人工结论：跑自动质检策略引擎。
+			// v2 严格准入（任务 §D3）：独立验证 uncertain/error 的候选强制 review_required，
+			// 不当作正常人脸进入聚类。no_face 候选已在 filterDetectionsByIndependentVerification 剔除。
 			outcome := evaluateFaceQuality(ev, qualityMode)
+			pipeline := model.FaceQualityEvidencePipelineLegacyV1
+			if detected.VerifierStatus == "uncertain" || detected.VerifierStatus == "error" {
+				outcome = qualityOutcome{
+					Action:      model.FaceQualityActionReviewRequired,
+					Decision:    model.FaceQualityDecisionReviewRequired,
+					ReasonCodes: append(outcome.ReasonCodes, "verifier_"+detected.VerifierStatus),
+				}
+				pipeline = model.FaceQualityEvidencePipelineIndependentV2
+			}
 			face.QualityReasonsCSV = reasonCodesCSV(outcome.ReasonCodes)
 			switch outcome.Action {
 			case model.FaceQualityActionExclude:
@@ -2379,21 +2395,22 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 			}
 			// 追加自动质检事件（FaceID 在事务内创建 Face 后回填）。
 			qualityEventsToWrite = append(qualityEventsToWrite, &model.FaceQualityEvent{
-				PhotoID:        photo.ID,
-				BBoxX:          detected.BBox.X,
-				BBoxY:          detected.BBox.Y,
-				BBoxWidth:      detected.BBox.Width,
-				BBoxHeight:     detected.BBox.Height,
-				Decision:       outcome.Decision,
-				Reason:         outcome.Reason,
-				Source:         model.FaceQualitySourceAuto,
-				RuleVersion:    qualityRuleVersionFromEvidence(ev),
-				ModelVersion:   qualityModelVersionFromEvidence(ev),
-				EvidenceJSON:   marshalEvidence(ev),
-				ReasonCodes:    reasonCodesCSV(outcome.ReasonCodes),
-				EvidenceOrigin: model.FaceQualityEvidenceOriginRealtime,
-				EvidenceState:  model.FaceQualityEvidenceStateAvailable,
-				IsCurrent:      true,
+				PhotoID:          photo.ID,
+				BBoxX:            detected.BBox.X,
+				BBoxY:            detected.BBox.Y,
+				BBoxWidth:        detected.BBox.Width,
+				BBoxHeight:       detected.BBox.Height,
+				Decision:         outcome.Decision,
+				Reason:           outcome.Reason,
+				Source:           model.FaceQualitySourceAuto,
+				RuleVersion:      qualityRuleVersionFromEvidence(ev),
+				ModelVersion:     qualityModelVersionFromEvidence(ev),
+				EvidenceJSON:     marshalEvidence(ev),
+				ReasonCodes:      reasonCodesCSV(outcome.ReasonCodes),
+				EvidenceOrigin:   model.FaceQualityEvidenceOriginRealtime,
+				EvidenceState:    model.FaceQualityEvidenceStateAvailable,
+				EvidencePipeline: pipeline,
+				IsCurrent:        true,
 			})
 		}
 		createdFaces = append(createdFaces, face)
@@ -4322,6 +4339,101 @@ func (s *peopleService) qualityModeSetting() string {
 		return s.config.People.FaceQualityMode
 	}
 	return "enforce"
+}
+
+// faceDetectionMinConfidence 返回新照片主检测准入线（people.face_detection_min_confidence）。
+// 初始 0.65：低于此值的检测不持久化为 Face（v2 严格准入）。未配置时回退 0.65。
+func (s *peopleService) faceDetectionMinConfidence() float64 {
+	if s.config != nil && s.config.People.FaceDetectionMinConfidence > 0 {
+		return s.config.People.FaceDetectionMinConfidence
+	}
+	return 0.65
+}
+
+// filterDetectionsByIndependentVerification 对主检测过线的候选执行 v2 独立验证（任务 §D3）。
+// 用 PrepareV2FaceCrops 在方向一致原图上裁取每张人脸上下文，调 VerifyKnownFaceCrops：
+//   - no_face：从候选剔除（不创建 Face、不生成缩略图、不写 embedding、不进聚类）；
+//   - uncertain/error：保留候选，但置 VerifierStatus，后续 ApplyDetectionResult 写 review_required 而非进聚类；
+//   - face：保留候选，正常进入既有质检/聚类路径。
+//
+// 验证器不可用或读图失败时 fail-open（保留全部候选），由既有 v1 质检兜底，绝不因验证器故障丢脸。
+// 候选 bbox 为归一化坐标，与原图方向一致坐标系对齐（PrepareV2FaceCrops 内部做 EXIF+manual_rotation 校正）。
+func (s *peopleService) filterDetectionsByIndependentVerification(photo *model.Photo, faces []model.PeopleDetectionFace) []model.PeopleDetectionFace {
+	if len(faces) == 0 || s.client == nil {
+		return faces
+	}
+	// 构造每张人脸的上下文裁剪。任一裁剪失败 → 该候选保留并标 uncertain（不因裁剪故障丢脸）。
+	type prepared struct {
+		idx   int
+		crops *V2FaceCrops
+		face  model.PeopleDetectionFace
+	}
+	preps := make([]prepared, 0, len(faces))
+	for i, f := range faces {
+		crops, err := PrepareV2FaceCrops(photo.FilePath, photo.ManualRotation, f.BBox.X, f.BBox.Y, f.BBox.Width, f.BBox.Height)
+		if err != nil || crops == nil || crops.ContextCropBase64 == "" {
+			// 裁剪失败（读图/EXIF/旋转）：fail-open，保留候选不标记，走既有 v1 质检路径，不丢脸。
+			// 注：这与验证器 uncertain 不同——裁剪失败是技术故障，不应让候选降级为 review_required。
+			continue
+		}
+		preps = append(preps, prepared{idx: i, crops: crops, face: f})
+	}
+	if len(preps) == 0 {
+		return faces
+	}
+
+	targets := make([]mlclient.VerifyKnownFaceCropTarget, 0, len(preps))
+	for _, p := range preps {
+		targets = append(targets, mlclient.VerifyKnownFaceCropTarget{
+			FaceID:               uint(p.idx),
+			ContextCropBase64:    p.crops.ContextCropBase64,
+			FaceBoxWidthPx:       p.crops.FaceBoxWidthPx,
+			FaceBoxHeightPx:      p.crops.FaceBoxHeightPx,
+			FaceBoxOffsetX:       p.crops.FaceBoxOffsetX,
+			FaceBoxOffsetY:       p.crops.FaceBoxOffsetY,
+			PrimaryDetectorScore: p.face.Confidence,
+		})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	resp, err := s.client.VerifyKnownFaceCrops(ctx, mlclient.VerifyKnownFaceCropsRequest{Targets: targets})
+	if err != nil {
+		// 验证器调用失败：fail-open 保留全部候选（既有 v1 质检兜底），不丢脸。
+		logger.Warnf("realtime independent verification failed for photo %d, fail-open: %v", photo.ID, err)
+		return faces
+	}
+
+	// 按 verification_status 分流：no_face 剔除，uncertain/error 标记，face 保留。
+	kept := make([]model.PeopleDetectionFace, 0, len(faces))
+	// 保留未裁剪成功（已标 uncertain）的候选顺序：先收集所有未参与验证的索引状态。
+	statusByIDX := make(map[int]string, len(preps))
+	for i, p := range preps {
+		if i < len(resp.Results) {
+			statusByIDX[p.idx] = resp.Results[i].VerificationStatus
+		}
+	}
+
+	for i, f := range faces {
+		st, ok := statusByIDX[i]
+		if !ok {
+			// 未参与验证（裁剪失败 fail-open）：保留候选，不标记，走既有 v1 质检路径。
+			kept = append(kept, f)
+			continue
+		}
+		switch st {
+		case "no_face":
+			// 剔除：不创建 Face。
+			s.appendBackgroundLog(fmt.Sprintf("照片 #%d 候选 %d 独立验证 no_face，剔除", photo.ID, i))
+			continue
+		case "uncertain", "error":
+			f.VerifierStatus = st
+		default:
+			f.VerifierStatus = "face"
+		}
+		kept = append(kept, f)
+	}
+	return kept
 }
 
 // errPeopleSplitConflict 是 ErrPeopleSplitConflict 的内部别名，保留既有调用点与测试的

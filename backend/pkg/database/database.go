@@ -310,6 +310,14 @@ func AutoMigrate(db *gorm.DB) error {
 		log.Printf("[database] warning: face quality rescore run meta migration failed: %v", err)
 	}
 
+	if err := migrateFaceQualityEvidencePipeline(db); err != nil {
+		log.Printf("[database] warning: face quality evidence pipeline migration failed: %v", err)
+	}
+
+	if err := migrateFaceQualityRescoreRunPipeline(db); err != nil {
+		log.Printf("[database] warning: face quality rescore run pipeline migration failed: %v", err)
+	}
+
 	if err := migratePersonPhotosTable(db); err != nil {
 		log.Printf("[database] warning: person_photos migration failed: %v", err)
 	}
@@ -523,6 +531,104 @@ func migrateFaceQualityRescoreRunMeta(db *gorm.DB) error {
 		  )`)
 	if res2.Error != nil {
 		return fmt.Errorf("backfill run last_error from items: %w", res2.Error)
+	}
+
+	marker := model.AppConfig{Key: migrationKey, Value: "done"}
+	if err := db.Where("key = ?", migrationKey).FirstOrCreate(&marker).Error; err != nil {
+		return fmt.Errorf("write migration marker: %w", err)
+	}
+	return nil
+}
+
+// migrateFaceQualityEvidencePipeline 给 face_quality_events 增加 evidence_pipeline 列，
+// 并把既有行标记为 legacy_v1（v1 同源启发式证据，仅保留供历史追溯）。
+//
+// 幂等：app_config 标记 migration.face_quality_evidence_pipeline_v1。
+// 新实时检测与历史复核路径必须显式填写该列，不允许留空；本迁移只补列与回填旧行。
+func migrateFaceQualityEvidencePipeline(db *gorm.DB) error {
+	const migrationKey = "migration.face_quality_evidence_pipeline_v1"
+
+	var existing model.AppConfig
+	if err := db.Where("key = ?", migrationKey).First(&existing).Error; err == nil {
+		return nil
+	}
+
+	if !db.Migrator().HasTable(&model.FaceQualityEvent{}) {
+		return nil
+	}
+
+	// 1) 补列（新库由 AutoMigrate 创建，这里只补旧库）。
+	if !db.Migrator().HasColumn(&model.FaceQualityEvent{}, "evidence_pipeline") {
+		if err := db.Exec("ALTER TABLE face_quality_events ADD COLUMN evidence_pipeline VARCHAR(20) DEFAULT ''").Error; err != nil {
+			return fmt.Errorf("add evidence_pipeline column: %w", err)
+		}
+	}
+
+	// 2) 回填旧行为 legacy_v1（仅 evidence_pipeline='' 的行）。
+	//    v1 的 score-known-faces 在已旋转展示缩略图上复用同一套 InsightFace 检测，
+	//    属同源启发式证据，不得作为 v2 自动隔离或人工判断依据。
+	res := db.Exec(`UPDATE face_quality_events
+		SET evidence_pipeline = ?
+		WHERE evidence_pipeline = '' OR evidence_pipeline IS NULL`,
+		model.FaceQualityEvidencePipelineLegacyV1)
+	if res.Error != nil {
+		return fmt.Errorf("backfill legacy_v1 evidence_pipeline: %w", res.Error)
+	}
+
+	// 3) evidence_pipeline 索引（便于 v2 选目标查询排除已有 independent_v2 事件的 Face）。
+	idxPipeline := "idx_fqe_evidence_pipeline"
+	db.Exec("DROP INDEX IF EXISTS " + idxPipeline)
+	if err := db.Exec("CREATE INDEX " + idxPipeline +
+		" ON face_quality_events (face_id, evidence_pipeline, is_current)").Error; err != nil {
+		return fmt.Errorf("create %s index: %w", idxPipeline, err)
+	}
+
+	marker := model.AppConfig{Key: migrationKey, Value: "done"}
+	if err := db.Where("key = ?", migrationKey).FirstOrCreate(&marker).Error; err != nil {
+		return fmt.Errorf("write migration marker: %w", err)
+	}
+	return nil
+}
+
+// migrateFaceQualityRescoreRunPipeline 给 face_quality_rescore_runs 增加 pipeline_version 与 target_scope 列，
+// 并把既有运行标记为 legacy_v1 + historical_backfill_missing。
+//
+// 幂等：app_config 标记 migration.face_quality_rescore_run_pipeline_v1。
+// v2 任务创建的运行固定为 independent_v2 + all_non_manual_faces_without_independent_v2。
+func migrateFaceQualityRescoreRunPipeline(db *gorm.DB) error {
+	const migrationKey = "migration.face_quality_rescore_run_pipeline_v1"
+
+	var existing model.AppConfig
+	if err := db.Where("key = ?", migrationKey).First(&existing).Error; err == nil {
+		return nil
+	}
+
+	if !db.Migrator().HasTable(&model.FaceQualityRescoreRun{}) {
+		return nil
+	}
+
+	// 1) 补列。
+	if !db.Migrator().HasColumn(&model.FaceQualityRescoreRun{}, "pipeline_version") {
+		if err := db.Exec("ALTER TABLE face_quality_rescore_runs ADD COLUMN pipeline_version VARCHAR(20) NOT NULL DEFAULT 'legacy_v1'").Error; err != nil {
+			return fmt.Errorf("add pipeline_version column: %w", err)
+		}
+	}
+	if !db.Migrator().HasColumn(&model.FaceQualityRescoreRun{}, "target_scope") {
+		if err := db.Exec("ALTER TABLE face_quality_rescore_runs ADD COLUMN target_scope VARCHAR(64) NOT NULL DEFAULT ''").Error; err != nil {
+			return fmt.Errorf("add target_scope column: %w", err)
+		}
+	}
+
+	// 2) 回填既有运行为 legacy_v1 + historical_backfill_missing。
+	//    v1 只从 historical_backfill + missing 事件选目标，成功补证据后事件转 historical_rescore+available，
+	//    后续 full 运行无法复用同一批目标——这正是 v2 要修正的语义。
+	res := db.Exec(`UPDATE face_quality_rescore_runs
+		SET pipeline_version = ?,
+		    target_scope = CASE WHEN target_scope = '' OR target_scope IS NULL THEN ? ELSE target_scope END`,
+		model.FaceQualityRescorePipelineLegacyV1,
+		model.RescoreTargetScopeV1)
+	if res.Error != nil {
+		return fmt.Errorf("backfill legacy run pipeline: %w", res.Error)
 	}
 
 	marker := model.AppConfig{Key: migrationKey, Value: "done"}

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"image/color"
+	"image/jpeg"
 	"math"
 	"os"
 	"path/filepath"
@@ -32,6 +34,9 @@ import (
 type fakePeopleMLClient struct {
 	responses map[string]*mlclient.DetectFacesResponse
 	err       error
+	// verifyStatus 按 target 顺序返回的验证状态（face/no_face/uncertain/error）。nil 时全部 no_face。
+	verifyStatus []string
+	verifyErr    error
 }
 
 func (c *fakePeopleMLClient) DetectFaces(ctx context.Context, req mlclient.DetectFacesRequest) (*mlclient.DetectFacesResponse, error) {
@@ -57,6 +62,31 @@ func (c *fakePeopleMLClient) ScoreKnownFaces(ctx context.Context, req mlclient.S
 		})
 	}
 	return &mlclient.ScoreKnownFacesResponse{Results: results}, nil
+}
+
+// VerifyKnownFaceCrops 满足 PeopleMLClient 接口；测试默认返回 no_face（v2 默认）。
+func (c *fakePeopleMLClient) VerifyKnownFaceCrops(ctx context.Context, req mlclient.VerifyKnownFaceCropsRequest) (*mlclient.VerifyKnownFaceCropsResponse, error) {
+	if c.verifyErr != nil {
+		return nil, c.verifyErr
+	}
+	results := make([]mlclient.VerifyKnownFaceCropResult, 0, len(req.Targets))
+	for i, t := range req.Targets {
+		// 默认 face（fail-open）：不关心验证的既有测试不应被 v2 准入剔除。
+		// 需要测试 no_face/uncertain 的用例显式设置 verifyStatus。
+		status := "face"
+		if i < len(c.verifyStatus) {
+			status = c.verifyStatus[i]
+		}
+		results = append(results, mlclient.VerifyKnownFaceCropResult{
+			FaceID:               t.FaceID,
+			VerificationStatus:   status,
+			FaceBoxWidthPx:       t.FaceBoxWidthPx,
+			FaceBoxHeightPx:      t.FaceBoxHeightPx,
+			PrimaryDetectorScore: t.PrimaryDetectorScore,
+			EvidenceSchemaVersion: "independent_v2",
+		})
+	}
+	return &mlclient.VerifyKnownFaceCropsResponse{Results: results}, nil
 }
 
 func setupPeopleServiceTestDB(t *testing.T) *gorm.DB {
@@ -5437,4 +5467,108 @@ func TestUpdateVisibility_RestoreReenablesPerson(t *testing.T) {
 	_, blocked = svc.hiddenPersonIDs[42]
 	svc.hiddenPersonsMu.RUnlock()
 	assert.False(t, blocked, "person 42 should be removed from block-set after restore")
+}
+
+// writePlainJPEGFile 写一张纯 JPEG 到 path。
+func writePlainJPEGFile(t *testing.T, path string, width, height int) {
+	t.Helper()
+	img := image.NewNRGBA(image.Rect(0, 0, width, height))
+	f, err := os.Create(path)
+	require.NoError(t, err)
+	defer f.Close()
+	require.NoError(t, jpeg.Encode(f, img, &jpeg.Options{Quality: 95}))
+}
+
+// TestFilterDetectionsByIndependentVerification_NoFaceDropped no_face 候选被剔除，face 候选保留。
+func TestFilterDetectionsByIndependentVerification_NoFaceDropped(t *testing.T) {
+	dir := t.TempDir()
+	jpg := filepath.Join(dir, "p.jpg")
+	writePlainJPEGFile(t, jpg, 200, 200)
+
+	// 两个候选：第一个 no_face（剔除），第二个 face（保留）。
+	client := &fakePeopleMLClient{verifyStatus: []string{"no_face", "face"}}
+	svc, _ := newPeopleServiceForTest(t, client)
+	photo := &model.Photo{FilePath: jpg, ManualRotation: 0, FaceProcessStatus: model.FaceProcessStatusReady}
+
+	faces := []model.PeopleDetectionFace{
+		{BBox: model.BoundingBox{X: 0.2, Y: 0.2, Width: 0.25, Height: 0.25}, Confidence: 0.9},
+		{BBox: model.BoundingBox{X: 0.5, Y: 0.5, Width: 0.25, Height: 0.25}, Confidence: 0.9},
+	}
+	got := svc.filterDetectionsByIndependentVerification(photo, faces)
+	require.Len(t, got, 1, "no_face 候选应被剔除")
+	assert.Equal(t, "face", got[0].VerifierStatus)
+}
+
+// TestFilterDetectionsByIndependentVerification_UncertainMarked uncertain 候选保留但标记。
+func TestFilterDetectionsByIndependentVerification_UncertainMarked(t *testing.T) {
+	dir := t.TempDir()
+	jpg := filepath.Join(dir, "p.jpg")
+	writePlainJPEGFile(t, jpg, 200, 200)
+
+	client := &fakePeopleMLClient{verifyStatus: []string{"uncertain"}}
+	svc, _ := newPeopleServiceForTest(t, client)
+	photo := &model.Photo{FilePath: jpg, FaceProcessStatus: model.FaceProcessStatusReady}
+
+	faces := []model.PeopleDetectionFace{
+		{BBox: model.BoundingBox{X: 0.2, Y: 0.2, Width: 0.25, Height: 0.25}, Confidence: 0.9},
+	}
+	got := svc.filterDetectionsByIndependentVerification(photo, faces)
+	require.Len(t, got, 1, "uncertain 候选应保留")
+	assert.Equal(t, "uncertain", got[0].VerifierStatus)
+}
+
+// TestFilterDetectionsByIndependentVerification_VerifierErrorFailOpen 验证器调用失败 → fail-open 保留全部。
+func TestFilterDetectionsByIndependentVerification_VerifierErrorFailOpen(t *testing.T) {
+	dir := t.TempDir()
+	jpg := filepath.Join(dir, "p.jpg")
+	writePlainJPEGFile(t, jpg, 200, 200)
+
+	client := &fakePeopleMLClient{verifyErr: fmt.Errorf("ml down")}
+	svc, _ := newPeopleServiceForTest(t, client)
+	photo := &model.Photo{FilePath: jpg, FaceProcessStatus: model.FaceProcessStatusReady}
+
+	faces := []model.PeopleDetectionFace{
+		{BBox: model.BoundingBox{X: 0.2, Y: 0.2, Width: 0.25, Height: 0.25}, Confidence: 0.9},
+	}
+	got := svc.filterDetectionsByIndependentVerification(photo, faces)
+	require.Len(t, got, 1, "验证器故障应 fail-open 不丢脸")
+}
+
+// TestPeopleService_RealtimeNoFaceNotPersisted v2 严格准入：独立验证 no_face 的候选不落库、不聚类。
+func TestPeopleService_RealtimeNoFaceNotPersisted(t *testing.T) {
+	rootDir := t.TempDir()
+	photoPath := createTestImageFile(t, rootDir, "admit.jpg")
+
+	// 主检测返回两张脸；独立验证：第一张 no_face（剔除），第二张 face（保留）。
+	client := &fakePeopleMLClient{
+		responses: map[string]*mlclient.DetectFacesResponse{
+			photoPath: {
+				Faces: []mlclient.DetectedFace{
+					{BBox: mlclient.BoundingBox{X: 0.1, Y: 0.1, Width: 0.2, Height: 0.2}, Confidence: 0.9, QualityScore: 0.8, Embedding: []float32{1, 0}},
+					{BBox: mlclient.BoundingBox{X: 0.5, Y: 0.5, Width: 0.2, Height: 0.2}, Confidence: 0.9, QualityScore: 0.8, Embedding: []float32{0, 1}},
+				},
+			},
+		},
+		verifyStatus: []string{"no_face", "face"},
+	}
+	svc, db := newPeopleServiceForTest(t, client)
+	svc.config.Photos.ThumbnailPath = filepath.Join(rootDir, ".thumbnails")
+
+	photoRepo := repository.NewPhotoRepository(db)
+	faceRepo := repository.NewFaceRepository(db)
+	jobRepo := repository.NewPeopleJobRepository(db)
+
+	photo := &model.Photo{FilePath: photoPath, FileName: "admit.jpg", FileSize: 1, FileHash: "admit-noface", Width: 100, Height: 100, Status: model.PhotoStatusActive, AIAnalyzed: true, MainCategory: "人物"}
+	require.NoError(t, photoRepo.Create(photo))
+
+	job := &model.PeopleJob{PhotoID: photo.ID, FilePath: photo.FilePath, Status: model.PeopleJobStatusQueued, Source: model.PeopleJobSourceScan, Priority: 10, QueuedAt: time.Now()}
+	require.NoError(t, jobRepo.Create(job))
+
+	require.NoError(t, svc.processJob(job))
+
+	faces, err := faceRepo.ListByPhotoID(photo.ID)
+	require.NoError(t, err)
+	require.Len(t, faces, 1, "no_face 候选不应落库，只保留 face 候选")
+	// 保留的是第二张（bbox 0.5,0.5）。
+	assert.InDelta(t, 0.5, faces[0].BBoxX, 1e-9)
 }

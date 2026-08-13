@@ -44,6 +44,10 @@ type PeopleDetectionFace struct {
 	Embedding    []float32   `json:"embedding"`
 	// 质检证据（远程 worker 结果可能不含；nil 时后端走兼容路径，标记可重试而非 non_face）。
 	Evidence *FaceQualityEvidence `json:"evidence,omitempty"`
+	// VerifierStatus 后端 v2 独立验证器结果（face/no_face/uncertain/error）。
+	// 由 filterDetectionsByIndependentVerification 填充；远程 worker 不填。
+	// no_face 的候选已被剔除；uncertain/error 的候选保留但须写 review_required 而非进聚类。
+	VerifierStatus string `json:"-"`
 }
 
 // BoundingBox 人脸边界框

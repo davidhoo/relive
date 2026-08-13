@@ -222,3 +222,92 @@ func TestFaceQualityRescoreRepo_EligibleCalibration(t *testing.T) {
 	_, err = repo.GetEligibleCalibration(999)
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
+
+func TestFaceQualityRescoreRepo_ListV2SnapshotTargets(t *testing.T) {
+	db := newRescoreRepoTestDB(t)
+	repo := NewFaceQualityRescoreRepository(db)
+
+	// Face A: photo 1, 无任何当前事件 → 进入 v2 快照。
+	// Face B: photo 2, 当前 source=manual 事件 → 跳过（人工结论优先）。
+	// Face C: photo 3, 当前 independent_v2 事件 → 跳过（已复核）。
+	// Face D: photo 4, 当前 legacy_v1 auto 事件 → 进入快照（旧自动结论无人工，需 v2 复核）。
+	// Face E: photo 5, 无事件但已 excluded（cluster_status=excluded, auto）→ 仍进入快照。
+	faces := []*model.Face{
+		{ID: 1001, PhotoID: 1, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusPending},
+		{ID: 1002, PhotoID: 2, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusAssigned},
+		{ID: 1003, PhotoID: 3, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusAssigned},
+		{ID: 1004, PhotoID: 4, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusAssigned},
+		{ID: 1005, PhotoID: 5, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusExcluded, ExclusionReason: model.ExclusionReasonLowQuality},
+	}
+	for _, f := range faces {
+		require.NoError(t, db.Create(f).Error)
+	}
+
+	// Face B: manual 当前事件。
+	manualEvt := &model.FaceQualityEvent{
+		PhotoID: 2, FaceID: uintPtr(1002),
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionAccepted,
+		Source:   model.FaceQualitySourceManual, RuleVersion: "v1", ModelVersion: "test-v1",
+		EvidencePipeline: model.FaceQualityEvidencePipelineLegacyV1,
+		IsCurrent:        true,
+	}
+	require.NoError(t, db.Create(manualEvt).Error)
+
+	// Face C: independent_v2 当前事件。
+	v2Evt := &model.FaceQualityEvent{
+		PhotoID: 3, FaceID: uintPtr(1003),
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionAccepted,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: "face_quality_v2", ModelVersion: "yunet-v1",
+		EvidencePipeline: model.FaceQualityEvidencePipelineIndependentV2,
+		IsCurrent:        true,
+	}
+	require.NoError(t, db.Create(v2Evt).Error)
+
+	// Face D: legacy_v1 auto 当前事件（旧自动结论，无人工覆盖）。
+	legacyEvt := &model.FaceQualityEvent{
+		PhotoID: 4, FaceID: uintPtr(1004),
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionLowQuality,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "test-v1",
+		EvidencePipeline: model.FaceQualityEvidencePipelineLegacyV1,
+		IsCurrent:        true,
+	}
+	require.NoError(t, db.Create(legacyEvt).Error)
+
+	targets, err := repo.ListV2SnapshotTargets(0)
+	require.NoError(t, err)
+
+	// 期望：Face A(1001), Face D(1004), Face E(1005)。Face B/C 被排除。
+	gotFaceIDs := make(map[uint]bool)
+	for _, tg := range targets {
+		gotFaceIDs[tg.FaceID] = true
+	}
+	assert.True(t, gotFaceIDs[1001], "Face A 应进入 v2 快照")
+	assert.True(t, gotFaceIDs[1004], "Face D（旧自动结论）应进入 v2 快照")
+	assert.True(t, gotFaceIDs[1005], "Face E（已 excluded 无人工）应进入 v2 快照")
+	assert.False(t, gotFaceIDs[1002], "Face B（manual）应跳过")
+	assert.False(t, gotFaceIDs[1003], "Face C（已 independent_v2）应跳过")
+
+	// Face D 的 baseline 应指向其当前事件 ID。
+	for _, tg := range targets {
+		if tg.FaceID == 1004 {
+			assert.Equal(t, legacyEvt.ID, tg.BaselineEventID, "Face D baseline 应为当前事件 ID")
+		}
+		if tg.FaceID == 1001 {
+			assert.Equal(t, uint(0), tg.BaselineEventID, "Face A 无当前事件，baseline=0")
+		}
+	}
+
+	// photoLimit 截断：按 photo_id 升序取前 1 张照片 → 仅 photo 1 的 Face A(1001)。
+	limited, err := repo.ListV2SnapshotTargets(1)
+	require.NoError(t, err)
+	limitedIDs := make(map[uint]bool)
+	for _, tg := range limited {
+		limitedIDs[tg.FaceID] = true
+	}
+	assert.True(t, limitedIDs[1001])
+	assert.Len(t, limited, 1, "限 1 张照片应只命中 photo 1 的 Face A")
+}
+

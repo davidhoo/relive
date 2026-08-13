@@ -178,9 +178,9 @@ func (b *FaceQualityBackfill) runOnce() (bool, error) {
 			ReasonCodes:  reasonCodesCSV(reasonCodes),
 			IsCurrent:    true,
 		}
-		// 存量审计事件一律标 historical_backfill。证据状态由是否构造出可解析 evidence 决定：
-		// 有证据快照 → available；无证据快照 → missing（交“历史待补证据”队列，不混入人工审核）。
+		// 存量审计事件一律标 historical_backfill + legacy_v1（v1 同源证据快照回放）。
 		evt.EvidenceOrigin = model.FaceQualityEvidenceOriginHistoricalBackfill
+		evt.EvidencePipeline = model.FaceQualityEvidencePipelineLegacyV1
 		// 若 Face 上有证据快照，尝试构造证据 JSON。
 		if face.FaceValidityScore > 0 || face.QualityReasonsCSV != "" {
 			ev := &model.FaceQualityEvidence{

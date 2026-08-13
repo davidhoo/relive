@@ -1211,6 +1211,8 @@ func rescoreRunResponse(r *model.FaceQualityRescoreRun) model.FaceQualityRescore
 		PhotoLimit:            r.PhotoLimit,
 		RetryOfRunID:          r.RetryOfRunID,
 		CalibrationRunID:      r.CalibrationRunID,
+		PipelineVersion:       r.PipelineVersion,
+		TargetScope:           r.TargetScope,
 		EligibleForEnforce:    false, // 由调用方按服务端判定填充，默认 false
 		CreatedAt:             r.CreatedAt,
 		UpdatedAt:             r.UpdatedAt,
@@ -1243,7 +1245,12 @@ func (h *PeopleHandler) CreateFaceQualityRescoreRun(c *gin.Context) {
 	if req.CalibrationRunID != nil {
 		calibrationRunID = *req.CalibrationRunID
 	}
-	run, err := h.faceQualityRescore.CreateRun(req.Mode, model.FaceQualityRescoreApplyModeEnforce, req.PhotoLimit, calibrationRunID)
+	// 证据管线：未填默认 independent_v2（本任务主链路）；显式 legacy_v1 仍可用以复跑 v1 历史链路。
+	pipelineVersion := req.PipelineVersion
+	if pipelineVersion == "" {
+		pipelineVersion = model.FaceQualityRescorePipelineIndependentV2
+	}
+	run, err := h.faceQualityRescore.CreateRun(req.Mode, model.FaceQualityRescoreApplyModeEnforce, req.PhotoLimit, calibrationRunID, pipelineVersion)
 	if err != nil {
 		writeRescoreRunError(c, err)
 		return
@@ -1404,6 +1411,8 @@ func writeRescoreRunError(c *gin.Context, err error) {
 		writePeopleError(c, http.StatusConflict, "RESCORE_RETRY_SOURCE_INVALID", err.Error())
 	case errors.Is(err, service.ErrRescoreRunNotFound), errors.Is(err, gorm.ErrRecordNotFound):
 		writePeopleError(c, http.StatusNotFound, "RESCORE_NOT_FOUND", err.Error())
+	case errors.Is(err, service.ErrRescoreRestoreLegacyV1NotAllowed):
+		writePeopleError(c, http.StatusConflict, "RESCORE_RESTORE_LEGACY_V1_NOT_ALLOWED", err.Error())
 	default:
 		if strings.Contains(strings.ToLower(err.Error()), "not found") {
 			writePeopleError(c, http.StatusNotFound, "RESCORE_NOT_FOUND", err.Error())

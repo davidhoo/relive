@@ -588,3 +588,87 @@ func TestFaceQualityState_Partitioning(t *testing.T) {
 	require.Len(t, page.Items, 1)
 	assert.Equal(t, e.ID, page.Items[0].EventID)
 }
+
+// TestListReviews_V2EvidencePopulated independent_v2 事件：buildReviewItem 解析 evidence_v2 + suggested_decision。
+func TestListReviews_V2EvidencePopulated(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, nil)
+	photo := &model.Photo{FilePath: "/t/p.jpg", FaceProcessStatus: model.FaceProcessStatusReady}
+	require.NoError(t, db.Create(photo).Error)
+	face := &model.Face{PhotoID: photo.ID, BBoxX: 0.25, BBoxY: 0.25, BBoxWidth: 0.25, BBoxHeight: 0.25, ClusterStatus: model.FaceClusterStatusPending}
+	require.NoError(t, db.Create(face).Error)
+
+	ev2 := model.FaceQualityEvidenceV2{
+		EvidenceSchemaVersion: "independent_v2",
+		PrimaryDetectorScore:  0.3,
+		VerificationStatus:    "no_face",
+		VerifierScore:         0.12,
+		VerifierName:          "yunet",
+		VerifierVersion:       "opencv-yunet-2023mar",
+		OriginalWidth:         4032,
+		OriginalHeight:        3024,
+		FaceBoxWidthPx:        55,
+		FaceBoxHeightPx:       63,
+		ContextCropWidthPx:    165,
+		ContextCropHeightPx:   189,
+		ContextExpandRatio:    1.0,
+		SuggestedDecision:     model.FaceQualityDecisionNonFace,
+		RuleVersion:           model.FaceQualityRescoreRuleVersionV2,
+		ModelVersion:          "opencv-yunet-2023mar",
+	}
+	ev2JSON, _ := json.Marshal(ev2)
+	evt := &model.FaceQualityEvent{
+		PhotoID: photo.ID, FaceID: &face.ID,
+		BBoxX: 0.25, BBoxY: 0.25, BBoxWidth: 0.25, BBoxHeight: 0.25,
+		Decision: model.FaceQualityDecisionReviewRequired,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: model.FaceQualityRescoreRuleVersionV2, ModelVersion: "opencv-yunet-2023mar",
+		EvidenceJSON:     string(ev2JSON),
+		EvidenceOrigin:   model.FaceQualityEvidenceOriginHistoricalRescore,
+		EvidenceState:    model.FaceQualityEvidenceStateAvailable,
+		EvidencePipeline: model.FaceQualityEvidencePipelineIndependentV2,
+		IsCurrent:        true,
+	}
+	require.NoError(t, db.Create(evt).Error)
+
+	fqs := NewFaceQualityService(svc)
+	page, err := fqs.ListReviews(model.FaceQualityReviewQuery{State: "pending_review", Page: 1, PageSize: 24})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	item := page.Items[0]
+	assert.Equal(t, model.FaceQualityEvidencePipelineIndependentV2, item.EvidencePipeline)
+	require.NotNil(t, item.EvidenceV2)
+	assert.Equal(t, "no_face", item.EvidenceV2.VerificationStatus)
+	assert.Equal(t, 55, item.EvidenceV2.FaceBoxWidthPx)
+	assert.Equal(t, 4032, item.EvidenceV2.OriginalWidth)
+	assert.Equal(t, model.FaceQualityDecisionNonFace, item.SuggestedDecision)
+}
+
+// TestListReviews_LegacyV1DoesNotPopulateV2 legacy_v1 事件：EvidenceV2 留 nil，不得把旧字段映射成 v2。
+func TestListReviews_LegacyV1DoesNotPopulateV2(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, nil)
+	photo := &model.Photo{FilePath: "/t/p.jpg", FaceProcessStatus: model.FaceProcessStatusReady}
+	require.NoError(t, db.Create(photo).Error)
+	face := &model.Face{PhotoID: photo.ID, BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusPending}
+	require.NoError(t, db.Create(face).Error)
+
+	evt := &model.FaceQualityEvent{
+		PhotoID: photo.ID, FaceID: &face.ID,
+		BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionReviewRequired,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "test-v1",
+		EvidenceJSON:     `{"face_validity_score":0.82,"pixel_width":14}`,
+		EvidenceOrigin:   model.FaceQualityEvidenceOriginHistoricalRescore,
+		EvidenceState:    model.FaceQualityEvidenceStateAvailable,
+		EvidencePipeline: model.FaceQualityEvidencePipelineLegacyV1,
+		IsCurrent:        true,
+	}
+	require.NoError(t, db.Create(evt).Error)
+
+	fqs := NewFaceQualityService(svc)
+	page, err := fqs.ListReviews(model.FaceQualityReviewQuery{State: "pending_review", Page: 1, PageSize: 24})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	item := page.Items[0]
+	assert.Equal(t, model.FaceQualityEvidencePipelineLegacyV1, item.EvidencePipeline)
+	assert.Nil(t, item.EvidenceV2, "legacy_v1 不得映射成 v2 证据")
+	assert.Empty(t, item.SuggestedDecision)
+}

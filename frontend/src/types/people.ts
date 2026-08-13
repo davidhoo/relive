@@ -135,6 +135,32 @@ export interface FaceQualityReasonStats {
   count: number
 }
 
+export interface FaceQualityEvidenceV2 {
+  evidence_schema_version: string
+  primary_detector_score: number
+  verification_status: 'face' | 'no_face' | 'uncertain' | 'error' | string
+  verifier_score: number
+  verifier_name: string
+  verifier_version: string
+  original_width: number
+  original_height: number
+  face_box_width_px: number
+  face_box_height_px: number
+  context_crop_width_px: number
+  context_crop_height_px: number
+  context_expand_ratio: number
+  sharpness_norm?: number
+  brightness_norm?: number
+  contrast_norm?: number
+  occluded?: boolean
+  quality_domain?: string
+  quality_version?: string
+  reason_codes?: string[]
+  suggested_decision?: string
+  rule_version: string
+  model_version: string
+}
+
 export interface FaceQualityReviewItem {
   event_id: number
   photo_id: number
@@ -164,6 +190,12 @@ export interface FaceQualityReviewItem {
   evidence_origin?: string
   evidence_state?: string
   rescore_run_id?: number
+  // 证据管线：legacy_v1 / independent_v2。
+  evidence_pipeline?: 'legacy_v1' | 'independent_v2' | string
+  // v2 独立复核结构化证据（仅 evidence_pipeline=independent_v2 时存在）。
+  evidence_v2?: FaceQualityEvidenceV2
+  // shadow 校准的系统建议决策（non_face/low_quality）。
+  suggested_decision?: string
   // 仅当 evidence_json 非空且可解析为质检证据时为 true。
   // 区分“模型真实评分（含 0 分）”与“历史回填无证据样本”。缺失字段按 false 处理。
   quality_evidence_available: boolean
@@ -232,6 +264,10 @@ export interface FaceQualityRescoreRun {
   photo_limit: number
   retry_of_run_id?: number
   calibration_run_id?: number
+  // 证据管线：legacy_v1 / independent_v2。v1 run 不可作为 v2 enforce 校准。
+  pipeline_version?: 'legacy_v1' | 'independent_v2' | string
+  // 目标快照范围语义。
+  target_scope?: string
   eligible_for_enforce: boolean
   created_at: string
   updated_at: string
@@ -242,6 +278,8 @@ export interface FaceQualityRescoreRunCreateRequest {
   photo_limit?: number
   // mode=full 时必填，指向服务端验证通过的合格校准 run。
   calibration_run_id?: number
+  // 证据管线：未填默认 independent_v2（本任务主链路）。
+  pipeline_version?: 'legacy_v1' | 'independent_v2' | string
 }
 
 export interface PersonMergeSuggestionTask {

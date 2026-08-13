@@ -32,7 +32,7 @@ type controllableRescoreService struct {
 	eligibleForEnforce   map[uint]bool
 }
 
-func (s *controllableRescoreService) CreateRun(mode, applyMode string, photoLimit int, calibrationRunID uint) (*model.FaceQualityRescoreRun, error) {
+func (s *controllableRescoreService) CreateRun(mode, applyMode string, photoLimit int, calibrationRunID uint, pipelineVersion string) (*model.FaceQualityRescoreRun, error) {
 	return s.createRunRun, s.createRunErr
 }
 func (s *controllableRescoreService) GetRun(id uint) (*model.FaceQualityRescoreRun, error) {

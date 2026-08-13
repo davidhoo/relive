@@ -96,6 +96,67 @@ type ScoreKnownFacesResponse struct {
 	ModelVersion string                 `json:"model_version,omitempty"`
 }
 
+// ---- v2 独立复核（verify-known-face-crops）----
+// 仅供后端历史复核 worker 内部调用，不暴露给浏览器。
+// 请求按 Face 传输「以人脸框为中心、四周各扩展 100%」的上下文裁剪 Base64、face_id、
+// 原图人脸框宽高与主检测分。ML 端用独立验证器（YuNet）判定，并在原图人脸框上计算质量特征。
+
+// VerifyKnownFaceCropTarget 单个 v2 复核目标。
+type VerifyKnownFaceCropTarget struct {
+	FaceID              uint   `json:"face_id"`
+	ContextCropBase64   string `json:"context_crop_base64"` // 上下文裁剪 JPEG Base64
+	FaceBoxWidthPx      int    `json:"face_box_width_px"`   // 原图人脸框实际宽
+	FaceBoxHeightPx     int    `json:"face_box_height_px"`  // 原图人脸框实际高
+	// FaceBoxOffsetX/Y 人脸框左上角在上下文裁剪中的像素偏移。
+	// ML 端用此精确定位人脸框区域计算原图质量指标，不得用裁剪中心近似。
+	FaceBoxOffsetX       int    `json:"face_box_offset_x"`
+	FaceBoxOffsetY       int    `json:"face_box_offset_y"`
+	PrimaryDetectorScore float64 `json:"primary_detector_score"` // 主检测置信度
+}
+
+// VerifyKnownFaceCropsRequest v2 独立复核请求：一组目标裁剪。
+type VerifyKnownFaceCropsRequest struct {
+	Targets []VerifyKnownFaceCropTarget `json:"targets"`
+}
+
+// V2QualityFeatures 原图人脸框质量特征（统一到固定短边归一化后计算）。
+type V2QualityFeatures struct {
+	SharpnessNorm  float64 `json:"sharpness_norm"`
+	BrightnessNorm float64 `json:"brightness_norm"`
+	ContrastNorm   float64 `json:"contrast_norm"`
+	Occluded       bool    `json:"occluded"`
+	QualityDomain  string  `json:"quality_domain"`
+	QualityVersion string  `json:"quality_version"`
+}
+
+// VerifyKnownFaceCropResult 单个目标的 v2 复核结果，按请求 target 顺序返回。
+// VerificationStatus: face / no_face / uncertain / error。
+type VerifyKnownFaceCropResult struct {
+	FaceID               uint               `json:"face_id"`
+	VerificationStatus   string             `json:"verification_status"`
+	VerifierScore        float64            `json:"verifier_score"`
+	VerifierName         string             `json:"verifier_name"`
+	VerifierVersion      string             `json:"verifier_version"`
+	OriginalWidth        int                `json:"original_width"`
+	OriginalHeight       int                `json:"original_height"`
+	FaceBoxWidthPx       int                `json:"face_box_width_px"`
+	FaceBoxHeightPx      int                `json:"face_box_height_px"`
+	ContextCropWidthPx   int                `json:"context_crop_width_px"`
+	ContextCropHeightPx  int                `json:"context_crop_height_px"`
+	ContextExpandRatio   float64            `json:"context_expand_ratio"`
+	PrimaryDetectorScore float64            `json:"primary_detector_score"`
+	Quality              *V2QualityFeatures `json:"quality,omitempty"`
+	ReasonCodes          []string           `json:"reason_codes,omitempty"`
+	EvidenceSchemaVersion string            `json:"evidence_schema_version"`
+}
+
+// VerifyKnownFaceCropsResponse v2 独立复核响应，按 face_id 一一对应。
+type VerifyKnownFaceCropsResponse struct {
+	Results      []VerifyKnownFaceCropResult `json:"results"`
+	RuleVersion  string                      `json:"rule_version,omitempty"`
+	ModelVersion string                      `json:"model_version,omitempty"`
+}
+
 func New(baseURL string, timeout time.Duration) *Client {
 	if timeout <= 0 {
 		timeout = 15 * time.Second
@@ -167,6 +228,41 @@ func (c *Client) ScoreKnownFaces(ctx context.Context, request ScoreKnownFacesReq
 	var result ScoreKnownFacesResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode score known faces response: %w", err)
+	}
+
+	return &result, nil
+}
+
+// VerifyKnownFaceCrops 调用 ML 服务的 v2 独立复核接口。
+// 仅用于历史复核 worker：传入每个 Face 的上下文裁剪 Base64、原图人脸框宽高与主检测分，
+// ML 端用独立验证器（YuNet）判定 face/no_face/uncertain/error，并在原图人脸框上计算质量特征。
+// 任何单条 target 的错误只影响对应 result，不使整批失败（HTTP 层仍校验 2xx）。
+// 不得把 error/uncertain 当作 non_face——这些只能进入可重试/待人工审核状态。
+func (c *Client) VerifyKnownFaceCrops(ctx context.Context, request VerifyKnownFaceCropsRequest) (*VerifyKnownFaceCropsResponse, error) {
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return nil, fmt.Errorf("marshal verify known face crops request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/v1/verify-known-face-crops", bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("build verify known face crops request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("call verify known face crops: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("verify known face crops returned status %d", resp.StatusCode)
+	}
+
+	var result VerifyKnownFaceCropsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode verify known face crops response: %w", err)
 	}
 
 	return &result, nil

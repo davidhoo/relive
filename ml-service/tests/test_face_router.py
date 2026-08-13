@@ -215,3 +215,33 @@ def test_score_known_faces_rejects_empty_base64():
     )
 
     assert response.status_code == 422
+
+
+def test_verify_known_face_crops_endpoint_shape():
+    """v2 接口保序返回，单条错误只影响对应 item。
+
+    无真实 YuNet 模型时 verifier.available=False → 所有目标 error（不退回 v1）。
+    """
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v1/verify-known-face-crops",
+        json={
+            "targets": [
+                {"face_id": 1, "context_crop_base64": _blank_image_base64(), "face_box_width_px": 50, "face_box_height_px": 50, "primary_detector_score": 0.4},
+                {"face_id": 2, "context_crop_base64": _blank_image_base64(), "face_box_width_px": 50, "face_box_height_px": 50, "primary_detector_score": 0.4},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "results" in payload
+    assert len(payload["results"]) == 2
+    assert payload["results"][0]["face_id"] == 1
+    assert payload["results"][1]["face_id"] == 2
+    # evidence_schema_version 固定 independent_v2。
+    assert payload["results"][0]["evidence_schema_version"] == "independent_v2"
+    # 模型缺失 → error，不伪装判定。
+    assert payload["results"][0]["verification_status"] == "error"
+    assert "rule_version" in payload

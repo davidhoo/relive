@@ -38,6 +38,9 @@ type PeopleWorkerConfig struct {
 type MLConfig struct {
 	Endpoint string `yaml:"endpoint"` // ML 服务端地址
 	Timeout  int    `yaml:"timeout"`  // 请求超时（秒）
+	// FaceDetectionMinConfidence 人脸检测准入线，与后端 people.face_detection_min_confidence 对齐。
+	// 初始 0.65：低于此值的检测不持久化为 Face（v2 严格准入）。
+	FaceDetectionMinConfidence float64 `yaml:"face_detection_min_confidence"`
 }
 
 // DownloadConfig 下载配置
@@ -70,8 +73,9 @@ func DefaultConfig() *Config {
 			RetryDelay: 5,
 		},
 		ML: MLConfig{
-			Endpoint: "http://localhost:5050",
-			Timeout:  15,
+			Endpoint:                   "http://localhost:5050",
+			Timeout:                    15,
+			FaceDetectionMinConfidence: 0.65,
 		},
 		Download: DownloadConfig{
 			TempDir:       "~/.relive-people-worker/temp",
@@ -172,7 +176,20 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("ml.endpoint is required")
 	}
 
+	// v2 准入线范围校验（0/未设置时回退默认 0.65）。
+	if c.ML.FaceDetectionMinConfidence < 0 || c.ML.FaceDetectionMinConfidence > 1 {
+		return fmt.Errorf("ml.face_detection_min_confidence must be between 0 and 1")
+	}
+
 	return nil
+}
+
+// GetFaceDetectionMinConfidence 返回人脸检测准入线，未配置时回退 0.65（与后端一致）。
+func (c *Config) GetFaceDetectionMinConfidence() float64 {
+	if c.ML.FaceDetectionMinConfidence > 0 {
+		return c.ML.FaceDetectionMinConfidence
+	}
+	return 0.65
 }
 
 // GetServerTimeout 获取服务端超时

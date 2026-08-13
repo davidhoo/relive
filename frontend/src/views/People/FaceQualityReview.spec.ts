@@ -118,6 +118,10 @@ const stubs = {
   'el-select-v2': { template: '<div/>' },
   'el-input-number': { template: '<div class="el-input-number"/>' },
   'el-input': { template: '<input class="el-input"/>' },
+  'el-alert': {
+    props: ['title', 'description', 'type'],
+    template: '<div class="el-alert"><span class="el-alert__title">{{ title }}</span><span class="el-alert__description">{{ description }}</span><slot/></div>',
+  },
   'el-image': {
     name: 'ElImage',
     props: ['src', 'fit', 'previewSrcList'],
@@ -529,6 +533,96 @@ describe('FaceQualityReview.vue - Task 6 改造', () => {
     expect(cards[0]!.text()).toContain('有效性未采集')
     expect(cards[0]!.text()).not.toContain('0%')
     expect(cards[1]!.text()).toContain('0% 有效')
+    wrapper.unmount()
+  })
+})
+
+// ---- v2 独立复核与 legacy_v1 证据展示 ----
+
+const v2Item = (over: Partial<FaceQualityReviewItem> = {}): FaceQualityReviewItem => baseItem({
+  event_id: 500,
+  evidence_pipeline: 'independent_v2',
+  quality_evidence_available: true,
+  evidence_v2: {
+    evidence_schema_version: 'independent_v2',
+    primary_detector_score: 0.3,
+    verification_status: 'no_face',
+    verifier_score: 0.12,
+    verifier_name: 'yunet',
+    verifier_version: 'opencv-yunet-2023mar',
+    original_width: 4032,
+    original_height: 3024,
+    face_box_width_px: 55,
+    face_box_height_px: 63,
+    context_crop_width_px: 165,
+    context_crop_height_px: 189,
+    context_expand_ratio: 1.0,
+    sharpness_norm: 42.5,
+    brightness_norm: 128.0,
+    contrast_norm: 30.2,
+    occluded: false,
+    quality_domain: 'original_face_box_norm_to_96',
+    quality_version: 'v1',
+    reason_codes: ['detector_verifier_disagreement'],
+    rule_version: 'face_quality_v2',
+    model_version: 'opencv-yunet-2023mar',
+  },
+  suggested_decision: 'non_face',
+  ...over,
+})
+
+describe('FaceQualityReview.vue - v2 证据展示', () => {
+  it('independent_v2 卡片显示 v2 标识而非有效性百分比', async () => {
+    mocks.mockListFaceQualityReviews.mockResolvedValue(page([v2Item()]))
+    const wrapper = mountReview()
+    await flushPromises()
+    const card = wrapper.find('.face-card')
+    expect(card.text()).toContain('v2 独立复核')
+    expect(card.text()).not.toContain('% 有效')
+    wrapper.unmount()
+  })
+
+  it('详情展示四组 v2 证据，不压成单一有效性', async () => {
+    mocks.mockListFaceQualityReviews.mockResolvedValue(page([v2Item()]))
+    const wrapper = mountReview()
+    await flushPromises()
+    await wrapper.find('.face-card').trigger('click')
+    await flushPromises()
+    const detail = wrapper.find('.detail-content')
+    expect(detail.exists()).toBe(true)
+    const v2 = wrapper.find('.v2-evidence')
+    expect(v2.exists()).toBe(true)
+    const text = v2.text()
+    // 主检测分
+    expect(text).toContain('主检测分')
+    // 独立复核结果 + 模型版本
+    expect(text).toContain('未检测到脸')
+    expect(text).toContain('yunet')
+    // 原图人脸框尺寸（55×63，不是压缩的 14×16）
+    expect(text).toContain('55 × 63 px')
+    expect(text).toContain('4032 × 3024')
+    // 上下文裁剪尺寸
+    expect(text).toContain('165 × 189 px')
+    // 质量特征：清晰度/亮度/遮挡
+    expect(text).toContain('清晰度')
+    expect(text).toContain('亮度')
+    expect(text).toContain('遮挡')
+    // 系统建议
+    expect(text).toContain('系统建议')
+    wrapper.unmount()
+  })
+
+  it('legacy_v1 详情显示旧版同源指标追溯提示', async () => {
+    mocks.mockListFaceQualityReviews.mockResolvedValue(page([baseItem({ event_id: 600, evidence_pipeline: 'legacy_v1' })]))
+    const wrapper = mountReview()
+    await flushPromises()
+    await wrapper.find('.face-card').trigger('click')
+    await flushPromises()
+    const alert = wrapper.find('.legacy-alert')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('旧版同源指标')
+    // legacy 不展示 v2 证据块
+    expect(wrapper.find('.v2-evidence').exists()).toBe(false)
     wrapper.unmount()
   })
 })

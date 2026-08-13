@@ -500,3 +500,46 @@ security:
 		t.Fatalf("db_locked_cooldown_seconds = %v, want 60", cfg.Background.DBLockedCooldownSeconds)
 	}
 }
+
+func TestPeopleV2ThresholdsDefaultsAndValidation(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	writeTestFile(t, configPath, `server:
+  port: 8080
+database:
+  type: "sqlite"
+photos:
+  root_path: "/tmp/photos"
+security:
+  jwt_Secret: "base-secret"
+`)
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	// 默认值。
+	if cfg.People.FaceDetectionMinConfidence != 0.65 {
+		t.Errorf("face_detection_min_confidence default = %v, want 0.65", cfg.People.FaceDetectionMinConfidence)
+	}
+	if cfg.People.FaceQualityV2MinOriginalShortEdge != 48 {
+		t.Errorf("face_quality_v2_min_original_short_edge default = %d, want 48", cfg.People.FaceQualityV2MinOriginalShortEdge)
+	}
+
+	// 越界拒绝。
+	bad := filepath.Join(dir, "bad.yaml")
+	writeTestFile(t, bad, `server:
+  port: 8080
+database:
+  type: "sqlite"
+photos:
+  root_path: "/tmp/photos"
+security:
+  jwt_Secret: "base-secret"
+people:
+  face_detection_min_confidence: 1.5
+`)
+	if _, err := Load(bad); err == nil {
+		t.Fatal("expected error for face_detection_min_confidence out of range")
+	}
+}

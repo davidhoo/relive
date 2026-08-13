@@ -213,3 +213,68 @@ func TestClientScoreKnownFacesNon2xx(t *testing.T) {
 		t.Fatal("expected error on 500")
 	}
 }
+
+func TestClientVerifyKnownFaceCropsBuildsRequest(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotRequest VerifyKnownFaceCropsRequest
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&gotRequest); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(VerifyKnownFaceCropsResponse{
+			Results: []VerifyKnownFaceCropResult{
+				{
+					FaceID:               7,
+					VerificationStatus:   "no_face",
+					VerifierScore:        0.12,
+					VerifierName:         "yunet",
+					VerifierVersion:      "opencv-yunet-2023mar",
+					PrimaryDetectorScore: 0.4,
+					FaceBoxWidthPx:       50,
+					FaceBoxHeightPx:      50,
+					EvidenceSchemaVersion: "independent_v2",
+					ReasonCodes:          []string{"input_too_small"},
+				},
+			},
+			RuleVersion:  "face_quality_v2",
+			ModelVersion: "opencv-yunet-2023mar",
+		})
+	}))
+	defer server.Close()
+
+	client := New(server.URL, 2*time.Second)
+	resp, err := client.VerifyKnownFaceCrops(context.Background(), VerifyKnownFaceCropsRequest{
+		Targets: []VerifyKnownFaceCropTarget{
+			{FaceID: 7, ContextCropBase64: "cropb64", FaceBoxWidthPx: 50, FaceBoxHeightPx: 50, PrimaryDetectorScore: 0.4},
+		},
+	})
+	if err != nil {
+		t.Fatalf("verify known face crops: %v", err)
+	}
+
+	if gotMethod != http.MethodPost {
+		t.Fatalf("expected POST, got %s", gotMethod)
+	}
+	if gotPath != "/api/v1/verify-known-face-crops" {
+		t.Fatalf("expected /api/v1/verify-known-face-crops, got %s", gotPath)
+	}
+	if len(gotRequest.Targets) != 1 || gotRequest.Targets[0].FaceID != 7 {
+		t.Fatalf("expected one target face_id=7, got %+v", gotRequest.Targets)
+	}
+	if gotRequest.Targets[0].ContextCropBase64 != "cropb64" {
+		t.Fatalf("expected context_crop_base64 forwarded, got %q", gotRequest.Targets[0].ContextCropBase64)
+	}
+
+	if len(resp.Results) != 1 {
+		t.Fatalf("expected one result, got %d", len(resp.Results))
+	}
+	if resp.Results[0].VerificationStatus != "no_face" {
+		t.Fatalf("expected no_face, got %s", resp.Results[0].VerificationStatus)
+	}
+	if resp.Results[0].EvidenceSchemaVersion != "independent_v2" {
+		t.Fatalf("expected evidence_schema_version=independent_v2, got %s", resp.Results[0].EvidenceSchemaVersion)
+	}
+}

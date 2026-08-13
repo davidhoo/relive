@@ -1,0 +1,11 @@
+# SHA256SUMS for YuNet v2 independent verifier assets.
+#
+# Format: <sha256>  <filename>
+# Docker 构建时复制 assets/yunet/ 并校验本文件；模型缺失或校验失败应使 ML health 降级，
+# 让历史 worker 写 technical_error，不可静默退回 v1 同源评分。
+#
+# 真实模型 face_detection_yunet_2023mar.onnx 由 NAS 侧放入本目录（不入 Git 二进制），
+# 其 SHA256 由操作者计算后填入下方。占位行确保校验逻辑在 CI 中可被测试（使用测试桩模型）。
+#
+# 示例（请替换为真实 digest）:
+# <64-hex-sha256>  face_detection_yunet_2023mar.onnx
