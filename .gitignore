@@ -98,5 +98,10 @@ docker-compose.prod.yml
 backup/
 *.bak
 
+# YuNet v2 verifier model binary — fetched by scripts/fetch-yunet-model.sh before
+# `docker compose build relive-ml`, never committed. SHA256SUMS + the fetch script
+# ARE tracked so the asset is reproducible and build-verified.
+ml-service/assets/yunet/*.onnx
+
 .worktrees/
 .claude/worktrees/

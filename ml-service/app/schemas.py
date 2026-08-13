@@ -84,7 +84,18 @@ class DetectFacesResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
+    """ML 服务健康状态。
+
+    对 v2 历史复核链路，健康只在 YuNet 验证器可用时为 ok（HTTP 200）；
+    验证器不可用（模型缺失/SHA 不匹配/加载失败）时为 degraded（HTTP 503），
+    令后端拒绝创建/恢复/重试 independent_v2 run，Docker healthcheck 标记 unhealthy。
+    legacy v1 同源评分不依赖 verifier，其行为不受本字段影响。
+    """
+
     status: str
+    verifier_available: bool
+    verifier_name: str
+    verifier_version: str
 
 
 # ---- 已知框重评分（score-known-faces）----

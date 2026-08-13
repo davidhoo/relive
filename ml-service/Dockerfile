@@ -17,12 +17,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 
-# v2 独立验证器（YuNet）资产：复制并校验 SHA256SUMS。
-# 模型缺失或校验失败不阻断构建（资产由 NAS 侧注入），但运行时 FaceVerifier.available=False，
-# 历史复核 worker 写 technical_error，绝不静默退回 v1 同源评分。
-# 注：任务书要求「Docker 构建时校验 SHA256SUMS」，但模型文件不入 Git、不在构建上下文，
-# 故构建时无法校验。降级为运行时 FaceVerifier.__init__ 校验（FaceVerifier.available 标志门控）。
+# v2 独立验证器（YuNet）资产：模型必须由 scripts/fetch-yunet-model.sh 在构建前取得并放入
+# 构建上下文（不入 Git）。这里 COPY 后立即校验 SHA256SUMS——模型缺失或摘要不匹配必须使
+# 镜像构建失败，绝不生成“容器健康但验证器不可用”的发布物。FaceVerifier 运行时再校验一次，
+# 防御镜像层损坏。不得用 docker cp / 运行时下载 / 未校验卷文件替代本步骤。
 COPY assets ./assets
+RUN test -s assets/yunet/face_detection_yunet_2023mar.onnx \
+    && cd assets/yunet && sha256sum -c SHA256SUMS
 
 EXPOSE 5050
 

@@ -8,13 +8,54 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 
-def test_health_endpoint():
+def test_health_endpoint(monkeypatch):
+    """验证器可用时 health 返回 200 + ok + verifier identity。"""
     client = TestClient(app)
+    from app.routers import faces
+
+    class _OKVerifier:
+        available = True
+        verifier_name = "yunet"
+        verifier_version = "opencv-yunet-2023mar"
+
+    monkeypatch.setattr(faces, "verifier", _OKVerifier())
 
     response = client.get("/api/v1/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    assert response.json() == {
+        "status": "ok",
+        "verifier_available": True,
+        "verifier_name": "yunet",
+        "verifier_version": "opencv-yunet-2023mar",
+    }
+
+
+def test_health_endpoint_degraded_when_verifier_unavailable(monkeypatch):
+    """验证器不可用时 health 返回 503 + degraded，绝不伪报 healthy。
+
+    复现 NAS 运行 #3 的根因：模型缺失时 FaceVerifier.available=False，health 必须降级，
+    使后端阻断 v2 run 创建/恢复、Docker healthcheck 标记 unhealthy。
+    """
+    client = TestClient(app)
+    from app.routers import faces
+
+    class _UnavailableVerifier:
+        available = False
+        verifier_name = "yunet"
+        verifier_version = "opencv-yunet-2023mar"
+
+    monkeypatch.setattr(faces, "verifier", _UnavailableVerifier())
+
+    response = client.get("/api/v1/health")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "degraded",
+        "verifier_available": False,
+        "verifier_name": "yunet",
+        "verifier_version": "opencv-yunet-2023mar",
+    }
 
 
 def test_detect_faces_endpoint_shape(tmp_path: Path):
