@@ -258,12 +258,17 @@ def test_score_known_faces_rejects_empty_base64():
     assert response.status_code == 422
 
 
-def test_verify_known_face_crops_endpoint_shape():
+def test_verify_known_face_crops_endpoint_shape(monkeypatch):
     """v2 接口保序返回，单条错误只影响对应 item。
 
-    无真实 YuNet 模型时 verifier.available=False → 所有目标 error（不退回 v1）。
+    验证器不可用（available=False）→ 所有目标 error（不退回 v1）。本测试强制注入
+    available=False，不依赖磁盘模型是否存在，保持与 health 降级测试同模式的确定性。
     """
     client = TestClient(app)
+    from app.routers import faces
+
+    # 无论构建前是否 fetch 过模型，强制不可用以验证 error 路径（verifier_unavailable）。
+    monkeypatch.setattr(faces.verifier, "available", False)
 
     response = client.post(
         "/api/v1/verify-known-face-crops",
@@ -283,6 +288,7 @@ def test_verify_known_face_crops_endpoint_shape():
     assert payload["results"][1]["face_id"] == 2
     # evidence_schema_version 固定 independent_v2。
     assert payload["results"][0]["evidence_schema_version"] == "independent_v2"
-    # 模型缺失 → error，不伪装判定。
+    # 验证器不可用 → error，不伪装判定。
     assert payload["results"][0]["verification_status"] == "error"
+    assert "verifier_unavailable" in payload["results"][0]["reason_codes"]
     assert "rule_version" in payload
