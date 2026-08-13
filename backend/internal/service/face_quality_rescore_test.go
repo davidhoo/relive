@@ -469,7 +469,7 @@ func TestRescore_ManualConclusionSupersedesItem(t *testing.T) {
 	require.NoError(t, db.Create(photo).Error)
 	face := &model.Face{
 		PhotoID: photo.ID,
-		BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		BBoxX:   0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2,
 		ClusterStatus: model.FaceClusterStatusPending,
 	}
 	require.NoError(t, db.Create(face).Error)
@@ -626,6 +626,121 @@ func TestRescore_PauseResumeResetProcessing(t *testing.T) {
 	assert.Equal(t, int64(1), pending)
 	processing, _ := repo.CountItemsByStatus(run.ID, model.FaceQualityRescoreItemStatusProcessing)
 	assert.Equal(t, int64(0), processing)
+}
+
+// setupTwoPhotoRescoreRun 建两张照片各 1 个 historical_backfill+missing 目标，创建 v1 calibration run。
+// 供并发暂停/取消竞态测试复用。
+func setupTwoPhotoRescoreRun(t *testing.T, rs *faceQualityRescoreService, svc *peopleService) *model.FaceQualityRescoreRun {
+	t.Helper()
+	db := svc.db
+	for i := 0; i < 2; i++ {
+		photo := &model.Photo{FilePath: filepath.Join("/t", fmt.Sprintf("p%d.jpg", i)), FaceProcessStatus: model.FaceProcessStatusReady}
+		require.NoError(t, db.Create(photo).Error)
+		face := &model.Face{PhotoID: photo.ID, BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusPending}
+		require.NoError(t, db.Create(face).Error)
+		require.NoError(t, db.Create(&model.FaceQualityEvent{
+			PhotoID: photo.ID, FaceID: &face.ID,
+			BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2,
+			Decision: model.FaceQualityDecisionReviewRequired,
+			Source:   model.FaceQualitySourceAuto, RuleVersion: "v1", ModelVersion: "test-v1",
+			EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalBackfill,
+			EvidenceState:  model.FaceQualityEvidenceStateMissing,
+			IsCurrent:      true,
+		}).Error)
+	}
+	run, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0, model.FaceQualityRescorePipelineLegacyV1)
+	require.NoError(t, err)
+	require.Equal(t, 2, run.TargetFaceCount)
+	return run
+}
+
+// TestRescore_PauseDuringInFlightBatch 复现并验证暂停竞态修复：worker 持有首批 item 为 processing
+// 期间并发暂停，首批完成到终态并触发 refreshRunCounts 后，paused 不得被覆盖回 running；
+// 暂停中的 run 不得再领取第二张照片的 pending item。
+func TestRescore_PauseDuringInFlightBatch(t *testing.T) {
+	block := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	client := &rescoreFakeMLClient{block: block, entered: entered}
+	rs, svc, repo := newRescoreTestSvc(t, client)
+	run := setupTwoPhotoRescoreRun(t, rs, svc)
+
+	// 启动首批处理：ClaimNextPhotoItemsWhenRunning 领取 photo1（processing），ML 阻塞。
+	done := make(chan struct{})
+	go func() {
+		rs.processOneBatch(run)
+		close(done)
+	}()
+
+	// 确定性等待 item 已被领取为 processing（ML 进入即说明 claim 已完成），再触发暂停。
+	<-entered
+	// 多核下 goroutine 可能恰好在 entered 发信号后；补一次 DB 断言巩固不变式。
+	require.Eventually(t, func() bool {
+		processing, _ := repo.CountItemsByStatus(run.ID, model.FaceQualityRescoreItemStatusProcessing)
+		return processing == 1
+	}, 2*time.Second, 5*time.Millisecond)
+
+	// 并发暂停：DB run 必须为 paused。
+	require.NoError(t, rs.Pause(run.ID))
+	latest, err := repo.GetRun(run.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.FaceQualityRescoreStatusPaused, latest.Status)
+
+	// 放行 ML，让首批完成到终态（unmatched）并触发 refreshRunCounts。
+	close(block)
+	<-done
+
+	// 首批完成后的进度刷新不得把 paused 改回 running。
+	latest, err = repo.GetRun(run.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.FaceQualityRescoreStatusPaused, latest.Status, "refreshRunCounts 不得覆盖 paused")
+
+	// 第二张照片仍 pending（未被领取）。
+	pending, _ := repo.CountItemsByStatus(run.ID, model.FaceQualityRescoreItemStatusPending)
+	assert.Equal(t, int64(1), pending, "暂停中的 run 不得领取下一批")
+
+	// 再次 processOneBatch：ClaimNextPhotoItemsWhenRunning 见 paused 返回空集，不领取。
+	rs.processOneBatch(run)
+	pending2, _ := repo.CountItemsByStatus(run.ID, model.FaceQualityRescoreItemStatusPending)
+	assert.Equal(t, int64(1), pending2, "暂停中的 run 不得领取下一批照片")
+}
+
+// TestRescore_CancelDuringInFlightBatch 取消竞态同构：批次完成后的进度刷新不得把 cancelled
+// 覆盖回 running；cancelled 的 run 不再领取 pending item。
+func TestRescore_CancelDuringInFlightBatch(t *testing.T) {
+	block := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	client := &rescoreFakeMLClient{block: block, entered: entered}
+	rs, svc, repo := newRescoreTestSvc(t, client)
+	run := setupTwoPhotoRescoreRun(t, rs, svc)
+
+	done := make(chan struct{})
+	go func() {
+		rs.processOneBatch(run)
+		close(done)
+	}()
+
+	<-entered
+	require.Eventually(t, func() bool {
+		processing, _ := repo.CountItemsByStatus(run.ID, model.FaceQualityRescoreItemStatusProcessing)
+		return processing == 1
+	}, 2*time.Second, 5*time.Millisecond)
+
+	require.NoError(t, rs.Cancel(run.ID))
+	latest, err := repo.GetRun(run.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.FaceQualityRescoreStatusCancelled, latest.Status)
+
+	close(block)
+	<-done
+
+	latest, err = repo.GetRun(run.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.FaceQualityRescoreStatusCancelled, latest.Status, "refreshRunCounts 不得覆盖 cancelled")
+
+	// cancelled 的 run 不得领取 pending item。
+	rs.processOneBatch(run)
+	pending, _ := repo.CountItemsByStatus(run.ID, model.FaceQualityRescoreItemStatusPending)
+	assert.Equal(t, int64(1), pending, "cancelled 的 run 不得领取 pending item")
 }
 
 // TestRescore_AllFailureRunIsCompletedWithErrors 全部 item retryable 的 run：
@@ -937,12 +1052,17 @@ func TestRescore_IsEligibleForEnforce(t *testing.T) {
 }
 
 // rescoreFakeMLClient 可控的 ScoreKnownFaces 桩：按 face_id 返回预设结果，或全部 unmatched。
+// block 非空时 ScoreKnownFaces 在返回前等待其关闭，用于复现 worker 持有首批 item 为 processing
+// 期间并发暂停/取消的竞态。entered 非空时进入 ScoreKnownFaces 即非阻塞发一笔信号，供测试
+// 确定性等待「item 已领取为 processing」后再触发暂停/取消，避免轮询竞态。
 type rescoreFakeMLClient struct {
 	resultsByFace       map[uint]mlclient.ScoreKnownFaceResult
 	verifyResultsByFace map[uint]mlclient.VerifyKnownFaceCropResult
 	unmatched           bool
 	err                 error
 	callCount           int
+	block               chan struct{}
+	entered             chan struct{}
 }
 
 func (c *rescoreFakeMLClient) DetectFaces(ctx context.Context, req mlclient.DetectFacesRequest) (*mlclient.DetectFacesResponse, error) {
@@ -953,6 +1073,17 @@ func (c *rescoreFakeMLClient) ScoreKnownFaces(ctx context.Context, req mlclient.
 	c.callCount++
 	if c.err != nil {
 		return nil, c.err
+	}
+	// 确定性同步：进入 ML 调用即通知测试（此时首批 item 必已领取为 processing）。
+	if c.entered != nil {
+		select {
+		case c.entered <- struct{}{}:
+		default:
+		}
+	}
+	// 阻塞直到测试放行：此时首批 item 已被领取为 processing，可并发触发 Pause/Cancel。
+	if c.block != nil {
+		<-c.block
 	}
 	results := make([]mlclient.ScoreKnownFaceResult, 0, len(req.Targets))
 	for _, t := range req.Targets {
@@ -984,13 +1115,13 @@ func (c *rescoreFakeMLClient) VerifyKnownFaceCrops(ctx context.Context, req mlcl
 		}
 		// 默认 no_face，供 v2 non_face 路径测试。
 		results = append(results, mlclient.VerifyKnownFaceCropResult{
-			FaceID:               t.FaceID,
-			VerificationStatus:   "no_face",
-			VerifierName:         "yunet",
-			VerifierVersion:      "opencv-yunet-2023mar",
-			PrimaryDetectorScore: t.PrimaryDetectorScore,
-			FaceBoxWidthPx:       t.FaceBoxWidthPx,
-			FaceBoxHeightPx:      t.FaceBoxHeightPx,
+			FaceID:                t.FaceID,
+			VerificationStatus:    "no_face",
+			VerifierName:          "yunet",
+			VerifierVersion:       "opencv-yunet-2023mar",
+			PrimaryDetectorScore:  t.PrimaryDetectorScore,
+			FaceBoxWidthPx:        t.FaceBoxWidthPx,
+			FaceBoxHeightPx:       t.FaceBoxHeightPx,
 			EvidenceSchemaVersion: "independent_v2",
 		})
 	}

@@ -60,6 +60,34 @@ func NewFaceQualityRescoreService(people *peopleService, repo repository.FaceQua
 	}
 }
 
+// transitionRunStatus 在 write gate 内调用 repo.TransitionRunStatus，返回是否命中。
+// executeWrite 可能因 SQLite 锁重试，ok 取最后一次尝试结果。
+func (s *faceQualityRescoreService) transitionRunStatus(runID uint, from []string, to string, completedAt *time.Time) (bool, error) {
+	var ok bool
+	err := s.people.executeWrite(func() error {
+		var tErr error
+		ok, tErr = s.repo.TransitionRunStatus(runID, from, to, completedAt)
+		return tErr
+	})
+	return ok, err
+}
+
+// ensureV2VerifierReady 在创建/恢复 v2 run 前校验 ML 验证器就绪。
+// 任务 §3 将实现基于 mlclient.Health 的真实门禁；当前为占位：
+// legacy_v1 永远放行，independent_v2 暂不阻断（Task 3 补齐后必须 200+verifier_available=true 才放行）。
+// 门禁必须在任何快照、item 重置或数据库写入之前发生，故置于 Resume/CreateRun 早期路径。
+func (s *faceQualityRescoreService) ensureV2VerifierReady(run *model.FaceQualityRescoreRun) error {
+	if run == nil {
+		return nil
+	}
+	if run.PipelineVersion != model.FaceQualityRescorePipelineIndependentV2 {
+		return nil
+	}
+	// TODO(task3): 调 s.people.client.Health(ctx)，仅 200+status=ok+verifier_available=true+identity=yunet/2023mar 放行，
+	// 否则返回 errV2VerifierUnavailable。在此处加，先于 ResetProcessingItems 与状态转换。
+	return nil
+}
+
 // CreateRun 创建运行并快照目标 Face 集合。
 // pipelineVersion=legacy_v1：从 historical_backfill+missing 事件选目标（v1 同源）。
 // pipelineVersion=independent_v2：从全部无 manual 结论、无 independent_v2 事件的 Face 选目标（v2 独立）。
@@ -314,8 +342,19 @@ func (s *faceQualityRescoreService) Pause(id uint) error {
 	if run.Status != model.FaceQualityRescoreStatusRunning && run.Status != model.FaceQualityRescoreStatusQueued {
 		return fmt.Errorf("run %d not running/queued (status=%s)", id, run.Status)
 	}
-	run.Status = model.FaceQualityRescoreStatusPaused
-	return s.people.executeWrite(func() error { return s.repo.UpdateRun(run) })
+	// 条件转换：仅 running|queued -> paused。并发方（worker 完成判定）已改状态时返回 false，
+	// 不重试、不覆盖。这样暂停是持久的——worker 后续的 refreshRunCounts 只写统计字段，
+	// 不会把 paused 整行覆盖回 running。
+	ok, err := s.transitionRunStatus(id,
+		[]string{model.FaceQualityRescoreStatusRunning, model.FaceQualityRescoreStatusQueued},
+		model.FaceQualityRescoreStatusPaused, nil)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("run %d not running/queued (status changed concurrently)", id)
+	}
+	return nil
 }
 
 func (s *faceQualityRescoreService) Resume(id uint) error {
@@ -326,12 +365,26 @@ func (s *faceQualityRescoreService) Resume(id uint) error {
 	if run.Status != model.FaceQualityRescoreStatusPaused {
 		return fmt.Errorf("run %d not paused (status=%s)", id, run.Status)
 	}
+	// v2 readiness 门禁（任务 §3）：验证器不可用时不允许恢复 v2 run，
+	// 且不重置任何 processing item。legacy v1 无此门禁。
+	if err := s.ensureV2VerifierReady(run); err != nil {
+		return err
+	}
 	// 重启时把 processing item 回到 pending（不丢失进度）。
 	if _, err := s.repo.ResetProcessingItems(id); err != nil {
 		return fmt.Errorf("reset processing items: %w", err)
 	}
-	run.Status = model.FaceQualityRescoreStatusRunning
-	return s.people.executeWrite(func() error { return s.repo.UpdateRun(run) })
+	// 条件转换 paused -> running。并发取消/完成已改状态时返回 false，不覆盖。
+	ok, err := s.transitionRunStatus(id,
+		[]string{model.FaceQualityRescoreStatusPaused},
+		model.FaceQualityRescoreStatusRunning, nil)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("run %d not paused (status changed concurrently)", id)
+	}
+	return nil
 }
 
 func (s *faceQualityRescoreService) Cancel(id uint) error {
@@ -339,13 +392,28 @@ func (s *faceQualityRescoreService) Cancel(id uint) error {
 	if err != nil {
 		return err
 	}
-	if run.Status == model.FaceQualityRescoreStatusCompleted || run.Status == model.FaceQualityRescoreStatusCompletedWithError || run.Status == model.FaceQualityRescoreStatusCancelled {
+	if run.Status == model.FaceQualityRescoreStatusCompleted ||
+		run.Status == model.FaceQualityRescoreStatusCompletedWithError ||
+		run.Status == model.FaceQualityRescoreStatusCancelled ||
+		run.Status == model.FaceQualityRescoreStatusFailed {
 		return nil
 	}
 	now := time.Now().UTC()
-	run.Status = model.FaceQualityRescoreStatusCancelled
-	run.CompletedAt = &now
-	return s.people.executeWrite(func() error { return s.repo.UpdateRun(run) })
+	// 条件转换：除终态外的活动状态 -> cancelled。并发方已置终态时返回 false（视为已完成，幂等 nil）。
+	from := []string{
+		model.FaceQualityRescoreStatusQueued,
+		model.FaceQualityRescoreStatusRunning,
+		model.FaceQualityRescoreStatusPaused,
+	}
+	ok, err := s.transitionRunStatus(id, from, model.FaceQualityRescoreStatusCancelled, &now)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		// 已被并发方置为终态——取消是幂等的，不报错。
+		return nil
+	}
+	return nil
 }
 
 // RestoreAuto 恢复某 run 产生的自动排除。复用 faceQualityService 的恢复事务逻辑，
@@ -608,7 +676,7 @@ func (s *faceQualityRescoreService) processOneBatch(run *model.FaceQualityRescor
 
 // processOneBatchV1 v1 同源链路：score-known-faces（historical_backfill+missing 目标）。
 func (s *faceQualityRescoreService) processOneBatchV1(run *model.FaceQualityRescoreRun) bool {
-	items, err := s.repo.ClaimNextPhotoItems(run.ID)
+	items, err := s.repo.ClaimNextPhotoItemsWhenRunning(run.ID)
 	if err != nil {
 		logger.Warnf("face_quality rescore run %d: claim items: %v", run.ID, err)
 		return false
@@ -747,7 +815,7 @@ func (s *faceQualityRescoreService) isSupersededByManual(item *model.FaceQuality
 // 每张人脸单独裁剪原图上下文 → VerifyKnownFaceCrops → evaluateFaceQualityV2 → 写 v2 证据/审计/排除。
 // 严禁调用 ProcessForAI(1024,85) 或 ScoreKnownFaces。
 func (s *faceQualityRescoreService) processOneBatchV2(run *model.FaceQualityRescoreRun) bool {
-	items, err := s.repo.ClaimNextPhotoItems(run.ID)
+	items, err := s.repo.ClaimNextPhotoItemsWhenRunning(run.ID)
 	if err != nil {
 		logger.Warnf("face_quality rescore v2 run %d: claim items: %v", run.ID, err)
 		return false
@@ -803,12 +871,12 @@ func (s *faceQualityRescoreService) processOneBatchV2(run *model.FaceQualityResc
 	targets := make([]mlclient.VerifyKnownFaceCropTarget, 0, len(preps))
 	for _, p := range preps {
 		targets = append(targets, mlclient.VerifyKnownFaceCropTarget{
-			FaceID:              p.item.FaceID,
-			ContextCropBase64:   p.crops.ContextCropBase64,
-			FaceBoxWidthPx:      p.crops.FaceBoxWidthPx,
-			FaceBoxHeightPx:     p.crops.FaceBoxHeightPx,
-			FaceBoxOffsetX:      p.crops.FaceBoxOffsetX,
-			FaceBoxOffsetY:      p.crops.FaceBoxOffsetY,
+			FaceID:               p.item.FaceID,
+			ContextCropBase64:    p.crops.ContextCropBase64,
+			FaceBoxWidthPx:       p.crops.FaceBoxWidthPx,
+			FaceBoxHeightPx:      p.crops.FaceBoxHeightPx,
+			FaceBoxOffsetX:       p.crops.FaceBoxOffsetX,
+			FaceBoxOffsetY:       p.crops.FaceBoxOffsetY,
 			PrimaryDetectorScore: 0, // 历史样本主检测分：v2 从 Face.Confidence 取，下方填充
 		})
 	}
@@ -1110,24 +1178,24 @@ func (s *faceQualityRescoreService) writeRescoreResult(run *model.FaceQualityRes
 
 			// 4) 写 rescore 审计事件。
 			evt := &model.FaceQualityEvent{
-				PhotoID:        item.PhotoID,
-				FaceID:         &item.FaceID,
-				BBoxX:          item.BBoxX,
-				BBoxY:          item.BBoxY,
-				BBoxWidth:      item.BBoxWidth,
-				BBoxHeight:     item.BBoxHeight,
-				Decision:       decision,
-				Reason:         reason,
-				Source:         model.FaceQualitySourceAuto,
-				RuleVersion:    run.RuleVersion,
-				ModelVersion:   run.ModelVersion,
-				EvidenceJSON:   evJSON,
-				ReasonCodes:    reasonCodesCSV(outcome.ReasonCodes),
-				EvidenceOrigin: model.FaceQualityEvidenceOriginHistoricalRescore,
-				EvidenceState:  model.FaceQualityEvidenceStateAvailable,
+				PhotoID:          item.PhotoID,
+				FaceID:           &item.FaceID,
+				BBoxX:            item.BBoxX,
+				BBoxY:            item.BBoxY,
+				BBoxWidth:        item.BBoxWidth,
+				BBoxHeight:       item.BBoxHeight,
+				Decision:         decision,
+				Reason:           reason,
+				Source:           model.FaceQualitySourceAuto,
+				RuleVersion:      run.RuleVersion,
+				ModelVersion:     run.ModelVersion,
+				EvidenceJSON:     evJSON,
+				ReasonCodes:      reasonCodesCSV(outcome.ReasonCodes),
+				EvidenceOrigin:   model.FaceQualityEvidenceOriginHistoricalRescore,
+				EvidenceState:    model.FaceQualityEvidenceStateAvailable,
 				EvidencePipeline: model.FaceQualityEvidencePipelineLegacyV1,
-				RescoreRunID:   &run.ID,
-				IsCurrent:      true,
+				RescoreRunID:     &run.ID,
+				IsCurrent:        true,
 			}
 			if err := tx.Create(evt).Error; err != nil {
 				return fmt.Errorf("create rescore event: %w", err)
@@ -1293,12 +1361,25 @@ func (s *faceQualityRescoreService) refreshRunCounts(run *model.FaceQualityResco
 		run.LastError = le
 	}
 
-	_ = s.people.executeWrite(func() error { return s.repo.UpdateRun(run) })
+	// 只写统计字段，绝不写 status——否则 worker 手持的过期 run 对象会把
+	// 并发的 paused/cancelled 整行覆盖回 running。状态转换一律走 TransitionRunStatus。
+	progress := repository.FaceQualityRescoreRunProgress{
+		ProcessedFaceCount:    run.ProcessedFaceCount,
+		ProcessedPhotoCount:   run.ProcessedPhotoCount,
+		AcceptedCount:         run.AcceptedCount,
+		ReviewRequiredCount:   run.ReviewRequiredCount,
+		AutoExcludedCount:     run.AutoExcludedCount,
+		RetryableCount:        run.RetryableCount,
+		SupersededManualCount: run.SupersededManualCount,
+		LastError:             run.LastError,
+	}
+	_ = s.people.executeWrite(func() error { return s.repo.UpdateRunProgress(run.ID, progress) })
 }
 
 // maybeCompleteRun 检查 run 是否全部 item 处理完（无 pending/processing），是则选择终态：
 // 无技术错误（retryable_count=0）→ completed；存在 retryable/unmatched → completed_with_errors。
-// 已被 Cancel/Failed 的 run 不覆盖（避免与人工取消竞态）。
+// 已被 Cancel/Failed/paused 的 run 不覆盖（避免与人工取消/暂停竞态）。终态写入用条件转换，
+// 禁止 db.Save(latest) 整行覆盖——否则会把并发暂停覆盖回 running。
 func (s *faceQualityRescoreService) maybeCompleteRun(run *model.FaceQualityRescoreRun) {
 	if run.Status == model.FaceQualityRescoreStatusCancelled || run.Status == model.FaceQualityRescoreStatusFailed {
 		return
@@ -1306,25 +1387,32 @@ func (s *faceQualityRescoreService) maybeCompleteRun(run *model.FaceQualityResco
 	pending, _ := s.repo.CountItemsByStatus(run.ID, model.FaceQualityRescoreItemStatusPending)
 	processing, _ := s.repo.CountItemsByStatus(run.ID, model.FaceQualityRescoreItemStatusProcessing)
 	if pending == 0 && processing == 0 {
-		// 重新读取 run，确认中途未被人工 Cancel/Failed。
+		// 重新读取 run，确认中途未被人工 Cancel/pause/Failed。
 		latest, err := s.repo.GetRun(run.ID)
 		if err != nil || latest == nil {
 			return
 		}
+		// 只在仍为 running|queued 时完成；paused/cancelled/已终态的 run 不覆盖。
 		if latest.Status != model.FaceQualityRescoreStatusRunning && latest.Status != model.FaceQualityRescoreStatusQueued {
 			return
 		}
-		// 先刷新计数，确保 retryable_count 反映最新失败 item。
+		// 先刷新计数，确保 retryable_count 反映最新失败 item（只写统计字段）。
 		s.refreshRunCounts(latest)
 		now := time.Now().UTC()
+		to := model.FaceQualityRescoreStatusCompleted
 		if latest.RetryableCount > 0 {
-			latest.Status = model.FaceQualityRescoreStatusCompletedWithError
-		} else {
-			latest.Status = model.FaceQualityRescoreStatusCompleted
+			to = model.FaceQualityRescoreStatusCompletedWithError
 		}
+		ok, err := s.transitionRunStatus(run.ID,
+			[]string{model.FaceQualityRescoreStatusRunning, model.FaceQualityRescoreStatusQueued},
+			to, &now)
+		if err != nil || !ok {
+			// 并发方已改状态——不覆盖，直接返回。
+			return
+		}
+		latest.Status = to
 		latest.CompletedAt = &now
 		*run = *latest
-		_ = s.people.executeWrite(func() error { return s.repo.UpdateRun(latest) })
 	}
 }
 

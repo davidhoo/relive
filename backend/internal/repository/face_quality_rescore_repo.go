@@ -13,10 +13,33 @@ type FaceQualityRescoreRunQuery struct {
 	Limit  int
 }
 
+// FaceQualityRescoreRunProgress 仅包含 worker 可安全刷新的统计字段。
+// 严禁含 status/started_at/completed_at——这些只能由 TransitionRunStatus 条件写入，
+// 否则 worker 手持过期内存对象会把 paused/cancelled 覆盖回 running。
+type FaceQualityRescoreRunProgress struct {
+	ProcessedFaceCount    int
+	ProcessedPhotoCount   int
+	AcceptedCount         int
+	ReviewRequiredCount   int
+	AutoExcludedCount     int
+	RetryableCount        int
+	SupersededManualCount int
+	LastError             string
+}
+
 // FaceQualityRescoreRepository 管理历史重评分运行与目标快照。
 type FaceQualityRescoreRepository interface {
 	CreateRun(run *model.FaceQualityRescoreRun) error
+	// UpdateRun 整行写回 run（db.Save）。仅供 run 创建/初始化或经条件检查后的非 worker 管理路径使用。
+	// 后台 worker 的进度刷新不得调用本方法——它会把过期内存对象（含旧 status）整行覆盖，
+	// 从而把 paused/cancelled 改回 running。worker 进度刷新一律用 UpdateRunProgress。
 	UpdateRun(run *model.FaceQualityRescoreRun) error
+	// UpdateRunProgress 只写统计字段，绝不触碰 status/started_at/completed_at。
+	// worker 每批完成后用它持久化进度，保证并发暂停/取消不会被覆盖。
+	UpdateRunProgress(runID uint, progress FaceQualityRescoreRunProgress) error
+	// TransitionRunStatus 以 WHERE id=? AND status IN ? 做条件状态转换，返回是否命中。
+	// false 表示并发方已改变状态，调用方不得重试或覆盖。completedAt 非空时一并写终态时间。
+	TransitionRunStatus(runID uint, from []string, to string, completedAt *time.Time) (bool, error)
 	GetRun(id uint) (*model.FaceQualityRescoreRun, error)
 	ListRuns(q FaceQualityRescoreRunQuery) ([]*model.FaceQualityRescoreRun, error)
 	// HasActiveRun 报告是否存在 status IN (running, paused) 的运行（单活跃 run 互斥）。
@@ -41,7 +64,12 @@ type FaceQualityRescoreRepository interface {
 	ListItemsByRun(runID uint) ([]*model.FaceQualityRescoreItem, error)
 	// ClaimNextPhotoItems 领取一组属于同一照片、status=pending 的 item（按 photo_id 分组），
 	// 把它们置为 processing 并返回。无 pending 时返回空切片。
+	// 本方法不做 run 状态门禁，仅供进程重启/测试等不需要状态校验的路径使用；
+	// v1/v2 worker 一律改用 ClaimNextPhotoItemsWhenRunning。
 	ClaimNextPhotoItems(runID uint) ([]*model.FaceQualityRescoreItem, error)
+	// ClaimNextPhotoItemsWhenRunning 在同一事务内先断言 run.status='running'，
+	// 不满足时返回空集且不更新任何 item，从而阻止暂停/取消中的 run 领取下一批照片。
+	ClaimNextPhotoItemsWhenRunning(runID uint) ([]*model.FaceQualityRescoreItem, error)
 	UpdateItem(item *model.FaceQualityRescoreItem) error
 	// ResetProcessingItems 进程重启时把 processing item 回到 pending（不丢失进度）。
 	ResetProcessingItems(runID uint) (int64, error)
@@ -70,6 +98,44 @@ func (r *faceQualityRescoreRepository) CreateRun(run *model.FaceQualityRescoreRu
 
 func (r *faceQualityRescoreRepository) UpdateRun(run *model.FaceQualityRescoreRun) error {
 	return r.db.Save(run).Error
+}
+
+// UpdateRunProgress 只写统计字段（map 形式，不含 status/started_at/completed_at），
+// 供 worker 每批完成后的进度刷新。updated_at 显式写入——GORM 对 map 更新不会自动维护。
+func (r *faceQualityRescoreRepository) UpdateRunProgress(runID uint, p FaceQualityRescoreRunProgress) error {
+	return r.db.Model(&model.FaceQualityRescoreRun{}).
+		Where("id = ?", runID).
+		Updates(map[string]any{
+			"processed_face_count":    p.ProcessedFaceCount,
+			"processed_photo_count":   p.ProcessedPhotoCount,
+			"accepted_count":          p.AcceptedCount,
+			"review_required_count":   p.ReviewRequiredCount,
+			"auto_excluded_count":     p.AutoExcludedCount,
+			"retryable_count":         p.RetryableCount,
+			"superseded_manual_count": p.SupersededManualCount,
+			"last_error":              p.LastError,
+			"updated_at":              rescoreRunTimestamp(),
+		}).Error
+}
+
+// TransitionRunStatus 以条件 UPDATE 完成状态转换：仅当当前 status ∈ from 时写 to。
+// 返回 (true,nil) 表示命中并转换；(false,nil) 表示状态已被并发方改变，调用方不得重试或覆盖。
+// completedAt 非空时一并写入终态时间。
+func (r *faceQualityRescoreRepository) TransitionRunStatus(runID uint, from []string, to string, completedAt *time.Time) (bool, error) {
+	updates := map[string]any{
+		"status":     to,
+		"updated_at": rescoreRunTimestamp(),
+	}
+	if completedAt != nil {
+		updates["completed_at"] = *completedAt
+	}
+	res := r.db.Model(&model.FaceQualityRescoreRun{}).
+		Where("id = ? AND status IN ?", runID, from).
+		Updates(updates)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
 
 func (r *faceQualityRescoreRepository) GetRun(id uint) (*model.FaceQualityRescoreRun, error) {
@@ -142,14 +208,14 @@ func (r *faceQualityRescoreRepository) CountPendingOrProcessing(runID uint) (int
 // 按 photo_id、id 升序返回，供 retry 精确快照。
 func (r *faceQualityRescoreRepository) ListRetryableTargets(sourceRunID uint) ([]model.FaceQualityRescoreRetryTarget, error) {
 	type row struct {
-		PhotoID         uint   `gorm:"column:photo_id"`
-		FaceID          *uint  `gorm:"column:face_id"`
-		BBoxX           float64 `gorm:"column:bbox_x"`
-		BBoxY           float64 `gorm:"column:bbox_y"`
-		BBoxWidth       float64 `gorm:"column:bbox_width"`
-		BBoxHeight      float64 `gorm:"column:bbox_height"`
-		ID              uint   `gorm:"column:id"`
-		EvidenceState   string `gorm:"column:evidence_state"`
+		PhotoID       uint    `gorm:"column:photo_id"`
+		FaceID        *uint   `gorm:"column:face_id"`
+		BBoxX         float64 `gorm:"column:bbox_x"`
+		BBoxY         float64 `gorm:"column:bbox_y"`
+		BBoxWidth     float64 `gorm:"column:bbox_width"`
+		BBoxHeight    float64 `gorm:"column:bbox_height"`
+		ID            uint    `gorm:"column:id"`
+		EvidenceState string  `gorm:"column:evidence_state"`
 	}
 	var rows []row
 	err := r.db.Model(&model.FaceQualityEvent{}).
@@ -237,8 +303,8 @@ func (r *faceQualityRescoreRepository) ListV2SnapshotTargets(photoLimit int) ([]
 	// 以 faces 为驱动表 LEFT JOIN 当前事件取 baseline（每个 face 至多一条 is_current 事件；
 	// 若多条，取 id 最大者作为 baseline）。
 	err := basePhotoIDs.Session(&gorm.Session{}).
-		Select("faces.photo_id AS photo_id, faces.id AS face_id, faces.b_box_x AS bbox_x, " +
-			"faces.b_box_y AS bbox_y, faces.b_box_width AS bbox_width, faces.b_box_height AS bbox_height, " +
+		Select("faces.photo_id AS photo_id, faces.id AS face_id, faces.b_box_x AS bbox_x, "+
+			"faces.b_box_y AS bbox_y, faces.b_box_width AS bbox_width, faces.b_box_height AS bbox_height, "+
 			"cur.id AS baseline_event_id").
 		Joins("LEFT JOIN face_quality_events cur ON cur.face_id = faces.id AND cur.is_current = ? "+
 			"AND cur.id = (SELECT MAX(id) FROM face_quality_events WHERE face_id = faces.id AND is_current = ?)",
@@ -282,34 +348,62 @@ func (r *faceQualityRescoreRepository) ListItemsByRun(runID uint) ([]*model.Face
 
 // ClaimNextPhotoItems 领取下一个待处理照片的全部 pending item。
 // 在一个事务中：找到最小 photo_id（有 pending item），把该照片所有 pending item 置 processing。
+// 本方法不做 run 状态门禁，仅供进程重启/测试等不需要状态校验的路径使用。
 func (r *faceQualityRescoreRepository) ClaimNextPhotoItems(runID uint) ([]*model.FaceQualityRescoreItem, error) {
 	var items []*model.FaceQualityRescoreItem
 	err := r.db.Transaction(func(tx *gorm.DB) error {
-		// 找下一个有 pending item 的 photo_id。
-		var photoID uint
-		err := tx.Model(&model.FaceQualityRescoreItem{}).
-			Where("run_id = ? AND status = ?", runID, model.FaceQualityRescoreItemStatusPending).
-			Order("photo_id ASC").
-			Limit(1).
-			Pluck("photo_id", &photoID).Error
-		if err != nil {
-			return err
-		}
-		if photoID == 0 {
-			return nil // 无 pending
-		}
-
-		// 领取该照片所有 pending item。
-		if err := tx.Model(&model.FaceQualityRescoreItem{}).
-			Where("run_id = ? AND photo_id = ? AND status = ?", runID, photoID, model.FaceQualityRescoreItemStatusPending).
-			Update("status", model.FaceQualityRescoreItemStatusProcessing).Error; err != nil {
-			return err
-		}
-
-		return tx.Where("run_id = ? AND photo_id = ? AND status = ?", runID, photoID, model.FaceQualityRescoreItemStatusProcessing).
-			Order("id ASC").Find(&items).Error
+		return claimNextPhotoItemsTx(tx, runID, &items)
 	})
 	return items, err
+}
+
+// ClaimNextPhotoItemsWhenRunning 在同一事务内先断言 run.status='running'，
+// 不满足时返回空集且不更新任何 item。阻止暂停/取消中的 run 领取下一批照片。
+// run 不存在视为非 running（返回空集），避免对幻影 run 领取。
+func (r *faceQualityRescoreRepository) ClaimNextPhotoItemsWhenRunning(runID uint) ([]*model.FaceQualityRescoreItem, error) {
+	var items []*model.FaceQualityRescoreItem
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var status string
+		if err := tx.Model(&model.FaceQualityRescoreRun{}).
+			Where("id = ?", runID).
+			Pluck("status", &status).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return nil
+			}
+			return err
+		}
+		if status != model.FaceQualityRescoreStatusRunning {
+			return nil
+		}
+		return claimNextPhotoItemsTx(tx, runID, &items)
+	})
+	return items, err
+}
+
+// claimNextPhotoItemsTx 在已开启的事务内领取下一个照片的全部 pending item。
+// 找到最小 pending photo_id，把该照片所有 pending item 置 processing 并回读。
+func claimNextPhotoItemsTx(tx *gorm.DB, runID uint, items *[]*model.FaceQualityRescoreItem) error {
+	var photoID uint
+	err := tx.Model(&model.FaceQualityRescoreItem{}).
+		Where("run_id = ? AND status = ?", runID, model.FaceQualityRescoreItemStatusPending).
+		Order("photo_id ASC").
+		Limit(1).
+		Pluck("photo_id", &photoID).Error
+	if err != nil {
+		return err
+	}
+	if photoID == 0 {
+		return nil // 无 pending
+	}
+
+	if err := tx.Model(&model.FaceQualityRescoreItem{}).
+		Where("run_id = ? AND photo_id = ? AND status = ?", runID, photoID, model.FaceQualityRescoreItemStatusPending).
+		Update("status", model.FaceQualityRescoreItemStatusProcessing).Error; err != nil {
+		return err
+	}
+
+	return tx.Where("run_id = ? AND photo_id = ? AND status = ?", runID, photoID, model.FaceQualityRescoreItemStatusProcessing).
+		Order("id ASC").Find(items).Error
 }
 
 func (r *faceQualityRescoreRepository) UpdateItem(item *model.FaceQualityRescoreItem) error {
