@@ -144,12 +144,21 @@ make deploy-image
 
 ### 5. 首次初始化
 
-访问 `http://localhost:8080`，然后按这个顺序操作：
+访问 `http://localhost:8080`。在进入 AI 分析前，先选好分析方式（二者不必都装）：
+
+| 方式 | 何时选择 | 是否需要单独安装 | 网络要求 |
+| --- | --- | --- | --- |
+| Web 直接分析（UI 名：在线分析） | 照片量不大，或 AI Provider 与 Relive 网络可达 | 否，Web 后台直接启动 | Relive 服务必须能访问已配置的 AI Provider |
+| 外部 `relive-analyzer`（API 模式） | 照片量大，或要把 AI 推理移到 Mac / GPU 主机 | 是，需在外部主机安装并运行 CLI | 该外部主机必须能通过 HTTP 访问 Relive 服务，并持有有效 Device API Key |
+
+不确定时先走 Web 直接分析；只有需要把推理移到另一台机器或批量处理较大照片库时，再按下方“使用方式”中的 API 模式接入 analyzer。API 模式是外部 HTTP worker，不是断网分析，也不再使用 `export.db` 导出/导入流程。
+
+然后按这个顺序操作：
 1. 使用默认账号 `admin / admin` 登录并修改密码
 2. 到“配置管理”添加扫描路径，例如 `/app/photos`
 3. 到“照片管理”执行扫描或重建
 4. 如需 AI 分析，在“配置管理”中设置 AI Provider
-5. 到“AI 分析”页面启动在线分析，或使用下方的 analyzer API 模式
+5. 到“AI 分析”页面启动 Web 直接分析；如需把推理放到另一台机器，见下方“使用方式”
 
 更详细的部署说明：
 - `QUICKSTART.md`：快速启动与部署
@@ -170,7 +179,7 @@ make backup-nas
 
 ## 使用方式
 
-### 方式 1：直接在 Web 中扫描 + 在线分析
+### 方式 1：Web 直接分析（UI 名：在线分析）
 
 **适合：**
 - 照片量不大
@@ -184,12 +193,14 @@ make backup-nas
 4. 在“AI 分析”页面启动分析
 5. 在“照片管理”与“展示策略”中查看和使用结果
 
-### 方式 2：使用 `relive-analyzer` API 模式批量分析
+### 方式 2：外部 `relive-analyzer`（API 模式）
 
 **适合：**
 - 照片量大
 - AI 主机与 NAS / 主服务分离
 - 想把分析任务放到另一台更强的机器上执行
+
+> API 模式是外部 HTTP worker：worker 必须能通过 HTTP 访问 Relive 服务并持有有效 Device API Key。它不是断网分析，也不再使用 `export.db` 导出/导入流程。
 
 **基本流程：**
 1. 在“设备管理”里创建 `offline` 或 `service` 类型设备

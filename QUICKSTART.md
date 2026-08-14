@@ -72,6 +72,15 @@ make deploy-image
 
 首次登录后会被强制要求修改密码。
 
+在进入 AI 分析前，先选好分析方式（二者不必都装）：
+
+| 方式 | 何时选择 | 是否需要单独安装 | 网络要求 |
+| --- | --- | --- | --- |
+| Web 直接分析（UI 名：在线分析） | 照片量不大，或 AI Provider 与 Relive 网络可达 | 否，Web 后台直接启动 | Relive 服务必须能访问已配置的 AI Provider |
+| 外部 `relive-analyzer`（API 模式） | 照片量大，或要把 AI 推理移到 Mac / GPU 主机 | 是，需在外部主机安装并运行 CLI | 该外部主机必须能通过 HTTP 访问 Relive 服务，并持有有效 Device API Key |
+
+不确定时先走 Web 直接分析；只有需要把推理移到另一台机器或批量处理较大照片库时，再按第 6 节接入 analyzer。API 模式是外部 HTTP worker，不是断网分析，也不再使用 `export.db` 导出/导入流程。
+
 推荐初始化顺序：
 1. 打开“配置管理”页面，添加扫描路径，例如 `/app/photos`
 2. 打开“照片管理”页面，执行扫描或重建
@@ -80,7 +89,7 @@ make deploy-image
 
 ## 6. 使用 analyzer API 模式（可选，推荐大批量照片）
 
-当前版本的 `relive-analyzer` 使用 **API 模式**，不再使用 `export.db` 导出/导入流程。
+当前版本的 `relive-analyzer` 是一个通过 HTTP 领取任务的外部 API worker（不是断网分析，也不再使用 `export.db` 导出/导入流程）：NAS / Relive 服务继续持有照片库与任务状态，外部 worker 在另一台主机下载照片、调用 AI Provider、提交结果。
 
 ### 6.1 在 Web 中创建设备
 
