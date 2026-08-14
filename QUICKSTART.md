@@ -126,6 +126,8 @@ make build-analyzer
 ./backend/bin/relive-analyzer analyze -config analyzer.yaml -workers 8
 ```
 
+完整说明见 `docs/ANALYZER_API_MODE.md`；旧 `export.db` 文件模式背景见 `docs/ANALYZER.md`（历史）。
+
 ## 常用命令
 
 ```bash

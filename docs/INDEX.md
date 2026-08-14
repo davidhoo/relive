@@ -82,6 +82,7 @@
 - `docs/plans/2026-04-13-people-worker-runtime-lease.md`
 - `docs/plans/2026-04-13-router-bridge-design.md`
 - `docs/plans/2026-04-13-router-bridge.md`
+- `docs/plans/2026-08-14-analyzer-mode-onboarding-documentation.md`：分析模式入门文档消歧（Web 直接分析与外部 analyzer API 模式）
 
 ## 当前实现文档
 
