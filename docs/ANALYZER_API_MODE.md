@@ -11,6 +11,19 @@
 - analyzer 负责下载图片、调用 AI、提交结果
 - 不再依赖旧版 `export.db` 导出 / 导入工作流
 
+职责流：
+
+```text
+Relive 主服务（照片库、任务分配、结果持久化）
+        ⇅ HTTP + Device API Key
+外部 relive-analyzer（下载照片、调用 AI Provider、提交结果）
+```
+
+边界澄清：
+- 外部 worker 可以运行在 NAS 以外的 Mac / GPU 主机，把 AI 推理移过去；NAS / Relive 服务继续持有照片库与任务状态，是任务真值的唯一来源。
+- 设备类型 `offline` / `service` 只表示这是外部 worker 的部署类别，**不代表** analyzer 可以在与 Relive 服务完全断网的环境中运行——它必须通过 HTTP 领取任务、按服务端返回的 URL 下载图片并提交结果。
+- 旧 `export.db` 导出 → 本地分析 → 导入结果的工作流不是当前流程；历史背景见 `docs/ANALYZER.md`。
+
 源码真值：
 - 服务端路由：`backend/internal/api/v1/router/router.go`
 - analyzer CLI：`backend/cmd/relive-analyzer/main.go`
@@ -130,7 +143,7 @@ analyzer 主要使用以下接口：
 
 ## 适用场景
 
-- NAS 与 AI 主机分离，但 analyzer 能访问 Relive 服务
+- NAS 与 AI 主机分离，且 analyzer 所在主机能通过 HTTP 访问 `server.endpoint`
 - 一台或多台分析主机并发处理照片
 - 本地 GPU / 远程 GPU / 云端 API 混合使用
 

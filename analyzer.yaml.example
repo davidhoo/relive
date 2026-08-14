@@ -1,11 +1,13 @@
-# relive-analyzer 离线分析工具配置示例
+# relive-analyzer 外部 API 分析 worker 配置示例
+# 这是一个通过 HTTP 领取任务的外部 worker，不是断网分析工具，
+# 也不再使用 export.db 导出/导入流程。
 # 使用方法：
 # 1. 复制此文件：cp analyzer.yaml.example analyzer.yaml
 # 2. 修改配置（特别是 endpoint 和 api_key）
 # 3. 运行：./backend/bin/relive-analyzer check -config analyzer.yaml
 
 server:
-  endpoint: "http://localhost:8080"     # Relive 服务端地址
+  endpoint: "http://localhost:8080"     # analyzer 所在主机可访问的 Relive 地址（勿填仅 NAS 容器内部可解析、外部主机访问不到的地址）
   api_key: "${RELIVE_API_KEY}"          # API Key（建议从环境变量读取）
   timeout: 30                           # API 请求超时（秒）
 
