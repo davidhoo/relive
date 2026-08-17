@@ -1,11 +1,16 @@
 package repository
 
 import (
+	"errors"
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
 	"gorm.io/gorm"
 )
+
+// ErrRescoreFaceIDNotFound 定点快照请求的 face_id 在当前数据库中不存在。
+// service 层据此返回 400，不向调用方暴露底层细节。
+var ErrRescoreFaceIDNotFound = errors.New("face_quality_rescore: face_id not found")
 
 // FaceQualityRescoreRunQuery 列表查询过滤条件。
 type FaceQualityRescoreRunQuery struct {
@@ -58,7 +63,20 @@ type FaceQualityRescoreRepository interface {
 	// ListV2SnapshotTargets 选择没有当前 source=manual 结论、且没有当前 evidence_pipeline=independent_v2
 	// 事件的 Face（以 faces.id 为主体）。这是 v2 历史快照的目标集合，不限于 historical_backfill + missing。
 	// photoLimit>0 时按 photo_id 升序限制快照照片数（校准用）。
+	//
+	// Deprecated: 保留向后兼容；新代码应使用 ListIndependentSnapshotTargets，它按 ruleVersion
+	// 区分新旧规则版本，使 v3 能重新复核已有 v2 自动证据。本方法等价于
+	// ListIndependentSnapshotTargets(face_quality_v2, photoLimit, nil)。
 	ListV2SnapshotTargets(photoLimit int) ([]model.FaceQualityRescoreRetryTarget, error)
+	// ListIndependentSnapshotTargets 按规则版本选择独立复核快照目标集合（以 faces.id 为主体）：
+	//   - 排除任何当前 source=manual 结论（人工结论绝对优先，跨规则版本不覆盖）；
+	//   - 仅排除当前 rule_version 已等于请求 ruleVersion 的自动事件 Face——这样 v3 可重新复核
+	//     已有 face_quality_v2 自动证据，而不会重复复核同规则版本已处理样本；
+	//   - 已自动隔离但无人工最终结论的 Face 仍进入快照（由 service 层决定不自动恢复）。
+	// faceIDs 非空时为定点快照：仅选这些 Face（去重、非零、必须存在），忽略 photoLimit。
+	// photoLimit>0 且 faceIDs 为空时按 photo_id 升序限制快照照片数（校准用）。
+	// ruleVersion 为空时回退 face_quality_v2（与原 ListV2SnapshotTargets 行为一致）。
+	ListIndependentSnapshotTargets(ruleVersion string, photoLimit int, faceIDs []uint) ([]model.FaceQualityRescoreRetryTarget, error)
 
 	CreateItems(items []*model.FaceQualityRescoreItem) error
 	ListItemsByRun(runID uint) ([]*model.FaceQualityRescoreItem, error)
@@ -251,18 +269,44 @@ func (r *faceQualityRescoreRepository) ListRetryableTargets(sourceRunID uint) ([
 	return out, nil
 }
 
-// ListV2SnapshotTargets 选择 v2 历史快照目标集合（以 faces.id 为主体）：
-//   - 没有 is_current=true 且 source=manual 的质检事件（人工结论优先，跳过）；
-//   - 没有 is_current=true 且 evidence_pipeline=independent_v2 的质检事件（避免重复 v2 复核）。
-//
-// 已自动隔离而没有人工最终结论的 Face 仍进入快照（由 service 层决定不自动恢复，
-// 冲突时写 review_required + auto_decision_conflict）。
-// 返回每个 Face 的归一化 BBox 及其当前 baseline 事件 ID（无当前事件则 BaselineEventID=0）。
-// photoLimit>0 时按 photo_id 升序限制快照照片数（校准用）。
-//
-// 注意：faces 表的 BBox 列由 GORM 默认 snake_case 映射为 b_box_x（Face 模型未显式 column），
-// 而 face_quality_events 显式指定为 bbox_x。这里用 faces.b_box_x 引用前者。
+// ListV2SnapshotTargets 委托至 ListIndependentSnapshotTargets(rule_version=face_quality_v2, nil)。
+// 保留旧签名以兼容未升级的调用方；新代码应直接使用 ListIndependentSnapshotTargets。
 func (r *faceQualityRescoreRepository) ListV2SnapshotTargets(photoLimit int) ([]model.FaceQualityRescoreRetryTarget, error) {
+	return r.ListIndependentSnapshotTargets(model.FaceQualityRescoreRuleVersionV2, photoLimit, nil)
+}
+
+// ListIndependentSnapshotTargets 按规则版本选择独立复核快照目标集合（以 faces.id 为主体）。
+// 详见接口注释。
+func (r *faceQualityRescoreRepository) ListIndependentSnapshotTargets(ruleVersion string, photoLimit int, faceIDs []uint) ([]model.FaceQualityRescoreRetryTarget, error) {
+	if ruleVersion == "" {
+		ruleVersion = model.FaceQualityRescoreRuleVersionV2
+	}
+
+	// face_ids 去重 + 去零。
+	faceIDSet := make([]uint, 0, len(faceIDs))
+	seen := make(map[uint]struct{}, len(faceIDs))
+	for _, id := range faceIDs {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		faceIDSet = append(faceIDSet, id)
+	}
+
+	// 定点快照：face_ids 必须全部存在于当前数据库，否则拒绝（不静默丢弃未知目标）。
+	if len(faceIDSet) > 0 {
+		var cnt int64
+		if err := r.db.Model(&model.Face{}).Where("id IN ?", faceIDSet).Count(&cnt).Error; err != nil {
+			return nil, err
+		}
+		if cnt != int64(len(faceIDSet)) {
+			return nil, ErrRescoreFaceIDNotFound
+		}
+	}
+
 	type row struct {
 		PhotoID         uint    `gorm:"column:photo_id"`
 		FaceID          uint    `gorm:"column:face_id"`
@@ -273,18 +317,23 @@ func (r *faceQualityRescoreRepository) ListV2SnapshotTargets(photoLimit int) ([]
 		BaselineEventID *uint   `gorm:"column:baseline_event_id"`
 	}
 
-	// photoLimit 限制：先取满足条件的去重 photo_id 子集，再限定到这些 photo。
+	// photoLimit 限制（仅非定点快照）：先取满足条件的去重 photo_id 子集，再限定到这些 photo。
 	// 用 NOT EXISTS 而非 NOT IN：NOT IN 在 SQLite 上易退化为全表扫描，
 	// idx_fqe_evidence_pipeline (face_id, evidence_pipeline, is_current) 对 NOT EXISTS 子查询更友好。
 	basePhotoIDs := r.db.Model(&model.Face{}).
 		Where("NOT EXISTS (SELECT 1 FROM face_quality_events mq WHERE mq.face_id = faces.id "+
 			"AND mq.is_current = ? AND mq.source = ?)",
 			true, model.FaceQualitySourceManual).
+		// 仅排除当前 rule_version 已等于请求 ruleVersion 的自动事件：同规则版本不重复复核，
+		// 异规则版本可重新复核（v3 能复核 v2 自动证据）。人工结论由上一条 NOT EXISTS 永久排除。
 		Where("NOT EXISTS (SELECT 1 FROM face_quality_events vq WHERE vq.face_id = faces.id "+
-			"AND vq.is_current = ? AND vq.evidence_pipeline = ?)",
-			true, model.FaceQualityEvidencePipelineIndependentV2)
+			"AND vq.is_current = ? AND vq.source = ? AND vq.rule_version = ?)",
+			true, model.FaceQualitySourceAuto, ruleVersion)
 
-	if photoLimit > 0 {
+	if len(faceIDSet) > 0 {
+		// 定点快照：限定到指定 face，忽略 photoLimit。
+		basePhotoIDs = basePhotoIDs.Where("faces.id IN ?", faceIDSet)
+	} else if photoLimit > 0 {
 		var photoIDs []uint
 		if err := basePhotoIDs.Session(&gorm.Session{}).
 			Distinct("photo_id").

@@ -218,7 +218,20 @@
               <el-tag size="small" :type="verifierTagType(current.evidence_v2!.verification_status)">
                 {{ verifierStatusLabel(current.evidence_v2!.verification_status) }}
               </el-tag>
-              <span class="v2-score">置信度 {{ (current.evidence_v2!.verifier_score * 100).toFixed(1) }}%</span>
+              <!-- 目标框匹配规则后的证据：face 显示目标匹配分+IoU；no_face 区分裁剪内是否有其他检测 -->
+              <template v-if="hasTargetMatchDiagnostics(current.evidence_v2)">
+                <span v-if="current.evidence_v2!.verification_status === 'face'" class="v2-score">
+                  已匹配目标脸 · 目标匹配分 {{ (current.evidence_v2!.verifier_score * 100).toFixed(1) }}%<span v-if="current.evidence_v2!.target_match_iou != null"> · IoU {{ current.evidence_v2!.target_match_iou.toFixed(3) }}</span>
+                </span>
+                <span v-else-if="current.evidence_v2!.verification_status === 'no_face'" class="v2-score">
+                  未匹配到目标脸<span v-if="(current.evidence_v2!.max_context_score ?? 0) > 0"> · 裁剪中其他检测最高 {{ (current.evidence_v2!.max_context_score! * 100).toFixed(1) }}%</span><span v-else> · 裁剪中未检测到可匹配的目标脸</span>
+                </span>
+              </template>
+              <!-- 旧 v2 证据：缺目标匹配诊断字段，保留原置信度展示但标注未记录诊断，不得当确认分 -->
+              <template v-else>
+                <span class="v2-score">置信度 {{ (current.evidence_v2!.verifier_score * 100).toFixed(1) }}%</span>
+                <span class="v2-hint">（旧证据，未记录目标匹配诊断）</span>
+              </template>
               <span class="v2-model">{{ current.evidence_v2!.verifier_name }} {{ current.evidence_v2!.verifier_version }}</span>
             </el-descriptions-item>
             <el-descriptions-item label="原图人脸框">
@@ -339,6 +352,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { peopleApi } from '@/api/people'
 import type {
   FaceQualityAction,
+  FaceQualityEvidenceV2,
   FaceQualityRescoreRun,
   FaceQualityReviewItem,
   FaceQualityState,
@@ -443,9 +457,17 @@ const isV2 = (item: FaceQualityReviewItem) =>
 const isLegacy = (item: FaceQualityReviewItem) => item.evidence_pipeline === 'legacy_v1'
 
 const verifierStatusLabel = (s: string) =>
-  ({ face: '确认为脸', no_face: '未检测到脸', uncertain: '无法可靠判断', error: '验证失败' } as Record<string, string>)[s] ?? s
+  ({ face: '确认为脸', no_face: '未匹配目标脸', uncertain: '无法可靠判断', error: '验证失败' } as Record<string, string>)[s] ?? s
 const verifierTagType = (s: string): 'success' | 'info' | 'warning' | 'danger' =>
   ({ face: 'success', no_face: 'danger', uncertain: 'warning', error: 'warning' } as Record<string, 'success' | 'info' | 'warning' | 'danger'>)[s] ?? 'info'
+
+// hasTargetMatchDiagnostics 判断 v2 证据是否记录了目标框匹配诊断（max_context_score /
+// target_match_iou）。新规则（independent_v2_target_match_v2）证据必含 max_context_score；
+// 旧 v2 证据缺这两个字段，按「旧证据」展示，不得把上下文分数当确认分。
+const hasTargetMatchDiagnostics = (ev?: FaceQualityEvidenceV2): boolean => {
+  if (!ev) return false
+  return ev.max_context_score !== undefined || ev.target_match_iou !== undefined
+}
 
 const decisionLabel = (d: string) => ({
   accepted: '已接受',

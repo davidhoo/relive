@@ -718,12 +718,20 @@ type FaceQualityRestoreResult struct {
 // mode=calibration 由服务端归一化为 apply_mode=shadow；mode=full 仅在 apply_mode=enforce
 // 且已存在 completed calibration 时接受。photo_limit>0 限制快照照片数（校准用）。
 // mode=full 时 calibration_run_id 必填，指向服务端验证通过的合格校准 run。
+// rule_version=face_quality_v3 启用目标框匹配规则版本（independent_v2 管线），
+// v3 full/enforce 要求引用 v3 校准；未填默认 face_quality_v2。
+// face_ids 非空时为定点校准（仅 calibration+shadow+independent_v2，最多 50 个去重去零、必须存在），
+// 是发布前定点验证入口，不做前端批量重跑功能。
 type FaceQualityRescoreRunCreateRequest struct {
-	Mode              string `json:"mode" binding:"required,oneof=calibration full"`
-	PhotoLimit        int    `json:"photo_limit,omitempty"`
-	CalibrationRunID  *uint  `json:"calibration_run_id,omitempty"`
+	Mode             string `json:"mode" binding:"required,oneof=calibration full"`
+	PhotoLimit       int    `json:"photo_limit,omitempty"`
+	CalibrationRunID *uint  `json:"calibration_run_id,omitempty"`
 	// PipelineVersion 证据管线：legacy_v1 / independent_v2。未填默认 independent_v2（本任务主链路）。
 	PipelineVersion string `json:"pipeline_version,omitempty"`
+	// RuleVersion 规则版本：face_quality_v3（目标框匹配）/ face_quality_v2（默认，未填）。
+	RuleVersion string `json:"rule_version,omitempty"`
+	// FaceIDs 定点校准目标 Face ID 列表（仅 calibration+shadow+independent_v2，最多 50 个）。
+	FaceIDs []uint `json:"face_ids,omitempty"`
 }
 
 // FaceQualityRescoreRunResponse 单个运行的只读视图。

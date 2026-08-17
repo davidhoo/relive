@@ -16,8 +16,12 @@ import (
 
 // controllableRescoreService 按字段返回预设结果/错误，用于精确测试错误码映射。
 type controllableRescoreService struct {
-	createRunRun       *model.FaceQualityRescoreRun
-	createRunErr       error
+	createRunRun *model.FaceQualityRescoreRun
+	createRunErr error
+	// 捕获 CreateRun 入参，供 handler 透传断言。
+	createRunPipeline  string
+	createRunRuleVer   string
+	createRunFaceIDs   []uint
 	getRunRun          *model.FaceQualityRescoreRun
 	getRunErr          error
 	listRuns           []*model.FaceQualityRescoreRun
@@ -32,7 +36,10 @@ type controllableRescoreService struct {
 	eligibleForEnforce map[uint]bool
 }
 
-func (s *controllableRescoreService) CreateRun(mode, applyMode string, photoLimit int, calibrationRunID uint, pipelineVersion string) (*model.FaceQualityRescoreRun, error) {
+func (s *controllableRescoreService) CreateRun(mode, applyMode string, photoLimit int, calibrationRunID uint, pipelineVersion, ruleVersion string, faceIDs []uint) (*model.FaceQualityRescoreRun, error) {
+	s.createRunPipeline = pipelineVersion
+	s.createRunRuleVer = ruleVersion
+	s.createRunFaceIDs = faceIDs
 	return s.createRunRun, s.createRunErr
 }
 func (s *controllableRescoreService) GetRun(id uint) (*model.FaceQualityRescoreRun, error) {
@@ -302,6 +309,52 @@ func TestRescoreHandler_RetryVerifierUnavailableReturns409(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	require.NotNil(t, resp.Error)
 	assert.Equal(t, "FACE_QUALITY_VERIFIER_UNAVAILABLE", resp.Error.Code)
+}
+
+// TestRescoreHandler_V3RuleVersionAndFaceIDsForwarded handler 把 rule_version 与 face_ids
+// 透传到 service.CreateRun；未填 rule_version 时为空串（service 内推导默认 v2）。
+func TestRescoreHandler_V3RuleVersionAndFaceIDsForwarded(t *testing.T) {
+	svc := &controllableRescoreService{
+		createRunRun: &model.FaceQualityRescoreRun{ID: 7, Mode: model.FaceQualityRescoreModeCalibration, ApplyMode: model.FaceQualityRescoreApplyModeShadow, Status: model.FaceQualityRescoreStatusRunning},
+	}
+	h := newRescoreHandlerWith(svc)
+	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
+		map[string]interface{}{
+			"mode":             "calibration",
+			"pipeline_version": "independent_v2",
+			"rule_version":     "face_quality_v3",
+			"face_ids":         []int{538580, 538581},
+		}, nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, model.FaceQualityRescorePipelineIndependentV2, svc.createRunPipeline)
+	assert.Equal(t, model.FaceQualityRescoreRuleVersionV3, svc.createRunRuleVer)
+	assert.Equal(t, []uint{538580, 538581}, svc.createRunFaceIDs)
+}
+
+// TestRescoreHandler_V3RuleVersionNotV3Returns409 v3 full/enforce 引用 v2 校准 → 409 + RESCORE_RULE_VERSION_NOT_V3。
+func TestRescoreHandler_V3RuleVersionNotV3Returns409(t *testing.T) {
+	svc := &controllableRescoreService{createRunErr: service.ErrRescoreRuleVersionNotV3}
+	h := newRescoreHandlerWith(svc)
+	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
+		map[string]interface{}{"mode": "full", "rule_version": "face_quality_v3", "calibration_run_id": 5}, nil)
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	var resp model.Response
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, "RESCORE_RULE_VERSION_NOT_V3", resp.Error.Code)
+}
+
+// TestRescoreHandler_FaceIDsInvalidReturns400 face_ids 校验失败 → 400 + RESCALE_FACE_IDS_INVALID。
+func TestRescoreHandler_FaceIDsInvalidReturns400(t *testing.T) {
+	svc := &controllableRescoreService{createRunErr: service.ErrRescoreFaceIDsNotCalibration}
+	h := newRescoreHandlerWith(svc)
+	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
+		map[string]interface{}{"mode": "full", "face_ids": []int{1}}, nil)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	var resp model.Response
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, "RESCORE_FACE_IDS_INVALID", resp.Error.Code)
 }
 
 // 编译期断言桩实现接口。

@@ -139,7 +139,13 @@ export interface FaceQualityEvidenceV2 {
   evidence_schema_version: string
   primary_detector_score: number
   verification_status: 'face' | 'no_face' | 'uncertain' | 'error' | string
+  // 目标匹配分：匹配到目标脸框时为该检测框置信度；未匹配为 0（不再写裁剪内其他脸分数）。
   verifier_score: number
+  // 裁剪内所有检测最高分（含非目标脸），仅供诊断/文案，不得当作「确认脸」置信度。
+  // 旧 v2 证据缺此字段（target_match 规则前未记录）。
+  max_context_score?: number
+  // 匹配到目标脸框时的 IoU；未匹配为 undefined。旧 v2 证据缺此字段。
+  target_match_iou?: number
   verifier_name: string
   verifier_version: string
   original_width: number
@@ -280,6 +286,12 @@ export interface FaceQualityRescoreRunCreateRequest {
   calibration_run_id?: number
   // 证据管线：未填默认 independent_v2（本任务主链路）。
   pipeline_version?: 'legacy_v1' | 'independent_v2' | string
+  // 规则版本：face_quality_v3 启用目标框匹配规则；未填默认 face_quality_v2。
+  // v3 full/enforce 要求引用 v3 校准（旧 v2 校准不得放行）。
+  rule_version?: 'face_quality_v2' | 'face_quality_v3' | string
+  // 定点校准目标 Face ID 列表（仅 calibration+shadow+independent_v2，最多 50 个去重去零、必须存在）。
+  // 发布前定点验证入口，前端不新增批量重跑按钮。
+  face_ids?: number[]
 }
 
 export interface PersonMergeSuggestionTask {

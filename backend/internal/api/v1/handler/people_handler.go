@@ -1250,7 +1250,8 @@ func (h *PeopleHandler) CreateFaceQualityRescoreRun(c *gin.Context) {
 	if pipelineVersion == "" {
 		pipelineVersion = model.FaceQualityRescorePipelineIndependentV2
 	}
-	run, err := h.faceQualityRescore.CreateRun(req.Mode, model.FaceQualityRescoreApplyModeEnforce, req.PhotoLimit, calibrationRunID, pipelineVersion)
+	// rule_version：face_quality_v3 显式启用目标框匹配规则；未填默认 v2（service 内推导）。
+	run, err := h.faceQualityRescore.CreateRun(req.Mode, model.FaceQualityRescoreApplyModeEnforce, req.PhotoLimit, calibrationRunID, pipelineVersion, req.RuleVersion, req.FaceIDs)
 	if err != nil {
 		writeRescoreRunError(c, err)
 		return
@@ -1415,6 +1416,15 @@ func writeRescoreRunError(c *gin.Context, err error) {
 		writePeopleError(c, http.StatusConflict, "RESCORE_RESTORE_LEGACY_V1_NOT_ALLOWED", err.Error())
 	case errors.Is(err, service.ErrRescoreV2VerifierUnavailable):
 		writePeopleError(c, http.StatusConflict, "FACE_QUALITY_VERIFIER_UNAVAILABLE", err.Error())
+	case errors.Is(err, service.ErrRescoreFaceIDsNotCalibration),
+		errors.Is(err, service.ErrRescoreFaceIDsNotIndependentV2),
+		errors.Is(err, service.ErrRescoreTooManyFaceIDs),
+		errors.Is(err, repository.ErrRescoreFaceIDNotFound):
+		// 定点校准参数错误：face_ids 仅 calibration+shadow+independent_v2、最多 50、必须存在。
+		writePeopleError(c, http.StatusBadRequest, "RESCORE_FACE_IDS_INVALID", err.Error())
+	case errors.Is(err, service.ErrRescoreRuleVersionNotV3):
+		// v3 full/enforce 必须引用 v3 校准（v2 校准 #5 不能放行）。
+		writePeopleError(c, http.StatusConflict, "RESCORE_RULE_VERSION_NOT_V3", err.Error())
 	default:
 		if strings.Contains(strings.ToLower(err.Error()), "not found") {
 			writePeopleError(c, http.StatusNotFound, "RESCORE_NOT_FOUND", err.Error())

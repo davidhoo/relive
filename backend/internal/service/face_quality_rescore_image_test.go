@@ -93,6 +93,11 @@ func TestPrepareV2FaceCrops_EdgeBoxContextClamped(t *testing.T) {
 	// 人脸框贴近左上角，边界裁切后 offset=(0,0)。
 	assert.Equal(t, 0, crops.FaceBoxOffsetX)
 	assert.Equal(t, 0, crops.FaceBoxOffsetY)
+	// 契约断言：边缘裁剪被截断后，目标脸框 offset 必须是真实的 (0,0)，而不是裁剪中心 (25,25)。
+	// 下游 worker（people_service / face_quality_rescore）必须把这个 offset 原样转发到 v2 请求，
+	// ML 端据此做目标框 IoU 匹配；任何把目标位置重置为裁剪中心的逻辑都会让边缘脸假阴性回归。
+	assert.NotEqual(t, crops.ContextCropWidthPx/2, crops.FaceBoxOffsetX, "offset 不得被重置为裁剪中心")
+	assert.NotEqual(t, crops.ContextCropHeightPx/2, crops.FaceBoxOffsetY, "offset 不得被重置为裁剪中心")
 }
 
 func TestPrepareV2FaceCrops_InvalidBBoxRejected(t *testing.T) {

@@ -23,6 +23,17 @@ const (
 // v2 规则版本字符串（rule_version=face_quality_v2）。
 const FaceQualityRescoreRuleVersionV2 = "face_quality_v2"
 
+// v3 规则版本字符串（rule_version=face_quality_v3）。
+// 证据管线仍是 independent_v2；face_quality_v3 表示同一独立验证管线下的「目标框匹配」规则版本：
+// face/no_face 改为是否匹配目标脸框，而非裁剪图几何中心。v3 可重新复核已有 face_quality_v2
+// 自动证据（按 rule_version 区分），人工结论仍绝对优先。旧 face_quality_v2 校准不得放行 v3 enforce。
+const FaceQualityRescoreRuleVersionV3 = "face_quality_v3"
+
+// IsValidRescoreRuleVersion 校验历史重评分规则版本是否合法。
+func IsValidRescoreRuleVersion(s string) bool {
+	return s == FaceQualityRescoreRuleVersionV2 || s == FaceQualityRescoreRuleVersionV3
+}
+
 // 目标快照范围语义。
 const (
 	// RescoreTargetScopeV1 v1 仅扫描 historical_backfill + missing 事件。

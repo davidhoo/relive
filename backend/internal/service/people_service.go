@@ -2210,7 +2210,8 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 	}()
 
 	// v2 严格准入（任务 §D3）：主检测过线的候选在持久化前执行独立验证。
-	// no_face 不创建 Face（从候选剔除）；uncertain/error 按规则标记 review_required（保留但不进聚类）。
+	// no_face/uncertain/error 一律保留并标记，由后续质检写 review_required（保留但不进聚类）；
+	// 实时不静默丢弃 no_face 候选，主检测过线的真实脸只进待人工质检。
 	result.Faces = s.filterDetectionsByIndependentVerification(photo, result.Faces)
 
 	if len(result.Faces) == 0 {
@@ -2367,15 +2368,17 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 			}
 		} else {
 			// 3) 无人工结论：跑自动质检策略引擎。
-			// v2 严格准入（任务 §D3）：独立验证 uncertain/error 的候选强制 review_required，
-			// 不当作正常人脸进入聚类。no_face 候选已在 filterDetectionsByIndependentVerification 剔除。
+			// v2 严格准入（任务 §D3）：独立验证 no_face/uncertain/error 的候选强制 review_required，
+			// 不当作正常人脸进入聚类。实时是单信号路径，no_face 仅表示「未匹配目标脸框」，
+			// 不能等价于自动 non_face——主检测过线的真实脸只能进待人工质检，不得静默丢弃。
 			outcome := evaluateFaceQuality(ev, qualityMode)
 			pipeline := model.FaceQualityEvidencePipelineLegacyV1
-			if detected.VerifierStatus == "uncertain" || detected.VerifierStatus == "error" {
+			switch detected.VerifierStatus {
+			case "no_face", "uncertain", "error":
 				outcome = qualityOutcome{
 					Action:      model.FaceQualityActionReviewRequired,
 					Decision:    model.FaceQualityDecisionReviewRequired,
-					ReasonCodes: append(outcome.ReasonCodes, "verifier_"+detected.VerifierStatus),
+					ReasonCodes: append(outcome.ReasonCodes, verifierReviewReasonCode(detected.VerifierStatus)),
 				}
 				pipeline = model.FaceQualityEvidencePipelineIndependentV2
 			}
@@ -4354,8 +4357,9 @@ func (s *peopleService) faceDetectionMinConfidence() float64 {
 
 // filterDetectionsByIndependentVerification 对主检测过线的候选执行 v2 独立验证（任务 §D3）。
 // 用 PrepareV2FaceCrops 在方向一致原图上裁取每张人脸上下文，调 VerifyKnownFaceCrops：
-//   - no_face：从候选剔除（不创建 Face、不生成缩略图、不写 embedding、不进聚类）；
-//   - uncertain/error：保留候选，但置 VerifierStatus，后续 ApplyDetectionResult 写 review_required 而非进聚类；
+//   - no_face/uncertain/error：保留候选并置 VerifierStatus，后续 ApplyDetectionResult 写 review_required
+//     而非进聚类。实时是单信号路径，没有历史 enforce 的双信号门禁，主检测过线的真实脸不能因
+//     一次目标未匹配或验证器灰区/故障而静默丢弃——只进待人工质检。
 //   - face：保留候选，正常进入既有质检/聚类路径。
 //
 // 验证器不可用或读图失败时 fail-open（保留全部候选），由既有 v1 质检兜底，绝不因验证器故障丢脸。
@@ -4406,7 +4410,7 @@ func (s *peopleService) filterDetectionsByIndependentVerification(photo *model.P
 		return faces
 	}
 
-	// 按 verification_status 分流：no_face 剔除，uncertain/error 标记，face 保留。
+	// 按 verification_status 分流：no_face/uncertain/error 保守保留待质检，face 保留。
 	kept := make([]model.PeopleDetectionFace, 0, len(faces))
 	// 保留未裁剪成功（已标 uncertain）的候选顺序：先收集所有未参与验证的索引状态。
 	statusByIDX := make(map[int]string, len(preps))
@@ -4425,9 +4429,10 @@ func (s *peopleService) filterDetectionsByIndependentVerification(photo *model.P
 		}
 		switch st {
 		case "no_face":
-			// 剔除：不创建 Face。
-			s.appendBackgroundLog(fmt.Sprintf("照片 #%d 候选 %d 独立验证 no_face，剔除", photo.ID, i))
-			continue
+			// 保留待质检：不静默丢弃。实时单信号未匹配目标脸框不能等价于自动 non_face，
+			// 真实脸（主检测过线）只应进待人工质检，由 ApplyDetectionResult 写 review_required。
+			f.VerifierStatus = "no_face"
+			s.appendBackgroundLog(fmt.Sprintf("照片 #%d 候选 %d 独立验证 no_face（未匹配目标脸框），保留待质检", photo.ID, i))
 		case "uncertain", "error":
 			f.VerifierStatus = st
 		default:
@@ -4436,6 +4441,22 @@ func (s *peopleService) filterDetectionsByIndependentVerification(photo *model.P
 		kept = append(kept, f)
 	}
 	return kept
+}
+
+// verifierReviewReasonCode 把实时独立验证的非 face 状态映射为 review_required 原因码。
+// no_face 在目标框匹配规则后语义为「未匹配目标脸框」，用 verifier_no_target_match 而非 verifier_no_face，
+// 与历史 enforce 的双信号门禁区分：实时单信号不自动隔离，只进待人工质检。
+func verifierReviewReasonCode(status string) string {
+	switch status {
+	case "no_face":
+		return "verifier_no_target_match"
+	case "uncertain":
+		return "verifier_uncertain"
+	case "error":
+		return "verifier_error"
+	default:
+		return "verifier_" + status
+	}
 }
 
 // errPeopleSplitConflict 是 ErrPeopleSplitConflict 的内部别名，保留既有调用点与测试的

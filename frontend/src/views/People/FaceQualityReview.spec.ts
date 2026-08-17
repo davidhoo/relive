@@ -595,8 +595,8 @@ describe('FaceQualityReview.vue - v2 证据展示', () => {
     const text = v2.text()
     // 主检测分
     expect(text).toContain('主检测分')
-    // 独立复核结果 + 模型版本
-    expect(text).toContain('未检测到脸')
+    // 独立复核结果 + 模型版本（no_face 在目标框匹配规则后显示「未匹配目标脸」）
+    expect(text).toContain('未匹配目标脸')
     expect(text).toContain('yunet')
     // 原图人脸框尺寸（55×63，不是压缩的 14×16）
     expect(text).toContain('55 × 63 px')
@@ -623,6 +623,101 @@ describe('FaceQualityReview.vue - v2 证据展示', () => {
     expect(alert.text()).toContain('旧版同源指标')
     // legacy 不展示 v2 证据块
     expect(wrapper.find('.v2-evidence').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
+
+// ---- Task 5：目标框匹配证据展示（#538580 等价 fixture）----
+
+const v3NoFaceItem = (over: Partial<FaceQualityReviewItem> = {}): FaceQualityReviewItem => baseItem({
+  event_id: 538580,
+  evidence_pipeline: 'independent_v2',
+  rule_version: 'face_quality_v3',
+  quality_evidence_available: true,
+  evidence_v2: {
+    evidence_schema_version: 'independent_v2_target_match_v2',
+    primary_detector_score: 0.746871,
+    verification_status: 'no_face',
+    verifier_score: 0,
+    max_context_score: 0.77609,
+    verifier_name: 'yunet',
+    verifier_version: 'opencv-yunet-2023mar',
+    original_width: 2235,
+    original_height: 2666,
+    face_box_width_px: 745,
+    face_box_height_px: 1083,
+    context_crop_width_px: 2235,
+    context_crop_height_px: 2666,
+    context_expand_ratio: 1.0,
+    reason_codes: ['target_face_not_matched', 'context_face_not_target'],
+    rule_version: 'face_quality_v3',
+    model_version: 'opencv-yunet-2023mar',
+  },
+  ...over,
+})
+
+describe('FaceQualityReview.vue - Task 5 目标框匹配证据展示', () => {
+  it('no_face + max_context_score>0 显示「未匹配到目标脸」+ 裁剪中其他检测最高 NN%，不把上下文分数当确认分', async () => {
+    mocks.mockListFaceQualityReviews.mockResolvedValue(page([v3NoFaceItem()]))
+    const wrapper = mountReview()
+    await flushPromises()
+    await wrapper.find('.face-card').trigger('click')
+    await flushPromises()
+    const v2 = wrapper.find('.v2-evidence')
+    expect(v2.exists()).toBe(true)
+    const text = v2.text()
+    expect(text).toContain('未匹配到目标脸')
+    expect(text).toContain('77.6%')
+    // 不得出现「未检测到脸置信度 77.6%」这类把上下文分数当确认分的矛盾文案
+    expect(text).not.toContain('未检测到脸置信度')
+    // verifier_score=0 不得作为确认分展示
+    expect(text).not.toMatch(/置信度\s*77\.6%/)
+    wrapper.unmount()
+  })
+
+  it('face 显示「已匹配目标脸」+ 目标匹配分 + IoU', async () => {
+    const item = v3NoFaceItem({
+      event_id: 538581,
+      evidence_v2: {
+        ...v3NoFaceItem().evidence_v2!,
+        verification_status: 'face',
+        verifier_score: 0.92,
+        max_context_score: 0.92,
+        target_match_iou: 0.846,
+      },
+    })
+    mocks.mockListFaceQualityReviews.mockResolvedValue(page([item]))
+    const wrapper = mountReview()
+    await flushPromises()
+    await wrapper.find('.face-card').trigger('click')
+    await flushPromises()
+    const text = wrapper.find('.v2-evidence').text()
+    expect(text).toContain('已匹配目标脸')
+    expect(text).toContain('92.0%')
+    expect(text).toContain('IoU')
+    expect(text).toContain('0.846')
+    wrapper.unmount()
+  })
+
+  it('旧 v2 证据缺目标匹配诊断字段时标注「旧证据」，保留原置信度入口', async () => {
+    // 旧证据：无 max_context_score/target_match_iou，verifier_score 旧逻辑写的上下文分数。
+    const oldEv = v3NoFaceItem().evidence_v2!
+    const { max_context_score: _omit, ...oldEvWithoutDiagnostics } = oldEv as any
+    const item = v3NoFaceItem({
+      event_id: 538582,
+      evidence_v2: { ...oldEvWithoutDiagnostics, evidence_schema_version: 'independent_v2', verifier_score: 0.77609, rule_version: 'face_quality_v2' },
+      rule_version: 'face_quality_v2',
+    })
+    mocks.mockListFaceQualityReviews.mockResolvedValue(page([item]))
+    const wrapper = mountReview()
+    await flushPromises()
+    await wrapper.find('.face-card').trigger('click')
+    await flushPromises()
+    const text = wrapper.find('.v2-evidence').text()
+    expect(text).toContain('旧证据，未记录目标匹配诊断')
+    // 旧证据仍展示原置信度，但已标注不当确认分
+    expect(text).toContain('置信度')
+    expect(text).toContain('77.6%')
     wrapper.unmount()
   })
 })

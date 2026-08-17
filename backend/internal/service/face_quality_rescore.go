@@ -26,7 +26,10 @@ type FaceQualityRescoreService interface {
 	// photo_limit>0 时限制快照照片数（校准用）。返回运行 ID 与实际快照计数。
 	// full/enforce 必须通过 calibrationRunID 指定服务端验证通过的合格校准 run（0 表示无）。
 	// pipelineVersion: legacy_v1（v1 同源 score-known-faces）/ independent_v2（v2 独立验证器）。
-	CreateRun(mode, applyMode string, photoLimit int, calibrationRunID uint, pipelineVersion string) (*model.FaceQualityRescoreRun, error)
+	// ruleVersion: independent_v2 管线下的规则版本——face_quality_v3（目标框匹配）/ face_quality_v2（默认）。
+	//   v3 可重新复核已有 v2 自动证据；v3 full/enforce 要求引用的校准 run rule_version=face_quality_v3。
+	// faceIDs: 非空时为定点校准（仅 calibration+shadow+independent_v2），最多 50 个去重去零、必须存在。
+	CreateRun(mode, applyMode string, photoLimit int, calibrationRunID uint, pipelineVersion, ruleVersion string, faceIDs []uint) (*model.FaceQualityRescoreRun, error)
 	GetRun(id uint) (*model.FaceQualityRescoreRun, error)
 	ListRuns(limit int) ([]*model.FaceQualityRescoreRun, error)
 	Pause(id uint) error
@@ -95,9 +98,11 @@ func (s *faceQualityRescoreService) ensureV2VerifierReady(pipelineVersion string
 
 // CreateRun 创建运行并快照目标 Face 集合。
 // pipelineVersion=legacy_v1：从 historical_backfill+missing 事件选目标（v1 同源）。
-// pipelineVersion=independent_v2：从全部无 manual 结论、无 independent_v2 事件的 Face 选目标（v2 独立）。
+// pipelineVersion=independent_v2：按 ruleVersion 选无 manual 结论、无同规则版本自动事件的 Face（v2 独立）。
+// ruleVersion=face_quality_v3 时可重新复核已有 v2 自动证据；v3 full/enforce 要求校准 run rule_version=face_quality_v3。
+// faceIDs 非空时为定点校准（仅 calibration+shadow+independent_v2），最多 50 个、必须存在。
 // full/enforce 必须通过 calibrationRunID 指定服务端验证通过的合格校准 run（Task 4 门禁）。
-func (s *faceQualityRescoreService) CreateRun(mode, applyMode string, photoLimit int, calibrationRunID uint, pipelineVersion string) (*model.FaceQualityRescoreRun, error) {
+func (s *faceQualityRescoreService) CreateRun(mode, applyMode string, photoLimit int, calibrationRunID uint, pipelineVersion, ruleVersion string, faceIDs []uint) (*model.FaceQualityRescoreRun, error) {
 	if s.people == nil {
 		return nil, fmt.Errorf("people service not available")
 	}
@@ -106,6 +111,32 @@ func (s *faceQualityRescoreService) CreateRun(mode, applyMode string, photoLimit
 	}
 	if !model.IsValidRescorePipelineVersion(pipelineVersion) {
 		return nil, fmt.Errorf("invalid pipeline_version: %s", pipelineVersion)
+	}
+
+	// face_ids 定点校准校验：仅 calibration（shadow）+ independent_v2 允许；full 拒绝；最多 50 个去重去零。
+	// 存在性由 repo.ListIndependentSnapshotTargets 校验（返回 ErrRescoreFaceIDNotFound）。
+	if len(faceIDs) > 0 {
+		if mode != model.FaceQualityRescoreModeCalibration {
+			return nil, ErrRescoreFaceIDsNotCalibration
+		}
+		if pipelineVersion != model.FaceQualityRescorePipelineIndependentV2 {
+			return nil, ErrRescoreFaceIDsNotIndependentV2
+		}
+		seen := make(map[uint]struct{}, len(faceIDs))
+		count := 0
+		for _, id := range faceIDs {
+			if id == 0 {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			count++
+		}
+		if count > 50 {
+			return nil, ErrRescoreTooManyFaceIDs
+		}
 	}
 
 	// 校准一律归一化为 shadow，忽略调用方传入的 apply_mode。
@@ -122,17 +153,37 @@ func (s *faceQualityRescoreService) CreateRun(mode, applyMode string, photoLimit
 		return nil, err
 	}
 
-	// full/enforce 门禁（计划 §3.4）：必须指定合格校准 run，服务端逐项验证。
+	// 规则版本：legacy_v1 固定 v1；independent_v2 按 ruleVersion——face_quality_v3 显式启用目标框
+	// 匹配规则，否则 v2（默认）。ruleVer 既写入 run.RuleVersion，也作为 full/enforce 校准门禁。
+	ruleVer := qualityRuleVersionFromEvidence(nil) // "v1"
+	modelVer := qualityModelVersionFromEvidence(nil)
+	if pipelineVersion == model.FaceQualityRescorePipelineIndependentV2 {
+		if ruleVersion == model.FaceQualityRescoreRuleVersionV3 {
+			ruleVer = model.FaceQualityRescoreRuleVersionV3
+		} else {
+			ruleVer = model.FaceQualityRescoreRuleVersionV2
+		}
+		modelVer = "yunet-v1"
+	} else if modelVer == "" {
+		// 与 ml-service FACE_QUALITY_MODEL_VERSION 对齐；测试环境可能为空，留 schema 默认。
+		modelVer = "insightface-buffalo-sc-v1"
+	}
+
+	// full/enforce 门禁（计划 §3.4 + Task 4）：必须指定合格校准 run，且校准 run 的 rule_version
+	// 必须等于本 run 的 ruleVer——这样 v2 校准（#5）不能放行 v3 enforce。
 	var calibrationRun *model.FaceQualityRescoreRun
 	if mode == model.FaceQualityRescoreModeFull && effectiveApplyMode == model.FaceQualityRescoreApplyModeEnforce {
 		if calibrationRunID == 0 {
 			return nil, errCalibrationRequired
 		}
-		cal, ok, err := s.getEligibleCalibration(calibrationRunID, pipelineVersion)
+		cal, ok, err := s.getEligibleCalibration(calibrationRunID, pipelineVersion, ruleVer)
 		if err != nil {
 			return nil, err
 		}
 		if !ok {
+			if ruleVer == model.FaceQualityRescoreRuleVersionV3 {
+				return nil, ErrRescoreRuleVersionNotV3
+			}
 			return nil, errCalibrationRequired
 		}
 		calibrationRun = cal
@@ -147,26 +198,24 @@ func (s *faceQualityRescoreService) CreateRun(mode, applyMode string, photoLimit
 		return nil, errRunConflict
 	}
 
-	// 快照目标 Face 集合：v1 走 historical_backfill+missing 事件；v2 走全部无 manual/v2 结论的 Face。
-	targets, err := s.snapshotTargets(photoLimit, pipelineVersion)
+	// 快照目标 Face 集合：v1 走 historical_backfill+missing 事件；independent_v2 按 ruleVersion 选
+	// 无 manual 结论、无同规则版本自动事件的 Face（v3 可重新复核 v2 自动证据）。
+	targets, err := s.snapshotTargets(photoLimit, pipelineVersion, ruleVer, faceIDs)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot targets: %w", err)
 	}
 
 	now := time.Now().UTC()
-	ruleVer := qualityRuleVersionFromEvidence(nil) // "v1"
-	modelVer := qualityModelVersionFromEvidence(nil)
-	if pipelineVersion == model.FaceQualityRescorePipelineIndependentV2 {
-		ruleVer = model.FaceQualityRescoreRuleVersionV2 // "face_quality_v2"
-		modelVer = "yunet-v1"
-	} else if modelVer == "" {
-		// 与 ml-service FACE_QUALITY_MODEL_VERSION 对齐；测试环境可能为空，留 schema 默认。
-		modelVer = "insightface-buffalo-sc-v1"
-	}
 
 	targetScope := model.RescoreTargetScopeV1
 	if pipelineVersion == model.FaceQualityRescorePipelineIndependentV2 {
 		targetScope = model.RescoreTargetScopeV2
+	}
+
+	// 定点校准审计：face_ids 非空时记录 explicit_face_ids，便于复现。
+	selectionPolicy := "oldest_by_photo_id"
+	if len(faceIDs) > 0 {
+		selectionPolicy = "explicit_face_ids"
 	}
 
 	run := &model.FaceQualityRescoreRun{
@@ -177,7 +226,7 @@ func (s *faceQualityRescoreService) CreateRun(mode, applyMode string, photoLimit
 		TargetFaceCount:  len(targets),
 		RuleVersion:      ruleVer,
 		ModelVersion:     modelVer,
-		SelectionPolicy:  "oldest_by_photo_id",
+		SelectionPolicy:  selectionPolicy,
 		PhotoLimit:       photoLimit,
 		PipelineVersion:  pipelineVersion,
 		TargetScope:      targetScope,
@@ -227,10 +276,11 @@ type rescoreTarget struct {
 
 // snapshotTargets 快照目标 Face 集合。
 // pipelineVersion=legacy_v1：当前 historical_backfill + missing 的 is_current 事件，按 photo 升序。
-// pipelineVersion=independent_v2：全部无 manual 结论、无 independent_v2 事件的 Face（repo.ListV2SnapshotTargets）。
-func (s *faceQualityRescoreService) snapshotTargets(photoLimit int, pipelineVersion string) ([]rescoreTarget, error) {
+// pipelineVersion=independent_v2：按 ruleVersion 选无 manual 结论、无同规则版本自动事件的 Face
+// （repo.ListIndependentSnapshotTargets）——v3 可重新复核 v2 自动证据。faceIDs 非空时为定点快照。
+func (s *faceQualityRescoreService) snapshotTargets(photoLimit int, pipelineVersion, ruleVersion string, faceIDs []uint) ([]rescoreTarget, error) {
 	if pipelineVersion == model.FaceQualityRescorePipelineIndependentV2 {
-		v2Targets, err := s.repo.ListV2SnapshotTargets(photoLimit)
+		v2Targets, err := s.repo.ListIndependentSnapshotTargets(ruleVersion, photoLimit, faceIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -586,7 +636,12 @@ func (s *faceQualityRescoreService) RetryRun(sourceRunID uint) (*model.FaceQuali
 // v2 门禁（任务 §3）：full/enforce run 必须引用 pipeline_version 与自身一致且合格的校准 run。
 // v2 full→v2 calib、v1 full→v1 calib 均允许（v1 路径保留但不再作为 v2 校准来源）；
 // 跨管线引用（v2 full→v1 calib）拒绝——v1 同源证据不得驱动 v2 自动隔离。
-func (s *faceQualityRescoreService) getEligibleCalibration(runID uint, fullPipeline string) (*model.FaceQualityRescoreRun, bool, error) {
+//
+// Task 4 规则版本门禁：fullRuleVersion 非空时，校准 run 的 rule_version 必须等于 fullRuleVersion。
+// 这样 v3 full→必须 v3 calib，v2 calib（#5）不能放行 v3 enforce。
+// fullRuleVersion 为空时不做规则版本检查（供 IsEligibleForEnforce 列表视图的通用合格判定，
+// 不预设未来 full 用 v2 还是 v3）。
+func (s *faceQualityRescoreService) getEligibleCalibration(runID uint, fullPipeline, fullRuleVersion string) (*model.FaceQualityRescoreRun, bool, error) {
 	run, err := s.repo.GetEligibleCalibration(runID)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -601,6 +656,10 @@ func (s *faceQualityRescoreService) getEligibleCalibration(runID uint, fullPipel
 	}
 	// 管线一致性：calibration 必须与 full run 同管线。v2 full 不得引用 v1 calib。
 	if run.PipelineVersion != fullPipeline {
+		return run, false, nil
+	}
+	// 规则版本一致性：fullRuleVersion 非空时校准 run 的 rule_version 必须匹配（v3 full→v3 calib）。
+	if fullRuleVersion != "" && run.RuleVersion != fullRuleVersion {
 		return run, false, nil
 	}
 	if run.TargetFaceCount <= 0 || run.RetryableCount != 0 {
@@ -620,9 +679,11 @@ func (s *faceQualityRescoreService) getEligibleCalibration(runID uint, fullPipel
 }
 
 // IsEligibleForEnforce 报告某 run 是否为合格校准（供 handler 列表/详情填充 eligible_for_enforce）。
-// 仅 independent_v2 校准可作为 v2 enforce 来源（任务 §3）。
+// 仅 independent_v2 校准可作为 v2 enforce 来源（任务 §3）。列表视图不做规则版本门禁——
+// 它不知道未来 full 要用 v2 还是 v3，只报通用合格性（completed/无 retryable/计数闭合/同管线）。
+// 真正的 v3 规则版本门禁在 CreateRun 的 full 路径（getEligibleCalibration 传 fullRuleVersion）做。
 func (s *faceQualityRescoreService) IsEligibleForEnforce(runID uint) bool {
-	_, ok, err := s.getEligibleCalibration(runID, model.FaceQualityRescorePipelineIndependentV2)
+	_, ok, err := s.getEligibleCalibration(runID, model.FaceQualityRescorePipelineIndependentV2, "")
 	return err == nil && ok
 }
 
@@ -999,11 +1060,19 @@ func (s *faceQualityRescoreService) applyV2Result(run *model.FaceQualityRescoreR
 // buildV2Evidence 把 crops + ML 验证结果 + 策略 outcome 合并为 FaceQualityEvidenceV2
 // （原图尺寸由后端填充；shadow 模式下 SuggestedDecision 保存系统建议决策供校准抽样）。
 func buildV2Evidence(crops *V2FaceCrops, r mlclient.VerifyKnownFaceCropResult, outcome v2QualityOutcome) *model.FaceQualityEvidenceV2 {
+	// 证据 schema 版本以 ML 响应为准（目标框匹配规则后为 independent_v2_target_match_v2）；
+	// 旧 ML 镜像回退 independent_v2。这样旧证据保留旧版本，新证据由 ML 决定，后端不伪造。
+	schemaVersion := r.EvidenceSchemaVersion
+	if schemaVersion == "" {
+		schemaVersion = model.EvidenceSchemaVersionV2
+	}
 	ev := &model.FaceQualityEvidenceV2{
-		EvidenceSchemaVersion: "independent_v2",
+		EvidenceSchemaVersion: schemaVersion,
 		PrimaryDetectorScore:  r.PrimaryDetectorScore,
 		VerificationStatus:    r.VerificationStatus,
 		VerifierScore:         r.VerifierScore,
+		MaxContextScore:       r.MaxContextScore,
+		TargetMatchIoU:        r.TargetMatchIoU,
 		VerifierName:          r.VerifierName,
 		VerifierVersion:       r.VerifierVersion,
 		OriginalWidth:         crops.OriginalWidth,
@@ -1521,6 +1590,10 @@ var (
 	ErrRescoreRetryNoTargets            = fmt.Errorf("retry source run has no current retryable failures")
 	ErrRescoreRestoreLegacyV1NotAllowed = fmt.Errorf("restore-auto is only allowed for independent_v2 runs")
 	ErrRescoreV2VerifierUnavailable     = fmt.Errorf("v2 verifier unavailable; deploy a verified YuNet model before creating/resuming/retrying independent_v2 runs")
+	ErrRescoreFaceIDsNotCalibration     = fmt.Errorf("face_ids is only allowed for calibration+shadow runs (pre-release targeted validation)")
+	ErrRescoreFaceIDsNotIndependentV2   = fmt.Errorf("face_ids is only allowed for independent_v2 pipeline runs")
+	ErrRescoreTooManyFaceIDs            = fmt.Errorf("face_ids must contain at most 50 unique non-zero ids")
+	ErrRescoreRuleVersionNotV3          = fmt.Errorf("a face_quality_v3 calibration is required before v3 full/enforce")
 
 	// 内部别名，保持 service 内部引用不变。
 	errRunConflict               = ErrRescoreRunConflict

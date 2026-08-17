@@ -196,6 +196,16 @@ const (
 	FaceQualityEvidencePipelineIndependentV2 = "independent_v2"
 )
 
+// v2 证据 schema 版本（写入 evidence_json 的 evidence_schema_version 字段）。
+const (
+	// EvidenceSchemaVersionV2 目标框匹配规则前的 v2 证据 schema 版本（旧证据）。
+	EvidenceSchemaVersionV2 = "independent_v2"
+	// EvidenceSchemaVersionV2TargetMatch 目标框匹配规则后的 v2 证据 schema 版本。
+	// 证据管线仍是 independent_v2；此版本仅标识 face/no_face 改为「是否匹配目标脸框」后的形态，
+	// 新增 max_context_score / target_match_iou 诊断字段。
+	EvidenceSchemaVersionV2TargetMatch = "independent_v2_target_match_v2"
+)
+
 // IsValidEvidencePipeline 校验证据管线是否合法
 func IsValidEvidencePipeline(s string) bool {
 	return s == FaceQualityEvidencePipelineLegacyV1 ||
@@ -339,16 +349,23 @@ type FaceQualityEvidence struct {
 // 所有尺寸/质量指标都在「EXIF 方向校正 + manual_rotation 叠加」的原图上计算，
 // 不得用缩略图或 ProcessForAI(1024,85) 压缩图的尺寸覆盖。缩略图尺寸不得替代这些字段。
 type FaceQualityEvidenceV2 struct {
-	EvidenceSchemaVersion string `json:"evidence_schema_version"` // 固定 "independent_v2"
+	EvidenceSchemaVersion string `json:"evidence_schema_version"` // independent_v2（旧）/ independent_v2_target_match_v2（目标框匹配后）
 
 	// 主检测（InsightFace buffalo_sc）置信度。
 	PrimaryDetectorScore float64 `json:"primary_detector_score"`
 
 	// 独立验证器（YuNet）结果。
 	VerificationStatus string  `json:"verification_status"` // face / no_face / uncertain / error
+	// VerifierScore 目标匹配分：匹配到目标脸框时为该检测框置信度；未匹配为 0。
+	// 不再写入裁剪内其他人脸分数，避免「未检测到脸 77.6%」矛盾文案。
 	VerifierScore      float64 `json:"verifier_score"`
-	VerifierName       string  `json:"verifier_name"`
-	VerifierVersion    string  `json:"verifier_version"`
+	// MaxContextScore 裁剪内所有检测的最高置信度（含非目标脸）。仅供诊断/文案，
+	// 不得当作「确认脸」置信度；前端据此区分「未匹配目标」与「裁剪中无任何检测」。
+	MaxContextScore float64 `json:"max_context_score"`
+	// TargetMatchIoU 匹配到目标脸框时的 IoU；未匹配为 nil。旧证据缺此字段。
+	TargetMatchIoU *float64 `json:"target_match_iou,omitempty"`
+	VerifierName   string   `json:"verifier_name"`
+	VerifierVersion string  `json:"verifier_version"`
 
 	// 原图（方向校正后）尺寸。
 	OriginalWidth  int `json:"original_width"`

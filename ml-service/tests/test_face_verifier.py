@@ -16,7 +16,11 @@ import numpy as np
 
 from app.models import face_verifier
 from app.models.face_verifier import FaceVerifier, _YUNET_MIN_INPUT_SHORT_EDGE
-from app.schemas import EVIDENCE_SCHEMA_VERSION_V2, VerifyKnownFaceCropTarget
+from app.schemas import (
+    EVIDENCE_SCHEMA_VERSION_V2,
+    EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH,
+    VerifyKnownFaceCropTarget,
+)
 
 
 def _write_fake_assets(tmp_path: Path, *, model_bytes: bytes = b"fake-onnx", digest: str | None = None) -> tuple[Path, Path]:
@@ -84,39 +88,106 @@ def test_verifier_no_face(tmp_path: Path):
     assert resp.results[0].quality is not None
 
 
-def test_verifier_face_centered(tmp_path: Path):
-    """检测框中心落在裁剪中心区域 → face。"""
+def test_verifier_face_matched_to_target_box(tmp_path: Path):
+    """检测框与目标脸框重叠足够（IoU>=0.3）→ face，目标匹配分为检测框分数。"""
     def factory():
         class D:
             def setInputSize(self, _): ...
             def detect(self, _frame):
-                # YuNet 返回 [x,y,w,h, ..., score]；中心脸放在裁剪中心。
-                faces = np.array([[40, 40, 40, 40, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.9]])
+                # 检测框 (10,10,40,40)，目标框 offset(0,0) size(50,50) → IoU≈0.64。
+                faces = np.array([[10, 10, 40, 40, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.9]])
                 return None, faces
         return D()
 
     v = _make_verifier_with_factory(tmp_path, factory)
     frame = np.full((120, 120, 3), 200, dtype=np.uint8)
-    resp = v.verify_crops([VerifyKnownFaceCropTarget(face_id=3, context_crop_base64=_encode_image(frame), face_box_width_px=50, face_box_height_px=50, primary_detector_score=0.4)])
+    resp = v.verify_crops([VerifyKnownFaceCropTarget(
+        face_id=3, context_crop_base64=_encode_image(frame),
+        face_box_offset_x=0, face_box_offset_y=0,
+        face_box_width_px=50, face_box_height_px=50, primary_detector_score=0.4)])
     assert resp.results[0].verification_status == "face"
     assert resp.results[0].verifier_score == 0.9
+    assert resp.results[0].target_match_iou is not None
+    assert resp.results[0].target_match_iou >= 0.3
+    assert resp.results[0].max_context_score == 0.9
 
 
-def test_verifier_face_off_center_is_no_face(tmp_path: Path):
-    """检测框在角落（非中心区域）→ no_face，避免上下文里的人被误判为目标脸。"""
+def test_verifier_edge_target_box_at_corner_is_face(tmp_path: Path):
+    """边缘裁剪回归（Face #538580 等价）：目标脸在裁剪左上角而非中心，仍须判 face。
+
+    100×100 上下文裁剪，目标框 (0,0,25,25)（被原图边界截断后 offset=0）；检测框 (2,2,23,23)
+    与目标框高度重叠。旧「裁剪中心 40%」规则会因目标脸不在中心而假阴性；目标框匹配应判 face。
+    """
     def factory():
         class D:
             def setInputSize(self, _): ...
             def detect(self, _frame):
-                # 角落脸，中心 (5,5) 远离裁剪中心。
-                faces = np.array([[0, 0, 10, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.95]])
+                faces = np.array([[2, 2, 23, 23, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.92]])
                 return None, faces
         return D()
 
     v = _make_verifier_with_factory(tmp_path, factory)
+    frame = np.full((100, 100, 3), 200, dtype=np.uint8)
+    resp = v.verify_crops([VerifyKnownFaceCropTarget(
+        face_id=538580, context_crop_base64=_encode_image(frame),
+        face_box_offset_x=0, face_box_offset_y=0,
+        face_box_width_px=25, face_box_height_px=25, primary_detector_score=0.746871)])
+    r = resp.results[0]
+    assert r.verification_status == "face"
+    assert r.verifier_score == 0.92
+    assert r.target_match_iou is not None and r.target_match_iou >= 0.3
+    assert r.max_context_score == 0.92
+    assert r.evidence_schema_version == EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH
+
+
+def test_verifier_group_shot_non_target_is_no_face(tmp_path: Path):
+    """群像反例：裁剪内有其他人脸但与目标框不重叠 → no_face，不因分数高而误匹配。"""
+    def factory():
+        class D:
+            def setInputSize(self, _): ...
+            def detect(self, _frame):
+                # 检测框 (45,45,25,25) 在右下，目标框 (0,0,25,25) 在左上，IoU=0。
+                faces = np.array([[45, 45, 25, 25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.95]])
+                return None, faces
+        return D()
+
+    v = _make_verifier_with_factory(tmp_path, factory)
+    frame = np.full((100, 100, 3), 200, dtype=np.uint8)
+    resp = v.verify_crops([VerifyKnownFaceCropTarget(
+        face_id=4, context_crop_base64=_encode_image(frame),
+        face_box_offset_x=0, face_box_offset_y=0,
+        face_box_width_px=25, face_box_height_px=25, primary_detector_score=0.4)])
+    r = resp.results[0]
+    assert r.verification_status == "no_face"
+    # 未匹配目标脸 → 分数为 0，不得把上下文里其他脸的 0.95 当作确认分。
+    assert r.verifier_score == 0.0
+    assert r.target_match_iou is None
+    # 诊断字段保留裁剪内最高检测分，供文案区分「未匹配目标」与「裁剪中无任何检测」。
+    assert r.max_context_score == 0.95
+    assert "target_face_not_matched" in r.reason_codes
+    assert "context_face_not_target" in r.reason_codes
+
+
+def test_verifier_no_detection_keeps_zero_context_score(tmp_path: Path):
+    """裁剪内无任何检测 → no_face，max_context_score=0，仅 target_face_not_matched。"""
+    def factory():
+        class D:
+            def setInputSize(self, _): ...
+            def detect(self, _frame):
+                return None, None
+        return D()
+
+    v = _make_verifier_with_factory(tmp_path, factory)
     frame = np.full((120, 120, 3), 200, dtype=np.uint8)
-    resp = v.verify_crops([VerifyKnownFaceCropTarget(face_id=4, context_crop_base64=_encode_image(frame), face_box_width_px=50, face_box_height_px=50, primary_detector_score=0.4)])
-    assert resp.results[0].verification_status == "no_face"
+    resp = v.verify_crops([VerifyKnownFaceCropTarget(
+        face_id=7, context_crop_base64=_encode_image(frame),
+        face_box_offset_x=20, face_box_offset_y=20,
+        face_box_width_px=50, face_box_height_px=50, primary_detector_score=0.4)])
+    r = resp.results[0]
+    assert r.verification_status == "no_face"
+    assert r.verifier_score == 0.0
+    assert r.max_context_score == 0.0
+    assert r.reason_codes == ["target_face_not_matched"]
 
 
 def test_verifier_uncertain_when_input_too_small(tmp_path: Path):
@@ -148,6 +219,7 @@ def test_min_input_short_edge_constant_positive():
 
 def test_evidence_schema_version_constant():
     assert EVIDENCE_SCHEMA_VERSION_V2 == "independent_v2"
+    assert EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH == "independent_v2_target_match_v2"
 
 
 def test_compute_quality_uses_exact_face_box_offset_not_center():

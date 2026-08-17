@@ -153,6 +153,12 @@ class ScoreKnownFacesResponse(BaseModel):
 # v2 证据 schema 版本。
 EVIDENCE_SCHEMA_VERSION_V2 = "independent_v2"
 
+# v2 目标框匹配规则后的证据 schema 版本。
+# 证据管线仍是 independent_v2（evidence_pipeline）；此版本仅标识「face/no_face 改为
+# 是否匹配目标脸框」后的证据形态，新增 max_context_score / target_match_iou 诊断字段。
+# 旧证据保留 independent_v2，由前端按字段缺失判定为「旧证据，未记录目标匹配诊断」。
+EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH = "independent_v2_target_match_v2"
+
 # v2 规则/模型版本（独立于 v1）。
 FACE_QUALITY_V2_RULE_VERSION = "face_quality_v2"
 YUNET_VERIFIER_NAME = "yunet"
@@ -188,15 +194,24 @@ class VerifyKnownFaceCropsRequest(BaseModel):
 
 
 class VerifyKnownFaceCropResult(BaseModel):
-    """单个目标的 v2 复核结果，按请求 target 顺序返回。"""
+    """单个目标的 v2 复核结果，按请求 target 顺序返回。
+
+    face/no_face 语义为「是否匹配到目标脸框」：仅当某检测框与请求 face_box_offset/width/height
+    重叠足够（IoU>=阈值）时判 face，避免群像中位于裁剪中心或分数更高的非目标脸替代目标脸。
+    """
 
     face_id: int
-    # face: 独立验证器在裁剪副本中检测到足够置信且位于目标中心区域的脸。
-    # no_face: 成功推理但无可靠脸。
+    # face: 独立验证器检测到与目标脸框重叠足够的脸。
+    # no_face: 成功推理但未匹配到目标脸（裁剪内可能仍有其他脸）。
     # uncertain: 输入短边不足模型最小可判尺寸或结果边界。
     # error: 加载/推理/解码异常（可重试）。
     verification_status: str
+    # 目标匹配分：匹配到目标脸时为该检测框置信度；未匹配时为 0（不再写入裁剪内其他脸分数）。
     verifier_score: float = 0.0
+    # 裁剪内所有检测的最高置信度（含非目标脸）。仅供诊断/文案，不得当作「确认脸」置信度。
+    max_context_score: float = 0.0
+    # 匹配到目标脸时的 IoU；未匹配为 None。
+    target_match_iou: float | None = None
     verifier_name: str = YUNET_VERIFIER_NAME
     verifier_version: str = YUNET_VERIFIER_VERSION
     original_width: int = 0
@@ -209,7 +224,7 @@ class VerifyKnownFaceCropResult(BaseModel):
     primary_detector_score: float = 0.0
     quality: V2QualityFeatures | None = None
     reason_codes: list[str] = Field(default_factory=list)
-    evidence_schema_version: str = EVIDENCE_SCHEMA_VERSION_V2
+    evidence_schema_version: str = EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH
 
 
 class VerifyKnownFaceCropsResponse(BaseModel):

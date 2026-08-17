@@ -5,11 +5,14 @@
 模型缺失或 SHA256SUMS 校验失败时，验证器进入 unavailable 状态，verify_crops 对所有目标
 返回 error，使后端历史 worker 写 technical_error——绝不静默退回 v1 同源评分。
 
-verify_crops 的判定语义：
-- face: YuNet 在裁剪副本中检测到置信度足够且位于目标中心区域的脸；
-- no_face: 成功推理但无可靠脸；
+verify_crops 的判定语义（目标框匹配，而非裁剪图几何中心）：
+- face: YuNet 某检测框与请求 face_box_offset/width/height 重叠足够（IoU>=阈值）；
+- no_face: 成功推理但无检测框与目标脸框重叠足够（裁剪内可能仍有其他人脸）；
 - uncertain: 输入短边不足模型最小可判尺寸或结果边界不可靠；
 - error: 加载/推理/解码异常。
+
+边缘裁剪被原图边界截断后，目标脸不再位于裁剪图几何中心，旧「中心 40%」规则会假阴性。
+目标框匹配只接受与目标框重叠足够的检测框，群像中附近其他人脸不会替代目标脸。
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ import cv2
 import numpy as np
 
 from app.schemas import (
-    EVIDENCE_SCHEMA_VERSION_V2,
+    EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH,
     V2QualityFeatures,
     VerifyKnownFaceCropResult,
     VerifyKnownFaceCropTarget,
@@ -41,7 +44,9 @@ YUNET_SHA256SUMS_PATH = YUNET_ASSET_DIR / "SHA256SUMS"
 
 # YuNet 检测阈值与几何约束（与 rule_version face_quality_v2 绑定；调整须重跑 shadow 校准）。
 _YUNET_CONFIDENCE_THRESHOLD = 0.5  # 裁剪副本内 YuNet 检测置信度阈值
-_YUNET_CENTER_RATIO = 0.4  # 检测框中心须落在目标中心 region（裁剪中心 40% 区域）内
+# 目标框匹配 IoU 阈值：检测框须与请求目标脸框 IoU>=此值才判 face。
+# 与已知框重评分 exclusionIoUThreshold=0.3 保持一致，群像中非目标脸不会因邻近而误匹配。
+_YUNET_TARGET_IOU_THRESHOLD = 0.3
 _YUNET_MIN_INPUT_SHORT_EDGE = 24  # 裁剪副本短边低于此值判 uncertain（模型最小可判尺寸）
 
 # 质量特征归一化短边（计算域）。
@@ -150,7 +155,7 @@ class FaceVerifier:
             face_box_width_px=int(target.face_box_width_px),
             face_box_height_px=int(target.face_box_height_px),
             primary_detector_score=float(target.primary_detector_score),
-            evidence_schema_version=EVIDENCE_SCHEMA_VERSION_V2,
+            evidence_schema_version=EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH,
         )
 
         # 模型不可用：整批 error，绝不退回 v1 同源评分。
@@ -198,14 +203,27 @@ class FaceVerifier:
             int(target.face_box_width_px), int(target.face_box_height_px),
         )
 
-        # 判定：检测到足够置信且位于目标中心区域的脸 → face；否则 no_face。
-        is_face, score = _has_centered_face(detected, w, h)
-        if is_face:
+        # 判定：是否匹配到目标脸框（IoU>=阈值），而非裁剪图几何中心。
+        target_match_score, target_match_iou, max_context_score = _match_target_face(
+            detected,
+            int(target.face_box_offset_x), int(target.face_box_offset_y),
+            int(target.face_box_width_px), int(target.face_box_height_px),
+        )
+        base.max_context_score = round(float(max_context_score), 6)
+        if target_match_iou is not None:
+            base.target_match_iou = round(float(target_match_iou), 6)
+
+        if target_match_iou is not None:
             base.verification_status = "face"
-            base.verifier_score = round(float(score), 6)
+            base.verifier_score = round(float(target_match_score), 6)
         else:
             base.verification_status = "no_face"
-            base.verifier_score = round(float(score), 6)
+            # 未匹配目标脸时分数为 0，不再写入裁剪内其他脸分数，避免「未检测到脸 77.6%」矛盾文案。
+            base.verifier_score = 0.0
+            codes = ["target_face_not_matched"]
+            if max_context_score > 0:
+                codes.append("context_face_not_target")
+            base.reason_codes = codes
         return base
 
     def _run_yunet(self, frame: np.ndarray) -> list[tuple[float, tuple[int, int, int, int]]]:
@@ -234,33 +252,63 @@ def _decode_base64_image(b64: str) -> np.ndarray | None:
         return None
 
 
-def _has_centered_face(
+def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+    """两个 (x, y, w, h) 框的 IoU。宽高为 0 或不相交时返回 0。"""
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    ax2, ay2 = ax + aw, ay + ah
+    bx2, by2 = bx + bw, by + bh
+    ix0 = max(ax, bx)
+    iy0 = max(ay, by)
+    ix1 = min(ax2, bx2)
+    iy1 = min(ay2, by2)
+    iw = ix1 - ix0
+    ih = iy1 - iy0
+    if iw <= 0 or ih <= 0:
+        return 0.0
+    inter = float(iw * ih)
+    area_a = float(max(0, aw) * max(0, ah))
+    area_b = float(max(0, bw) * max(0, bh))
+    union = area_a + area_b - inter
+    if union <= 0:
+        return 0.0
+    return inter / union
+
+
+def _match_target_face(
     detected: list[tuple[float, tuple[int, int, int, int]]],
-    w: int,
-    h: int,
-) -> tuple[bool, float]:
-    """检测框中心须落在裁剪中心 _YUNET_CENTER_RATIO 区域内。
+    target_x: int,
+    target_y: int,
+    target_w: int,
+    target_h: int,
+) -> tuple[float, float | None, float]:
+    """在裁剪副本坐标系内，把 YuNet 检测框与目标脸框做 IoU 匹配。
 
-    上下文裁剪以人脸框为中心扩展，目标脸应位于裁剪中心；边缘检测框更可能是上下文里的人。
-    返回 (是否为 face, 最高置信度)。无检测时 score=0。
+    目标脸框为请求中的 (face_box_offset_x/y, face_box_width/height)。
+    仅 IoU >= _YUNET_TARGET_IOU_THRESHOLD 的候选可匹配目标；多个候选命中时选 IoU 最大者，
+    IoU 相同时选分数更高者。绝不因裁剪内另一张脸分数更高而判目标脸存在。
+
+    返回 (target_match_score, target_match_iou, max_context_score)：
+    - target_match_score: 匹配目标框的检测框置信度；无匹配为 0。
+    - target_match_iou: 匹配框与目标框的 IoU；无匹配为 None。
+    - max_context_score: 裁剪内所有检测的最高置信度（含非目标脸），仅供诊断。
     """
-    if not detected:
-        return False, 0.0
-    cx_low = w * (0.5 - _YUNET_CENTER_RATIO / 2)
-    cx_high = w * (0.5 + _YUNET_CENTER_RATIO / 2)
-    cy_low = h * (0.5 - _YUNET_CENTER_RATIO / 2)
-    cy_high = h * (0.5 + _YUNET_CENTER_RATIO / 2)
-
+    max_context_score = 0.0
+    best_iou: float | None = None
     best_score = 0.0
-    centered = False
-    for conf, (x, y, fw, fh) in detected:
-        if conf > best_score:
+    target_box = (target_x, target_y, target_w, target_h)
+    for conf, box in detected:
+        if conf > max_context_score:
+            max_context_score = conf
+        iou = _iou(box, target_box)
+        if iou < _YUNET_TARGET_IOU_THRESHOLD:
+            continue
+        if best_iou is None or iou > best_iou or (iou == best_iou and conf > best_score):
+            best_iou = iou
             best_score = conf
-        fx = x + fw / 2
-        fy = y + fh / 2
-        if cx_low <= fx <= cx_high and cy_low <= fy <= cy_high:
-            centered = True
-    return centered, best_score
+    if best_iou is None:
+        return 0.0, None, max_context_score
+    return best_score, best_iou, max_context_score
 
 
 def _compute_quality(

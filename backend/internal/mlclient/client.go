@@ -131,10 +131,14 @@ type V2QualityFeatures struct {
 
 // VerifyKnownFaceCropResult 单个目标的 v2 复核结果，按请求 target 顺序返回。
 // VerificationStatus: face / no_face / uncertain / error。
+// face/no_face 语义为「是否匹配到目标脸框」：face 表示某检测框与请求目标框 IoU>=阈值；
+// no_face 表示未匹配目标框（裁剪内可能仍有其他人脸，见 MaxContextScore）。
 type VerifyKnownFaceCropResult struct {
 	FaceID                uint               `json:"face_id"`
 	VerificationStatus    string             `json:"verification_status"`
-	VerifierScore         float64            `json:"verifier_score"`
+	VerifierScore         float64            `json:"verifier_score"`             // 目标匹配分；未匹配为 0
+	MaxContextScore       float64            `json:"max_context_score"`          // 裁剪内所有检测最高分（诊断用，非确认分）
+	TargetMatchIoU        *float64           `json:"target_match_iou,omitempty"` // 匹配目标框的 IoU；未匹配为 nil
 	VerifierName          string             `json:"verifier_name"`
 	VerifierVersion       string             `json:"verifier_version"`
 	OriginalWidth         int                `json:"original_width"`

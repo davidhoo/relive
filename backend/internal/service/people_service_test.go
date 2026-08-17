@@ -5498,13 +5498,16 @@ func writePlainJPEGFile(t *testing.T, path string, width, height int) {
 	require.NoError(t, jpeg.Encode(f, img, &jpeg.Options{Quality: 95}))
 }
 
-// TestFilterDetectionsByIndependentVerification_NoFaceDropped no_face 候选被剔除，face 候选保留。
-func TestFilterDetectionsByIndependentVerification_NoFaceDropped(t *testing.T) {
+// TestFilterDetectionsByIndependentVerification_NoFaceKeptForReview
+// 主检测过线（>=0.65）+ 独立验证 no_face 的候选不得静默丢弃：保留并置 VerifierStatus=no_face，
+// 由 ApplyDetectionResult 写 review_required。实时是单信号路径，没有历史 enforce 的双信号门禁，
+// 真实脸不能因一次目标未匹配而丢失。
+func TestFilterDetectionsByIndependentVerification_NoFaceKeptForReview(t *testing.T) {
 	dir := t.TempDir()
 	jpg := filepath.Join(dir, "p.jpg")
 	writePlainJPEGFile(t, jpg, 200, 200)
 
-	// 两个候选：第一个 no_face（剔除），第二个 face（保留）。
+	// 两个候选：第一个 no_face（保留待质检），第二个 face（正常保留）。
 	client := &fakePeopleMLClient{verifyStatus: []string{"no_face", "face"}}
 	svc, _ := newPeopleServiceForTest(t, client)
 	photo := &model.Photo{FilePath: jpg, ManualRotation: 0, FaceProcessStatus: model.FaceProcessStatusReady}
@@ -5514,8 +5517,9 @@ func TestFilterDetectionsByIndependentVerification_NoFaceDropped(t *testing.T) {
 		{BBox: model.BoundingBox{X: 0.5, Y: 0.5, Width: 0.25, Height: 0.25}, Confidence: 0.9},
 	}
 	got := svc.filterDetectionsByIndependentVerification(photo, faces)
-	require.Len(t, got, 1, "no_face 候选应被剔除")
-	assert.Equal(t, "face", got[0].VerifierStatus)
+	require.Len(t, got, 2, "no_face 候选应保留待质检，不得剔除")
+	assert.Equal(t, "no_face", got[0].VerifierStatus)
+	assert.Equal(t, "face", got[1].VerifierStatus)
 }
 
 // TestFilterDetectionsByIndependentVerification_UncertainMarked uncertain 候选保留但标记。
@@ -5553,12 +5557,14 @@ func TestFilterDetectionsByIndependentVerification_VerifierErrorFailOpen(t *test
 	require.Len(t, got, 1, "验证器故障应 fail-open 不丢脸")
 }
 
-// TestPeopleService_RealtimeNoFaceNotPersisted v2 严格准入：独立验证 no_face 的候选不落库、不聚类。
-func TestPeopleService_RealtimeNoFaceNotPersisted(t *testing.T) {
+// TestPeopleService_RealtimeNoFaceBecomesReviewRequired
+// 主检测过线 + 独立验证 no_face 的候选不得静默丢弃：必须落库为 review_required，
+// 不删除 Face、不进入人物聚类（person_id 为空）。
+func TestPeopleService_RealtimeNoFaceBecomesReviewRequired(t *testing.T) {
 	rootDir := t.TempDir()
 	photoPath := createTestImageFile(t, rootDir, "admit.jpg")
 
-	// 主检测返回两张脸；独立验证：第一张 no_face（剔除），第二张 face（保留）。
+	// 主检测返回两张脸；独立验证：第一张 no_face（落库 review_required），第二张 face（正常）。
 	client := &fakePeopleMLClient{
 		responses: map[string]*mlclient.DetectFacesResponse{
 			photoPath: {
@@ -5587,7 +5593,24 @@ func TestPeopleService_RealtimeNoFaceNotPersisted(t *testing.T) {
 
 	faces, err := faceRepo.ListByPhotoID(photo.ID)
 	require.NoError(t, err)
-	require.Len(t, faces, 1, "no_face 候选不应落库，只保留 face 候选")
-	// 保留的是第二张（bbox 0.5,0.5）。
-	assert.InDelta(t, 0.5, faces[0].BBoxX, 1e-9)
+	// 两张脸都落库：no_face 候选不再静默丢弃，而是落库为 review_required。
+	require.Len(t, faces, 2, "no_face 候选应落库为 review_required，不得静默删除")
+
+	// 按 bbox 定位两张脸，断言 no_face 候选为 review_required 且不聚类。
+	var noFaceFace, faceFace *model.Face
+	for i := range faces {
+		if faces[i].BBoxX < 0.3 {
+			noFaceFace = faces[i]
+		} else {
+			faceFace = faces[i]
+		}
+	}
+	require.NotNil(t, noFaceFace, "no_face 候选必须落库")
+	assert.Equal(t, model.FaceClusterStatusReviewRequired, noFaceFace.ClusterStatus, "no_face 候选须为 review_required")
+	assert.Nil(t, noFaceFace.PersonID, "review_required 不得进入人物聚类")
+	// 原因码须含 verifier_no_target_match。
+	assert.Contains(t, noFaceFace.QualityReasonsCSV, "verifier_no_target_match")
+
+	require.NotNil(t, faceFace)
+	assert.NotEqual(t, model.FaceClusterStatusReviewRequired, faceFace.ClusterStatus)
 }

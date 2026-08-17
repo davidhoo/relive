@@ -311,6 +311,164 @@ func TestFaceQualityRescoreRepo_ListV2SnapshotTargets(t *testing.T) {
 	assert.Len(t, limited, 1, "限 1 张照片应只命中 photo 1 的 Face A")
 }
 
+// TestFaceQualityRescoreRepo_ListIndependentSnapshotTargets_V3ReVerifiesV2
+// 规则版本化快照：v3 可重新复核已有 face_quality_v2 自动证据，人工结论仍绝对优先，
+// 同规则版本（v3）的自动事件不重复复核。
+func TestFaceQualityRescoreRepo_ListIndependentSnapshotTargets_V3ReVerifiesV2(t *testing.T) {
+	db := newRescoreRepoTestDB(t)
+	repo := NewFaceQualityRescoreRepository(db)
+
+	// Face A: photo 1, 当前 face_quality_v2 auto 事件 → v3 应重新选中（异规则版本复核）。
+	// Face B: photo 2, 当前 source=manual accept → 永久排除（人工结论优先）。
+	// Face C: photo 3, 当前 face_quality_v3 auto 事件 → v3 不重复选中（同规则版本）。
+	// Face D: photo 4, 无事件 → 选中。
+	faces := []*model.Face{
+		{ID: 538580, PhotoID: 1, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusPending},
+		{ID: 538581, PhotoID: 2, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusAssigned},
+		{ID: 538582, PhotoID: 3, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusAssigned},
+		{ID: 538583, PhotoID: 4, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusPending},
+	}
+	for _, f := range faces {
+		require.NoError(t, db.Create(f).Error)
+	}
+
+	// Face A: v2 自动事件（no_face，主分过线 → review_required）。
+	v2Evt := &model.FaceQualityEvent{
+		PhotoID: 1, FaceID: uintPtr(538580),
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionReviewRequired,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: model.FaceQualityRescoreRuleVersionV2, ModelVersion: "yunet-v1",
+		EvidencePipeline: model.FaceQualityEvidencePipelineIndependentV2,
+		IsCurrent:        true,
+	}
+	require.NoError(t, db.Create(v2Evt).Error)
+
+	// Face B: 人工 accept。
+	manualEvt := &model.FaceQualityEvent{
+		PhotoID: 2, FaceID: uintPtr(538581),
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionAccepted,
+		Source:   model.FaceQualitySourceManual, RuleVersion: model.FaceQualityRescoreRuleVersionV2, ModelVersion: "yunet-v1",
+		EvidencePipeline: model.FaceQualityEvidencePipelineIndependentV2,
+		IsCurrent:        true,
+	}
+	require.NoError(t, db.Create(manualEvt).Error)
+
+	// Face C: v3 自动事件（同规则版本，不重复复核）。
+	v3Evt := &model.FaceQualityEvent{
+		PhotoID: 3, FaceID: uintPtr(538582),
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionAccepted,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: model.FaceQualityRescoreRuleVersionV3, ModelVersion: "yunet-v1",
+		EvidencePipeline: model.FaceQualityEvidencePipelineIndependentV2,
+		IsCurrent:        true,
+	}
+	require.NoError(t, db.Create(v3Evt).Error)
+
+	targets, err := repo.ListIndependentSnapshotTargets(model.FaceQualityRescoreRuleVersionV3, 0, nil)
+	require.NoError(t, err)
+
+	got := make(map[uint]bool)
+	for _, tg := range targets {
+		got[tg.FaceID] = true
+	}
+	assert.True(t, got[538580], "Face A（v2 自动证据）应被 v3 重新选中复核")
+	assert.True(t, got[538583], "Face D（无事件）应选中")
+	assert.False(t, got[538581], "Face B（人工 accept）应被永久排除")
+	assert.False(t, got[538582], "Face C（v3 同规则版本）不应重复复核")
+
+	// Face A 的 baseline 应指向其当前 v2 事件（复核时以此为 baseline 检测冲突）。
+	for _, tg := range targets {
+		if tg.FaceID == 538580 {
+			assert.Equal(t, v2Evt.ID, tg.BaselineEventID, "Face A baseline 应为当前 v2 事件 ID")
+		}
+	}
+
+	// 回归：v2 请求不应选中 Face A（同规则版本 v2 已复核），仍排除 B/C。
+	v2Targets, err := repo.ListIndependentSnapshotTargets(model.FaceQualityRescoreRuleVersionV2, 0, nil)
+	require.NoError(t, err)
+	v2Got := make(map[uint]bool)
+	for _, tg := range v2Targets {
+		v2Got[tg.FaceID] = true
+	}
+	assert.False(t, v2Got[538580], "v2 请求不应重复复核已 v2 复核的 Face A")
+	assert.False(t, v2Got[538581], "v2 请求仍排除人工 accept 的 Face B")
+	assert.True(t, v2Got[538582], "v2 请求应选中 Face C（当前 v3 事件属异规则版本，可复核）")
+}
+
+// TestFaceQualityRescoreRepo_ListIndependentSnapshotTargets_TargetedFaceIDs
+// face_ids 定点快照：仅选指定 Face，忽略 photoLimit；未知 id 报错。
+func TestFaceQualityRescoreRepo_ListIndependentSnapshotTargets_TargetedFaceIDs(t *testing.T) {
+	db := newRescoreRepoTestDB(t)
+	repo := NewFaceQualityRescoreRepository(db)
+
+	faces := []*model.Face{
+		{ID: 538580, PhotoID: 1, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusPending},
+		{ID: 538581, PhotoID: 1, BBoxX: 0.5, BBoxY: 0.5, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusPending},
+		{ID: 538582, PhotoID: 2, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusPending},
+	}
+	for _, f := range faces {
+		require.NoError(t, db.Create(f).Error)
+	}
+
+	// 定点：只选 538580（去重 + 顺序无关）。
+	targets, err := repo.ListIndependentSnapshotTargets(model.FaceQualityRescoreRuleVersionV3, 100, []uint{538580, 538580, 0})
+	require.NoError(t, err)
+	require.Len(t, targets, 1, "定点快照应只命中指定 Face")
+	assert.Equal(t, uint(538580), targets[0].FaceID)
+	// photoLimit=100 在定点模式下被忽略（否则 photo 1 截断会丢 538580，这里仍命中说明忽略生效）。
+
+	// 多个目标。
+	multi, err := repo.ListIndependentSnapshotTargets(model.FaceQualityRescoreRuleVersionV3, 0, []uint{538582, 538580})
+	require.NoError(t, err)
+	multiIDs := make(map[uint]bool)
+	for _, tg := range multi {
+		multiIDs[tg.FaceID] = true
+	}
+	assert.True(t, multiIDs[538580])
+	assert.True(t, multiIDs[538582])
+
+	// 未知 id 报 ErrRescoreFaceIDNotFound，不静默丢弃。
+	_, err = repo.ListIndependentSnapshotTargets(model.FaceQualityRescoreRuleVersionV3, 0, []uint{538580, 999999})
+	assert.ErrorIs(t, err, ErrRescoreFaceIDNotFound, "未知 face_id 应报错而非静默丢弃")
+}
+
+// TestFaceQualityRescoreRepo_ListIndependentSnapshotTargets_DefaultRuleVersion
+// ruleVersion 为空时回退 face_quality_v2（与 ListV2SnapshotTargets 行为一致）。
+func TestFaceQualityRescoreRepo_ListIndependentSnapshotTargets_DefaultRuleVersion(t *testing.T) {
+	db := newRescoreRepoTestDB(t)
+	repo := NewFaceQualityRescoreRepository(db)
+
+	require.NoError(t, db.Create(&model.Face{ID: 7001, PhotoID: 1, BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2}).Error)
+	// 当前 v2 自动事件 → 空规则版本回退 v2 时应排除。
+	require.NoError(t, db.Create(&model.FaceQualityEvent{
+		PhotoID: 1, FaceID: uintPtr(7001),
+		BBoxX: 0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionAccepted,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: model.FaceQualityRescoreRuleVersionV2, ModelVersion: "yunet-v1",
+		EvidencePipeline: model.FaceQualityEvidencePipelineIndependentV2,
+		IsCurrent:        true,
+	}).Error)
+
+	empty, err := repo.ListIndependentSnapshotTargets("", 0, nil)
+	require.NoError(t, err)
+	// 空规则版本回退 v2 → 排除当前 v2 自动事件的 Face 7001。
+	for _, tg := range empty {
+		assert.NotEqual(t, uint(7001), tg.FaceID, "空 ruleVersion 回退 v2，应排除已 v2 复核的 Face")
+	}
+
+	// v3 请求应选中（异规则版本复核）。
+	v3, err := repo.ListIndependentSnapshotTargets(model.FaceQualityRescoreRuleVersionV3, 0, nil)
+	require.NoError(t, err)
+	found := false
+	for _, tg := range v3 {
+		if tg.FaceID == 7001 {
+			found = true
+		}
+	}
+	assert.True(t, found, "v3 应重新复核 v2 自动证据的 Face 7001")
+}
+
 // TestFaceQualityRescoreRepo_UpdateRunProgress 验证 UpdateRunProgress 只写统计字段，
 // 绝不触碰 status/started_at/completed_at——这是 worker 进度刷新不覆盖暂停竞态的核心保证。
 func TestFaceQualityRescoreRepo_UpdateRunProgress(t *testing.T) {
