@@ -146,6 +146,12 @@ export interface FaceQualityEvidenceV2 {
   max_context_score?: number
   // 匹配到目标脸框时的 IoU；未匹配为 undefined。旧 v2 证据缺此字段。
   target_match_iou?: number
+  // 尺度归一化审计：送入 YuNet 的检测副本相对未缩放上下文的缩放比例与输入尺寸。
+  // 仅 v4 证据（schema independent_v2_target_match_v3）填充；旧证据缺这三个字段。
+  // scale=1 表示未缩放（目标脸最长边<=256）；<1 表示等比缩小。仅当三字段完整存在时前端才展示检测输入诊断。
+  verifier_input_scale?: number
+  verifier_input_width_px?: number
+  verifier_input_height_px?: number
   verifier_name: string
   verifier_version: string
   original_width: number

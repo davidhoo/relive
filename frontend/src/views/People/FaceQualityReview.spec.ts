@@ -718,6 +718,51 @@ describe('FaceQualityReview.vue - Task 5 目标框匹配证据展示', () => {
     // 旧证据仍展示原置信度，但已标注不当确认分
     expect(text).toContain('置信度')
     expect(text).toContain('77.6%')
+    // 旧证据不得显示 YuNet 检测输入诊断
+    expect(text).not.toContain('YuNet 检测输入')
+    expect(text).not.toContain('缩放')
+    wrapper.unmount()
+  })
+})
+
+// ---- Task 4：尺度归一化（v4）证据展示 ----
+
+describe('FaceQualityReview.vue - Task 4 尺度归一化证据展示', () => {
+  it('v4 证据三字段完整时显示 YuNet 检测输入尺寸与缩放百分比', async () => {
+    const item = v3NoFaceItem({
+      event_id: 538580,
+      rule_version: 'face_quality_v4',
+      evidence_v2: {
+        ...v3NoFaceItem().evidence_v2!,
+        evidence_schema_version: 'independent_v2_target_match_v3',
+        rule_version: 'face_quality_v4',
+        verifier_input_scale: 0.23638,
+        verifier_input_width_px: 527,
+        verifier_input_height_px: 629,
+      },
+    })
+    mocks.mockListFaceQualityReviews.mockResolvedValue(page([item]))
+    const wrapper = mountReview()
+    await flushPromises()
+    await wrapper.find('.face-card').trigger('click')
+    await flushPromises()
+    const text = wrapper.find('.v2-evidence').text()
+    expect(text).toContain('YuNet 检测输入')
+    expect(text).toContain('527 × 629 px')
+    expect(text).toContain('缩放')
+    expect(text).toContain('23.6%')
+    wrapper.unmount()
+  })
+
+  it('v3 证据无缩放字段时不显示 YuNet 检测输入诊断', async () => {
+    // v3 证据（schema v2）无 verifier_input_* 字段，不得显示检测输入行。
+    mocks.mockListFaceQualityReviews.mockResolvedValue(page([v3NoFaceItem()]))
+    const wrapper = mountReview()
+    await flushPromises()
+    await wrapper.find('.face-card').trigger('click')
+    await flushPromises()
+    const text = wrapper.find('.v2-evidence').text()
+    expect(text).not.toContain('YuNet 检测输入')
     wrapper.unmount()
   })
 })

@@ -242,6 +242,10 @@
               {{ current.evidence_v2!.context_crop_width_px }} × {{ current.evidence_v2!.context_crop_height_px }} px
               <span class="v2-hint">（扩展比例 {{ current.evidence_v2!.context_expand_ratio }}）</span>
             </el-descriptions-item>
+            <el-descriptions-item label="YuNet 检测输入" v-if="hasScaleNormalizedDiagnostics(current.evidence_v2)">
+              {{ current.evidence_v2!.verifier_input_width_px }} × {{ current.evidence_v2!.verifier_input_height_px }} px
+              <span class="v2-hint">（缩放 {{ formatScalePercent(current.evidence_v2!.verifier_input_scale!) }}）</span>
+            </el-descriptions-item>
             <el-descriptions-item label="质量特征">
               清晰度 {{ current.evidence_v2!.sharpness_norm?.toFixed(2) ?? '—' }} ·
               亮度 {{ current.evidence_v2!.brightness_norm?.toFixed(1) ?? '—' }} ·
@@ -468,6 +472,21 @@ const hasTargetMatchDiagnostics = (ev?: FaceQualityEvidenceV2): boolean => {
   if (!ev) return false
   return ev.max_context_score !== undefined || ev.target_match_iou !== undefined
 }
+
+// hasScaleNormalizedDiagnostics 判断 v2 证据是否记录了 YuNet 检测尺度归一化诊断
+// （v4 schema independent_v2_target_match_v3）。仅当三字段完整存在时展示检测输入诊断，
+// 旧证据（v2/v3 schema）缺字段，不得显示缩放或伪造「已缩放」。
+const hasScaleNormalizedDiagnostics = (ev?: FaceQualityEvidenceV2): boolean => {
+  if (!ev) return false
+  return (
+    ev.verifier_input_scale !== undefined &&
+    ev.verifier_input_width_px !== undefined &&
+    ev.verifier_input_height_px !== undefined
+  )
+}
+
+// formatScalePercent 把缩放比例格式化为百分比展示，如 0.23638 → "23.6%"。
+const formatScalePercent = (scale: number): string => `${(scale * 100).toFixed(1)}%`
 
 const decisionLabel = (d: string) => ({
   accepted: '已接受',
