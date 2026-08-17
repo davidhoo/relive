@@ -28,7 +28,7 @@ import numpy as np
 
 from app.schemas import (
     CandidateBox,
-    EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH,
+    EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH_SCALE_NORMALIZED,
     V2QualityFeatures,
     VerifyKnownFaceCropResult,
     VerifyKnownFaceCropTarget,
@@ -58,6 +58,46 @@ _QUALITY_VERSION = "v1"
 
 # YuNet 默认输入尺寸（FaceDetectorYN 的 size 参数）。
 _YUNET_INPUT_SIZE = (320, 320)
+
+# 尺度归一化：目标脸最长边超过此值时，把上下文裁剪等比缩小后再送 YuNet。
+# YuNet 主要工作尺度约 10×10 至 300×300 px；超过此值的大脸直接以原像素推理易漏检。
+# 小脸（<=此值）不放大——放大不会凭空创造细节，反而可能伪造可靠证据。
+_YUNET_MAX_TARGET_LONG_EDGE = 256
+
+
+@dataclass(frozen=True)
+class _DetectionInputPlan:
+    """单一检测输入计划：缩放比例与送入 YuNet 的实际输入尺寸。
+
+    scale=1 表示不缩放（目标脸最长边<=256）；<1 表示等比缩小。input_width/height 为
+    缩放后的上下文副本尺寸，仅用于送入 YuNet 推理；候选框/目标框/IoU/质量特征始终基于
+    未缩放上下文坐标。
+    """
+
+    scale: float
+    input_width: int
+    input_height: int
+
+
+def _plan_detection_input(
+    frame_width: int,
+    frame_height: int,
+    target_width: int,
+    target_height: int,
+) -> _DetectionInputPlan:
+    """按目标脸最长边决定是否等比缩小上下文副本，返回缩放比例与输入尺寸。
+
+    缩放依据必须是目标脸最长边，不能用整张上下文最长边：边缘裁剪（被原图边界截断）与
+    常规裁剪的上下文尺寸差异大，但同一目标脸应得到一致的检测尺度。用上下文最长边会
+    导致不同裁剪策略下同一目标脸尺度不一致。
+    """
+    target_long_edge = max(target_width, target_height)
+    scale = min(1.0, _YUNET_MAX_TARGET_LONG_EDGE / max(1, target_long_edge))
+    return _DetectionInputPlan(
+        scale=scale,
+        input_width=max(1, round(frame_width * scale)),
+        input_height=max(1, round(frame_height * scale)),
+    )
 
 
 class FaceVerifier:
@@ -157,7 +197,7 @@ class FaceVerifier:
             face_box_width_px=int(target.face_box_width_px),
             face_box_height_px=int(target.face_box_height_px),
             primary_detector_score=float(target.primary_detector_score),
-            evidence_schema_version=EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH,
+            evidence_schema_version=EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH_SCALE_NORMALIZED,
         )
 
         # 模型不可用：整批 error，绝不退回 v1 同源评分。
@@ -179,6 +219,7 @@ class FaceVerifier:
         base.original_height = 0
 
         # 输入短边不足 → uncertain（验证器无法可靠判断）。
+        # 短边判断始终基于未缩放上下文：缩小不会让输入变得可判，放大则可能伪造可靠证据。
         short_edge = min(w, h)
         if short_edge < _YUNET_MIN_INPUT_SHORT_EDGE:
             base.verification_status = "uncertain"
@@ -190,20 +231,42 @@ class FaceVerifier:
             )
             return base
 
+        # 尺度归一化：目标脸最长边 >256 时等比缩小上下文副本送 YuNet；小脸不放大。
+        plan = _plan_detection_input(
+            w, h,
+            int(target.face_box_width_px), int(target.face_box_height_px),
+        )
+        base.verifier_input_scale = round(float(plan.scale), 6)
+        base.verifier_input_width_px = int(plan.input_width)
+        base.verifier_input_height_px = int(plan.input_height)
+
+        # 仅在 scale<1 时生成缩小副本（INTER_AREA 适合下采样）；scale==1 直接用原 frame。
+        if plan.scale < 1.0:
+            detection_frame = cv2.resize(
+                frame,
+                (plan.input_width, plan.input_height),
+                interpolation=cv2.INTER_AREA,
+            )
+        else:
+            detection_frame = frame
+
         # 推理异常 → error。
         try:
-            detected = self._run_yunet(frame)
+            raw_detected = self._run_yunet(detection_frame)
         except Exception as exc:  # pragma: no cover - ONNX 推理异常
             logger.warning("YuNet inference failed for face %s: %s", face_id, exc)
             base.reason_codes = ["verifier_inference_failed"]
             return base
 
-        # 质量特征在原图人脸框（精确按 offset+尺寸裁取）上计算并归一化。
+        # 质量特征在未缩放原图人脸框（精确按 offset+尺寸裁取）上计算并归一化。
         base.quality = _compute_quality(
             frame, w, h,
             int(target.face_box_offset_x), int(target.face_box_offset_y),
             int(target.face_box_width_px), int(target.face_box_height_px),
         )
+
+        # 把 YuNet 检测框按 1/scale 映射回未缩放上下文坐标；scale==1 时不额外取整。
+        detected = _map_boxes_to_original(raw_detected, plan.scale, w, h)
 
         # 判定：是否匹配到目标脸框（IoU>=阈值），而非裁剪图几何中心。
         m = _match_target_face(
@@ -248,6 +311,36 @@ class FaceVerifier:
             conf = float(f[-1]) if len(f) >= 14 else 0.0
             out.append((conf, (x, y, fw, fh)))
         return out
+
+
+def _map_boxes_to_original(
+    detected: list[tuple[float, tuple[int, int, int, int]]],
+    scale: float,
+    frame_width: int,
+    frame_height: int,
+) -> list[tuple[float, tuple[int, int, int, int]]]:
+    """把缩放坐标系下的 YuNet 检测框映射回未缩放上下文坐标。
+
+    scale==1 时直接返回原框，不额外取整，避免无缩放场景引入坐标漂移。
+    scale<1 时按 round(value/scale) 映射，再裁切到原图边界（负值归零、超出框宽高截断）。
+    """
+    if scale >= 1.0:
+        return detected
+    out: list[tuple[float, tuple[int, int, int, int]]] = []
+    for conf, (x, y, w, h) in detected:
+        mx = max(0, round(x / scale))
+        my = max(0, round(y / scale))
+        mw = max(0, round(w / scale))
+        mh = max(0, round(h / scale))
+        # 裁切到原图边界。
+        if mx >= frame_width or my >= frame_height:
+            continue
+        mw = min(mw, frame_width - mx)
+        mh = min(mh, frame_height - my)
+        if mw <= 0 or mh <= 0:
+            continue
+        out.append((conf, (mx, my, mw, mh)))
+    return out
 
 
 def _decode_base64_image(b64: str) -> np.ndarray | None:

@@ -286,8 +286,9 @@ def test_verify_known_face_crops_endpoint_shape(monkeypatch):
     assert len(payload["results"]) == 2
     assert payload["results"][0]["face_id"] == 1
     assert payload["results"][1]["face_id"] == 2
-    # evidence_schema_version 在目标框匹配规则后升级为 independent_v2_target_match_v2。
-    assert payload["results"][0]["evidence_schema_version"] == "independent_v2_target_match_v2"
+    # evidence_schema_version 在尺度归一化后升级为 independent_v2_target_match_v3。
+    # 即使验证器不可用走 error 早返回，schema 版本仍标识当前证据形态（v3）。
+    assert payload["results"][0]["evidence_schema_version"] == "independent_v2_target_match_v3"
     # 验证器不可用 → error，不伪装判定。
     assert payload["results"][0]["verification_status"] == "error"
     assert "verifier_unavailable" in payload["results"][0]["reason_codes"]

@@ -143,7 +143,7 @@ def test_verifier_edge_target_box_at_corner_is_face(tmp_path: Path):
     assert r.verifier_score == 0.92
     assert r.target_match_iou is not None and r.target_match_iou >= 0.3
     assert r.max_context_score == 0.92
-    assert r.evidence_schema_version == EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH
+    assert r.evidence_schema_version == EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH_SCALE_NORMALIZED
 
 
 def test_verifier_group_shot_non_target_is_no_face(tmp_path: Path):
@@ -182,15 +182,19 @@ def test_verifier_target_match_diagnostics_below_threshold(tmp_path: Path):
     face_h=1083（边缘裁剪特征，与既有「中心 40%」假阴性的根因一致）。
 
     候选框为结构化占位：完全落在目标框内、IoU≈0.167<0.3，代表「YuNet 框尺度/锚点与存储框
-    不同」。候选框的真实坐标须待任务 3 NAS 定点重跑产出 best_target_candidate_box 后替换
-    （见计划任务 3 Step 3）；本测试仅驱动诊断字段落地，不预先放宽匹配。
+    不同」。尺度归一化后检测在缩放副本上运行，故 factory 返回缩放坐标候选；映射回未缩放
+    上下文后应接近 (1000,800,300,450)，IoU≈0.167<0.3。候选框的真实坐标须待任务 5 NAS 定点
+    重跑产出 best_target_candidate_box 后替换；本测试仅驱动诊断字段落地，不预先放宽匹配。
     """
+    scale = 256 / 1083  # 目标最长边 1083 > 256
+
     def factory():
         class D:
             def setInputSize(self, _): ...
             def detect(self, _frame):
-                # 候选 (1000,800,300,450) 置信度 0.77609，与目标框 IoU≈0.167<0.3。
-                faces = np.array([[1000, 800, 300, 450, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.77609]])
+                # 缩放坐标候选，映射回未缩放后接近 (1000,800,300,450)，IoU≈0.167<0.3。
+                faces = np.array([[1000 * scale, 800 * scale, 300 * scale, 450 * scale,
+                                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0.77609]])
                 return None, faces
         return D()
 
@@ -207,10 +211,12 @@ def test_verifier_target_match_diagnostics_below_threshold(tmp_path: Path):
     assert r.best_target_candidate_score == 0.77609
     assert r.target_match_iou is None
     assert r.best_target_candidate_box is not None
-    assert r.best_target_candidate_box.x == 1000
-    assert r.best_target_candidate_box.y == 800
-    assert r.best_target_candidate_box.width == 300
-    assert r.best_target_candidate_box.height == 450
+    # 映射回未缩放坐标后接近 (1000,800,300,450)（允许 ±5 取整漂移：缩放坐标生成 + round(./scale) 反向映射的双向取整偏差）。
+    assert abs(r.best_target_candidate_box.x - 1000) <= 5
+    assert abs(r.best_target_candidate_box.y - 800) <= 5
+    assert abs(r.best_target_candidate_box.width - 300) <= 5
+    assert abs(r.best_target_candidate_box.height - 450) <= 5
+    assert r.evidence_schema_version == EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH_SCALE_NORMALIZED
 
 
 def test_verifier_no_detection_keeps_zero_context_score(tmp_path: Path):
@@ -378,16 +384,18 @@ def test_verifier_scale_normalized_large_target_face_matched(tmp_path: Path):
     assert r.verification_status == "face"
     assert r.target_match_iou is not None
     assert r.target_match_iou >= 0.3
-    assert r.verifier_input_scale == pytest.approx(256 / 1083)
+    assert r.verifier_input_scale == pytest.approx(256 / 1083, rel=1e-3)
     assert r.verifier_input_width_px == expected_w
     assert r.verifier_input_height_px == expected_h
     assert r.evidence_schema_version == EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH_SCALE_NORMALIZED
     # 候选框审计坐标必须映射回原上下文坐标，接近 (744,500,745,1083)。
+    # 允许 ±5 取整漂移：factory 在缩放坐标生成框、实现再 round(./scale) 映射回原坐标，
+    # 双向取整会引入几个像素的累积偏差，属于尺度归一化的固有误差，不影响 IoU 判定。
     assert r.best_target_candidate_box is not None
-    assert abs(r.best_target_candidate_box.x - 744) <= 2
-    assert abs(r.best_target_candidate_box.y - 500) <= 2
-    assert abs(r.best_target_candidate_box.width - 745) <= 2
-    assert abs(r.best_target_candidate_box.height - 1083) <= 2
+    assert abs(r.best_target_candidate_box.x - 744) <= 5
+    assert abs(r.best_target_candidate_box.y - 500) <= 5
+    assert abs(r.best_target_candidate_box.width - 745) <= 5
+    assert abs(r.best_target_candidate_box.height - 1083) <= 5
 
 
 def test_verifier_scale_normalized_group_shot_non_target_is_no_face(tmp_path: Path):

@@ -159,6 +159,13 @@ EVIDENCE_SCHEMA_VERSION_V2 = "independent_v2"
 # 旧证据保留 independent_v2，由前端按字段缺失判定为「旧证据，未记录目标匹配诊断」。
 EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH = "independent_v2_target_match_v2"
 
+# v2 尺度归一化后的证据 schema 版本。
+# 证据管线仍是 independent_v2；此版本在目标框匹配基础上进一步把「目标脸最长边>256 时
+# 等比缩小送 YuNet、候选框映射回原上下文坐标」纳入证据形态，新增
+# verifier_input_scale / verifier_input_width_px / verifier_input_height_px 审计字段。
+# 旧证据保留 independent_v2 / independent_v2_target_match_v2，可读不可改写。
+EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH_SCALE_NORMALIZED = "independent_v2_target_match_v3"
+
 # v2 规则/模型版本（独立于 v1）。
 FACE_QUALITY_V2_RULE_VERSION = "face_quality_v2"
 YUNET_VERIFIER_NAME = "yunet"
@@ -228,6 +235,12 @@ class VerifyKnownFaceCropResult(BaseModel):
     best_target_candidate_score: float = 0.0
     # 诊断：best_target_iou 对应候选框（上下文裁剪副本坐标系）。无候选时为 None。
     best_target_candidate_box: CandidateBox | None = None
+    # 尺度归一化审计：送入 YuNet 的检测副本相对未缩放上下文的缩放比例与实际输入尺寸。
+    # scale=1 表示未缩放（目标脸最长边<=256）；<1 表示等比缩小。候选框/目标框/IoU 始终为
+    # 未缩放上下文坐标，质量特征始终从未缩放原图目标框计算。旧证据缺这三个字段。
+    verifier_input_scale: float = 1.0
+    verifier_input_width_px: int = 0
+    verifier_input_height_px: int = 0
     verifier_name: str = YUNET_VERIFIER_NAME
     verifier_version: str = YUNET_VERIFIER_VERSION
     original_width: int = 0
@@ -240,7 +253,7 @@ class VerifyKnownFaceCropResult(BaseModel):
     primary_detector_score: float = 0.0
     quality: V2QualityFeatures | None = None
     reason_codes: list[str] = Field(default_factory=list)
-    evidence_schema_version: str = EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH
+    evidence_schema_version: str = EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH_SCALE_NORMALIZED
 
 
 class VerifyKnownFaceCropsResponse(BaseModel):
