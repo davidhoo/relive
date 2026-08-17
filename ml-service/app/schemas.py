@@ -176,6 +176,15 @@ class V2QualityFeatures(BaseModel):
     quality_version: str
 
 
+class CandidateBox(BaseModel):
+    """诊断用候选框（上下文裁剪副本坐标系，像素）。仅供审计/排障，非确认分依据。"""
+
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    width: int = Field(ge=0)
+    height: int = Field(ge=0)
+
+
 class VerifyKnownFaceCropTarget(BaseModel):
     """单个 v2 复核目标。"""
 
@@ -212,6 +221,13 @@ class VerifyKnownFaceCropResult(BaseModel):
     max_context_score: float = 0.0
     # 匹配到目标脸时的 IoU；未匹配为 None。
     target_match_iou: float | None = None
+    # 诊断：与目标框几何最接近（最大 IoU）的候选，即便低于阈值也记录。无任何候选时为 None。
+    # 仅供审计/排障，不作为自动隔离、质量分或 UI 的确认分。
+    best_target_iou: float | None = None
+    # 诊断：best_target_iou 对应候选的置信度。无候选时为 0。
+    best_target_candidate_score: float = 0.0
+    # 诊断：best_target_iou 对应候选框（上下文裁剪副本坐标系）。无候选时为 None。
+    best_target_candidate_box: CandidateBox | None = None
     verifier_name: str = YUNET_VERIFIER_NAME
     verifier_version: str = YUNET_VERIFIER_VERSION
     original_width: int = 0

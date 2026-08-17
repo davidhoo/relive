@@ -276,8 +276,9 @@ type rescoreTarget struct {
 
 // snapshotTargets 快照目标 Face 集合。
 // pipelineVersion=legacy_v1：当前 historical_backfill + missing 的 is_current 事件，按 photo 升序。
-// pipelineVersion=independent_v2：按 ruleVersion 选无 manual 结论、无同规则版本自动事件的 Face
-// （repo.ListIndependentSnapshotTargets）——v3 可重新复核 v2 自动证据。faceIDs 非空时为定点快照。
+// pipelineVersion=independent_v2：按 ruleVersion 选无 manual 结论的 Face
+// （repo.ListIndependentSnapshotTargets）——非定点运行去重同规则版本自动事件（v3 复核 v2 自动证据）；
+// 定点运行（faceIDs 非空）豁免同规则去重，允许对特定样本追加复核同规则版本。
 func (s *faceQualityRescoreService) snapshotTargets(photoLimit int, pipelineVersion, ruleVersion string, faceIDs []uint) ([]rescoreTarget, error) {
 	if pipelineVersion == model.FaceQualityRescorePipelineIndependentV2 {
 		v2Targets, err := s.repo.ListIndependentSnapshotTargets(ruleVersion, photoLimit, faceIDs)
@@ -1045,7 +1046,7 @@ func (s *faceQualityRescoreService) applyV2Result(run *model.FaceQualityRescoreR
 	item.Status = model.FaceQualityRescoreItemStatusProcessed
 
 	// 构建 v2 evidence（原图尺寸/裁剪尺寸由后端 crops 填充，ML 端 original_* 留 0）。
-	ev := buildV2Evidence(crops, result, v2QualityOutcome{})
+	ev := buildV2Evidence(crops, result, v2QualityOutcome{}, run.RuleVersion)
 
 	// 阈值从 config 读取（D 轮：未配置时回退默认）。
 	outcome := evaluateFaceQualityV2(ev, run.ApplyMode, s.v2Thresholds())
@@ -1059,7 +1060,9 @@ func (s *faceQualityRescoreService) applyV2Result(run *model.FaceQualityRescoreR
 
 // buildV2Evidence 把 crops + ML 验证结果 + 策略 outcome 合并为 FaceQualityEvidenceV2
 // （原图尺寸由后端填充；shadow 模式下 SuggestedDecision 保存系统建议决策供校准抽样）。
-func buildV2Evidence(crops *V2FaceCrops, r mlclient.VerifyKnownFaceCropResult, outcome v2QualityOutcome) *model.FaceQualityEvidenceV2 {
+// runRuleVersion 由调用方传入当前 run.RuleVersion，写入 evidence.rule_version 与事件行一致；
+// 不得用 ML 响应或前端请求推导规则版本，亦不得硬编码 v2——否则同一审计事件会行/证据版本不符。
+func buildV2Evidence(crops *V2FaceCrops, r mlclient.VerifyKnownFaceCropResult, outcome v2QualityOutcome, runRuleVersion string) *model.FaceQualityEvidenceV2 {
 	// 证据 schema 版本以 ML 响应为准（目标框匹配规则后为 independent_v2_target_match_v2）；
 	// 旧 ML 镜像回退 independent_v2。这样旧证据保留旧版本，新证据由 ML 决定，后端不伪造。
 	schemaVersion := r.EvidenceSchemaVersion
@@ -1073,19 +1076,30 @@ func buildV2Evidence(crops *V2FaceCrops, r mlclient.VerifyKnownFaceCropResult, o
 		VerifierScore:         r.VerifierScore,
 		MaxContextScore:       r.MaxContextScore,
 		TargetMatchIoU:        r.TargetMatchIoU,
-		VerifierName:          r.VerifierName,
-		VerifierVersion:       r.VerifierVersion,
-		OriginalWidth:         crops.OriginalWidth,
-		OriginalHeight:        crops.OriginalHeight,
-		FaceBoxWidthPx:        crops.FaceBoxWidthPx,
-		FaceBoxHeightPx:       crops.FaceBoxHeightPx,
-		ContextCropWidthPx:    crops.ContextCropWidthPx,
-		ContextCropHeightPx:   crops.ContextCropHeightPx,
-		ContextExpandRatio:    contextExpandRatio,
-		ReasonCodes:           append([]string{}, r.ReasonCodes...),
-		SuggestedDecision:     outcome.SuggestedDecision,
-		RuleVersion:           model.FaceQualityRescoreRuleVersionV2,
-		ModelVersion:          r.VerifierVersion,
+		// 诊断字段透传：低于阈值的候选框几何，仅供审计/排障，不作为确认分。
+		BestTargetIoU:            r.BestTargetIoU,
+		BestTargetCandidateScore: r.BestTargetCandidateScore,
+		VerifierName:             r.VerifierName,
+		VerifierVersion:          r.VerifierVersion,
+		OriginalWidth:            crops.OriginalWidth,
+		OriginalHeight:           crops.OriginalHeight,
+		FaceBoxWidthPx:           crops.FaceBoxWidthPx,
+		FaceBoxHeightPx:          crops.FaceBoxHeightPx,
+		ContextCropWidthPx:       crops.ContextCropWidthPx,
+		ContextCropHeightPx:      crops.ContextCropHeightPx,
+		ContextExpandRatio:       contextExpandRatio,
+		ReasonCodes:              append([]string{}, r.ReasonCodes...),
+		SuggestedDecision:        outcome.SuggestedDecision,
+		RuleVersion:              runRuleVersion,
+		ModelVersion:             r.VerifierVersion,
+	}
+	if r.BestTargetCandidateBox != nil {
+		ev.BestTargetCandidateBox = &model.FaceCandidateBox{
+			X:      r.BestTargetCandidateBox.X,
+			Y:      r.BestTargetCandidateBox.Y,
+			Width:  r.BestTargetCandidateBox.Width,
+			Height: r.BestTargetCandidateBox.Height,
+		}
 	}
 	if r.Quality != nil {
 		ev.SharpnessNorm = r.Quality.SharpnessNorm

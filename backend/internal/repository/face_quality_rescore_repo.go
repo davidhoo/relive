@@ -69,9 +69,11 @@ type FaceQualityRescoreRepository interface {
 	// ListIndependentSnapshotTargets(face_quality_v2, photoLimit, nil)。
 	ListV2SnapshotTargets(photoLimit int) ([]model.FaceQualityRescoreRetryTarget, error)
 	// ListIndependentSnapshotTargets 按规则版本选择独立复核快照目标集合（以 faces.id 为主体）：
-	//   - 排除任何当前 source=manual 结论（人工结论绝对优先，跨规则版本不覆盖）；
-	//   - 仅排除当前 rule_version 已等于请求 ruleVersion 的自动事件 Face——这样 v3 可重新复核
-	//     已有 face_quality_v2 自动证据，而不会重复复核同规则版本已处理样本；
+	//   - 排除任何当前 source=manual 结论（人工结论绝对优先，跨规则版本与定点重跑均不覆盖）；
+	//   - 非定点运行时排除「当前 rule_version 已等于请求 ruleVersion 的自动事件 Face」——这样 v3 可
+	//     重新复核已有 face_quality_v2 自动证据，而不会重复复核同规则版本已处理样本；
+	//   - 定点运行（faceIDs 非空）不应用同规则版本去重：允许对特定样本追加复核（含已有同规则版本
+	//     自动证据的样本），新事件以 is_current=true 取代旧自动事件当前性，旧事件保留审计；
 	//   - 已自动隔离但无人工最终结论的 Face 仍进入快照（由 service 层决定不自动恢复）。
 	// faceIDs 非空时为定点快照：仅选这些 Face（去重、非零、必须存在），忽略 photoLimit。
 	// photoLimit>0 且 faceIDs 为空时按 photo_id 升序限制快照照片数（校准用）。
@@ -321,14 +323,20 @@ func (r *faceQualityRescoreRepository) ListIndependentSnapshotTargets(ruleVersio
 	// 用 NOT EXISTS 而非 NOT IN：NOT IN 在 SQLite 上易退化为全表扫描，
 	// idx_fqe_evidence_pipeline (face_id, evidence_pipeline, is_current) 对 NOT EXISTS 子查询更友好。
 	basePhotoIDs := r.db.Model(&model.Face{}).
+		// 人工结论绝对优先：任何当前 source=manual 事件永久排除，跨规则版本与定点重跑均不覆盖。
 		Where("NOT EXISTS (SELECT 1 FROM face_quality_events mq WHERE mq.face_id = faces.id "+
 			"AND mq.is_current = ? AND mq.source = ?)",
-			true, model.FaceQualitySourceManual).
-		// 仅排除当前 rule_version 已等于请求 ruleVersion 的自动事件：同规则版本不重复复核，
-		// 异规则版本可重新复核（v3 能复核 v2 自动证据）。人工结论由上一条 NOT EXISTS 永久排除。
-		Where("NOT EXISTS (SELECT 1 FROM face_quality_events vq WHERE vq.face_id = faces.id "+
+			true, model.FaceQualitySourceManual)
+
+	// 同规则版本自动事件去重：非定点运行时排除「当前 rule_version 已等于请求 ruleVersion 的自动事件」，
+	// 避免全量重复复核同规则已处理样本。定点（face_ids 非空）运行不应用此去重——定点是为复核特定样本
+	// （含已有同规则版本自动证据的样本），新事件以 is_current=true 取代旧自动事件当前性，旧事件保留审计。
+	// 异规则版本复核（如 v3 复核 v2）本就由 ruleVersion 不匹配自然命中，不受此条件影响。
+	if len(faceIDSet) == 0 {
+		basePhotoIDs = basePhotoIDs.Where("NOT EXISTS (SELECT 1 FROM face_quality_events vq WHERE vq.face_id = faces.id "+
 			"AND vq.is_current = ? AND vq.source = ? AND vq.rule_version = ?)",
 			true, model.FaceQualitySourceAuto, ruleVersion)
+	}
 
 	if len(faceIDSet) > 0 {
 		// 定点快照：限定到指定 face，忽略 photoLimit。

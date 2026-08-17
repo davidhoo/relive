@@ -109,8 +109,8 @@ type Face struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
-	PersonID   *uint   `gorm:"index:idx_face_person;index:idx_face_person_photo,priority:1" json:"person_id,omitempty"`
-	PhotoID    uint    `gorm:"not null;index:idx_face_photo;index:idx_face_person_photo,priority:2" json:"photo_id"`
+	PersonID *uint `gorm:"index:idx_face_person;index:idx_face_person_photo,priority:1" json:"person_id,omitempty"`
+	PhotoID  uint  `gorm:"not null;index:idx_face_photo;index:idx_face_person_photo,priority:2" json:"photo_id"`
 	// idx_face_person_photo is a composite (person_id, photo_id) index for cursor pagination
 	// queries that deduplicate photos by person association without scanning all faces.
 	// Column order is person_id ASC, photo_id ASC (priority:1 < priority:2) so a
@@ -142,10 +142,10 @@ type Face struct {
 
 	// 质检证据快照（face_quality_events 的冗余字段，便于审核页直接读取，避免 JOIN）。
 	// 由 ApplyDetectionResult 写入；人工改判不覆盖此处，历史由 face_quality_events 追加保留。
-	FaceValidityScore      float64 `gorm:"not null;default:0" json:"face_validity_score"`
-	QualityReasonsCSV      string  `gorm:"type:varchar(255);default:''" json:"quality_reasons,omitempty"`
-	QualityRuleVersion     string  `gorm:"type:varchar(20);default:''" json:"quality_rule_version,omitempty"`
-	QualityModelVersion    string  `gorm:"type:varchar(40);default:''" json:"quality_model_version,omitempty"`
+	FaceValidityScore   float64 `gorm:"not null;default:0" json:"face_validity_score"`
+	QualityReasonsCSV   string  `gorm:"type:varchar(255);default:''" json:"quality_reasons,omitempty"`
+	QualityRuleVersion  string  `gorm:"type:varchar(20);default:''" json:"quality_rule_version,omitempty"`
+	QualityModelVersion string  `gorm:"type:varchar(40);default:''" json:"quality_model_version,omitempty"`
 }
 
 func (Face) TableName() string {
@@ -154,9 +154,9 @@ func (Face) TableName() string {
 
 // 质检最终动作枚举
 const (
-	FaceQualityActionAccept          = "accept"
-	FaceQualityActionExclude         = "exclude"
-	FaceQualityActionReviewRequired  = "review_required"
+	FaceQualityActionAccept         = "accept"
+	FaceQualityActionExclude        = "exclude"
+	FaceQualityActionReviewRequired = "review_required"
 )
 
 // 质检判定枚举（face_quality_events.decision）
@@ -255,9 +255,9 @@ type FaceQualityEvent struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
-	PhotoID      uint    `gorm:"not null;index:idx_fqe_photo" json:"photo_id"`
-	FaceID       *uint   `gorm:"index:idx_fqe_face" json:"face_id,omitempty"` // 最近匹配 Face ID，重检后回填
-	ExclusionID  *uint   `gorm:"index:idx_fqe_exclusion" json:"exclusion_id,omitempty"`
+	PhotoID     uint  `gorm:"not null;index:idx_fqe_photo" json:"photo_id"`
+	FaceID      *uint `gorm:"index:idx_fqe_face" json:"face_id,omitempty"` // 最近匹配 Face ID，重检后回填
+	ExclusionID *uint `gorm:"index:idx_fqe_exclusion" json:"exclusion_id,omitempty"`
 	// 归一化人脸框：重检后按 photo_id + bbox IoU 匹配回填当前结论。
 	// gorm 默认 snake_case 会把 BBoxX 转成 b_box_x，这里用 column 显式指定为 bbox_x，
 	// 与 face_exclusions 表保持一致，便于跨表 IoU 查询复用同一列名。
@@ -268,7 +268,7 @@ type FaceQualityEvent struct {
 
 	// 判定结果。
 	Decision string `gorm:"type:varchar(20);not null;index:idx_fqe_decision" json:"decision"`
-	Reason   string `gorm:"type:varchar(20);not null" json:"reason"` // non_face/low_quality/''（accepted/review_required 为空）
+	Reason   string `gorm:"type:varchar(20);not null" json:"reason"`                      // non_face/low_quality/''（accepted/review_required 为空）
 	Source   string `gorm:"type:varchar(10);not null;index:idx_fqe_source" json:"source"` // auto/manual
 
 	// 版本与证据。
@@ -327,22 +327,30 @@ func IsValidQualityReviewAction(a string) bool {
 
 // FaceQualityEvidence 质检证据的 Go 镜像（对应 ml-service FaceQualityEvidence JSON）
 type FaceQualityEvidence struct {
-	FaceValidityScore      float64   `json:"face_validity_score"`
-	PixelWidth             int       `json:"pixel_width"`
-	PixelHeight            int       `json:"pixel_height"`
-	Sharpness              float64   `json:"sharpness"`
-	Brightness             float64   `json:"brightness"`
-	Contrast               float64   `json:"contrast"`
-	LandmarkCompleteness   float64   `json:"landmark_completeness"`
-	LandmarkGeometryScore  float64   `json:"landmark_geometry_score"`
-	Yaw                    *float64  `json:"yaw,omitempty"`
-	Pitch                  *float64  `json:"pitch,omitempty"`
-	Roll                   *float64  `json:"roll,omitempty"`
-	PoseEstimable          bool      `json:"pose_estimable"`
-	Occluded               bool      `json:"occluded"`
-	QualityReasons         []string  `json:"quality_reasons"`
-	RuleVersion            string    `json:"rule_version"`
-	ModelVersion           string    `json:"model_version"`
+	FaceValidityScore     float64  `json:"face_validity_score"`
+	PixelWidth            int      `json:"pixel_width"`
+	PixelHeight           int      `json:"pixel_height"`
+	Sharpness             float64  `json:"sharpness"`
+	Brightness            float64  `json:"brightness"`
+	Contrast              float64  `json:"contrast"`
+	LandmarkCompleteness  float64  `json:"landmark_completeness"`
+	LandmarkGeometryScore float64  `json:"landmark_geometry_score"`
+	Yaw                   *float64 `json:"yaw,omitempty"`
+	Pitch                 *float64 `json:"pitch,omitempty"`
+	Roll                  *float64 `json:"roll,omitempty"`
+	PoseEstimable         bool     `json:"pose_estimable"`
+	Occluded              bool     `json:"occluded"`
+	QualityReasons        []string `json:"quality_reasons"`
+	RuleVersion           string   `json:"rule_version"`
+	ModelVersion          string   `json:"model_version"`
+}
+
+// FaceCandidateBox 诊断用候选框（上下文裁剪副本坐标系，像素）。仅供审计/排障。
+type FaceCandidateBox struct {
+	X      int `json:"x"`
+	Y      int `json:"y"`
+	Width  int `json:"width"`
+	Height int `json:"height"`
 }
 
 // FaceQualityEvidenceV2 独立复核证据（evidence_pipeline=independent_v2）。
@@ -355,17 +363,24 @@ type FaceQualityEvidenceV2 struct {
 	PrimaryDetectorScore float64 `json:"primary_detector_score"`
 
 	// 独立验证器（YuNet）结果。
-	VerificationStatus string  `json:"verification_status"` // face / no_face / uncertain / error
+	VerificationStatus string `json:"verification_status"` // face / no_face / uncertain / error
 	// VerifierScore 目标匹配分：匹配到目标脸框时为该检测框置信度；未匹配为 0。
 	// 不再写入裁剪内其他人脸分数，避免「未检测到脸 77.6%」矛盾文案。
-	VerifierScore      float64 `json:"verifier_score"`
+	VerifierScore float64 `json:"verifier_score"`
 	// MaxContextScore 裁剪内所有检测的最高置信度（含非目标脸）。仅供诊断/文案，
 	// 不得当作「确认脸」置信度；前端据此区分「未匹配目标」与「裁剪中无任何检测」。
 	MaxContextScore float64 `json:"max_context_score"`
 	// TargetMatchIoU 匹配到目标脸框时的 IoU；未匹配为 nil。旧证据缺此字段。
 	TargetMatchIoU *float64 `json:"target_match_iou,omitempty"`
-	VerifierName   string   `json:"verifier_name"`
-	VerifierVersion string  `json:"verifier_version"`
+	// 诊断（target_match_diagnostics）：与目标框几何最接近（最大 IoU）的候选，即便低于
+	// 阈值也记录。仅供审计/排障——回答「YuNet 实际检测到了什么框、与目标框相差多少」，
+	// 不作为自动隔离、质量分或 UI 的确认分，亦不据此放宽 IoU 阈值。
+	// 无任何候选时 BestTargetIoU 为 nil。
+	BestTargetIoU            *float64          `json:"best_target_iou,omitempty"`
+	BestTargetCandidateScore float64           `json:"best_target_candidate_score"`
+	BestTargetCandidateBox   *FaceCandidateBox `json:"best_target_candidate_box,omitempty"`
+	VerifierName             string            `json:"verifier_name"`
+	VerifierVersion          string            `json:"verifier_version"`
 
 	// 原图（方向校正后）尺寸。
 	OriginalWidth  int `json:"original_width"`
@@ -379,12 +394,12 @@ type FaceQualityEvidenceV2 struct {
 	ContextExpandRatio  float64 `json:"context_expand_ratio"` // 扩展比例，固定 1.0（四周各 100%）
 
 	// 原图人脸框质量特征（统一到固定短边归一化后计算，标明计算域与版本）。
-	SharpnessNorm   float64 `json:"sharpness_norm"`   // Laplacian 清晰度（归一化后）
-	BrightnessNorm  float64 `json:"brightness_norm"`  // 亮度
-	ContrastNorm    float64 `json:"contrast_norm"`    // 对比度
-	Occluded        bool    `json:"occluded"`         // 遮挡/几何可用性
-	QualityDomain   string  `json:"quality_domain"`   // 计算域说明，如 "original_face_box_norm_to_96"
-	QualityVersion  string  `json:"quality_version"`  // 质量特征计算版本
+	SharpnessNorm  float64 `json:"sharpness_norm"`  // Laplacian 清晰度（归一化后）
+	BrightnessNorm float64 `json:"brightness_norm"` // 亮度
+	ContrastNorm   float64 `json:"contrast_norm"`   // 对比度
+	Occluded       bool    `json:"occluded"`        // 遮挡/几何可用性
+	QualityDomain  string  `json:"quality_domain"`  // 计算域说明，如 "original_face_box_norm_to_96"
+	QualityVersion string  `json:"quality_version"` // 质量特征计算版本
 
 	// 原因码（auto_decision_conflict / too_small_unconfirmed / verifier_uncertain / ...）。
 	ReasonCodes []string `json:"reason_codes,omitempty"`

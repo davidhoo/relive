@@ -433,6 +433,57 @@ func TestFaceQualityRescoreRepo_ListIndependentSnapshotTargets_TargetedFaceIDs(t
 	assert.ErrorIs(t, err, ErrRescoreFaceIDNotFound, "未知 face_id 应报错而非静默丢弃")
 }
 
+// TestFaceQualityRescoreRepo_ListIndependentSnapshotTargets_TargetedReVerifiesSameRuleAuto
+// 定点 face_ids 不应用「同规则版本自动事件去重」：已有当前 face_quality_v3 自动事件的 Face，
+// 定点重跑仍应被选中（旧事件由新事件 is_current=true 取代，审计保留）。非定点仍去重同规则版本。
+func TestFaceQualityRescoreRepo_ListIndependentSnapshotTargets_TargetedReVerifiesSameRuleAuto(t *testing.T) {
+	db := newRescoreRepoTestDB(t)
+	repo := NewFaceQualityRescoreRepository(db)
+
+	require.NoError(t, db.Create(&model.Face{ID: 538580, PhotoID: 1, BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusReviewRequired}).Error)
+	// 当前 v3 自动事件（同规则版本）：非定点会被去重排除，但定点应重新选中。
+	require.NoError(t, db.Create(&model.FaceQualityEvent{
+		PhotoID: 1, FaceID: uintPtr(538580),
+		BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionReviewRequired,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: model.FaceQualityRescoreRuleVersionV3, ModelVersion: "yunet-v1",
+		EvidencePipeline: model.FaceQualityEvidencePipelineIndependentV2, IsCurrent: true,
+	}).Error)
+
+	// 定点：同规则版本去重不应生效，应重新选中。
+	targets, err := repo.ListIndependentSnapshotTargets(model.FaceQualityRescoreRuleVersionV3, 0, []uint{538580})
+	require.NoError(t, err)
+	require.Len(t, targets, 1, "定点 v3 重跑应重新选中已有同规则版本自动事件的 Face")
+	assert.Equal(t, uint(538580), targets[0].FaceID)
+
+	// 非定点：同规则版本去重仍生效，同一 Face 不应入选（避免全量重复复核）。
+	nonTargeted, err := repo.ListIndependentSnapshotTargets(model.FaceQualityRescoreRuleVersionV3, 0, nil)
+	require.NoError(t, err)
+	for _, tg := range nonTargeted {
+		assert.NotEqual(t, uint(538580), tg.FaceID, "非定点应去重同规则版本自动事件")
+	}
+}
+
+// TestFaceQualityRescoreRepo_ListIndependentSnapshotTargets_TargetedRespectsManual
+// 定点请求不绕过人工结论：当前 manual 事件的 Face 定点仍返回零目标。
+func TestFaceQualityRescoreRepo_ListIndependentSnapshotTargets_TargetedRespectsManual(t *testing.T) {
+	db := newRescoreRepoTestDB(t)
+	repo := NewFaceQualityRescoreRepository(db)
+
+	require.NoError(t, db.Create(&model.Face{ID: 538581, PhotoID: 1, BBoxX: 0.3, BBoxY: 0.3, BBoxWidth: 0.2, BBoxHeight: 0.2, ClusterStatus: model.FaceClusterStatusManual}).Error)
+	require.NoError(t, db.Create(&model.FaceQualityEvent{
+		PhotoID: 1, FaceID: uintPtr(538581),
+		BBoxX: 0.3, BBoxY: 0.3, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Decision: model.FaceQualityDecisionAccepted, Source: model.FaceQualitySourceManual,
+		RuleVersion: model.FaceQualityRescoreRuleVersionV3, ModelVersion: "yunet-v1",
+		EvidencePipeline: model.FaceQualityEvidencePipelineIndependentV2, IsCurrent: true,
+	}).Error)
+
+	targets, err := repo.ListIndependentSnapshotTargets(model.FaceQualityRescoreRuleVersionV3, 0, []uint{538581})
+	require.NoError(t, err)
+	assert.Empty(t, targets, "人工结论不得因定点重跑被绕过")
+}
+
 // TestFaceQualityRescoreRepo_ListIndependentSnapshotTargets_DefaultRuleVersion
 // ruleVersion 为空时回退 face_quality_v2（与 ListV2SnapshotTargets 行为一致）。
 func TestFaceQualityRescoreRepo_ListIndependentSnapshotTargets_DefaultRuleVersion(t *testing.T) {

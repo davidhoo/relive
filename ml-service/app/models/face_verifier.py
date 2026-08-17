@@ -20,12 +20,14 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
 import numpy as np
 
 from app.schemas import (
+    CandidateBox,
     EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH,
     V2QualityFeatures,
     VerifyKnownFaceCropResult,
@@ -204,24 +206,31 @@ class FaceVerifier:
         )
 
         # 判定：是否匹配到目标脸框（IoU>=阈值），而非裁剪图几何中心。
-        target_match_score, target_match_iou, max_context_score = _match_target_face(
+        m = _match_target_face(
             detected,
             int(target.face_box_offset_x), int(target.face_box_offset_y),
             int(target.face_box_width_px), int(target.face_box_height_px),
         )
-        base.max_context_score = round(float(max_context_score), 6)
-        if target_match_iou is not None:
-            base.target_match_iou = round(float(target_match_iou), 6)
+        base.max_context_score = round(float(m.max_context_score), 6)
+        # 诊断字段：始终记录与目标框最大 IoU 的候选（即使低于阈值），供审计/排障。
+        # 不作为自动隔离、质量分或 UI 的确认分；不得据此放宽 target_match_iou 阈值。
+        if m.best_target_iou is not None:
+            base.best_target_iou = round(float(m.best_target_iou), 6)
+            base.best_target_candidate_score = round(float(m.best_target_candidate_score), 6)
+            if m.best_target_candidate_box is not None:
+                bx, by, bw, bh = m.best_target_candidate_box
+                base.best_target_candidate_box = CandidateBox(x=bx, y=by, width=bw, height=bh)
 
-        if target_match_iou is not None:
+        if m.target_match_iou is not None:
+            base.target_match_iou = round(float(m.target_match_iou), 6)
             base.verification_status = "face"
-            base.verifier_score = round(float(target_match_score), 6)
+            base.verifier_score = round(float(m.target_match_score), 6)
         else:
             base.verification_status = "no_face"
             # 未匹配目标脸时分数为 0，不再写入裁剪内其他脸分数，避免「未检测到脸 77.6%」矛盾文案。
             base.verifier_score = 0.0
             codes = ["target_face_not_matched"]
-            if max_context_score > 0:
+            if m.max_context_score > 0:
                 codes.append("context_face_not_target")
             base.reason_codes = codes
         return base
@@ -275,40 +284,73 @@ def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
     return inter / union
 
 
+@dataclass
+class _TargetMatch:
+    """_match_target_face 的判定与诊断结果。
+
+    target_match_*：仅当存在 IoU>=阈值的候选时填入（决定 face/no_face）。
+    best_target_*：与目标框几何最接近（最大 IoU）的候选诊断，即便低于阈值也记录，
+        仅供审计/排障，不作为自动隔离或确认分依据。无任何候选时 best_target_iou 为 None。
+    """
+
+    target_match_score: float
+    target_match_iou: float | None
+    max_context_score: float
+    best_target_iou: float | None
+    best_target_candidate_score: float
+    best_target_candidate_box: tuple[int, int, int, int] | None
+
+
 def _match_target_face(
     detected: list[tuple[float, tuple[int, int, int, int]]],
     target_x: int,
     target_y: int,
     target_w: int,
     target_h: int,
-) -> tuple[float, float | None, float]:
+) -> _TargetMatch:
     """在裁剪副本坐标系内，把 YuNet 检测框与目标脸框做 IoU 匹配。
 
     目标脸框为请求中的 (face_box_offset_x/y, face_box_width/height)。
     仅 IoU >= _YUNET_TARGET_IOU_THRESHOLD 的候选可匹配目标；多个候选命中时选 IoU 最大者，
     IoU 相同时选分数更高者。绝不因裁剪内另一张脸分数更高而判目标脸存在。
 
-    返回 (target_match_score, target_match_iou, max_context_score)：
-    - target_match_score: 匹配目标框的检测框置信度；无匹配为 0。
-    - target_match_iou: 匹配框与目标框的 IoU；无匹配为 None。
-    - max_context_score: 裁剪内所有检测的最高置信度（含非目标脸），仅供诊断。
+    诊断维度始终计算「与目标框最大 IoU 的候选」（best_target_*），即便该候选低于阈值，
+    用于审计「YuNet 实际检测到了什么框、与目标框相差多少」。诊断不改变 face/no_face 判定。
     """
     max_context_score = 0.0
-    best_iou: float | None = None
-    best_score = 0.0
+    best_match_iou: float | None = None  # 命中阈值的最优 IoU
+    best_match_score = 0.0
+    # 诊断：与目标框几何最接近的候选；同 IoU 取更高分。无候选时保持 None。
+    best_diag_iou: float | None = None
+    best_diag_score = 0.0
+    best_diag_box: tuple[int, int, int, int] | None = None
     target_box = (target_x, target_y, target_w, target_h)
     for conf, box in detected:
         if conf > max_context_score:
             max_context_score = conf
         iou = _iou(box, target_box)
+        # 诊断跟踪先于阈值过滤：即便 iou<阈值也记录为「最接近目标的候选」。
+        if (
+            best_diag_iou is None
+            or iou > best_diag_iou
+            or (iou == best_diag_iou and conf > best_diag_score)
+        ):
+            best_diag_iou = iou
+            best_diag_score = conf
+            best_diag_box = box
         if iou < _YUNET_TARGET_IOU_THRESHOLD:
             continue
-        if best_iou is None or iou > best_iou or (iou == best_iou and conf > best_score):
-            best_iou = iou
-            best_score = conf
-    if best_iou is None:
-        return 0.0, None, max_context_score
-    return best_score, best_iou, max_context_score
+        if best_match_iou is None or iou > best_match_iou or (iou == best_match_iou and conf > best_match_score):
+            best_match_iou = iou
+            best_match_score = conf
+    return _TargetMatch(
+        target_match_score=best_match_score,
+        target_match_iou=best_match_iou,
+        max_context_score=max_context_score,
+        best_target_iou=best_diag_iou,
+        best_target_candidate_score=best_diag_score,
+        best_target_candidate_box=best_diag_box,
+    )
 
 
 def _compute_quality(

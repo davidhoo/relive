@@ -168,6 +168,45 @@ def test_verifier_group_shot_non_target_is_no_face(tmp_path: Path):
     assert "context_face_not_target" in r.reason_codes
 
 
+def test_verifier_target_match_diagnostics_below_threshold(tmp_path: Path):
+    """低于阈值的候选仍须记录诊断，不丢失几何证据。
+
+    目标框 (744,500,745,1083) 取自 Face #538580 真实线上几何：上下文裁剪以人脸框四周各扩展
+    100% 构成，offset≈face_w；但该脸位于原图上边界，顶部 padding 被截断，故 offset_y=500 <
+    face_h=1083（边缘裁剪特征，与既有「中心 40%」假阴性的根因一致）。
+
+    候选框为结构化占位：完全落在目标框内、IoU≈0.167<0.3，代表「YuNet 框尺度/锚点与存储框
+    不同」。候选框的真实坐标须待任务 3 NAS 定点重跑产出 best_target_candidate_box 后替换
+    （见计划任务 3 Step 3）；本测试仅驱动诊断字段落地，不预先放宽匹配。
+    """
+    def factory():
+        class D:
+            def setInputSize(self, _): ...
+            def detect(self, _frame):
+                # 候选 (1000,800,300,450) 置信度 0.77609，与目标框 IoU≈0.167<0.3。
+                faces = np.array([[1000, 800, 300, 450, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.77609]])
+                return None, faces
+        return D()
+
+    v = _make_verifier_with_factory(tmp_path, factory)
+    frame = np.full((1600, 1600, 3), 200, dtype=np.uint8)
+    resp = v.verify_crops([VerifyKnownFaceCropTarget(
+        face_id=538580, context_crop_base64=_encode_image(frame),
+        face_box_offset_x=744, face_box_offset_y=500,
+        face_box_width_px=745, face_box_height_px=1083, primary_detector_score=0.746871)])
+    r = resp.results[0]
+    assert r.verification_status == "no_face"
+    assert r.max_context_score == 0.77609
+    assert r.best_target_iou is not None
+    assert r.best_target_candidate_score == 0.77609
+    assert r.target_match_iou is None
+    assert r.best_target_candidate_box is not None
+    assert r.best_target_candidate_box.x == 1000
+    assert r.best_target_candidate_box.y == 800
+    assert r.best_target_candidate_box.width == 300
+    assert r.best_target_candidate_box.height == 450
+
+
 def test_verifier_no_detection_keeps_zero_context_score(tmp_path: Path):
     """裁剪内无任何检测 → no_face，max_context_score=0，仅 target_face_not_matched。"""
     def factory():

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -1209,6 +1210,80 @@ func TestRescore_V2ShadowWritesIndependentV2Evidence(t *testing.T) {
 	var f model.Face
 	require.NoError(t, db.First(&f, face.ID).Error)
 	assert.Equal(t, model.FaceClusterStatusAssigned, f.ClusterStatus)
+}
+
+// TestRescore_V3ShadowPersistsTargetMatchDiagnostics v3 shadow 在 no_face（候选低于 IoU 阈值）
+// 时仍把 YuNet 实际检测框诊断透传到审计证据，且 evidence.RuleVersion 与 run 一致（face_quality_v3）。
+// 诊断仅供审计/排障，不改变 review_required 结论、不作为确认分，亦不据此放宽 IoU 阈值。
+func TestRescore_V3ShadowPersistsTargetMatchDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	jpgPath := filepath.Join(dir, "p.jpg")
+	writeTestJPEG(t, jpgPath, 200, 200)
+
+	// ML 返回 no_face + 低于阈值的候选诊断（置信度 0.77609，best_target_iou=0.16728<0.3）。
+	bestIOU := 0.16728
+	client := &rescoreFakeMLClient{
+		healthReady: true,
+		verifyResultsByFace: map[uint]mlclient.VerifyKnownFaceCropResult{
+			538580: {
+				FaceID:                   538580,
+				VerificationStatus:       "no_face",
+				VerifierScore:            0.0,
+				MaxContextScore:          0.77609,
+				TargetMatchIoU:           nil,
+				BestTargetIoU:            &bestIOU,
+				BestTargetCandidateScore: 0.77609,
+				BestTargetCandidateBox:   &mlclient.CandidateBox{X: 50, Y: 40, Width: 30, Height: 36},
+				VerifierName:             "yunet",
+				VerifierVersion:          "opencv-yunet-2023mar",
+				PrimaryDetectorScore:     0.3,
+				FaceBoxWidthPx:           50,
+				FaceBoxHeightPx:          50,
+				EvidenceSchemaVersion:    "independent_v2_target_match_v2",
+				ReasonCodes:              []string{"target_face_not_matched", "context_face_not_target"},
+			},
+		},
+	}
+	rs, svc, repo := newRescoreTestSvc(t, client)
+	db := svc.db
+
+	photo := &model.Photo{FilePath: jpgPath, FaceProcessStatus: model.FaceProcessStatusReady}
+	require.NoError(t, db.Create(photo).Error)
+	face := &model.Face{ID: 538580, PhotoID: photo.ID, BBoxX: 0.25, BBoxY: 0.25, BBoxWidth: 0.25, BBoxHeight: 0.25, Confidence: 0.3, ClusterStatus: model.FaceClusterStatusReviewRequired}
+	require.NoError(t, db.Create(face).Error)
+
+	run, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0, model.FaceQualityRescorePipelineIndependentV2, model.FaceQualityRescoreRuleVersionV3, nil)
+	require.NoError(t, err)
+	assert.Equal(t, model.FaceQualityRescoreRuleVersionV3, run.RuleVersion)
+	assert.Equal(t, 1, run.TargetFaceCount)
+
+	processed := rs.processOneBatch(run)
+	assert.True(t, processed)
+	assert.Equal(t, 1, client.callCount, "v3 worker 应调 VerifyKnownFaceCrops")
+
+	items, _ := repo.ListItemsByRun(run.ID)
+	require.Len(t, items, 1)
+	assert.Equal(t, model.FaceQualityRescoreItemStatusProcessed, items[0].Status)
+
+	var evt model.FaceQualityEvent
+	require.NoError(t, db.Where("face_id = ? AND is_current = ?", face.ID, true).First(&evt).Error)
+	require.NotNil(t, evt.RescoreRunID)
+	assert.Equal(t, run.ID, *evt.RescoreRunID)
+	assert.Equal(t, model.FaceQualityRescoreRuleVersionV3, evt.RuleVersion, "事件行 rule_version 须为 v3")
+	assert.Equal(t, model.FaceQualityDecisionReviewRequired, evt.Decision, "shadow 不自动隔离")
+
+	var ev model.FaceQualityEvidenceV2
+	require.NoError(t, json.Unmarshal([]byte(evt.EvidenceJSON), &ev))
+	assert.Equal(t, model.FaceQualityRescoreRuleVersionV3, ev.RuleVersion, "evidence.rule_version 须与 run 一致，不得硬编码 v2")
+	assert.InDelta(t, 0.77609, ev.BestTargetCandidateScore, 0.000001, "须透传低于阈值候选的置信度诊断")
+	require.NotNil(t, ev.BestTargetIoU, "须透传低于阈值的 best_target_iou 诊断")
+	assert.InDelta(t, 0.16728, *ev.BestTargetIoU, 0.000001)
+	assert.Nil(t, ev.TargetMatchIoU, "低于阈值不得写入 target_match_iou")
+	require.NotNil(t, ev.BestTargetCandidateBox)
+	assert.Equal(t, 50, ev.BestTargetCandidateBox.X)
+	assert.Equal(t, 40, ev.BestTargetCandidateBox.Y)
+	assert.Equal(t, 30, ev.BestTargetCandidateBox.Width)
+	assert.Equal(t, 36, ev.BestTargetCandidateBox.Height)
 }
 
 // TestRescore_V2EnforceAutoExcludesNonFace v2 enforce + 低分 no_face → 自动 non_face 隔离。
