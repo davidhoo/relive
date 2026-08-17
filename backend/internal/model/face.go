@@ -345,6 +345,14 @@ type FaceQualityEvidence struct {
 	ModelVersion           string    `json:"model_version"`
 }
 
+// FaceCandidateBox 诊断用候选框（上下文裁剪副本坐标系，像素）。仅供审计/排障。
+type FaceCandidateBox struct {
+	X      int `json:"x"`
+	Y      int `json:"y"`
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
 // FaceQualityEvidenceV2 独立复核证据（evidence_pipeline=independent_v2）。
 // 所有尺寸/质量指标都在「EXIF 方向校正 + manual_rotation 叠加」的原图上计算，
 // 不得用缩略图或 ProcessForAI(1024,85) 压缩图的尺寸覆盖。缩略图尺寸不得替代这些字段。
@@ -364,6 +372,13 @@ type FaceQualityEvidenceV2 struct {
 	MaxContextScore float64 `json:"max_context_score"`
 	// TargetMatchIoU 匹配到目标脸框时的 IoU；未匹配为 nil。旧证据缺此字段。
 	TargetMatchIoU *float64 `json:"target_match_iou,omitempty"`
+	// 诊断（target_match_diagnostics）：与目标框几何最接近（最大 IoU）的候选，即便低于
+	// 阈值也记录。仅供审计/排障——回答「YuNet 实际检测到了什么框、与目标框相差多少」，
+	// 不作为自动隔离、质量分或 UI 的确认分，亦不据此放宽 IoU 阈值。
+	// 无任何候选时 BestTargetIoU 为 nil。
+	BestTargetIoU            *float64          `json:"best_target_iou,omitempty"`
+	BestTargetCandidateScore  float64          `json:"best_target_candidate_score"`
+	BestTargetCandidateBox   *FaceCandidateBox `json:"best_target_candidate_box,omitempty"`
 	VerifierName   string   `json:"verifier_name"`
 	VerifierVersion string  `json:"verifier_version"`
 
