@@ -445,8 +445,8 @@ func TestFaceQualityRescoreRepo_ListIndependentSnapshotTargets_TargetedReVerifie
 	require.NoError(t, db.Create(&model.FaceQualityEvent{
 		PhotoID: 1, FaceID: uintPtr(538580),
 		BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2,
-		Decision:         model.FaceQualityDecisionReviewRequired,
-		Source:           model.FaceQualitySourceAuto, RuleVersion: model.FaceQualityRescoreRuleVersionV3, ModelVersion: "yunet-v1",
+		Decision: model.FaceQualityDecisionReviewRequired,
+		Source:   model.FaceQualitySourceAuto, RuleVersion: model.FaceQualityRescoreRuleVersionV3, ModelVersion: "yunet-v1",
 		EvidencePipeline: model.FaceQualityEvidencePipelineIndependentV2, IsCurrent: true,
 	}).Error)
 
@@ -474,8 +474,8 @@ func TestFaceQualityRescoreRepo_ListIndependentSnapshotTargets_TargetedRespectsM
 	require.NoError(t, db.Create(&model.FaceQualityEvent{
 		PhotoID: 1, FaceID: uintPtr(538581),
 		BBoxX: 0.3, BBoxY: 0.3, BBoxWidth: 0.2, BBoxHeight: 0.2,
-		Decision:         model.FaceQualityDecisionAccepted, Source: model.FaceQualitySourceManual,
-		RuleVersion:       model.FaceQualityRescoreRuleVersionV3, ModelVersion: "yunet-v1",
+		Decision: model.FaceQualityDecisionAccepted, Source: model.FaceQualitySourceManual,
+		RuleVersion: model.FaceQualityRescoreRuleVersionV3, ModelVersion: "yunet-v1",
 		EvidencePipeline: model.FaceQualityEvidencePipelineIndependentV2, IsCurrent: true,
 	}).Error)
 

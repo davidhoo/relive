@@ -142,26 +142,26 @@ type CandidateBox struct {
 // face/no_face 语义为「是否匹配到目标脸框」：face 表示某检测框与请求目标框 IoU>=阈值；
 // no_face 表示未匹配目标框（裁剪内可能仍有其他人脸，见 MaxContextScore）。
 type VerifyKnownFaceCropResult struct {
-	FaceID                uint               `json:"face_id"`
-	VerificationStatus    string             `json:"verification_status"`
-	VerifierScore         float64            `json:"verifier_score"`             // 目标匹配分；未匹配为 0
-	MaxContextScore       float64            `json:"max_context_score"`          // 裁剪内所有检测最高分（诊断用，非确认分）
-	TargetMatchIoU        *float64           `json:"target_match_iou,omitempty"` // 匹配目标框的 IoU；未匹配为 nil
+	FaceID             uint     `json:"face_id"`
+	VerificationStatus string   `json:"verification_status"`
+	VerifierScore      float64  `json:"verifier_score"`             // 目标匹配分；未匹配为 0
+	MaxContextScore    float64  `json:"max_context_score"`          // 裁剪内所有检测最高分（诊断用，非确认分）
+	TargetMatchIoU     *float64 `json:"target_match_iou,omitempty"` // 匹配目标框的 IoU；未匹配为 nil
 	// 诊断：与目标框几何最接近（最大 IoU）的候选，即便低于阈值也记录。无候选为 nil。
 	// 仅供审计/排障，不作为自动隔离、质量分或 UI 的确认分。
-	BestTargetIoU            *float64      `json:"best_target_iou,omitempty"`
-	BestTargetCandidateScore  float64       `json:"best_target_candidate_score"`            // best_target_iou 对应候选置信度；无候选为 0
-	BestTargetCandidateBox   *CandidateBox `json:"best_target_candidate_box,omitempty"` // best_target_iou 对应候选框
-	VerifierName             string        `json:"verifier_name"`
-	VerifierVersion          string        `json:"verifier_version"`
-	OriginalWidth            int           `json:"original_width"`
-	OriginalHeight           int           `json:"original_height"`
-	FaceBoxWidthPx           int           `json:"face_box_width_px"`
-	FaceBoxHeightPx          int           `json:"face_box_height_px"`
-	ContextCropWidthPx       int           `json:"context_crop_width_px"`
-	ContextCropHeightPx      int           `json:"context_crop_height_px"`
-	ContextExpandRatio       float64       `json:"context_expand_ratio"`
-	PrimaryDetectorScore     float64       `json:"primary_detector_score"`
+	BestTargetIoU            *float64           `json:"best_target_iou,omitempty"`
+	BestTargetCandidateScore float64            `json:"best_target_candidate_score"`         // best_target_iou 对应候选置信度；无候选为 0
+	BestTargetCandidateBox   *CandidateBox      `json:"best_target_candidate_box,omitempty"` // best_target_iou 对应候选框
+	VerifierName             string             `json:"verifier_name"`
+	VerifierVersion          string             `json:"verifier_version"`
+	OriginalWidth            int                `json:"original_width"`
+	OriginalHeight           int                `json:"original_height"`
+	FaceBoxWidthPx           int                `json:"face_box_width_px"`
+	FaceBoxHeightPx          int                `json:"face_box_height_px"`
+	ContextCropWidthPx       int                `json:"context_crop_width_px"`
+	ContextCropHeightPx      int                `json:"context_crop_height_px"`
+	ContextExpandRatio       float64            `json:"context_expand_ratio"`
+	PrimaryDetectorScore     float64            `json:"primary_detector_score"`
 	Quality                  *V2QualityFeatures `json:"quality,omitempty"`
 	ReasonCodes              []string           `json:"reason_codes,omitempty"`
 	EvidenceSchemaVersion    string             `json:"evidence_schema_version"`

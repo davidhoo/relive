@@ -1071,14 +1071,14 @@ func buildV2Evidence(crops *V2FaceCrops, r mlclient.VerifyKnownFaceCropResult, o
 	}
 	ev := &model.FaceQualityEvidenceV2{
 		EvidenceSchemaVersion: schemaVersion,
-		PrimaryDetectorScore:   r.PrimaryDetectorScore,
-		VerificationStatus:      r.VerificationStatus,
-		VerifierScore:           r.VerifierScore,
-		MaxContextScore:         r.MaxContextScore,
-		TargetMatchIoU:          r.TargetMatchIoU,
+		PrimaryDetectorScore:  r.PrimaryDetectorScore,
+		VerificationStatus:    r.VerificationStatus,
+		VerifierScore:         r.VerifierScore,
+		MaxContextScore:       r.MaxContextScore,
+		TargetMatchIoU:        r.TargetMatchIoU,
 		// 诊断字段透传：低于阈值的候选框几何，仅供审计/排障，不作为确认分。
-		BestTargetIoU:             r.BestTargetIoU,
-		BestTargetCandidateScore:  r.BestTargetCandidateScore,
+		BestTargetIoU:            r.BestTargetIoU,
+		BestTargetCandidateScore: r.BestTargetCandidateScore,
 		VerifierName:             r.VerifierName,
 		VerifierVersion:          r.VerifierVersion,
 		OriginalWidth:            crops.OriginalWidth,
