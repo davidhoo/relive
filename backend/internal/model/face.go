@@ -204,6 +204,11 @@ const (
 	// 证据管线仍是 independent_v2；此版本仅标识 face/no_face 改为「是否匹配目标脸框」后的形态，
 	// 新增 max_context_score / target_match_iou 诊断字段。
 	EvidenceSchemaVersionV2TargetMatch = "independent_v2_target_match_v2"
+	// EvidenceSchemaVersionV2TargetMatchScaleNormalized 尺度归一化后的 v2 证据 schema 版本。
+	// 证据管线仍是 independent_v2；在目标框匹配基础上把「目标脸最长边>256 时等比缩小送 YuNet、
+	// 候选框映射回未缩放上下文坐标」纳入证据形态，新增
+	// verifier_input_scale / verifier_input_width_px / verifier_input_height_px 审计字段。
+	EvidenceSchemaVersionV2TargetMatchScaleNormalized = "independent_v2_target_match_v3"
 )
 
 // IsValidEvidencePipeline 校验证据管线是否合法
@@ -379,8 +384,14 @@ type FaceQualityEvidenceV2 struct {
 	BestTargetIoU            *float64          `json:"best_target_iou,omitempty"`
 	BestTargetCandidateScore float64           `json:"best_target_candidate_score"`
 	BestTargetCandidateBox   *FaceCandidateBox `json:"best_target_candidate_box,omitempty"`
-	VerifierName             string            `json:"verifier_name"`
-	VerifierVersion          string            `json:"verifier_version"`
+	// 尺度归一化审计：送入 YuNet 的检测副本相对未缩放上下文的缩放比例与实际输入尺寸。
+	// scale=1 表示未缩放（目标脸最长边<=256）；<1 表示等比缩小。仅 v4 证据（schema v3）填充；
+	// 旧证据缺这三个字段，反序列化为零值，前端按 schema 版本区分展示。
+	VerifierInputScale    float64 `json:"verifier_input_scale,omitempty"`
+	VerifierInputWidthPx  int     `json:"verifier_input_width_px,omitempty"`
+	VerifierInputHeightPx int     `json:"verifier_input_height_px,omitempty"`
+	VerifierName             string             `json:"verifier_name"`
+	VerifierVersion          string             `json:"verifier_version"`
 
 	// 原图（方向校正后）尺寸。
 	OriginalWidth  int `json:"original_width"`

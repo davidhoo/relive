@@ -29,9 +29,19 @@ const FaceQualityRescoreRuleVersionV2 = "face_quality_v2"
 // 自动证据（按 rule_version 区分），人工结论仍绝对优先。旧 face_quality_v2 校准不得放行 v3 enforce。
 const FaceQualityRescoreRuleVersionV3 = "face_quality_v3"
 
+// v4 规则版本字符串（rule_version=face_quality_v4）。
+// 证据管线仍是 independent_v2；face_quality_v4 在 v3 目标框匹配基础上引入「YuNet 检测尺度归一化」：
+// 目标脸最长边 >256 时等比缩小上下文副本送 YuNet，候选框映射回未缩放上下文坐标后再做 IoU 匹配。
+// 新增 verifier_input_scale / verifier_input_width_px / verifier_input_height_px 审计字段
+// （evidence_schema_version=independent_v2_target_match_v3）。v4 可重新复核已有 v2/v3 自动证据；
+// 只有完成且计数闭合、retryable_count=0 的 v4 calibration 才能放行 v4 enforce。
+const FaceQualityRescoreRuleVersionV4 = "face_quality_v4"
+
 // IsValidRescoreRuleVersion 校验历史重评分规则版本是否合法。
 func IsValidRescoreRuleVersion(s string) bool {
-	return s == FaceQualityRescoreRuleVersionV2 || s == FaceQualityRescoreRuleVersionV3
+	return s == FaceQualityRescoreRuleVersionV2 ||
+		s == FaceQualityRescoreRuleVersionV3 ||
+		s == FaceQualityRescoreRuleVersionV4
 }
 
 // 目标快照范围语义。

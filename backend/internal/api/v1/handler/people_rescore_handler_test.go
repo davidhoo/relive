@@ -357,5 +357,37 @@ func TestRescoreHandler_FaceIDsInvalidReturns400(t *testing.T) {
 	assert.Equal(t, "RESCORE_FACE_IDS_INVALID", resp.Error.Code)
 }
 
+// TestRescoreHandler_V4RuleVersionForwarded handler 把 face_quality_v4 rule_version 透传到 service。
+func TestRescoreHandler_V4RuleVersionForwarded(t *testing.T) {
+	svc := &controllableRescoreService{
+		createRunRun: &model.FaceQualityRescoreRun{ID: 9, Mode: model.FaceQualityRescoreModeCalibration, ApplyMode: model.FaceQualityRescoreApplyModeShadow, Status: model.FaceQualityRescoreStatusRunning},
+	}
+	h := newRescoreHandlerWith(svc)
+	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
+		map[string]interface{}{
+			"mode":             "calibration",
+			"pipeline_version": "independent_v2",
+			"rule_version":     "face_quality_v4",
+			"face_ids":         []int{538580, 538582, 538665},
+		}, nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, model.FaceQualityRescorePipelineIndependentV2, svc.createRunPipeline)
+	assert.Equal(t, model.FaceQualityRescoreRuleVersionV4, svc.createRunRuleVer)
+	assert.Equal(t, []uint{538580, 538582, 538665}, svc.createRunFaceIDs)
+}
+
+// TestRescoreHandler_V4RuleVersionMismatchReturns409 v4 full/enforce 引用 v3 校准 → 409 + RESCORE_RULE_VERSION_NOT_V3。
+func TestRescoreHandler_V4RuleVersionMismatchReturns409(t *testing.T) {
+	svc := &controllableRescoreService{createRunErr: service.ErrRescoreRuleVersionMismatch}
+	h := newRescoreHandlerWith(svc)
+	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
+		map[string]interface{}{"mode": "full", "rule_version": "face_quality_v4", "calibration_run_id": 7}, nil)
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	var resp model.Response
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, "RESCORE_RULE_VERSION_NOT_V3", resp.Error.Code)
+}
+
 // 编译期断言桩实现接口。
 var _ service.FaceQualityRescoreService = (*controllableRescoreService)(nil)

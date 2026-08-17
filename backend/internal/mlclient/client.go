@@ -152,6 +152,11 @@ type VerifyKnownFaceCropResult struct {
 	BestTargetIoU            *float64           `json:"best_target_iou,omitempty"`
 	BestTargetCandidateScore float64            `json:"best_target_candidate_score"`         // best_target_iou 对应候选置信度；无候选为 0
 	BestTargetCandidateBox   *CandidateBox      `json:"best_target_candidate_box,omitempty"` // best_target_iou 对应候选框
+	// 尺度归一化审计：送入 YuNet 的检测副本相对未缩放上下文的缩放比例与实际输入尺寸。
+	// scale=1 表示未缩放；<1 表示等比缩小。仅 v4 schema（independent_v2_target_match_v3）填充。
+	VerifierInputScale    float64 `json:"verifier_input_scale,omitempty"`
+	VerifierInputWidthPx  int     `json:"verifier_input_width_px,omitempty"`
+	VerifierInputHeightPx int     `json:"verifier_input_height_px,omitempty"`
 	VerifierName             string             `json:"verifier_name"`
 	VerifierVersion          string             `json:"verifier_version"`
 	OriginalWidth            int                `json:"original_width"`

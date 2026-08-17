@@ -1250,7 +1250,8 @@ func (h *PeopleHandler) CreateFaceQualityRescoreRun(c *gin.Context) {
 	if pipelineVersion == "" {
 		pipelineVersion = model.FaceQualityRescorePipelineIndependentV2
 	}
-	// rule_version：face_quality_v3 显式启用目标框匹配规则；未填默认 v2（service 内推导）。
+	// rule_version：face_quality_v3 启用目标框匹配规则；face_quality_v4 在其上叠加 YuNet
+	// 检测尺度归一化；未填默认 v2（service 内推导）。
 	run, err := h.faceQualityRescore.CreateRun(req.Mode, model.FaceQualityRescoreApplyModeEnforce, req.PhotoLimit, calibrationRunID, pipelineVersion, req.RuleVersion, req.FaceIDs)
 	if err != nil {
 		writeRescoreRunError(c, err)
@@ -1422,8 +1423,11 @@ func writeRescoreRunError(c *gin.Context, err error) {
 		errors.Is(err, repository.ErrRescoreFaceIDNotFound):
 		// 定点校准参数错误：face_ids 仅 calibration+shadow+independent_v2、最多 50、必须存在。
 		writePeopleError(c, http.StatusBadRequest, "RESCORE_FACE_IDS_INVALID", err.Error())
-	case errors.Is(err, service.ErrRescoreRuleVersionNotV3):
-		// v3 full/enforce 必须引用 v3 校准（v2 校准 #5 不能放行）。
+	case errors.Is(err, service.ErrRescoreRuleVersionNotV3),
+		errors.Is(err, service.ErrRescoreRuleVersionMismatch):
+		// full/enforce 必须引用与本 run rule_version 匹配的合格校准 run
+		// （v2 校准不能放行 v3/v4 enforce，v3 校准不能放行 v4 enforce）。
+		// 保留 RESCORE_RULE_VERSION_NOT_V3 错误码兼容旧前端；新统一码同义。
 		writePeopleError(c, http.StatusConflict, "RESCORE_RULE_VERSION_NOT_V3", err.Error())
 	default:
 		if strings.Contains(strings.ToLower(err.Error()), "not found") {

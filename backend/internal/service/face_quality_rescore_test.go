@@ -1634,7 +1634,9 @@ func TestRescore_V2CalibrationCannotGateV3Enforce(t *testing.T) {
 	// 但 v3 full/enforce 引用该 v2 校准必须被拒（rule_version 不匹配）。
 	// 校准已为 face 写了 v2 事件，v3 full 选目标会重新选中它（异规则版本），不影响门禁判定。
 	_, err = rs.CreateRun(model.FaceQualityRescoreModeFull, model.FaceQualityRescoreApplyModeEnforce, 0, calib.ID, model.FaceQualityRescorePipelineIndependentV2, model.FaceQualityRescoreRuleVersionV3, nil)
-	assert.ErrorIs(t, err, ErrRescoreRuleVersionNotV3, "v2 校准不得放行 v3 enforce")
+	assert.ErrorIs(t, err, ErrRescoreRuleVersionMismatch, "v2 校准不得放行 v3 enforce")
+	// 旧别名仍可识别（向后兼容）。
+	assert.ErrorIs(t, err, ErrRescoreRuleVersionNotV3, "ErrRescoreRuleVersionNotV3 保留为 Mismatch 别名")
 }
 
 // TestRescore_V3CalibrationGatesV3Enforce 合格 v3 校准可放行 v3 enforce。
@@ -1677,5 +1679,132 @@ func TestRescore_V3CalibrationGatesV3Enforce(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, model.FaceQualityRescoreRuleVersionV3, full.RuleVersion)
 	assert.Equal(t, 1, full.TargetFaceCount, "v3 full 应只选入 face2（face 已有 v3 事件）")
+	assert.Equal(t, calib.ID, *full.CalibrationRunID)
+}
+
+// ---- 任务 3：v4 规则版本 + 尺度归一化证据透传 ----
+
+// TestRescore_V4ShadowPersistsVerifierInputFields v4 shadow 把 ML 返回的尺度归一化审计字段
+// 原样持久化到证据 JSON，evidence_schema_version=independent_v2_target_match_v3，
+// run.RuleVersion=face_quality_v4。
+func TestRescore_V4ShadowPersistsVerifierInputFields(t *testing.T) {
+	dir := t.TempDir()
+	jpgPath := filepath.Join(dir, "p.jpg")
+	writeTestJPEG(t, jpgPath, 200, 200)
+
+	ioU := 0.91
+	client := &rescoreFakeMLClient{
+		healthReady: true,
+		verifyResultsByFace: map[uint]mlclient.VerifyKnownFaceCropResult{
+			538580: {
+				FaceID:                  538580,
+				VerificationStatus:      "face",
+				VerifierScore:           0.9,
+				MaxContextScore:         0.9,
+				TargetMatchIoU:          &ioU,
+				BestTargetIoU:           &ioU,
+				BestTargetCandidateScore: 0.9,
+				BestTargetCandidateBox:   &mlclient.CandidateBox{X: 744, Y: 500, Width: 745, Height: 1083},
+				VerifierName:            "yunet",
+				VerifierVersion:         "opencv-yunet-2023mar",
+				PrimaryDetectorScore:    0.746871,
+				FaceBoxWidthPx:          745,
+				FaceBoxHeightPx:         1083,
+				EvidenceSchemaVersion:   "independent_v2_target_match_v3",
+				VerifierInputScale:      256.0 / 1083.0,
+				VerifierInputWidthPx:    527,
+				VerifierInputHeightPx:   629,
+				ReasonCodes:             []string{},
+			},
+		},
+	}
+	rs, svc, repo := newRescoreTestSvc(t, client)
+	db := svc.db
+
+	photo := &model.Photo{FilePath: jpgPath, FaceProcessStatus: model.FaceProcessStatusReady}
+	require.NoError(t, db.Create(photo).Error)
+	face := &model.Face{ID: 538580, PhotoID: photo.ID, BBoxX: 0.25, BBoxY: 0.25, BBoxWidth: 0.25, BBoxHeight: 0.25, Confidence: 0.746871, ClusterStatus: model.FaceClusterStatusReviewRequired}
+	require.NoError(t, db.Create(face).Error)
+
+	run, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0, model.FaceQualityRescorePipelineIndependentV2, model.FaceQualityRescoreRuleVersionV4, []uint{538580})
+	require.NoError(t, err)
+	assert.Equal(t, model.FaceQualityRescoreRuleVersionV4, run.RuleVersion)
+
+	processed := rs.processOneBatch(run)
+	assert.True(t, processed)
+
+	items, _ := repo.ListItemsByRun(run.ID)
+	require.Len(t, items, 1)
+	assert.Equal(t, model.FaceQualityRescoreItemStatusProcessed, items[0].Status)
+
+	var evt model.FaceQualityEvent
+	require.NoError(t, db.Where("face_id = ? AND is_current = ?", face.ID, true).First(&evt).Error)
+	assert.Equal(t, model.FaceQualityRescoreRuleVersionV4, evt.RuleVersion, "事件行 rule_version 须为 v4")
+
+	var ev model.FaceQualityEvidenceV2
+	require.NoError(t, json.Unmarshal([]byte(evt.EvidenceJSON), &ev))
+	assert.Equal(t, model.EvidenceSchemaVersionV2TargetMatchScaleNormalized, ev.EvidenceSchemaVersion)
+	assert.Equal(t, model.FaceQualityRescoreRuleVersionV4, ev.RuleVersion, "evidence.rule_version 须与 run 一致")
+	// 三个尺度归一化审计字段原样持久化。
+	assert.InDelta(t, 256.0/1083.0, ev.VerifierInputScale, 1e-6)
+	assert.Equal(t, 527, ev.VerifierInputWidthPx)
+	assert.Equal(t, 629, ev.VerifierInputHeightPx)
+	// 候选框坐标语义不变（未缩放上下文坐标）。
+	require.NotNil(t, ev.BestTargetCandidateBox)
+	assert.Equal(t, 744, ev.BestTargetCandidateBox.X)
+}
+
+// TestRescore_V4CalibrationGatesV4Enforce 合格 v4 校准可放行 v4 enforce；
+// v3 校准不能放行 v4 enforce（rule_version 不匹配）。
+func TestRescore_V4CalibrationGatesV4Enforce(t *testing.T) {
+	dir := t.TempDir()
+	jpgPath := filepath.Join(dir, "p.jpg")
+	writeTestJPEG(t, jpgPath, 200, 200)
+
+	client := &rescoreFakeMLClient{healthReady: true}
+	rs, svc, repo := newRescoreTestSvc(t, client)
+	db := svc.db
+
+	photo := &model.Photo{FilePath: jpgPath, FaceProcessStatus: model.FaceProcessStatusReady}
+	require.NoError(t, db.Create(photo).Error)
+	face := &model.Face{PhotoID: photo.ID, BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.75, ClusterStatus: model.FaceClusterStatusPending}
+	require.NoError(t, db.Create(face).Error)
+
+	// 合格 v4 校准。
+	calib, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0, model.FaceQualityRescorePipelineIndependentV2, model.FaceQualityRescoreRuleVersionV4, nil)
+	require.NoError(t, err)
+	assert.Equal(t, model.FaceQualityRescoreRuleVersionV4, calib.RuleVersion)
+	rs.processOneBatch(calib)
+	items, _ := repo.ListItemsByRun(calib.ID)
+	for _, it := range items {
+		it.Status = model.FaceQualityRescoreItemStatusProcessed
+		require.NoError(t, repo.UpdateItem(it))
+	}
+	calib.Status = model.FaceQualityRescoreStatusCompleted
+	calib.TargetFaceCount = len(items)
+	calib.ProcessedFaceCount = len(items)
+	calib.RetryableCount = 0
+	require.NoError(t, repo.UpdateRun(calib))
+
+	// v3 校准不能放行 v4 enforce：把同一 calib 的 rule_version 改回 v3 模拟 v3 校准。
+	calibV3 := *calib
+	calibV3.ID = calib.ID
+	calibV3.RuleVersion = model.FaceQualityRescoreRuleVersionV3
+	require.NoError(t, repo.UpdateRun(&calibV3))
+	face2 := &model.Face{PhotoID: photo.ID, BBoxX: 0.5, BBoxY: 0.5, BBoxWidth: 0.2, BBoxHeight: 0.2, Confidence: 0.75, ClusterStatus: model.FaceClusterStatusPending}
+	require.NoError(t, db.Create(face2).Error)
+	_, err = rs.CreateRun(model.FaceQualityRescoreModeFull, model.FaceQualityRescoreApplyModeEnforce, 0, calib.ID, model.FaceQualityRescorePipelineIndependentV2, model.FaceQualityRescoreRuleVersionV4, nil)
+	assert.ErrorIs(t, err, ErrRescoreRuleVersionMismatch, "v3 校准不得放行 v4 enforce")
+
+	// 恢复 v4 后可放行。
+	calibV4 := *calib
+	calibV4.ID = calib.ID
+	calibV4.RuleVersion = model.FaceQualityRescoreRuleVersionV4
+	require.NoError(t, repo.UpdateRun(&calibV4))
+	// face2 在 v4 视角下仍无 v4 事件，可被 full 选中（face 已有 v4 事件被排除）。
+	// 但前一次失败的 full 尝试可能已为 face2 写事件？CreateRun 在门禁失败时不写事件，故 face2 仍可选。
+	full, err := rs.CreateRun(model.FaceQualityRescoreModeFull, model.FaceQualityRescoreApplyModeEnforce, 0, calib.ID, model.FaceQualityRescorePipelineIndependentV2, model.FaceQualityRescoreRuleVersionV4, nil)
+	require.NoError(t, err)
+	assert.Equal(t, model.FaceQualityRescoreRuleVersionV4, full.RuleVersion)
 	assert.Equal(t, calib.ID, *full.CalibrationRunID)
 }
