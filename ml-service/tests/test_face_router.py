@@ -292,3 +292,45 @@ def test_verify_known_face_crops_endpoint_shape(monkeypatch):
     assert payload["results"][0]["verification_status"] == "error"
     assert "verifier_unavailable" in payload["results"][0]["reason_codes"]
     assert "rule_version" in payload
+
+
+def test_verify_known_face_crops_emits_scale_normalized_schema(monkeypatch):
+    """尺度归一化后，成功匹配的大脸证据 schema 升级为 independent_v2_target_match_v3，
+    并带 verifier_input_scale/width/height 审计字段。"""
+    client = TestClient(app)
+    from app.routers import faces
+
+    # 注入可用验证器 + 假检测器工厂：目标框 (0,0,50,50)，scale=1（最长边 50<=256）。
+    real_verifier = faces.verifier
+    captured = {}
+
+    def fake_factory():
+        class D:
+            def setInputSize(self, size):
+                captured["size"] = (int(size[0]), int(size[1]))
+            def detect(self, _frame):
+                faces = np.array([[10, 10, 40, 40, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.9]])
+                return None, faces
+        return D()
+
+    monkeypatch.setattr(real_verifier, "_detector_factory", fake_factory)
+    monkeypatch.setattr(real_verifier, "available", True)
+
+    response = client.post(
+        "/api/v1/verify-known-face-crops",
+        json={
+            "targets": [
+                {"face_id": 1, "context_crop_base64": _blank_image_base64(),
+                 "face_box_offset_x": 0, "face_box_offset_y": 0,
+                 "face_box_width_px": 50, "face_box_height_px": 50, "primary_detector_score": 0.4},
+            ],
+        },
+    )
+    assert response.status_code == 200
+    result = response.json()["results"][0]
+    assert result["verification_status"] == "face"
+    assert result["evidence_schema_version"] == "independent_v2_target_match_v3"
+    assert "verifier_input_scale" in result
+    assert result["verifier_input_scale"] == 1.0
+    assert result["verifier_input_width_px"] > 0
+    assert result["verifier_input_height_px"] > 0

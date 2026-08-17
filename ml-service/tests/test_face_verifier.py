@@ -13,12 +13,18 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from app.models import face_verifier
-from app.models.face_verifier import FaceVerifier, _YUNET_MIN_INPUT_SHORT_EDGE
+from app.models.face_verifier import (
+    FaceVerifier,
+    _YUNET_MIN_INPUT_SHORT_EDGE,
+    _plan_detection_input,
+)
 from app.schemas import (
     EVIDENCE_SCHEMA_VERSION_V2,
     EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH,
+    EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH_SCALE_NORMALIZED,
     VerifyKnownFaceCropTarget,
 )
 
@@ -259,6 +265,43 @@ def test_min_input_short_edge_constant_positive():
 def test_evidence_schema_version_constant():
     assert EVIDENCE_SCHEMA_VERSION_V2 == "independent_v2"
     assert EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH == "independent_v2_target_match_v2"
+    assert (
+        EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH_SCALE_NORMALIZED
+        == "independent_v2_target_match_v3"
+    )
+
+
+# ---- 任务 1：以失败测试固定尺度归一化契约 ----
+
+def test_detection_plan_downscales_large_target_without_upscaling_small_target():
+    """缩放依据必须是目标框最长边，不能用整张上下文最长边。
+
+    #538580 等价：上下文裁剪 2235×2666，目标脸框 745×1083（最长边 1083>256）→ 等比缩小，
+    使送入 YuNet 的目标脸最长边 ≈256。小脸控制样本（120×153 上下文，目标 40×51）不得放大。
+    """
+    large = _plan_detection_input(2235, 2666, 745, 1083)
+    assert large.scale == pytest.approx(256 / 1083)
+    assert (large.input_width, large.input_height) == (
+        round(2235 * 256 / 1083),
+        round(2666 * 256 / 1083),
+    )
+
+    small = _plan_detection_input(120, 153, 40, 51)
+    assert small.scale == 1.0
+    assert (small.input_width, small.input_height) == (120, 153)
+
+
+def test_detection_plan_uses_target_long_edge_not_context_long_edge():
+    """缩放依据必须是目标框最长边而非上下文最长边，否则边缘裁剪与常规裁剪目标人脸尺度不一致。
+
+    边缘裁剪：上下文短（如 1400），目标脸最长边 1083>256，仍应缩小。
+    若误用上下文最长边缩放，会得到不同的 scale，导致边缘裁剪目标脸尺度与常规裁剪不一致。
+    """
+    plan = _plan_detection_input(1400, 1100, 745, 1083)
+    # 目标最长边 1083 > 256 → scale = 256/1083，与 #538580 相同（同目标脸）。
+    assert plan.scale == pytest.approx(256 / 1083)
+    assert plan.input_width == round(1400 * 256 / 1083)
+    assert plan.input_height == round(1100 * 256 / 1083)
 
 
 def test_compute_quality_uses_exact_face_box_offset_not_center():
@@ -289,3 +332,126 @@ def test_compute_quality_occluded_when_low_contrast():
     q = _compute_quality(frame, 80, 80, face_offset_x=10, face_offset_y=10, face_width=40, face_height=40)
     assert q.occluded is True
     assert q.contrast_norm < 5.0
+
+
+# ---- 任务 1 Step 2/3：大脸等价回归 + 群像反例（尺度归一化） ----
+
+def test_verifier_scale_normalized_large_target_face_matched(tmp_path: Path):
+    """#538580 等价大脸回归：目标脸最长边 >256 → 等比缩小送 YuNet，候选框映射回原坐标后 IoU>=0.3 → face。
+
+    构造未缩放上下文 2235×2666、目标框 (744,500,745,1083)。假 YuNet 检测器断言收到缩放后尺寸，
+    并在缩放坐标系返回目标框等比候选；映射回原上下文后应接近 (744,500,745,1083)。
+    """
+    captured_input_size: dict[str, tuple[int, int]] = {}
+
+    def factory():
+        class D:
+            def setInputSize(self, size):
+                captured_input_size["size"] = (int(size[0]), int(size[1]))
+            def detect(self, _frame):
+                # 目标脸最长边 1083 > 256 → scale=256/1083 ≈ 0.23638。
+                # 缩放后目标框尺寸约 (745*scale, 1083*scale) ≈ (175, 256)，位置 (744*scale, 500*scale)。
+                scale = 256 / 1083
+                x = 744 * scale
+                y = 500 * scale
+                w = 745 * scale
+                h = 1083 * scale
+                faces = np.array([[x, y, w, h, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.9]])
+                return None, faces
+        return D()
+
+    v = _make_verifier_with_factory(tmp_path, factory)
+    frame = np.full((2666, 2235, 3), 200, dtype=np.uint8)  # (h, w)
+    resp = v.verify_crops([VerifyKnownFaceCropTarget(
+        face_id=538580, context_crop_base64=_encode_image(frame),
+        face_box_offset_x=744, face_box_offset_y=500,
+        face_box_width_px=745, face_box_height_px=1083, primary_detector_score=0.746871)])
+    r = resp.results[0]
+
+    # YuNet 收到的必须是缩放后尺寸，而非原始 2235×2666。
+    expected_w = round(2235 * 256 / 1083)
+    expected_h = round(2666 * 256 / 1083)
+    assert captured_input_size["size"] == (expected_w, expected_h), (
+        f"YuNet 应收到缩放后 {expected_w}x{expected_h}，实际 {captured_input_size['size']}"
+    )
+
+    assert r.verification_status == "face"
+    assert r.target_match_iou is not None
+    assert r.target_match_iou >= 0.3
+    assert r.verifier_input_scale == pytest.approx(256 / 1083)
+    assert r.verifier_input_width_px == expected_w
+    assert r.verifier_input_height_px == expected_h
+    assert r.evidence_schema_version == EVIDENCE_SCHEMA_VERSION_V2_TARGET_MATCH_SCALE_NORMALIZED
+    # 候选框审计坐标必须映射回原上下文坐标，接近 (744,500,745,1083)。
+    assert r.best_target_candidate_box is not None
+    assert abs(r.best_target_candidate_box.x - 744) <= 2
+    assert abs(r.best_target_candidate_box.y - 500) <= 2
+    assert abs(r.best_target_candidate_box.width - 745) <= 2
+    assert abs(r.best_target_candidate_box.height - 1083) <= 2
+
+
+def test_verifier_scale_normalized_group_shot_non_target_is_no_face(tmp_path: Path):
+    """群像反例：同一缩放比例下只返回右下方邻脸候选，映射回原坐标后与目标框不重叠 → no_face。
+
+    目标框 (744,500,745,1083)；假检测器返回右下角邻脸（缩放坐标），映射回原坐标后与目标框 IoU=0。
+    """
+    def factory():
+        class D:
+            def setInputSize(self, _): ...
+            def detect(self, _frame):
+                # 邻脸在原坐标右下角 (1700, 1900, 600, 700)，缩放后送入。
+                scale = 256 / 1083
+                x = 1700 * scale
+                y = 1900 * scale
+                w = 600 * scale
+                h = 700 * scale
+                faces = np.array([[x, y, w, h, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.76363]])
+                return None, faces
+        return D()
+
+    v = _make_verifier_with_factory(tmp_path, factory)
+    frame = np.full((2666, 2235, 3), 200, dtype=np.uint8)
+    resp = v.verify_crops([VerifyKnownFaceCropTarget(
+        face_id=538582, context_crop_base64=_encode_image(frame),
+        face_box_offset_x=744, face_box_offset_y=500,
+        face_box_width_px=749, face_box_height_px=1119, primary_detector_score=0.76363)])
+    r = resp.results[0]
+
+    assert r.verification_status == "no_face"
+    assert r.verifier_score == 0.0
+    assert r.max_context_score > 0
+    assert r.target_match_iou is None
+    assert r.verifier_input_scale < 1.0
+    assert "target_face_not_matched" in r.reason_codes
+    assert "context_face_not_target" in r.reason_codes
+
+
+def test_verifier_scale_not_applied_to_small_target(tmp_path: Path):
+    """#538665 控制样本：目标脸最长边 <=256 不放大，scale=1，候选框坐标不做缩放映射。"""
+    def factory():
+        class D:
+            def setInputSize(self, _): ...
+            def detect(self, _frame):
+                # 目标框 (10,10,40,51)，检测框 (12,12,38,49) 与其高度重叠。
+                faces = np.array([[12, 12, 38, 49, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.85]])
+                return None, faces
+        return D()
+
+    v = _make_verifier_with_factory(tmp_path, factory)
+    frame = np.full((153, 120, 3), 200, dtype=np.uint8)  # (h, w) = (153, 120)
+    resp = v.verify_crops([VerifyKnownFaceCropTarget(
+        face_id=538665, context_crop_base64=_encode_image(frame),
+        face_box_offset_x=10, face_box_offset_y=10,
+        face_box_width_px=40, face_box_height_px=51, primary_detector_score=0.924)])
+    r = resp.results[0]
+
+    assert r.verification_status == "face"
+    assert r.verifier_input_scale == 1.0
+    assert r.verifier_input_width_px == 120
+    assert r.verifier_input_height_px == 153
+    # scale=1 时候选框坐标不额外取整偏移。
+    assert r.best_target_candidate_box is not None
+    assert r.best_target_candidate_box.x == 12
+    assert r.best_target_candidate_box.y == 12
+    assert r.best_target_candidate_box.width == 38
+    assert r.best_target_candidate_box.height == 49
