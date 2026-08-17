@@ -153,19 +153,22 @@ func (s *faceQualityRescoreService) CreateRun(mode, applyMode string, photoLimit
 		return nil, err
 	}
 
-	// 规则版本：legacy_v1 固定 v1；independent_v2 按 ruleVersion——face_quality_v3 启用目标框匹配，
-	// face_quality_v4 在其上叠加 YuNet 检测尺度归一化，否则 v2（默认）。
-	// ruleVer 既写入 run.RuleVersion，也作为 full/enforce 校准门禁。
+	// 规则版本：legacy_v1 固定 v1（忽略 ruleVersion 入参，保持向后兼容）；
+	// independent_v2 按 ruleVersion——face_quality_v3 启用目标框匹配，face_quality_v4 在其上叠加
+	// YuNet 检测尺度归一化；空串推导为 v2（默认）；未知的非空值必须报参数错误，不得静默降级 v2，
+	// 否则拼写错误会产出错误的 v2 run 与证据，污染校准来源。
 	ruleVer := qualityRuleVersionFromEvidence(nil) // "v1"
 	modelVer := qualityModelVersionFromEvidence(nil)
 	if pipelineVersion == model.FaceQualityRescorePipelineIndependentV2 {
 		switch ruleVersion {
-		case model.FaceQualityRescoreRuleVersionV3:
-			ruleVer = model.FaceQualityRescoreRuleVersionV3
-		case model.FaceQualityRescoreRuleVersionV4:
-			ruleVer = model.FaceQualityRescoreRuleVersionV4
-		default:
+		case "":
 			ruleVer = model.FaceQualityRescoreRuleVersionV2
+		case model.FaceQualityRescoreRuleVersionV2,
+			model.FaceQualityRescoreRuleVersionV3,
+			model.FaceQualityRescoreRuleVersionV4:
+			ruleVer = ruleVersion
+		default:
+			return nil, ErrRescoreUnknownRuleVersion
 		}
 		modelVer = "yunet-v1"
 	} else if modelVer == "" {
@@ -1622,9 +1625,13 @@ var (
 	ErrRescoreTooManyFaceIDs            = fmt.Errorf("face_ids must contain at most 50 unique non-zero ids")
 	ErrRescoreRuleVersionNotV3          = fmt.Errorf("a face_quality_v3 calibration is required before v3 full/enforce")
 	// ErrRescoreRuleVersionMismatch full/enforce 引用的校准 run rule_version 与本 run 不匹配。
-	// 通用规则版本门禁：v3 full→必须 v3 calib；v4 full→必须 v4 calib。此错误同时 Is ErrRescoreRuleVersionNotV3
-	// （v3 门禁是它的特例），保持旧 handler 错误码与旧测试向后兼容。
-	ErrRescoreRuleVersionMismatch = fmt.Errorf("a calibration run with matching rule_version is required before full/enforce: %w", ErrRescoreRuleVersionNotV3)
+	// 通用规则版本门禁：v3 full→必须 v3 calib；v4 full→必须 v4 calib。此错误独立于
+	// ErrRescoreRuleVersionNotV3（不再 wrap），handler 映射为通用 RESCORE_RULE_VERSION_MISMATCH；
+	// v3 旧路径继续使用 ErrRescoreRuleVersionNotV3 + RESCORE_RULE_VERSION_NOT_V3 向后兼容。
+	ErrRescoreRuleVersionMismatch = fmt.Errorf("a calibration run with matching rule_version is required before full/enforce")
+	// ErrRescoreUnknownRuleVersion independent_v2 管线下传入了未知的非空 rule_version。
+	// 必须返回参数错误，不得静默降级为 v2——否则拼写错误会产出错误的 v2 run 与证据。
+	ErrRescoreUnknownRuleVersion = fmt.Errorf("unknown rule_version for independent_v2 pipeline; use face_quality_v2/v3/v4 or leave empty")
 
 	// 内部别名，保持 service 内部引用不变。
 	errRunConflict               = ErrRescoreRunConflict

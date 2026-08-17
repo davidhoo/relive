@@ -376,12 +376,26 @@ func TestRescoreHandler_V4RuleVersionForwarded(t *testing.T) {
 	assert.Equal(t, []uint{538580, 538582, 538665}, svc.createRunFaceIDs)
 }
 
-// TestRescoreHandler_V4RuleVersionMismatchReturns409 v4 full/enforce 引用 v3 校准 → 409 + RESCORE_RULE_VERSION_NOT_V3。
+// TestRescoreHandler_V4RuleVersionMismatchReturns409 v4 full/enforce 引用 v3 校准 → 409 + RESCORE_RULE_VERSION_MISMATCH（新通用错误码）。
 func TestRescoreHandler_V4RuleVersionMismatchReturns409(t *testing.T) {
 	svc := &controllableRescoreService{createRunErr: service.ErrRescoreRuleVersionMismatch}
 	h := newRescoreHandlerWith(svc)
 	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
 		map[string]interface{}{"mode": "full", "rule_version": "face_quality_v4", "calibration_run_id": 7}, nil)
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	var resp model.Response
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, "RESCORE_RULE_VERSION_MISMATCH", resp.Error.Code)
+}
+
+// TestRescoreHandler_V3RuleVersionNotV3StillMapsOldCode v3 旧路径 ErrRescoreRuleVersionNotV3
+// 保留旧错误码 RESCORE_RULE_VERSION_NOT_V3，向后兼容已有调用方。
+func TestRescoreHandler_V3RuleVersionNotV3StillMapsOldCode(t *testing.T) {
+	svc := &controllableRescoreService{createRunErr: service.ErrRescoreRuleVersionNotV3}
+	h := newRescoreHandlerWith(svc)
+	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
+		map[string]interface{}{"mode": "full", "rule_version": "face_quality_v3", "calibration_run_id": 5}, nil)
 	assert.Equal(t, http.StatusConflict, rec.Code)
 	var resp model.Response
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))

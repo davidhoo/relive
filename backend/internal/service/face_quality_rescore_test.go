@@ -1602,6 +1602,35 @@ func TestRescore_V3TargetedFaceIDsValidation(t *testing.T) {
 	assert.ErrorIs(t, err, repository.ErrRescoreFaceIDNotFound)
 }
 
+// TestRescore_UnknownRuleVersionRejected independent_v2 管线下未知的非空 rule_version
+// 必须返回参数错误（ErrRescoreUnknownRuleVersion），不得静默降级为 face_quality_v2。
+// 否则拼写错误会产出错误的 v2 run 与证据，污染校准来源。
+func TestRescore_UnknownRuleVersionRejected(t *testing.T) {
+	client := &rescoreFakeMLClient{healthReady: true}
+	rs, svc, _ := newRescoreTestSvc(t, client)
+	db := svc.db
+	photo := &model.Photo{FilePath: "/t/p.jpg", FaceProcessStatus: model.FaceProcessStatusReady}
+	require.NoError(t, db.Create(photo).Error)
+	require.NoError(t, db.Create(&model.Face{PhotoID: photo.ID, BBoxX: 0.2, BBoxY: 0.2, BBoxWidth: 0.2, BBoxHeight: 0.2}).Error)
+
+	// 拼写错误的 rule_version 必须被拒，不得降级为 v2。校验在快照/创建 run 之前，不占用活跃 run 槽。
+	_, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0, model.FaceQualityRescorePipelineIndependentV2, "face_quality_v9", nil)
+	assert.ErrorIs(t, err, ErrRescoreUnknownRuleVersion, "未知 rule_version 不得静默降级 v2")
+
+	// 空串仍允许（service 内推导为 v2 默认），保持调用方不填时的旧行为。
+	run, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0, model.FaceQualityRescorePipelineIndependentV2, "", nil)
+	require.NoError(t, err)
+	assert.Equal(t, model.FaceQualityRescoreRuleVersionV2, run.RuleVersion, "空 rule_version 推导为 v2")
+
+	// 把上一个 run 推到终态，腾出单活跃 run 互斥槽，再测 legacy_v1。
+	require.NoError(t, rs.Cancel(run.ID))
+
+	// legacy_v1 管线忽略 rule_version（固定 v1），不受未知值影响。
+	runLegacy, err := rs.CreateRun(model.FaceQualityRescoreModeCalibration, "", 0, 0, model.FaceQualityRescorePipelineLegacyV1, "face_quality_v9", nil)
+	require.NoError(t, err, "legacy_v1 固定 v1，忽略 rule_version 入参")
+	assert.Equal(t, "v1", runLegacy.RuleVersion)
+}
+
 // TestRescore_V2CalibrationCannotGateV3Enforce v2 校准（#5）虽 IsEligibleForEnforce=true，
 // 但 v3 full/enforce 引用它时被 rule_version 门禁拒绝（ErrRescoreRuleVersionNotV3）。
 func TestRescore_V2CalibrationCannotGateV3Enforce(t *testing.T) {
@@ -1635,8 +1664,6 @@ func TestRescore_V2CalibrationCannotGateV3Enforce(t *testing.T) {
 	// 校准已为 face 写了 v2 事件，v3 full 选目标会重新选中它（异规则版本），不影响门禁判定。
 	_, err = rs.CreateRun(model.FaceQualityRescoreModeFull, model.FaceQualityRescoreApplyModeEnforce, 0, calib.ID, model.FaceQualityRescorePipelineIndependentV2, model.FaceQualityRescoreRuleVersionV3, nil)
 	assert.ErrorIs(t, err, ErrRescoreRuleVersionMismatch, "v2 校准不得放行 v3 enforce")
-	// 旧别名仍可识别（向后兼容）。
-	assert.ErrorIs(t, err, ErrRescoreRuleVersionNotV3, "ErrRescoreRuleVersionNotV3 保留为 Mismatch 别名")
 }
 
 // TestRescore_V3CalibrationGatesV3Enforce 合格 v3 校准可放行 v3 enforce。

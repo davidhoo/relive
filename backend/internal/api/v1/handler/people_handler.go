@@ -1423,12 +1423,16 @@ func writeRescoreRunError(c *gin.Context, err error) {
 		errors.Is(err, repository.ErrRescoreFaceIDNotFound):
 		// 定点校准参数错误：face_ids 仅 calibration+shadow+independent_v2、最多 50、必须存在。
 		writePeopleError(c, http.StatusBadRequest, "RESCORE_FACE_IDS_INVALID", err.Error())
-	case errors.Is(err, service.ErrRescoreRuleVersionNotV3),
-		errors.Is(err, service.ErrRescoreRuleVersionMismatch):
-		// full/enforce 必须引用与本 run rule_version 匹配的合格校准 run
-		// （v2 校准不能放行 v3/v4 enforce，v3 校准不能放行 v4 enforce）。
-		// 保留 RESCORE_RULE_VERSION_NOT_V3 错误码兼容旧前端；新统一码同义。
+	case errors.Is(err, service.ErrRescoreRuleVersionMismatch):
+		// full/enforce 引用的校准 run rule_version 与本 run 不匹配
+		// （v2 校准不能放行 v3/v4 enforce，v3 校准不能放行 v4 enforce）。通用错误码。
+		writePeopleError(c, http.StatusConflict, "RESCORE_RULE_VERSION_MISMATCH", err.Error())
+	case errors.Is(err, service.ErrRescoreRuleVersionNotV3):
+		// v3 旧路径兼容：仍映射 RESCORE_RULE_VERSION_NOT_V3（旧调用方/前端可能依赖）。
 		writePeopleError(c, http.StatusConflict, "RESCORE_RULE_VERSION_NOT_V3", err.Error())
+	case errors.Is(err, service.ErrRescoreUnknownRuleVersion):
+		// independent_v2 管线下传入了未知的非空 rule_version，不得静默降级 v2。
+		writePeopleError(c, http.StatusBadRequest, "RESCORE_UNKNOWN_RULE_VERSION", err.Error())
 	default:
 		if strings.Contains(strings.ToLower(err.Error()), "not found") {
 			writePeopleError(c, http.StatusNotFound, "RESCORE_NOT_FOUND", err.Error())
