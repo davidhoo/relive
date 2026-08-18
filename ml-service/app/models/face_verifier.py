@@ -313,33 +313,54 @@ class FaceVerifier:
         return out
 
 
+def _clip_box_to_frame(
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    frame_width: int,
+    frame_height: int,
+) -> tuple[int, int, int, int] | None:
+    """把已处于未缩放上下文坐标系的框裁切到图内，返回 (x,y,w,h) 或 None（完全图外/裁后无面积）。
+
+    YuNet 的检测框属于图像边界坐标，左上角略微在裁剪图外（如 x=-1）是模型允许的边界输出。
+    按边界交集裁切：左/上裁为 0，右/下截到 frame 边界，宽高相应缩短——而不是把负坐标置零
+    但保留原宽高（那会把图外像素凭空扩展进图内）。裁后宽高<=0 视为完全图外，丢弃。
+    """
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(frame_width, x + width), min(frame_height, y + height)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return x0, y0, x1 - x0, y1 - y0
+
+
 def _map_boxes_to_original(
     detected: list[tuple[float, tuple[int, int, int, int]]],
     scale: float,
     frame_width: int,
     frame_height: int,
 ) -> list[tuple[float, tuple[int, int, int, int]]]:
-    """把缩放坐标系下的 YuNet 检测框映射回未缩放上下文坐标。
+    """把缩放坐标系下的 YuNet 检测框映射回未缩放上下文坐标，并统一裁切到图内。
 
-    scale==1 时直接返回原框，不额外取整，避免无缩放场景引入坐标漂移。
-    scale<1 时按 round(value/scale) 映射，再裁切到原图边界（负值归零、超出框宽高截断）。
+    scale<1 时先按 round(value/scale) 映射到原坐标；scale>=1 时保留整数坐标，不额外取整。
+    两条路径随后都调用 _clip_box_to_frame() 裁切图边界，保证 _match_target_face()、
+    max_context_score 与 CandidateBox 只接收非负、图内、正宽高的框——YuNet 在未缩放输入上
+    返回略越边界的候选框（如 x=-1）是模型允许的输出，必须在坐标边界统一归一化，而不是
+    放宽 CandidateBox 的非负约束。完全图外或裁后无面积的框直接丢弃，不参与任何计算。
     """
-    if scale >= 1.0:
-        return detected
     out: list[tuple[float, tuple[int, int, int, int]]] = []
     for conf, (x, y, w, h) in detected:
-        mx = max(0, round(x / scale))
-        my = max(0, round(y / scale))
-        mw = max(0, round(w / scale))
-        mh = max(0, round(h / scale))
-        # 裁切到原图边界。
-        if mx >= frame_width or my >= frame_height:
+        if scale < 1.0:
+            mx = round(x / scale)
+            my = round(y / scale)
+            mw = round(w / scale)
+            mh = round(h / scale)
+        else:
+            mx, my, mw, mh = x, y, w, h
+        clipped = _clip_box_to_frame(mx, my, mw, mh, frame_width, frame_height)
+        if clipped is None:
             continue
-        mw = min(mw, frame_width - mx)
-        mh = min(mh, frame_height - my)
-        if mw <= 0 or mh <= 0:
-            continue
-        out.append((conf, (mx, my, mw, mh)))
+        out.append((conf, clipped))
     return out
 
 

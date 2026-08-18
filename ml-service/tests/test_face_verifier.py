@@ -463,3 +463,70 @@ def test_verifier_scale_not_applied_to_small_target(tmp_path: Path):
     assert r.best_target_candidate_box.y == 12
     assert r.best_target_candidate_box.width == 38
     assert r.best_target_candidate_box.height == 49
+
+
+# ---- 任务 1：YuNet 边界候选框裁切契约（scale=1 与缩放分支统一） ----
+
+def test_verifier_clamps_edge_candidate_box_when_scale_is_one(tmp_path: Path):
+    """scale=1 时 YuNet 返回略越左/上边界的候选框，必须裁切到图内后再进 CandidateBox。
+
+    100×100 上下文，目标框刻意放在右下 (60,60,20,20)，确保本测试只验证边界归一化，
+    不会因 IoU 命中混入「是否是目标脸」语义。YuNet 候选 (-1,-2,31,42)：左上越界、右下
+    仍在图内。裁切后应得 (0,0,30,40)，宽高相应缩短（不是把负坐标置零但保留原宽高）。
+    旧实现 scale>=1 直接透传原框 → CandidateBox(x=-1) 触发 ValidationError。
+    """
+    def factory():
+        class D:
+            def setInputSize(self, _): ...
+            def detect(self, _frame):
+                # YuNet 候选略越过左、上边界；右下仍在 100x100 图内。
+                return None, np.array([[-1, -2, 31, 42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.91]])
+        return D()
+
+    verifier = _make_verifier_with_factory(tmp_path, factory)
+    frame = np.full((100, 100, 3), 200, dtype=np.uint8)
+    result = verifier.verify_crops([VerifyKnownFaceCropTarget(
+        face_id=9001,
+        context_crop_base64=_encode_image(frame),
+        face_box_offset_x=60,
+        face_box_offset_y=60,
+        face_box_width_px=20,
+        face_box_height_px=20,
+        primary_detector_score=0.8,
+    )]).results[0]
+
+    assert result.verifier_input_scale == 1.0
+    assert result.verification_status == "no_face"
+    assert result.best_target_candidate_box is not None
+    assert (result.best_target_candidate_box.x, result.best_target_candidate_box.y) == (0, 0)
+    assert (result.best_target_candidate_box.width, result.best_target_candidate_box.height) == (30, 40)
+
+
+def test_map_boxes_clips_to_frame_across_scale_branches():
+    """_map_boxes_to_original 在 scale<1 与 scale>=1 两条路径都必须返回非负、图内、正宽高的框。
+
+    同一越界框 (-1,-2,31,42) 在 100×100 图上：
+    - scale=1.0：直接裁切，左上裁为 0、右下 x+w=30<100 不变 → (0,0,30,40)；
+    - scale=0.5：先 round(./scale) 映射回原坐标 (-2,-4,62,84)，左上裁为 0、右下
+      x+w=-2+62=60<100 → (0,0,60,80)。两条路径都体现「左上越界裁切，宽高相应缩短」。
+    完全图内框 (12,12,38,49) 在 scale=1 下必须保持完全不变（不引入取整漂移）。
+    完全在图外的框（如 x>=frame_width）必须被丢弃，不出现在输出里。
+    """
+    from app.models.face_verifier import _map_boxes_to_original
+
+    edge_box = (0.91, (-1, -2, 31, 42))
+    in_frame_box = (0.85, (12, 12, 38, 49))
+    off_frame_box = (0.7, (105, 10, 20, 20))  # x 起点已在 100x100 图外
+
+    # scale=1.0 分支
+    out_one = _map_boxes_to_original([edge_box, in_frame_box, off_frame_box], 1.0, 100, 100)
+    one_conf = {round(c, 2): b for c, b in out_one}
+    assert one_conf[0.91] == (0, 0, 30, 40)  # 左上越界裁切，宽高缩短
+    assert one_conf[0.85] == (12, 12, 38, 49)  # 图内框保持不变
+    assert 0.7 not in one_conf  # 完全图外框被丢弃
+
+    # scale=0.5 分支：映射回原坐标 (-2,-4,62,84) 再裁切 → (0,0,60,80)
+    out_half = _map_boxes_to_original([edge_box], 0.5, 100, 100)
+    assert len(out_half) == 1
+    assert out_half[0][0] == pytest.approx(0.91)
+    assert out_half[0][1] == (0, 0, 60, 80)
