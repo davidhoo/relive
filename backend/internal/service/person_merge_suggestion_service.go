@@ -61,6 +61,12 @@ type personMergeSuggestionService struct {
 	// 为 nil 时合并建议完整走现有 prototype ANN 路径，行为与 Task 10 前一致。
 	profileProvider PersonProfileSimilarityProvider
 
+	// identityMatchingEngine + mode/strategy：primary 模式走统一引擎，禁止 legacy 隐式回退。
+	identityMatchingEngine  *IdentityMatchingEngine
+	identityProfileMode     string
+	identitySuggestStrategy IdentityStrategy
+	identityConfigFingerprint string
+
 	mu             sync.RWMutex
 	task           *model.PersonMergeSuggestionTask
 	state          personMergeSuggestionState
@@ -117,6 +123,9 @@ type mergeSuggestionCandidate struct {
 	targetPerson *model.Person
 	source       string // legacy / identity_profile
 	warning      string // "" / same_photo_cooccurrence
+	reason       string
+	margin       *float64
+	profileGen   int
 }
 
 // mergeSuggestionProfileK 是非 legacy 模式下每个目标人物从身份画像召回的最大候选数。
@@ -136,8 +145,12 @@ func (s *personMergeSuggestionService) buildAssignments(targets []*model.Person)
 	}
 
 	// legacy 模式（provider 未注入）完整走现有 prototype ANN 路径，行为与 Task 10 前一致。
-	if s.profileProvider == nil {
+	if s.profileProvider == nil && s.identityMatchingEngine == nil {
 		return s.legacyAssignments(targets, idx, cannotLinkCache)
+	}
+	// primary：统一引擎，禁止整批/逐目标/逐对 legacy 回退。
+	if s.identityProfileMode == model.PeopleIdentityModePrimary && s.identityMatchingEngine != nil {
+		return s.primaryAssignments(targets, cannotLinkCache)
 	}
 	return s.mixedAssignments(targets, idx, cannotLinkCache)
 }
@@ -494,6 +507,9 @@ func (s *personMergeSuggestionService) buildItemsFromBest(bestByCandidate map[ui
 			Status:            model.PersonMergeSuggestionItemStatusPending,
 			MatchSource:       source,
 			Warning:           assignment.warning,
+			Reason:            assignment.reason,
+			Margin:            assignment.margin,
+			CandidateProfileGeneration: assignment.profileGen,
 		})
 	}
 	for _, target := range targets {
@@ -625,6 +641,123 @@ func (s *personMergeSuggestionService) SetFeedbackEventRepo(repo repository.Peop
 // legacy 模式必须保持 nil，使合并建议完整走现有 prototype ANN 路径。测试通过 fake provider 注入。
 func (s *personMergeSuggestionService) SetProfileSimilarityProvider(provider PersonProfileSimilarityProvider) {
 	s.profileProvider = provider
+}
+
+// SetIdentityMatchingEngine 注入统一身份匹配引擎（primary 推荐路径）。
+func (s *personMergeSuggestionService) SetIdentityMatchingEngine(engine *IdentityMatchingEngine) {
+	s.identityMatchingEngine = engine
+}
+
+// SetIdentityProfileMode 注入当前身份画像模式，用于选择推荐决策路径。
+func (s *personMergeSuggestionService) SetIdentityProfileMode(mode string) {
+	s.identityProfileMode = mode
+}
+
+// SetIdentitySuggestStrategy 注入人工推荐策略。
+func (s *personMergeSuggestionService) SetIdentitySuggestStrategy(strategy IdentityStrategy) {
+	s.identitySuggestStrategy = strategy
+}
+
+// SetIdentityConfigFingerprint 注入策略配置指纹，写入新推荐记录。
+func (s *personMergeSuggestionService) SetIdentityConfigFingerprint(fp string) {
+	s.identityConfigFingerprint = fp
+}
+
+// primaryAssignments 使用统一引擎生成推荐，禁止任何 legacy 隐式回退。
+// 硬冲突直接丢弃；unavailable 目标标记到任务状态，不伪装成无推荐。
+func (s *personMergeSuggestionService) primaryAssignments(targets []*model.Person, cannotLinkCache map[uint]map[uint]bool) (map[uint][]model.PersonMergeSuggestionItem, error) {
+	strategy := s.identitySuggestStrategy
+	if strategy.Name == "" && s.config != nil {
+		strategy = NewIdentitySuggestStrategy(s.config.People)
+	}
+	threshold := strategy.ScoreThreshold
+	if threshold <= 0 {
+		threshold = s.mergeSuggestionThreshold()
+	}
+
+	targetIDs := make([]uint, 0, len(targets))
+	targetByID := make(map[uint]*model.Person, len(targets))
+	for _, t := range targets {
+		if t == nil {
+			continue
+		}
+		targetIDs = append(targetIDs, t.ID)
+		targetByID[t.ID] = t
+	}
+
+	opts := IdentityRecallOptions{TopK: mergeSuggestionProfileK}.normalized()
+	results := s.identityMatchingEngine.SimilarPeople(targetIDs, opts)
+
+	bestByCandidate := make(map[uint]mergeSuggestionCandidate)
+	var unavailableTargets []uint
+
+	for _, tid := range targetIDs {
+		res, ok := results[tid]
+		if !ok {
+			unavailableTargets = append(unavailableTargets, tid)
+			continue
+		}
+		switch res.Status {
+		case IdentityMatchStatusUnavailable, IdentityMatchStatusInvalid:
+			unavailableTargets = append(unavailableTargets, tid)
+			continue
+		case IdentityMatchStatusNoCandidate:
+			continue
+		}
+
+		// 对召回候选批量 ComparePeople 做精确分数（与 SimilarPeople 共用引擎）
+		pairs := make([]PersonPair, 0, len(res.Candidates))
+		for _, c := range res.Candidates {
+			if c.PersonID == 0 || cannotLinkBlocked(cannotLinkCache, tid, c.PersonID) {
+				continue
+			}
+			pairs = append(pairs, PersonPair{TargetID: tid, CandidateID: c.PersonID})
+		}
+		comparisons := s.identityMatchingEngine.ComparePeople(pairs)
+
+		for _, pr := range pairs {
+			cmp := comparisons[pr]
+			if cmp.Status == IdentityMatchStatusHardConflict || cmp.Status == IdentityMatchStatusUnavailable || cmp.Status == IdentityMatchStatusInvalid {
+				continue
+			}
+			if cmp.Best == nil || cmp.Best.PersonID == 0 {
+				continue
+			}
+			dec := ApplyIdentityStrategy(cmp, strategy)
+			if !dec.Accepted {
+				continue
+			}
+			if dec.Score < threshold {
+				continue
+			}
+			var margin *float64
+			if cmp.MarginApplicable {
+				m := cmp.Margin
+				margin = &m
+			}
+			s.updateBestCandidate(bestByCandidate, mergeSuggestionCandidate{
+				targetID:     tid,
+				candidateID:  dec.PersonID,
+				score:        dec.Score,
+				targetPerson: targetByID[tid],
+				source:       model.PersonMergeMatchSourceIdentityProfile,
+				warning:      "", // primary 硬阻断，不写 warning 推荐
+				reason:       cmp.BlockReason,
+				margin:       margin,
+				profileGen:   0,
+			})
+		}
+	}
+
+	if len(unavailableTargets) > 0 {
+		s.mu.Lock()
+		if s.task != nil {
+			s.task.CurrentMessage = fmt.Sprintf("partial: %d targets waiting on identity engine", len(unavailableTargets))
+		}
+		s.mu.Unlock()
+	}
+
+	return s.buildItemsFromBest(bestByCandidate, targets), nil
 }
 
 // recordFeedbackEvent 在核心人物变更已提交后单独写入一条反馈事件。必须在任何

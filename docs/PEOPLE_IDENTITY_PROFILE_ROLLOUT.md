@@ -387,6 +387,57 @@ docker compose restart backend
 
 ---
 
+## 8. primary 模式上线与回退（统一引擎）
+
+`primary` 同时接管：
+
+1. 增量聚类身份归属（统一引擎 + 自动归属策略）
+2. 人物合并推荐（统一引擎 + 人工推荐策略）
+
+两条链路共用原始分数与硬约束，仅阈值不同。primary 下禁止任何整批/逐目标/逐对 legacy 隐式回退；索引/画像/负证据不可用时等待恢复并有界退避。
+
+### 上线前检查
+
+- [ ] 代码与迁移 `migration.people_identity_primary_v1` 已部署（含 `assignment_version` 触发器、归属批次表）
+- [ ] 配置仍为 `rescue`（或 `shadow`），**不要**在部署时顺带启用 primary
+- [ ] 一致性备份已校验：`make backup-nas` → `PRAGMA quick_check`
+- [ ] 副本上完成迁移幂等验证与撤销预演（不连生产写库）
+
+### 切换步骤
+
+1. 暂停新增聚类写入并等待批次排空。
+2. 将 `people.identity_profile_mode` 改为 `primary` 并按实际配置加载行为重启服务（勿假设热更新）。
+3. 旧待审混合/legacy 来源建议标记 `obsolete`（`stale_reason=primary_mode_transition`），有界重新生成；保留已接受/拒绝反馈。
+4. 恢复处理；检查真实归属记录：
+   - `GET /api/v1/people/identity-assignment-batches`
+   - 确认 `engine_version=identity-engine-v1`、来源为画像挂靠/创建新人
+5. 检查新推荐：`match_source=identity_profile`，无 legacy 来源；部分失败不得显示完整成功。
+
+若暂无合格待处理人脸：记录「已启用但尚未产生实际决策」，**不得**为制造证据自动重置历史数据。
+
+### 验收证据（分开记录）
+
+| 状态 | 含义 |
+|------|------|
+| 代码完成 | 本分支合并 |
+| 测试通过 | `go test ./...` 与关键 race 测试 |
+| 已部署 | 迁移标记存在 |
+| 已切换 | 配置为 primary 且服务已加载 |
+| 真实画像归属已发生 | assignment batch 中有 profile_attach/create_person |
+| 新推荐已用统一引擎 | 新 pending 建议 engine_version / match_source 正确 |
+
+### primary 回退
+
+1. 暂停并排空聚类。
+2. 切回 `rescue`（或明确选择 `legacy`）并重启。
+3. 对问题批次：`POST .../identity-assignment-batches/:id/revoke/preview` → 授权后 `.../revoke`。
+4. 核查统计、头像、画像；将不兼容待审推荐标记过期并按回退模式重新生成。
+5. 恢复调度。
+
+**注意：** 切模式不会自动修复已经写入的归属；批次撤销只撤销自动聚类，不撤销用户已确认的推荐合并。
+
+---
+
 ## 参考
 
 - `docs/NAS_BACKUP.md` — NAS 在线备份工具。
@@ -394,3 +445,5 @@ docker compose restart backend
 - `backend/internal/service/person_identity_profile_benchmark_test.go` — 代表规模基准测试。
 - `backend/internal/model/people_identity_decision.go` — identity decision 表结构与枚举。
 - `backend/internal/model/person_merge_suggestion.go` — 合并建议表与 Rank 字段。
+- `backend/internal/model/people_identity_assignment.go` — primary 归属批次与撤销模型。
+- `docs/plans/2026-09-08-people-identity-primary.md` — primary 统一引擎任务说明。

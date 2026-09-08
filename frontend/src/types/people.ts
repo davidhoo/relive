@@ -132,6 +132,9 @@ export interface PersonMergeSuggestionItem {
   status: string
   match_source: 'legacy' | 'identity_profile'
   warning?: 'same_photo_cooccurrence'
+  reason?: string
+  margin?: number
+  candidate_profile_generation?: number
   candidate_person?: Person
 }
 
@@ -145,6 +148,10 @@ export interface PersonMergeSuggestion {
   reviewed_at?: string
   created_at: string
   updated_at: string
+  engine_version?: string
+  strategy_version?: string
+  config_fingerprint?: string
+  stale_reason?: string
   target_person?: Person
   items?: PersonMergeSuggestionItem[]
 }

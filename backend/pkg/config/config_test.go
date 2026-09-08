@@ -336,6 +336,10 @@ func TestPeopleIdentityProfileRejectsInvalidConfig(t *testing.T) {
 		{name: "zero slice budget", field: "identity_profile_slice_budget_ms", apply: func(c *PeopleConfig) { c.IdentityProfileSliceBudgetMs = 0 }},
 		{name: "zero ann delta threshold", field: "identity_profile_ann_rebuild_delta_threshold", apply: func(c *PeopleConfig) { c.IdentityProfileAnnRebuildDeltaThreshold = 0 }},
 		{name: "ann delta threshold above one", field: "identity_profile_ann_rebuild_delta_threshold", apply: func(c *PeopleConfig) { c.IdentityProfileAnnRebuildDeltaThreshold = 1.1 }},
+		{name: "auto threshold below suggest", field: "identity_profile_rescue_threshold", apply: func(c *PeopleConfig) {
+			c.IdentityProfileRescueThreshold = 0.50
+			c.MergeSuggestionThreshold = 0.55
+		}},
 	}
 
 	for _, tt := range tests {

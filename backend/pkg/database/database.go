@@ -222,6 +222,10 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.FaceQualityRescoreItem{},
 		&model.PeopleIdentityDecision{},
 		&model.PersonPhoto{},
+		&model.PeopleIdentityAssignmentBatch{},
+		&model.PeopleIdentityAssignmentChange{},
+		&model.PeopleIdentityAssignmentRevocation{},
+		&model.PeopleIdentityAssignmentRevocationItem{},
 	}
 
 	if err := migrateDeviceLastSeenColumn(db); err != nil {
@@ -332,6 +336,10 @@ func AutoMigrate(db *gorm.DB) error {
 
 	if err := migratePersonFaceCursorIndex(db); err != nil {
 		log.Printf("[database] warning: person face cursor index migration failed: %v", err)
+	}
+
+	if err := migratePeopleIdentityPrimaryV1(db); err != nil {
+		return err
 	}
 
 	return nil
@@ -1377,6 +1385,94 @@ func migratePersonFaceCursorIndex(db *gorm.DB) error {
 		db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
 	} else {
 		log.Printf("[database] person face cursor index verified (elapsed=%s)", elapsed)
+	}
+	return nil
+}
+
+// migratePeopleIdentityPrimaryV1 添加 primary 模式所需的归属版本字段、有界退避字段、
+// 完整归属变更日志表，以及推进 assignment_version 的自愈触发器。
+// 标记幂等；触发器每次启动 CREATE IF NOT EXISTS 以自愈。缺失时启动失败（安全要求）。
+func migratePeopleIdentityPrimaryV1(db *gorm.DB) error {
+	const migrationKey = "migration.people_identity_primary_v1"
+
+	var cfg model.AppConfig
+	alreadyMarked := db.Where("key = ?", migrationKey).First(&cfg).Error == nil
+
+	if !alreadyMarked {
+		log.Printf("[database] migrating people identity primary v1 columns and tables...")
+	}
+
+	faceCols := []struct {
+		name string
+		ddl  string
+	}{
+		{"assignment_version", "ALTER TABLE faces ADD COLUMN assignment_version INTEGER NOT NULL DEFAULT 0"},
+		{"identity_retry_after", "ALTER TABLE faces ADD COLUMN identity_retry_after DATETIME"},
+		{"identity_failure_reason", "ALTER TABLE faces ADD COLUMN identity_failure_reason VARCHAR(100) NOT NULL DEFAULT ''"},
+		{"identity_unavailable_count", "ALTER TABLE faces ADD COLUMN identity_unavailable_count INTEGER NOT NULL DEFAULT 0"},
+	}
+	for _, col := range faceCols {
+		if !db.Migrator().HasColumn(&model.Face{}, col.name) {
+			if err := db.Exec(col.ddl).Error; err != nil {
+				return fmt.Errorf("add faces.%s: %w", col.name, err)
+			}
+		}
+	}
+
+	suggestionCols := []struct {
+		model interface{}
+		name  string
+		ddl   string
+	}{
+		{&model.PersonMergeSuggestion{}, "engine_version", "ALTER TABLE person_merge_suggestions ADD COLUMN engine_version VARCHAR(50) NOT NULL DEFAULT ''"},
+		{&model.PersonMergeSuggestion{}, "strategy_version", "ALTER TABLE person_merge_suggestions ADD COLUMN strategy_version VARCHAR(50) NOT NULL DEFAULT ''"},
+		{&model.PersonMergeSuggestion{}, "config_fingerprint", "ALTER TABLE person_merge_suggestions ADD COLUMN config_fingerprint VARCHAR(64) NOT NULL DEFAULT ''"},
+		{&model.PersonMergeSuggestion{}, "index_generation", "ALTER TABLE person_merge_suggestions ADD COLUMN index_generation INTEGER NOT NULL DEFAULT 0"},
+		{&model.PersonMergeSuggestion{}, "target_profile_generation", "ALTER TABLE person_merge_suggestions ADD COLUMN target_profile_generation INTEGER NOT NULL DEFAULT 0"},
+		{&model.PersonMergeSuggestion{}, "stale_reason", "ALTER TABLE person_merge_suggestions ADD COLUMN stale_reason VARCHAR(100) NOT NULL DEFAULT ''"},
+		{&model.PersonMergeSuggestionItem{}, "reason", "ALTER TABLE person_merge_suggestion_items ADD COLUMN reason VARCHAR(100) NOT NULL DEFAULT ''"},
+		{&model.PersonMergeSuggestionItem{}, "candidate_profile_generation", "ALTER TABLE person_merge_suggestion_items ADD COLUMN candidate_profile_generation INTEGER NOT NULL DEFAULT 0"},
+		{&model.PersonMergeSuggestionItem{}, "margin", "ALTER TABLE person_merge_suggestion_items ADD COLUMN margin REAL"},
+	}
+	for _, col := range suggestionCols {
+		if !db.Migrator().HasColumn(col.model, col.name) {
+			if err := db.Exec(col.ddl).Error; err != nil {
+				return fmt.Errorf("add %s: %w", col.name, err)
+			}
+		}
+	}
+
+	indexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_faces_identity_pending_retry ON faces(cluster_status, identity_retry_after, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_piac_batch_component ON people_identity_assignment_changes(batch_id, component_key, face_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_piac_face_version ON people_identity_assignment_changes(face_id, committed_assignment_version)`,
+	}
+	for _, sql := range indexes {
+		if err := db.Exec(sql).Error; err != nil {
+			return fmt.Errorf("create identity primary index: %w", err)
+		}
+	}
+
+	// 触发器：归属相关字段变更时推进 assignment_version。每次启动自愈重建。
+	triggerSQL := `
+CREATE TRIGGER IF NOT EXISTS trg_faces_assignment_version
+AFTER UPDATE OF person_id, cluster_status, manual_locked ON faces
+FOR EACH ROW
+WHEN COALESCE(OLD.person_id, 0) != COALESCE(NEW.person_id, 0)
+  OR OLD.cluster_status != NEW.cluster_status
+  OR OLD.manual_locked != NEW.manual_locked
+BEGIN
+  UPDATE faces
+  SET assignment_version = OLD.assignment_version + 1
+  WHERE id = NEW.id;
+END`
+	if err := db.Exec(triggerSQL).Error; err != nil {
+		return fmt.Errorf("create assignment_version trigger: %w", err)
+	}
+
+	if !alreadyMarked {
+		db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
+		log.Printf("[database] people identity primary v1 migration complete")
 	}
 	return nil
 }

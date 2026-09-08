@@ -357,6 +357,7 @@ func (c *peopleClusteringCoordinator) runClusterBatch(source clusterSource) back
 	}
 
 	gateStart := time.Now()
+	c.svc.beginIdentityAssignmentBatch(string(source))
 	c.svc.writeGate.RLock()
 	var res backgroundClusterResult
 	func() {
@@ -369,6 +370,15 @@ func (c *peopleClusteringCoordinator) runClusterBatch(source clusterSource) back
 		}()
 		res.affectedPersonIDs, res.affectedPhotoIDs, res.shadowObservations, res.err = c.svc.runIncrementalClustering()
 	}()
+	if c.svc.identityPrimaryEnabled() {
+		status := model.PeopleIdentityAssignmentBatchCompleted
+		if res.err != nil {
+			status = model.PeopleIdentityAssignmentBatchFailed
+		} else if len(res.affectedPersonIDs) == 0 {
+			status = model.PeopleIdentityAssignmentBatchPartial
+		}
+		c.svc.finalizeIdentityAssignmentBatch(status, len(res.affectedPersonIDs), 0, 0)
+	}
 	elapsed := time.Since(gateStart)
 
 	// shadow 处理在 writeGate 释放后执行：foreground merge/split/move 无需等待画像

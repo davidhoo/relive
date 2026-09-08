@@ -27,7 +27,16 @@
             <span>{{ getPersonCategoryLabel(suggestion.target_person?.category || suggestion.target_category_snapshot) }}</span>
             <span>{{ suggestion.candidate_count }} 个候选</span>
             <span>{{ `最高相似度 ${(suggestion.top_similarity * 100).toFixed(1)}%` }}</span>
+            <span v-if="suggestion.engine_version">引擎 {{ suggestion.engine_version }}</span>
           </div>
+          <el-alert
+            v-if="suggestion.status === 'obsolete' || suggestion.stale_reason"
+            type="warning"
+            :closable="false"
+            show-icon
+            class="review-stale-alert"
+            :title="staleAlertTitle"
+          />
         </div>
 
         <el-checkbox-group v-model="selectedIds" class="candidate-list">
@@ -37,7 +46,7 @@
             class="candidate-card"
             :class="{ 'candidate-card--warning': isMergeSuggestionWarning(item) }"
           >
-            <el-checkbox :value="item.candidate_person_id" />
+            <el-checkbox :value="item.candidate_person_id" :disabled="isSuggestionStale" />
             <el-avatar
               :size="40"
               :src="getFaceThumbnail(item.candidate_person?.representative_face_id)"
@@ -55,6 +64,11 @@
                 <span>{{ item.candidate_person?.photo_count || 0 }} 照片</span>
                 <span>{{ item.candidate_person?.face_count || 0 }} 人脸</span>
                 <span>{{ `相似度 ${(item.similarity_score * 100).toFixed(1)}%` }}</span>
+                <span v-if="item.match_source === 'identity_profile'">画像引擎</span>
+                <span v-else-if="item.match_source === 'legacy'">legacy</span>
+              </div>
+              <div v-if="item.reason" class="candidate-reason">
+                证据说明：{{ formatMatchReason(item.reason) }}
               </div>
               <div v-if="isMergeSuggestionWarning(item)" class="candidate-warning">
                 <el-icon><WarningFilled /></el-icon>
@@ -80,7 +94,7 @@
           <el-button @click="emit('update:modelValue', false)">关闭</el-button>
         <el-button
           type="warning"
-          :disabled="selectedIds.length === 0 || submitting"
+          :disabled="selectedIds.length === 0 || submitting || isSuggestionStale"
           :loading="submitting"
           @click="emit('exclude', [...selectedIds])"
         >
@@ -88,7 +102,7 @@
         </el-button>
         <el-button
           type="primary"
-          :disabled="selectedIds.length === 0 || submitting"
+          :disabled="selectedIds.length === 0 || submitting || isSuggestionStale"
           :loading="submitting"
           @click="emit('apply', [...selectedIds])"
         >
@@ -128,8 +142,35 @@ const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/a
 
 const sortedItems = computed(() => sortMergeSuggestionCandidates(props.suggestion?.items || []))
 
+const isSuggestionStale = computed(() => {
+  const s = props.suggestion
+  if (!s) return false
+  return s.status === 'obsolete' || !!s.stale_reason
+})
+
+const staleAlertTitle = computed(() => {
+  const reason = props.suggestion?.stale_reason || 'primary_mode_transition'
+  return `该建议已过期（${reason}），请刷新生成后再审核`
+})
+
+function formatMatchReason(reason: string): string {
+  const labels: Record<string, string> = {
+    score_below_threshold: '分数未达自动门槛，可作为人工推荐',
+    margin_too_small: '与次佳差距偏小',
+    unstable_center: '中心样本偏少/不稳定',
+    below_center_boundary: '未达中心边界',
+    cannot_link: '存在 cannot-link 约束',
+    same_photo_cooccurrence: '同照片共现冲突',
+  }
+  return labels[reason] || reason
+}
+
 // 全选/反选仅在无 warning 候选范围内操作；warning 候选可手动勾选但不被批量默认选中。
-const selectableIds = computed(() => sortedItems.value.filter(item => !isMergeSuggestionWarning(item)).map(i => i.candidate_person_id))
+const selectableIds = computed(() =>
+  isSuggestionStale.value
+    ? []
+    : sortedItems.value.filter(item => !isMergeSuggestionWarning(item)).map(i => i.candidate_person_id),
+)
 
 const isAllSelected = computed(() => selectableIds.value.length > 0 && selectableIds.value.every(id => selectedIds.value.includes(id)))
 
@@ -264,6 +305,16 @@ watch(
   color: var(--color-text-secondary);
   flex-wrap: wrap;
   line-height: 1.4;
+}
+
+.candidate-reason {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+}
+
+.review-stale-alert {
+  margin-top: 12px;
 }
 
 .review-footer {

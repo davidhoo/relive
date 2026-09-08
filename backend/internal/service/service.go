@@ -33,6 +33,7 @@ type Services struct {
 	Scheduler             *TaskScheduler
 	ResultQueue           *ResultQueue // 结果队列服务
 	IdentityProfile       PersonIdentityProfileService
+	IdentityAssignment    PeopleIdentityAssignmentService
 	BackgroundCoordinator *BackgroundTaskCoordinator // 后台任务治理准入控制器（状态 API 用）
 	BackgroundLoadSampler *BackgroundLoadSampler     // 负载采样器（状态 API 用，advisory）
 	// PersonPhotoRepo 人物照片派生表仓库，供 person_photos 后台回填与 cursor 查询切换使用。
@@ -200,6 +201,28 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 				matcher.Match,
 				telemetry.Record,
 			)
+
+			// 统一身份匹配引擎：primary 聚类与合并推荐共用。
+			engine := NewIdentityMatchingEngine(
+				ann,
+				repos.IdentityProfile,
+				repos.Face,
+				repos.CannotLink,
+				repos.Face,
+				IdentityProfileMatcherConfig{
+					EmbeddingModel:  embeddingModel,
+					RescueThreshold: cfg.People.IdentityProfileRescueThreshold,
+					Margin:          cfg.People.IdentityProfileMargin,
+					MinCenterFaces:  cfg.People.IdentityProfileMinCenterFaces,
+				},
+			)
+			peopleSvc.(*peopleService).SetIdentityMatchingEngine(engine)
+			peopleSvc.(*peopleService).SetIdentityAutoStrategy(NewIdentityAutoStrategy(cfg.People))
+			peopleSvc.(*peopleService).SetIdentityAssignmentRepo(repos.IdentityAssignment)
+			mergeSuggestionService.(*personMergeSuggestionService).SetIdentityMatchingEngine(engine)
+			mergeSuggestionService.(*personMergeSuggestionService).SetIdentityProfileMode(cfg.People.IdentityProfileMode)
+			mergeSuggestionService.(*personMergeSuggestionService).SetIdentitySuggestStrategy(NewIdentitySuggestStrategy(cfg.People))
+			mergeSuggestionService.(*personMergeSuggestionService).SetIdentityConfigFingerprint(IdentityStrategyFingerprint(cfg.People))
 			// Task 13：注入统一身份画像失效 hook（仅非 legacy 模式）。所有人物变更路径
 			// （detection/merge/split/move/dissolve/reset/聚类/recluster）通过该 hook 统一
 			// 失效画像，替代 Task 12 仅用于 rescue 的 dirty hook。rescue 的画像持久化失效
@@ -249,6 +272,19 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	// 将队列设置到分析服务
 	analysisService.SetResultQueue(resultQueue)
 
+	assignmentService := NewPeopleIdentityAssignmentService(repos.IdentityAssignment, repos.Face, repos.Person)
+	if as, ok := assignmentService.(*peopleIdentityAssignmentService); ok {
+		as.SetWriteGateFn(func() func() {
+			return peopleSvc.(*peopleService).AcquireWriteGate()
+		})
+		if cfg != nil && cfg.People.IdentityProfileMode != "legacy" {
+			as.SetInvalidationHook(identityProfileService.Invalidate)
+		}
+	}
+	if n, err := assignmentService.MarkInterruptedRunning(); err == nil && n > 0 {
+		logger.Infof("identity assignment: marked %d interrupted running batches", n)
+	}
+
 	return &Services{
 		Photo:                   photoService,
 		People:                  peopleSvc,
@@ -269,6 +305,7 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		Scheduler:               scheduler,
 		ResultQueue:             resultQueue,
 		IdentityProfile:         identityProfileService,
+		IdentityAssignment:      assignmentService,
 		BackgroundCoordinator:   backgroundCoordinator,
 		BackgroundLoadSampler:   loadSampler,
 		PersonPhotoRepo:         repos.PersonPhoto,

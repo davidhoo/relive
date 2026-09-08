@@ -153,6 +153,18 @@ type Face struct {
 	ReclusterGeneration int `gorm:"not null;default:0" json:"recluster_generation"`
 	RetryCount          int `gorm:"not null;default:0" json:"retry_count"` // 聚类失败重试次数，用于退避策略
 
+	// AssignmentVersion 是单调递增的归属版本。任何会影响撤销资格的写入（人物归属、
+	// 聚类状态、人工锁）都必须推进该版本；批次撤销用它识别后续修改冲突。
+	// 由数据库触发器在 person_id/cluster_status/manual_locked 变更时自动 +1。
+	AssignmentVersion uint64 `gorm:"not null;default:0" json:"assignment_version"`
+	// IdentityRetryAfter 是 primary 模式技术故障/不确定结果的有界退避截止时间。
+	// ListPending 会跳过尚未到期的人脸，避免忙循环；技术不可用不消耗语义 RetryCount。
+	IdentityRetryAfter *time.Time `gorm:"index:idx_faces_identity_pending_retry,priority:2" json:"identity_retry_after,omitempty"`
+	// IdentityFailureReason 记录最近一次 primary 决策的稳定原因枚举（可诊断，不含路径/向量）。
+	IdentityFailureReason string `gorm:"type:varchar(100);not null;default:''" json:"identity_failure_reason,omitempty"`
+	// IdentityUnavailableCount 统计连续技术不可用次数，用于指数退避上限计算。
+	IdentityUnavailableCount int `gorm:"not null;default:0" json:"identity_unavailable_count"`
+
 	// 排除相关字段（cluster_status = excluded 时使用）
 	ExclusionReason string     `gorm:"type:varchar(20);default:''" json:"exclusion_reason,omitempty"`
 	ExcludedAt      *time.Time `json:"excluded_at,omitempty"`

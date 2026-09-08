@@ -251,6 +251,12 @@ func Setup(db *gorm.DB, cfg *config.Config, appState *lifecycle.State) (*gin.Eng
 				people.GET("/identity-profiles/stats", handlers.People.GetIdentityProfileStats)
 				people.GET("/identity-profiles/decisions", handlers.People.ListIdentityProfileDecisions)
 
+				// primary 归属批次查询与撤销（静态路由必须在 /:id 之前）。
+				people.GET("/identity-assignment-batches", handlers.People.ListIdentityAssignmentBatches)
+				people.GET("/identity-assignment-batches/:id", handlers.People.GetIdentityAssignmentBatch)
+				people.POST("/identity-assignment-batches/:id/revoke/preview", handlers.People.PreviewIdentityAssignmentRevoke)
+				people.POST("/identity-assignment-batches/:id/revoke", handlers.People.RevokeIdentityAssignmentBatch)
+
 				// 人脸质检审核接口：静态路由必须注册在 /:id 之前，避免
 				// face-quality 被解析成人物 ID。
 				people.GET("/face-quality/stats", handlers.People.GetFaceQualityStats)

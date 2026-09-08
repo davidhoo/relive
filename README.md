@@ -250,7 +250,7 @@ people:
 | `legacy`  | 当前生产默认；不构建画像、不运行 matcher、不写决策。 |
 | `shadow`  | 构建画像并记录与 legacy 的对比遥测，**不改变**人物归属。 |
 | `rescue`  | 仅在 legacy miss 且通过全部护栏时救回（挂靠已有人物）；必须先有 shadow 校准数据。 |
-| `primary` | 当前不可用于生产，不应启用。 |
+| `primary` | 统一身份匹配引擎接管增量聚类与合并推荐；禁止隐式回退 legacy。技术故障等待恢复，不自动降级旧算法。 |
 
 发布顺序（不可跳级）：
 
@@ -259,15 +259,17 @@ people:
 3. 生产切换到 `shadow`。
 4. 收集并评审校准数据（通过只读运行状态接口观察分歧率、legacy miss/profile hit 等）。
 5. 达到安全门槛后才评估 `rescue`。
+6. 评估通过后再切换 `primary`（同时接管聚类与推荐）；切换后旧待审混合来源推荐会标记过期并有界重新生成。
 
 只读运行状态接口（均需认证，不返回 embedding/路径/人名）：
 
 ```
 GET /api/v1/people/identity-profiles/stats
 GET /api/v1/people/identity-profiles/decisions?limit=50
+GET /api/v1/people/identity-assignment-batches?page=1&page_size=20
 ```
 
-回滚：将配置改回 `legacy` 并重启服务即可。profile/center/decision 均为派生数据，回滚**不需要**恢复 `faces.person_id`；**不建议**手工删除画像表；`rescue` 不能在没有 `shadow` 校准的情况下启用。
+回滚：暂停并排空聚类 → 将配置改回 `rescue` 或 `legacy` 并重启服务 → 对问题批次预演/执行撤销（仅自动归属）→ 核查统计与画像 → 标记不兼容待审推荐过期并按回退模式重新生成。profile/center/decision 均为派生数据；**切模式不会自动修复已经写入的归属**。
 
 ### 往年今日 & 事件策展
 - 每天自动挑选历史上同一天或相近日期的照片
