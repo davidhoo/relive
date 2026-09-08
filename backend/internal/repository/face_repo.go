@@ -288,6 +288,8 @@ func (r *faceRepository) ListPending(limit int) ([]*model.Face, error) {
 			"WHEN 3 THEN 5 " +
 			"WHEN 4 THEN 15 " +
 							"ELSE 60 END").
+		// primary 技术故障有界退避：未到期的人脸跳过，不消耗语义 retry_count。
+		Where("identity_retry_after IS NULL OR identity_retry_after <= CURRENT_TIMESTAMP").
 		Order("retry_count ASC").              // 重试次数少的优先
 		Order("clustered_at ASC NULLS FIRST"). // 从未尝试的优先
 		Order("id ASC")

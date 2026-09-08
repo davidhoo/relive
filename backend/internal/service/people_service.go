@@ -177,11 +177,11 @@ type peopleService struct {
 	annCandidateFn func(probes []faceWithEmbedding, k int) map[uint]struct{}
 
 	// identityProfileMode / hooks wire the身份画像 matcher into incremental
-	// clustering in Task 11 (shadow) / Task 12 (rescue). legacy 模式下四者均为零值，
-	// runIncrementalClustering 不分配 observation、不复制 embedding、不调用 matcher/telemetry。
+	// clustering in Task 11 (shadow) / Task 12 (rescue) / primary takeover。
+	// legacy 模式下四者均为零值，runIncrementalClustering 不分配 observation、
+	// 不复制 embedding、不调用 matcher/telemetry。
 	// shadow/rescue/primary 模式由 service.go 注入真实 matcher.Match 与 telemetry.Record；
-	// rescue 模式额外注入 markDirtyFn 以在 legacy miss 救回后标记目标人物画像 dirty。
-	// primary 模式仍按 shadow-only 处理（Task 12 不实现 primary 应用）。
+	// primary 另注入统一 IdentityMatchingEngine，由引擎接管归属决策（禁止隐式 legacy 回退）。
 	//
 	// hooks 在 service 装配时一次性注入（早于任何聚类批次），读取发生在 coordinator
 	// worker goroutine 内，与 setANNCandidateFn 同样无需额外同步。
@@ -189,6 +189,10 @@ type peopleService struct {
 	identityProfileMatchFn     identityProfileMatchFn
 	identityDecisionRecordFn   identityDecisionRecordFn
 	identityProfileMarkDirtyFn identityProfileMarkDirtyFn
+	identityMatchingEngine     IdentityComponentMatcher
+	identityAutoStrategy       IdentityStrategy
+	identityAssignmentRepo     repository.PeopleIdentityAssignmentRepository
+	currentAssignmentBatchID   uint
 
 	// identityProfileInvalidateFn 是 Task 13 统一身份画像失效 hook。所有改变 faces.person_id、
 	// 人物成员组成或人物存续状态的业务路径都通过 invalidateIdentityProfiles 触发该 hook，
@@ -3881,6 +3885,19 @@ func (s *peopleService) runIncrementalClustering() ([]uint, []uint, []identitySh
 		// Merge runtime hidden person block-set into cannot-link block-set.
 		s.mergeHiddenPersonsIntoBlocked(blockedPersons)
 
+		// primary：统一引擎接管，禁止调用 legacy 作为隐式替代。
+		if s.identityPrimaryEnabled() {
+			decision := s.decidePrimaryComponent(component)
+			logPrimaryDecision(decision.action, decision.reason, decision.personID, decision.score)
+			if err := s.applyPrimaryComponentDecision(component, decision, affectedPersonIDs, affectedPhotoIDs); err != nil {
+				return nil, nil, nil, err
+			}
+			if obs := s.recordPrimaryObservation(component, decision, false); obs != nil {
+				shadowObservations = append(shadowObservations, *obs)
+			}
+			continue
+		}
+
 		personID, score, attached := s.attachComponentToExistingPersonWithEmbeddings(
 			componentWithEmb, prototypesWithEmb, blockedPersons, prototypes, s.effectiveAttachThreshold(maxRetry),
 		)
@@ -4506,7 +4523,7 @@ func (s *peopleService) identityShadowEnabled() bool {
 
 // identityRescueEnabled 报告当前是否启用 rescue（保守救回 legacy miss）。仅 rescue 模式
 // 且注入了 match hook 时为 true。禁止用 mode != legacy 作为 rescue 判断，否则 shadow /
-// primary 会提前改变人物归属。Task 12 新增。
+// primary 会提前改变人物归属。primary 由 identityPrimaryEnabled 单独接管。
 func (s *peopleService) identityRescueEnabled() bool {
 	return s.identityProfileMode == model.PeopleIdentityModeRescue && s.identityProfileMatchFn != nil
 }
@@ -4523,7 +4540,7 @@ func (s *peopleService) identityRescueEnabled() bool {
 // legacy_miss_profile_miss 等），不重复匹配。
 //
 // legacy 模式直接返回（不遍历 observations、不调用 matcher/recorder、不访问画像
-// Repository）。primary 模式仍按 shadow-only 处理：计算并记录，不应用结果。
+// Repository）。primary 模式在持锁阶段已完成引擎决策并写入，此处只做遥测复用。
 func (s *peopleService) processIdentityShadowObservations(observations []identityShadowObservation) {
 	if s.identityProfileMode == "" || s.identityProfileMode == model.PeopleIdentityModeLegacy {
 		return

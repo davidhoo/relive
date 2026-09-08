@@ -586,6 +586,10 @@ func (c *Config) Validate() error {
 	if math.IsNaN(c.People.IdentityProfileRescueThreshold) || c.People.IdentityProfileRescueThreshold <= 0 || c.People.IdentityProfileRescueThreshold >= 1 {
 		return fmt.Errorf("people.identity_profile_rescue_threshold must be between 0 and 1")
 	}
+	// primary 自动归属门槛不得低于推荐门槛，否则推荐策略会比自动归属更严。
+	if c.People.IdentityProfileRescueThreshold < c.People.MergeSuggestionThreshold {
+		return fmt.Errorf("people.identity_profile_rescue_threshold must be >= people.merge_suggestion_threshold")
+	}
 	if c.People.IdentityProfileBatchSize <= 0 {
 		return fmt.Errorf("people.identity_profile_batch_size must be greater than 0")
 	}

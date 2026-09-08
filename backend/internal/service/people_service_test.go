@@ -3753,9 +3753,73 @@ func TestPeopleService_IdentityProfileShadow_RetryCountIsolated(t *testing.T) {
 	assert.Equal(t, results[0], results[1], "profile result must be identical regardless of RetryCount")
 }
 
-// TestPeopleService_IdentityProfileShadow_PrimaryModeShadowOnly 验证 Task 12 阶段配置为
-// primary 仍只 shadow 记录，不改变 legacy 归属（primary 尚未实现应用）。
-func TestPeopleService_IdentityProfileShadow_PrimaryModeShadowOnly(t *testing.T) {
+// TestPeopleService_IdentityProfilePrimary_OverridesLegacyHit 验证 primary 模式下
+// 即使 legacy 会挂靠 A，统一引擎合格匹配 B 时实际写入 B，且不计算 legacy 作为决策。
+func TestPeopleService_IdentityProfilePrimary_OverridesLegacyHit(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
+	_, _, faceRepo, person, pendingPhoto := seedShadowClusterDataset(t, db)
+
+	// 另建人物 B：引擎将返回该目标。
+	personB := &model.Person{Category: model.PersonCategoryFamily}
+	require.NoError(t, repository.NewPersonRepository(db).Create(personB))
+
+	rec := &shadowHookRecorder{
+		matchFn: func(component []*model.Face) IdentityProfileMatch {
+			return IdentityProfileMatch{Available: true, PersonID: personB.ID, Score: 0.99, AutoEligible: true}
+		},
+	}
+	svc.SetIdentityProfileShadowHooks(model.PeopleIdentityModePrimary, rec.match, rec.record)
+	svc.SetIdentityMatchingEngine(&fakePrimaryEngine{
+		result: IdentityMatchResult{
+			Status:           IdentityMatchStatusMatch,
+			EngineVersion:    identityEngineVersion,
+			Margin:           0.2,
+			MarginApplicable: true,
+			Best: &IdentityCandidateResult{
+				PersonID:        personB.ID,
+				Score:           0.99,
+				SupportingUnits: 3,
+				MinSupportCount: 3,
+				StableCenters:   true,
+				CenterFitOK:     true,
+				Status:          IdentityMatchStatusMatch,
+			},
+		},
+	})
+	svc.SetIdentityAutoStrategy(IdentityStrategy{
+		Name:                 identityStrategyNameAuto,
+		Version:              identityAutoStrategyVersion,
+		ScoreThreshold:       0.65,
+		Margin:               0.05,
+		MinCenterFaces:       1,
+		MinSupportingUnits:   1,
+		RequireStableCenters: true,
+		RequireEngineMatch:   true,
+	})
+
+	res := svc.clusteringCoordinator.submitBackground()
+	require.NoError(t, res.err)
+
+	pendingFaces, err := faceRepo.ListByPhotoID(pendingPhoto.ID)
+	require.NoError(t, err)
+	require.Len(t, pendingFaces, 1)
+	require.NotNil(t, pendingFaces[0].PersonID)
+	assert.Equal(t, personB.ID, *pendingFaces[0].PersonID, "primary must write engine target B, not legacy A=%d", person.ID)
+}
+
+type fakePrimaryEngine struct {
+	result IdentityMatchResult
+	calls  int
+}
+
+func (f *fakePrimaryEngine) MatchComponent(component []*model.Face, opts IdentityRecallOptions) IdentityMatchResult {
+	f.calls++
+	return f.result
+}
+
+// TestPeopleService_IdentityProfileShadow_PrimaryWithoutEngineStaysLegacy 验证未注入引擎时
+// primary 配置不会错误接管（保持兼容，避免半装配）。
+func TestPeopleService_IdentityProfileShadow_PrimaryWithoutEngineStaysLegacy(t *testing.T) {
 	mode := model.PeopleIdentityModePrimary
 	svc, db := newPeopleServiceForTest(t, &fakePeopleMLClient{})
 	_, _, faceRepo, person, pendingPhoto := seedShadowClusterDataset(t, db)
@@ -3766,6 +3830,7 @@ func TestPeopleService_IdentityProfileShadow_PrimaryModeShadowOnly(t *testing.T)
 		},
 	}
 	svc.SetIdentityProfileShadowHooks(mode, rec.match, rec.record)
+	// 故意不注入 engine
 
 	res := svc.clusteringCoordinator.submitBackground()
 	require.NoError(t, res.err)
@@ -3774,12 +3839,7 @@ func TestPeopleService_IdentityProfileShadow_PrimaryModeShadowOnly(t *testing.T)
 	require.NoError(t, err)
 	require.Len(t, pendingFaces, 1)
 	require.NotNil(t, pendingFaces[0].PersonID)
-	assert.Equal(t, person.ID, *pendingFaces[0].PersonID, "%s mode must not apply profile before its task", mode)
-
-	require.Equal(t, 1, rec.recordCount())
-	in := rec.lastInput
-	require.NotNil(t, in)
-	assert.Equal(t, mode, in.Mode, "Mode must preserve actual config value")
+	assert.Equal(t, person.ID, *pendingFaces[0].PersonID)
 }
 
 // ---- Task 12: 身份画像 rescue 模式 ----

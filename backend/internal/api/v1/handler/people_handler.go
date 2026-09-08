@@ -46,6 +46,8 @@ type PeopleHandler struct {
 	// personPhotoRepo 用于人物照片 cursor 分页在 person_photos 迁移完成后切换到派生表索引。
 	// nil 时回退到原 JOIN 查询（迁移未完成或测试未注入）。
 	personPhotoRepo repository.PersonPhotoRepository
+	// identityAssignmentService primary 归属批次查询与撤销。nil 时相关接口返回 503。
+	identityAssignmentService service.PeopleIdentityAssignmentService
 	cfg             *config.Config
 }
 
@@ -86,6 +88,11 @@ func (h *PeopleHandler) SetFaceQualityRescore(s service.FaceQualityRescoreServic
 // SetPersonPhotoRepo 注入人物照片派生表仓库，供 cursor 分页在迁移完成后切换到索引查询。
 func (h *PeopleHandler) SetPersonPhotoRepo(r repository.PersonPhotoRepository) {
 	h.personPhotoRepo = r
+}
+
+// SetIdentityAssignmentService 注入 primary 归属批次服务。
+func (h *PeopleHandler) SetIdentityAssignmentService(s service.PeopleIdentityAssignmentService) {
+	h.identityAssignmentService = s
 }
 
 // beginForegroundRelease 注册一个 foreground scope 并返回 release 函数。
@@ -1982,4 +1989,84 @@ func (h *PeopleHandler) ListIdentityProfileDecisions(c *gin.Context) {
 			Limit: limit,
 		},
 	})
+}
+
+// ListIdentityAssignmentBatches 分页列出 primary 归属批次。
+func (h *PeopleHandler) ListIdentityAssignmentBatches(c *gin.Context) {
+	if h.identityAssignmentService == nil {
+		writePeopleError(c, http.StatusServiceUnavailable, "IDENTITY_ASSIGNMENT_UNAVAILABLE", "identity assignment service not enabled")
+		return
+	}
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	batches, total, err := h.identityAssignmentService.ListBatches(page, pageSize)
+	if err != nil {
+		writePeopleError(c, http.StatusInternalServerError, "IDENTITY_ASSIGNMENT_LIST_FAILED", err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Data: gin.H{
+		"items":     batches,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	}})
+}
+
+// GetIdentityAssignmentBatch 返回批次详情与有界变更列表。
+func (h *PeopleHandler) GetIdentityAssignmentBatch(c *gin.Context) {
+	if h.identityAssignmentService == nil {
+		writePeopleError(c, http.StatusServiceUnavailable, "IDENTITY_ASSIGNMENT_UNAVAILABLE", "identity assignment service not enabled")
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || id == 0 {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_ID", "invalid batch id")
+		return
+	}
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
+	detail, err := h.identityAssignmentService.GetBatch(uint(id), page, pageSize)
+	if err != nil {
+		writePeopleError(c, http.StatusNotFound, "IDENTITY_ASSIGNMENT_NOT_FOUND", err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Data: detail})
+}
+
+// PreviewIdentityAssignmentRevoke 预演批次撤销。
+func (h *PeopleHandler) PreviewIdentityAssignmentRevoke(c *gin.Context) {
+	if h.identityAssignmentService == nil {
+		writePeopleError(c, http.StatusServiceUnavailable, "IDENTITY_ASSIGNMENT_UNAVAILABLE", "identity assignment service not enabled")
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || id == 0 {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_ID", "invalid batch id")
+		return
+	}
+	preview, err := h.identityAssignmentService.PreviewRevoke(uint(id))
+	if err != nil {
+		writePeopleError(c, http.StatusBadRequest, "IDENTITY_ASSIGNMENT_PREVIEW_FAILED", err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Data: preview})
+}
+
+// RevokeIdentityAssignmentBatch 执行批次撤销（幂等）。
+func (h *PeopleHandler) RevokeIdentityAssignmentBatch(c *gin.Context) {
+	if h.identityAssignmentService == nil {
+		writePeopleError(c, http.StatusServiceUnavailable, "IDENTITY_ASSIGNMENT_UNAVAILABLE", "identity assignment service not enabled")
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || id == 0 {
+		writePeopleError(c, http.StatusBadRequest, "INVALID_ID", "invalid batch id")
+		return
+	}
+	result, err := h.identityAssignmentService.Revoke(uint(id))
+	if err != nil {
+		writePeopleError(c, http.StatusConflict, "IDENTITY_ASSIGNMENT_REVOKE_FAILED", err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, model.Response{Success: true, Data: result})
 }

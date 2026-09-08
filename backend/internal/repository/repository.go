@@ -14,6 +14,7 @@ type Repositories struct {
 	MergeSuggestion  PersonMergeSuggestionRepository
 	IdentityProfile  PersonIdentityProfileRepository
 	IdentityDecision PeopleIdentityDecisionRepository
+	IdentityAssignment PeopleIdentityAssignmentRepository
 	FeedbackEvent    PeopleFeedbackEventRepository
 	PersonPhoto      PersonPhotoRepository
 	ScanJob          ScanJobRepository
@@ -40,6 +41,7 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		MergeSuggestion:  NewPersonMergeSuggestionRepository(db),
 		IdentityProfile:  NewPersonIdentityProfileRepository(db),
 		IdentityDecision: NewPeopleIdentityDecisionRepository(db),
+		IdentityAssignment: NewPeopleIdentityAssignmentRepository(db),
 		FeedbackEvent:    NewPeopleFeedbackEventRepository(db),
 		PersonPhoto:      NewPersonPhotoRepository(db),
 		ScanJob:          NewScanJobRepository(db),
