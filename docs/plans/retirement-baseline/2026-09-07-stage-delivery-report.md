@@ -1,6 +1,6 @@
 # 阶段性交付报告：下线人脸质检 / 保留人工排除
 
-> 2026-09-08 更新：用户已授权提交并合并本地 main，本文原有“不要合并”和待授权描述仅代表当时状态，不再作为合并前置条件。三项审查问题已修复，后端全量测试、构建和前端 196 个测试及构建通过。生产数据迁移仍未执行；下文 §3.4 的关联统计与缓存刷新缺口仍需补齐，不能把代码合并当作生产迁移放行。
+> 2026-09-08 更新：用户已授权提交并合并本地 main，本文原有“不要合并”和待授权描述仅代表当时状态，不再作为合并前置条件。三项审查问题已修复，后端全量测试、构建和前端 196 个测试及构建通过。生产数据迁移仍未执行；§3.4 的关联统计与缓存刷新在 2026-09-08 NAS 部署准备中补齐，仍须以真实副本验证和维护窗口验收作为生产迁移依据。
 
 > 日期：2026-09-07
 > 工作区：`.worktrees/retire-face-quality`
@@ -110,7 +110,9 @@ ORDER BY 4 DESC;
 
 确认所有 `(source, decision, review_action)` 组合都落在现有分支内；未知组合进 unknown 清单，不得默认可清。
 
-### 3.4 已知缺口（计划 §七 执行要求 6）
+### 3.4 原有缺口及部署准备更新（计划 §七 执行要求 6）
+
+2026-09-08 更新：离线迁移已在事务内重算受影响照片分类及计数、刷新仍可定位的人物统计和头像、将相关身份画像及合并建议标记待更新；已有人工锁定且有效的头像保留。进程内缓存由维护窗口后的服务重启重建。新增回归测试及服务层测试通过，Dockerfile 已交付迁移工具。以下为原始阶段记录。
 
 当前 apply **只重算受影响照片 `face_count`**。尚未做：
 
@@ -229,3 +231,14 @@ type FaceQualityRetirementSideEffects interface {
 
 合成数据上可做工作已收口。继续改只会过度设计。
 **请求 dual-confirm break**，待 human 提供真实库 WAL 备份后再开任务 1 清单与任务 5 真实预演。
+
+## 2026-09-08 NAS 部署与生产迁移记录
+
+- 镜像：`relive:retire-quality-20260908`（`30fcf4267bba`）已切换为 `relive:local`；回滚标签 `relive:local-pre-retire-20260908`。
+- 代码下线已验证：`/api/v1/people/face-quality/*` 返回 `410 FACE_QUALITY_RETIRED`；人物列表正常；`face_exclusions.source` 已补齐。
+- 生产迁移结果（停机后一致性备份 + 已审查清单 apply）：
+  - `promote_manual_source`: 2555（保留排除，source→manual）
+  - `unknown`: 35810（**未恢复**，避免误伤人物管理人工排除）
+  - `clear_*`: 0
+- 备份目录：`/volume1/docker/relive/backup/retire-quality-20260908/`（含 `prod-pre-switch.db`、`prod-pre-migrate.db`、`prod-approved-plan.json`）。
+- 后续可选：对 `unknown` 做更细的人工/自动区分后再清理；当前不影响质检模块下线与人工排除保留。

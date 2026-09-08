@@ -141,3 +141,31 @@ func TestRetirementRejectsEditedAction(t *testing.T) {
 	_, err = ApplyFaceQualityRetirement(db, plan)
 	require.ErrorIs(t, err, errRetirementFingerprintMismatch)
 }
+
+func TestRetirementRefreshDerivedState(t *testing.T) {
+	db := setupPeopleServiceTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.PersonIdentityProfile{}))
+	photo := &model.Photo{FilePath: "/derived.jpg", FileHash: "derived", FaceCount: 99}
+	require.NoError(t, db.Create(photo).Error)
+	person := &model.Person{Category: model.PersonCategoryFamily, FaceCount: 99, PhotoCount: 99}
+	require.NoError(t, db.Create(person).Error)
+	face := &model.Face{PhotoID: photo.ID, PersonID: &person.ID, ClusterStatus: model.FaceClusterStatusManual, QualityScore: 0.8}
+	require.NoError(t, db.Create(face).Error)
+	require.NoError(t, db.Create(&model.AppConfig{Key: personMergeSuggestionStateKey, Value: `{"paused":true,"dirty":false,"cursor_target_id":123,"dirty_generation":3}`}).Error)
+	require.NoError(t, refreshRetirementDerivedState(db, []RetirementItem{{OldPersonID: &person.ID}}, []uint{photo.ID}))
+	require.NoError(t, db.First(person, person.ID).Error)
+	assert.Equal(t, 1, person.FaceCount)
+	assert.Equal(t, 1, person.PhotoCount)
+	require.NotNil(t, person.RepresentativeFaceID)
+	assert.Equal(t, face.ID, *person.RepresentativeFaceID)
+	require.NoError(t, db.First(photo, photo.ID).Error)
+	assert.Equal(t, 1, photo.FaceCount)
+	var profile model.PersonIdentityProfile
+	require.NoError(t, db.Where("person_id = ?", person.ID).First(&profile).Error)
+	assert.Equal(t, model.PersonIdentityProfileStatusDirty, profile.Status)
+	var state model.AppConfig
+	require.NoError(t, db.Where("key = ?", personMergeSuggestionStateKey).First(&state).Error)
+	assert.Contains(t, state.Value, `"paused":true`)
+	assert.Contains(t, state.Value, `"dirty":true`)
+	assert.Contains(t, state.Value, `"cursor_target_id":0`)
+}

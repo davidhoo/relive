@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/davidhoo/relive/internal/model"
+	"github.com/davidhoo/relive/internal/repository"
 	"gorm.io/gorm"
 )
 
@@ -527,6 +528,10 @@ func ApplyFaceQualityRetirement(db *gorm.DB, plan *RetirementPlan) (*RetirementA
 			}
 		}
 
+		if err := refreshRetirementDerivedState(tx, changed, photoIDs); err != nil {
+			return err
+		}
+
 		marker := model.AppConfig{
 			Key:   FaceQualityRetirementMigrationKey,
 			Value: fmt.Sprintf("done@%s", now.Format(time.RFC3339)),
@@ -610,4 +615,75 @@ func isMissingTable(err error) bool {
 // MarshalRetirementPlanJSON 便于 CLI 输出。
 func MarshalRetirementPlanJSON(plan *RetirementPlan) ([]byte, error) {
 	return json.MarshalIndent(plan, "", "  ")
+}
+
+// Offline-only: persistent derived state commits atomically. In-memory caches
+// are rebuilt when the service starts after migration.
+func refreshRetirementDerivedState(tx *gorm.DB, changed []RetirementItem, photoIDs []uint) error {
+	if len(photoIDs) == 0 {
+		return nil
+	}
+	if err := repository.NewPhotoRepository(tx).RecomputeTopPersonCategory(photoIDs); err != nil {
+		return err
+	}
+	ids := map[uint]bool{}
+	for _, item := range changed {
+		if item.OldPersonID != nil && *item.OldPersonID != 0 {
+			ids[*item.OldPersonID] = true
+		}
+	}
+	for id := range ids {
+		var person model.Person
+		if err := tx.First(&person, id).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			return err
+		}
+		if err := repository.NewPersonRepository(tx).RefreshStats(id); err != nil {
+			return err
+		}
+		var faces []model.Face
+		if err := tx.Where("person_id = ? AND cluster_status != ?", id, model.FaceClusterStatusExcluded).Order("quality_score DESC, confidence DESC, id ASC").Find(&faces).Error; err != nil {
+			return err
+		}
+		validLocked := false
+		for _, face := range faces {
+			if person.AvatarLocked && person.RepresentativeFaceID != nil && face.ID == *person.RepresentativeFaceID {
+				validLocked = true
+			}
+		}
+		if !validLocked {
+			var representative *uint
+			if len(faces) > 0 {
+				representative = &faces[0].ID
+			}
+			if err := tx.Model(&person).Updates(map[string]interface{}{"representative_face_id": representative, "avatar_locked": false}).Error; err != nil {
+				return err
+			}
+		}
+		if tx.Migrator().HasTable(&model.PersonIdentityProfile{}) {
+			if err := repository.NewPersonIdentityProfileRepository(tx).MarkDirty([]uint{id}, "face_quality_retirement"); err != nil {
+				return err
+			}
+		}
+	}
+	var cfg model.AppConfig
+	state := personMergeSuggestionState{}
+	err := tx.Where("key = ?", personMergeSuggestionStateKey).First(&cfg).Error
+	if err == nil && cfg.Value != "" {
+		if err := json.Unmarshal([]byte(cfg.Value), &state); err != nil {
+			return err
+		}
+	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	state.Dirty = true
+	state.CursorTargetID = 0
+	state.DirtyGeneration++
+	raw, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	return upsertMergeSuggestionState(tx, string(raw))
 }

@@ -74,6 +74,8 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
     -o /app/relive-duplicate-face-audit \
     ./cmd/relive-duplicate-face-audit
 
+RUN CGO_ENABLED=1 GOOS=linux go build -tags "fts5" -o /app/retire-face-quality ./cmd/retire-face-quality
+
 # Stage 3: 运行阶段
 FROM alpine:3.21
 
@@ -96,6 +98,7 @@ RUN apk add --no-cache \
 
 # 从构建阶段复制后端二进制文件
 COPY --from=backend-builder /app/relive /app/relive
+COPY --from=backend-builder /app/retire-face-quality /app/retire-face-quality
 COPY --from=backend-builder /app/relive-analyzer /app/relive-analyzer
 COPY --from=backend-builder /app/relive-duplicate-face-audit /app/relive-duplicate-face-audit
 COPY --from=backend-builder /app/assets/fonts /app/fonts
