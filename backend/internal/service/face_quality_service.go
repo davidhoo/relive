@@ -680,7 +680,7 @@ func (f *faceQualityService) ApplyQualityDecision(req model.FaceQualityDecisionR
 					}
 					if exclude {
 						// 排除：写 face_exclusions，Face 置 excluded。
-						if err := upsertExclusionTx(tx, rec.PhotoID, faceID, targetReason, rec.BBoxX, rec.BBoxY, rec.BBoxWidth, rec.BBoxHeight, now); err != nil {
+						if err := upsertExclusionTx(tx, rec.PhotoID, faceID, targetReason, model.ExclusionSourceManual, rec.BBoxX, rec.BBoxY, rec.BBoxWidth, rec.BBoxHeight, now); err != nil {
 							return err
 						}
 						if err := tx.Model(&model.Face{}).Where("id = ?", faceID).Updates(map[string]interface{}{
@@ -789,7 +789,10 @@ func resolveReviewAction(action, reason string) (decision, reasonOut string, exc
 }
 
 // upsertExclusionTx 在事务内按 photo+face 写 face_exclusions 记录。
-func upsertExclusionTx(tx *gorm.DB, photoID, faceID uint, reason string, bx, by, bw, bh float64, now time.Time) error {
+func upsertExclusionTx(tx *gorm.DB, photoID, faceID uint, reason, source string, bx, by, bw, bh float64, now time.Time) error {
+	if source == "" || !model.IsValidExclusionSource(source) {
+		source = model.ExclusionSourceUnknown
+	}
 	var existing model.FaceExclusion
 	err := tx.Where("photo_id = ? AND source_face_id = ?", photoID, faceID).First(&existing).Error
 	if err == gorm.ErrRecordNotFound {
@@ -797,6 +800,7 @@ func upsertExclusionTx(tx *gorm.DB, photoID, faceID uint, reason string, bx, by,
 			PhotoID:      photoID,
 			SourceFaceID: faceID,
 			Reason:       reason,
+			Source:       source,
 			BBoxX:        bx,
 			BBoxY:        by,
 			BBoxWidth:    bw,
@@ -808,6 +812,7 @@ func upsertExclusionTx(tx *gorm.DB, photoID, faceID uint, reason string, bx, by,
 		return err
 	}
 	existing.Reason = reason
+	existing.Source = source
 	existing.BBoxX = bx
 	existing.BBoxY = by
 	existing.BBoxWidth = bw

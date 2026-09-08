@@ -1,407 +1,47 @@
 package handler
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/davidhoo/relive/internal/model"
-	"github.com/davidhoo/relive/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// controllableRescoreService 按字段返回预设结果/错误，用于精确测试错误码映射。
-type controllableRescoreService struct {
-	createRunRun *model.FaceQualityRescoreRun
-	createRunErr error
-	// 捕获 CreateRun 入参，供 handler 透传断言。
-	createRunPipeline  string
-	createRunRuleVer   string
-	createRunFaceIDs   []uint
-	getRunRun          *model.FaceQualityRescoreRun
-	getRunErr          error
-	listRuns           []*model.FaceQualityRescoreRun
-	listRunsErr        error
-	pauseErr           error
-	resumeErr          error
-	cancelErr          error
-	restoreResult      *model.FaceQualityRestoreResult
-	restoreErr         error
-	retryRun           *model.FaceQualityRescoreRun
-	retryErr           error
-	eligibleForEnforce map[uint]bool
-}
-
-func (s *controllableRescoreService) CreateRun(mode, applyMode string, photoLimit int, calibrationRunID uint, pipelineVersion, ruleVersion string, faceIDs []uint) (*model.FaceQualityRescoreRun, error) {
-	s.createRunPipeline = pipelineVersion
-	s.createRunRuleVer = ruleVersion
-	s.createRunFaceIDs = faceIDs
-	return s.createRunRun, s.createRunErr
-}
-func (s *controllableRescoreService) GetRun(id uint) (*model.FaceQualityRescoreRun, error) {
-	return s.getRunRun, s.getRunErr
-}
-func (s *controllableRescoreService) ListRuns(limit int) ([]*model.FaceQualityRescoreRun, error) {
-	return s.listRuns, s.listRunsErr
-}
-func (s *controllableRescoreService) Pause(id uint) error  { return s.pauseErr }
-func (s *controllableRescoreService) Resume(id uint) error { return s.resumeErr }
-func (s *controllableRescoreService) Cancel(id uint) error { return s.cancelErr }
-func (s *controllableRescoreService) RestoreAuto(runID uint, limit int) (*model.FaceQualityRestoreResult, error) {
-	return s.restoreResult, s.restoreErr
-}
-func (s *controllableRescoreService) RetryRun(sourceRunID uint) (*model.FaceQualityRescoreRun, error) {
-	return s.retryRun, s.retryErr
-}
-func (s *controllableRescoreService) IsEligibleForEnforce(runID uint) bool {
-	if s.eligibleForEnforce == nil {
-		return false
-	}
-	return s.eligibleForEnforce[runID]
-}
-func (s *controllableRescoreService) Run() {}
-
-func newRescoreHandlerWith(svc service.FaceQualityRescoreService) *PeopleHandler {
+// 质检/rescore 路由已退役：一律 410，不能成功创建后台工作。
+func TestRescoreHandlers_AllReturnGone(t *testing.T) {
+	gin.SetMode(gin.TestMode)
 	h := &PeopleHandler{}
-	h.SetFaceQualityRescore(svc)
-	return h
-}
 
-// callRescoreHandler 直接调用 handler 方法，模拟 gin 路由。
-func callRescoreHandler(t *testing.T, h *PeopleHandler, fn func(*gin.Context), body interface{}, params gin.Params) *httptest.ResponseRecorder {
-	t.Helper()
-	var buf bytes.Buffer
-	if body != nil {
-		require.NoError(t, json.NewEncoder(&buf).Encode(body))
+	calls := []struct {
+		name string
+		fn   func(*gin.Context)
+	}{
+		{"create", h.CreateFaceQualityRescoreRun},
+		{"list", h.ListFaceQualityRescoreRuns},
+		{"get", h.GetFaceQualityRescoreRun},
+		{"pause", h.PauseFaceQualityRescoreRun},
+		{"resume", h.ResumeFaceQualityRescoreRun},
+		{"cancel", h.CancelFaceQualityRescoreRun},
+		{"restore", h.RestoreAutoFaceQualityRescoreRun},
+		{"retry", h.RetryFaceQualityRescoreRun},
 	}
-	rec := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(rec)
-	ctx.Params = params
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/", &buf)
-	ctx.Request.Header.Set("Content-Type", "application/json")
-	fn(ctx)
-	return rec
-}
-
-// TestRescoreHandler_CalibrationForcesShadow 校准请求返回 shadow，apply_mode 由服务端归一化。
-func TestRescoreHandler_CalibrationForcesShadow(t *testing.T) {
-	svc := &controllableRescoreService{
-		createRunRun: &model.FaceQualityRescoreRun{
-			ID: 1, Mode: model.FaceQualityRescoreModeCalibration,
-			ApplyMode:       model.FaceQualityRescoreApplyModeShadow,
-			Status:          model.FaceQualityRescoreStatusRunning,
-			TargetFaceCount: 5,
-		},
+	for _, tc := range calls {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/people/face-quality/rescore-runs", nil)
+			c.Params = gin.Params{{Key: "id", Value: "1"}}
+			tc.fn(c)
+			assert.Equal(t, http.StatusGone, w.Code)
+			var resp model.Response
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			require.NotNil(t, resp.Error)
+			assert.Equal(t, "FACE_QUALITY_RETIRED", resp.Error.Code)
+		})
 	}
-	h := newRescoreHandlerWith(svc)
-	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
-		map[string]interface{}{"mode": "calibration", "photo_limit": 1000}, nil)
-	require.Equal(t, http.StatusOK, rec.Code)
-	var resp struct {
-		Success bool                                `json:"success"`
-		Data    model.FaceQualityRescoreRunResponse `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	assert.True(t, resp.Success)
-	assert.Equal(t, model.FaceQualityRescoreApplyModeShadow, resp.Data.ApplyMode)
-	assert.Equal(t, 5, resp.Data.TargetFaceCount)
 }
-
-// TestRescoreHandler_FullEnforceWithoutCalibrationReturns409 无 completed calibration 时 full/enforce 返回 409 + RESCORE_CALIBRATION_REQUIRED。
-func TestRescoreHandler_FullEnforceWithoutCalibrationReturns409(t *testing.T) {
-	svc := &controllableRescoreService{
-		createRunErr: service.ErrRescoreCalibrationRequired,
-	}
-	h := newRescoreHandlerWith(svc)
-	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
-		map[string]interface{}{"mode": "full"}, nil)
-	assert.Equal(t, http.StatusConflict, rec.Code)
-	var resp model.Response
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.NotNil(t, resp.Error)
-	assert.Equal(t, "RESCORE_CALIBRATION_REQUIRED", resp.Error.Code)
-}
-
-// TestRescoreHandler_SecondActiveRunReturns409 单活跃 run 互斥返回 409 + RESCORE_RUN_CONFLICT。
-func TestRescoreHandler_SecondActiveRunReturns409(t *testing.T) {
-	svc := &controllableRescoreService{
-		createRunErr: service.ErrRescoreRunConflict,
-	}
-	h := newRescoreHandlerWith(svc)
-	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
-		map[string]interface{}{"mode": "calibration"}, nil)
-	assert.Equal(t, http.StatusConflict, rec.Code)
-	var resp model.Response
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.NotNil(t, resp.Error)
-	assert.Equal(t, "RESCORE_RUN_CONFLICT", resp.Error.Code)
-}
-
-// TestRescoreHandler_GetNotFoundReturns404 GetRun 未找到返回 404 + RESCORE_NOT_FOUND。
-func TestRescoreHandler_GetNotFoundReturns404(t *testing.T) {
-	svc := &controllableRescoreService{
-		getRunErr: service.ErrRescoreRunNotFound,
-	}
-	h := newRescoreHandlerWith(svc)
-	rec := callRescoreHandler(t, h, h.GetFaceQualityRescoreRun, nil,
-		gin.Params{{Key: "id", Value: "999"}})
-	assert.Equal(t, http.StatusNotFound, rec.Code)
-	var resp model.Response
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.NotNil(t, resp.Error)
-	assert.Equal(t, "RESCORE_NOT_FOUND", resp.Error.Code)
-}
-
-// TestRescoreHandler_PauseResumeScoped pause/resume 只影响指定 run（service 层隔离，handler 透传 id）。
-func TestRescoreHandler_PauseResumeScoped(t *testing.T) {
-	svc := &controllableRescoreService{}
-	h := newRescoreHandlerWith(svc)
-
-	rec := callRescoreHandler(t, h, h.PauseFaceQualityRescoreRun, nil,
-		gin.Params{{Key: "id", Value: "7"}})
-	require.Equal(t, http.StatusOK, rec.Code)
-
-	rec = callRescoreHandler(t, h, h.ResumeFaceQualityRescoreRun, nil,
-		gin.Params{{Key: "id", Value: "7"}})
-	require.Equal(t, http.StatusOK, rec.Code)
-}
-
-// TestRescoreHandler_RestoreAutoDoesNotAffectOtherRuns restore-auto 透传 run id，service 层按 rescore_run_id 隔离。
-func TestRescoreHandler_RestoreAutoDoesNotAffectOtherRuns(t *testing.T) {
-	svc := &controllableRescoreService{
-		restoreResult: &model.FaceQualityRestoreResult{Restored: 3},
-	}
-	h := newRescoreHandlerWith(svc)
-	rec := callRescoreHandler(t, h, h.RestoreAutoFaceQualityRescoreRun, nil,
-		gin.Params{{Key: "id", Value: "7"}})
-	require.Equal(t, http.StatusOK, rec.Code)
-	var resp struct {
-		Success bool                           `json:"success"`
-		Data    model.FaceQualityRestoreResult `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	assert.True(t, resp.Success)
-	assert.Equal(t, 3, resp.Data.Restored)
-}
-
-// TestRescoreHandler_PauseErrorMapsNotFound Pause 返回 not-found 错误映射 404。
-func TestRescoreHandler_PauseErrorMapsNotFound(t *testing.T) {
-	svc := &controllableRescoreService{
-		pauseErr: service.ErrRescoreRunNotFound,
-	}
-	h := newRescoreHandlerWith(svc)
-	rec := callRescoreHandler(t, h, h.PauseFaceQualityRescoreRun, nil,
-		gin.Params{{Key: "id", Value: "999"}})
-	assert.Equal(t, http.StatusNotFound, rec.Code)
-}
-
-// TestRescoreHandler_UnavailableWhenNil service 未注入时返回 503。
-func TestRescoreHandler_UnavailableWhenNil(t *testing.T) {
-	h := &PeopleHandler{}
-	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
-		map[string]interface{}{"mode": "calibration"}, nil)
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-}
-
-// TestRescoreHandler_InvalidModeReturns400 mode 非法返回 400。
-func TestRescoreHandler_InvalidModeReturns400(t *testing.T) {
-	svc := &controllableRescoreService{}
-	h := newRescoreHandlerWith(svc)
-	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
-		map[string]interface{}{"mode": "bogus"}, nil)
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
-}
-
-// TestRescoreHandler_RetryReturnsNewRun retry 接口透传 source run id，返回新 shadow run。
-func TestRescoreHandler_RetryReturnsNewRun(t *testing.T) {
-	svc := &controllableRescoreService{
-		retryRun: &model.FaceQualityRescoreRun{
-			ID: 2, Mode: model.FaceQualityRescoreModeCalibration,
-			ApplyMode: model.FaceQualityRescoreApplyModeShadow,
-			Status:    model.FaceQualityRescoreStatusRunning,
-		},
-	}
-	h := newRescoreHandlerWith(svc)
-	rec := callRescoreHandler(t, h, h.RetryFaceQualityRescoreRun, nil,
-		gin.Params{{Key: "id", Value: "1"}})
-	require.Equal(t, http.StatusOK, rec.Code)
-	var resp struct {
-		Success bool                                `json:"success"`
-		Data    model.FaceQualityRescoreRunResponse `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	assert.True(t, resp.Success)
-	assert.Equal(t, uint(2), resp.Data.ID)
-	assert.Equal(t, model.FaceQualityRescoreApplyModeShadow, resp.Data.ApplyMode)
-}
-
-// TestRescoreHandler_RetrySourceInvalidReturns409 来源 run 不合格返回 409。
-func TestRescoreHandler_RetrySourceInvalidReturns409(t *testing.T) {
-	svc := &controllableRescoreService{
-		retryErr: service.ErrRescoreRetrySourceInvalid,
-	}
-	h := newRescoreHandlerWith(svc)
-	rec := callRescoreHandler(t, h, h.RetryFaceQualityRescoreRun, nil,
-		gin.Params{{Key: "id", Value: "1"}})
-	assert.Equal(t, http.StatusConflict, rec.Code)
-	var resp model.Response
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.NotNil(t, resp.Error)
-	assert.Equal(t, "RESCORE_RETRY_SOURCE_INVALID", resp.Error.Code)
-}
-
-// TestRescoreHandler_RetryNotFoundReturns404 来源 run 不存在返回 404。
-func TestRescoreHandler_RetryNotFoundReturns404(t *testing.T) {
-	svc := &controllableRescoreService{
-		retryErr: service.ErrRescoreRunNotFound,
-	}
-	h := newRescoreHandlerWith(svc)
-	rec := callRescoreHandler(t, h, h.RetryFaceQualityRescoreRun, nil,
-		gin.Params{{Key: "id", Value: "999"}})
-	assert.Equal(t, http.StatusNotFound, rec.Code)
-}
-
-// TestRescoreHandler_FullRequiresCalibrationRunID full 缺 calibration_run_id 由 service 返回 409。
-func TestRescoreHandler_FullRequiresCalibrationRunID(t *testing.T) {
-	svc := &controllableRescoreService{
-		createRunErr: service.ErrRescoreCalibrationRequired,
-	}
-	h := newRescoreHandlerWith(svc)
-	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
-		map[string]interface{}{"mode": "full"}, nil)
-	assert.Equal(t, http.StatusConflict, rec.Code)
-	var resp model.Response
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.NotNil(t, resp.Error)
-	assert.Equal(t, "RESCORE_CALIBRATION_REQUIRED", resp.Error.Code)
-}
-
-// TestRescoreHandler_VerifierUnavailableReturns409 v2 验证器不可用时 create 返回稳定 409 +
-// FACE_QUALITY_VERIFIER_UNAVAILABLE，而非伪成功或 500。
-func TestRescoreHandler_VerifierUnavailableReturns409(t *testing.T) {
-	svc := &controllableRescoreService{
-		createRunErr: service.ErrRescoreV2VerifierUnavailable,
-	}
-	h := newRescoreHandlerWith(svc)
-	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
-		map[string]interface{}{"mode": "calibration"}, nil)
-	assert.Equal(t, http.StatusConflict, rec.Code)
-	var resp model.Response
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.NotNil(t, resp.Error)
-	assert.Equal(t, "FACE_QUALITY_VERIFIER_UNAVAILABLE", resp.Error.Code)
-}
-
-// TestRescoreHandler_RetryVerifierUnavailableReturns409 v2 retry 验证器不可用同样映射 409。
-func TestRescoreHandler_RetryVerifierUnavailableReturns409(t *testing.T) {
-	svc := &controllableRescoreService{
-		retryErr: service.ErrRescoreV2VerifierUnavailable,
-	}
-	h := newRescoreHandlerWith(svc)
-	rec := callRescoreHandler(t, h, h.RetryFaceQualityRescoreRun, nil,
-		gin.Params{{Key: "id", Value: "3"}})
-	assert.Equal(t, http.StatusConflict, rec.Code)
-	var resp model.Response
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.NotNil(t, resp.Error)
-	assert.Equal(t, "FACE_QUALITY_VERIFIER_UNAVAILABLE", resp.Error.Code)
-}
-
-// TestRescoreHandler_V3RuleVersionAndFaceIDsForwarded handler 把 rule_version 与 face_ids
-// 透传到 service.CreateRun；未填 rule_version 时为空串（service 内推导默认 v2）。
-func TestRescoreHandler_V3RuleVersionAndFaceIDsForwarded(t *testing.T) {
-	svc := &controllableRescoreService{
-		createRunRun: &model.FaceQualityRescoreRun{ID: 7, Mode: model.FaceQualityRescoreModeCalibration, ApplyMode: model.FaceQualityRescoreApplyModeShadow, Status: model.FaceQualityRescoreStatusRunning},
-	}
-	h := newRescoreHandlerWith(svc)
-	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
-		map[string]interface{}{
-			"mode":             "calibration",
-			"pipeline_version": "independent_v2",
-			"rule_version":     "face_quality_v3",
-			"face_ids":         []int{538580, 538581},
-		}, nil)
-	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, model.FaceQualityRescorePipelineIndependentV2, svc.createRunPipeline)
-	assert.Equal(t, model.FaceQualityRescoreRuleVersionV3, svc.createRunRuleVer)
-	assert.Equal(t, []uint{538580, 538581}, svc.createRunFaceIDs)
-}
-
-// TestRescoreHandler_V3RuleVersionNotV3Returns409 v3 full/enforce 引用 v2 校准 → 409 + RESCORE_RULE_VERSION_NOT_V3。
-func TestRescoreHandler_V3RuleVersionNotV3Returns409(t *testing.T) {
-	svc := &controllableRescoreService{createRunErr: service.ErrRescoreRuleVersionNotV3}
-	h := newRescoreHandlerWith(svc)
-	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
-		map[string]interface{}{"mode": "full", "rule_version": "face_quality_v3", "calibration_run_id": 5}, nil)
-	assert.Equal(t, http.StatusConflict, rec.Code)
-	var resp model.Response
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.NotNil(t, resp.Error)
-	assert.Equal(t, "RESCORE_RULE_VERSION_NOT_V3", resp.Error.Code)
-}
-
-// TestRescoreHandler_FaceIDsInvalidReturns400 face_ids 校验失败 → 400 + RESCALE_FACE_IDS_INVALID。
-func TestRescoreHandler_FaceIDsInvalidReturns400(t *testing.T) {
-	svc := &controllableRescoreService{createRunErr: service.ErrRescoreFaceIDsNotCalibration}
-	h := newRescoreHandlerWith(svc)
-	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
-		map[string]interface{}{"mode": "full", "face_ids": []int{1}}, nil)
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
-	var resp model.Response
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.NotNil(t, resp.Error)
-	assert.Equal(t, "RESCORE_FACE_IDS_INVALID", resp.Error.Code)
-}
-
-// TestRescoreHandler_V4RuleVersionForwarded handler 把 face_quality_v4 rule_version 透传到 service。
-func TestRescoreHandler_V4RuleVersionForwarded(t *testing.T) {
-	svc := &controllableRescoreService{
-		createRunRun: &model.FaceQualityRescoreRun{ID: 9, Mode: model.FaceQualityRescoreModeCalibration, ApplyMode: model.FaceQualityRescoreApplyModeShadow, Status: model.FaceQualityRescoreStatusRunning},
-	}
-	h := newRescoreHandlerWith(svc)
-	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
-		map[string]interface{}{
-			"mode":             "calibration",
-			"pipeline_version": "independent_v2",
-			"rule_version":     "face_quality_v4",
-			"face_ids":         []int{538580, 538582, 538665},
-		}, nil)
-	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, model.FaceQualityRescorePipelineIndependentV2, svc.createRunPipeline)
-	assert.Equal(t, model.FaceQualityRescoreRuleVersionV4, svc.createRunRuleVer)
-	assert.Equal(t, []uint{538580, 538582, 538665}, svc.createRunFaceIDs)
-}
-
-// TestRescoreHandler_V4RuleVersionMismatchReturns409 v4 full/enforce 引用 v3 校准 → 409 + RESCORE_RULE_VERSION_MISMATCH（新通用错误码）。
-func TestRescoreHandler_V4RuleVersionMismatchReturns409(t *testing.T) {
-	svc := &controllableRescoreService{createRunErr: service.ErrRescoreRuleVersionMismatch}
-	h := newRescoreHandlerWith(svc)
-	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
-		map[string]interface{}{"mode": "full", "rule_version": "face_quality_v4", "calibration_run_id": 7}, nil)
-	assert.Equal(t, http.StatusConflict, rec.Code)
-	var resp model.Response
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.NotNil(t, resp.Error)
-	assert.Equal(t, "RESCORE_RULE_VERSION_MISMATCH", resp.Error.Code)
-}
-
-// TestRescoreHandler_V3RuleVersionNotV3StillMapsOldCode v3 旧路径 ErrRescoreRuleVersionNotV3
-// 保留旧错误码 RESCORE_RULE_VERSION_NOT_V3，向后兼容已有调用方。
-func TestRescoreHandler_V3RuleVersionNotV3StillMapsOldCode(t *testing.T) {
-	svc := &controllableRescoreService{createRunErr: service.ErrRescoreRuleVersionNotV3}
-	h := newRescoreHandlerWith(svc)
-	rec := callRescoreHandler(t, h, h.CreateFaceQualityRescoreRun,
-		map[string]interface{}{"mode": "full", "rule_version": "face_quality_v3", "calibration_run_id": 5}, nil)
-	assert.Equal(t, http.StatusConflict, rec.Code)
-	var resp model.Response
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.NotNil(t, resp.Error)
-	assert.Equal(t, "RESCORE_RULE_VERSION_NOT_V3", resp.Error.Code)
-}
-
-// 编译期断言桩实现接口。
-var _ service.FaceQualityRescoreService = (*controllableRescoreService)(nil)

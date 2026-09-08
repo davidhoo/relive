@@ -1197,7 +1197,7 @@ func (s *faceQualityRescoreService) writeV2RescoreResult(run *model.FaceQualityR
 				if faceBefore.PersonID != nil && *faceBefore.PersonID != 0 {
 					affectedPersonIDs[*faceBefore.PersonID] = struct{}{}
 				}
-				if err := upsertExclusionTx(tx, item.PhotoID, item.FaceID, reason, item.BBoxX, item.BBoxY, item.BBoxWidth, item.BBoxHeight, now); err != nil {
+				if err := upsertExclusionTx(tx, item.PhotoID, item.FaceID, reason, model.ExclusionSourceAuto, item.BBoxX, item.BBoxY, item.BBoxWidth, item.BBoxHeight, now); err != nil {
 					return err
 				}
 				if err := tx.Model(&model.Face{}).Where("id = ?", item.FaceID).Updates(map[string]interface{}{
@@ -1334,7 +1334,7 @@ func (s *faceQualityRescoreService) writeRescoreResult(run *model.FaceQualityRes
 				if faceBefore.PersonID != nil && *faceBefore.PersonID != 0 {
 					affectedPersonIDs[*faceBefore.PersonID] = struct{}{}
 				}
-				if err := upsertExclusionTx(tx, item.PhotoID, item.FaceID, reason, item.BBoxX, item.BBoxY, item.BBoxWidth, item.BBoxHeight, now); err != nil {
+				if err := upsertExclusionTx(tx, item.PhotoID, item.FaceID, reason, model.ExclusionSourceAuto, item.BBoxX, item.BBoxY, item.BBoxWidth, item.BBoxHeight, now); err != nil {
 					return err
 				}
 				if err := tx.Model(&model.Face{}).Where("id = ?", item.FaceID).Updates(map[string]interface{}{

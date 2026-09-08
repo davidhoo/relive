@@ -1061,128 +1061,56 @@ func (h *PeopleHandler) UpdateFaceExclusion(c *gin.Context) {
 	})
 }
 
+
+// writeFaceQualityRetired 统一拒绝已下线的质检接口（410 Gone）。
+// 保留静态路由注册，避免 /people/face-quality/* 误落入人物 ID 路由。
+func writeFaceQualityRetired(c *gin.Context) {
+	writePeopleError(c, http.StatusGone, "FACE_QUALITY_RETIRED", "人脸质检模块已下线")
+}
+
 // ---- 人脸质检审核接口 ----
 
 // GetFaceQualityStats 全局质检统计。
 func (h *PeopleHandler) GetFaceQualityStats(c *gin.Context) {
-	if h.faceQualityService == nil {
-		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检功能未启用")
-		return
-	}
-	stats, err := h.faceQualityService.GetStats()
-	if err != nil {
-		writePeopleError(c, http.StatusInternalServerError, "FACE_QUALITY_STATS_FAILED", err.Error())
-		return
-	}
-	c.JSON(http.StatusOK, model.Response{Success: true, Data: stats})
+	writeFaceQualityRetired(c)
 }
+
 
 // ListFaceQualityReviews 审核页列表（支持 state/reason/source/rule_version/时间范围/分页）。
 func (h *PeopleHandler) ListFaceQualityReviews(c *gin.Context) {
-	if h.faceQualityService == nil {
-		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检功能未启用")
-		return
-	}
-	page, pageSize, ok := parsePagination(c)
-	if !ok {
-		return
-	}
-	q := model.FaceQualityReviewQuery{
-		State:       strings.TrimSpace(c.Query("state")),
-		Reason:      strings.TrimSpace(c.Query("reason")),
-		Source:      strings.TrimSpace(c.Query("source")),
-		RuleVersion: strings.TrimSpace(c.Query("rule_version")),
-		StartTime:   strings.TrimSpace(c.Query("start_time")),
-		EndTime:     strings.TrimSpace(c.Query("end_time")),
-		Page:        page,
-		PageSize:    pageSize,
-	}
-	page2, err := h.faceQualityService.ListReviews(q)
-	if err != nil {
-		writePeopleError(c, http.StatusInternalServerError, "FACE_QUALITY_LIST_FAILED", err.Error())
-		return
-	}
-	c.JSON(http.StatusOK, model.Response{Success: true, Data: page2})
+	writeFaceQualityRetired(c)
 }
+
 
 // ApplyFaceQualityDecision 人工质检决策（批量确认排除/改判/接受/恢复）。
 func (h *PeopleHandler) ApplyFaceQualityDecision(c *gin.Context) {
-	if h.faceQualityService == nil {
-		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检功能未启用")
-		return
-	}
-	var req model.FaceQualityDecisionRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-		return
-	}
-	if !model.IsValidQualityReviewAction(req.Action) {
-		writePeopleError(c, http.StatusBadRequest, "INVALID_ACTION", "无效的审核动作")
-		return
-	}
-	result, err := h.faceQualityService.ApplyQualityDecision(req)
-	if err != nil {
-		writeServiceFailure(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, model.Response{Success: true, Message: "质检决策已应用", Data: result})
+	writeFaceQualityRetired(c)
 }
+
 
 // RestoreAutoFaceQuality 按规则版本恢复自动排除的样本（回滚/阈值修正用）。
 func (h *PeopleHandler) RestoreAutoFaceQuality(c *gin.Context) {
-	if h.faceQualityService == nil {
-		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检功能未启用")
-		return
-	}
-	var req model.FaceQualityRestoreRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-		return
-	}
-	limit := req.Limit
-	if limit <= 0 {
-		limit = 500
-	}
-	result, err := h.faceQualityService.RestoreAuto(req.RuleVersion, limit)
-	if err != nil {
-		writeServiceFailure(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, model.Response{Success: true, Message: "已按规则版本恢复自动排除样本", Data: result})
+	writeFaceQualityRetired(c)
 }
+
 
 // GetFaceQualityBackfillStatus 存量质检审计后台任务状态（进度/暂停态）。
 func (h *PeopleHandler) GetFaceQualityBackfillStatus(c *gin.Context) {
-	if h.faceQualityBackfill == nil {
-		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检审计任务未启用")
-		return
-	}
-	c.JSON(http.StatusOK, model.Response{Success: true, Data: gin.H{
-		"paused":       h.faceQualityBackfill.IsPaused(),
-		"last_face_id": h.faceQualityBackfill.Progress(),
-		"progress_key": "migration.face_quality_backfill_v1",
-	}})
+	writeFaceQualityRetired(c)
 }
+
 
 // PauseFaceQualityBackfill 暂停存量质检审计。
 func (h *PeopleHandler) PauseFaceQualityBackfill(c *gin.Context) {
-	if h.faceQualityBackfill == nil {
-		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检审计任务未启用")
-		return
-	}
-	h.faceQualityBackfill.Pause()
-	c.JSON(http.StatusOK, model.Response{Success: true, Message: "存量质检审计已暂停"})
+	writeFaceQualityRetired(c)
 }
+
 
 // ResumeFaceQualityBackfill 恢复存量质检审计。
 func (h *PeopleHandler) ResumeFaceQualityBackfill(c *gin.Context) {
-	if h.faceQualityBackfill == nil {
-		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检审计任务未启用")
-		return
-	}
-	h.faceQualityBackfill.Resume()
-	c.JSON(http.StatusOK, model.Response{Success: true, Message: "存量质检审计已恢复"})
+	writeFaceQualityRetired(c)
 }
+
 
 // ---- 历史重评分运行接口 ----
 
@@ -1229,174 +1157,52 @@ func rescoreRunResponseWithEligibility(r *model.FaceQualityRescoreRun, eligible 
 // CreateFaceQualityRescoreRun 创建历史重评分运行。
 // 校准强制 shadow；full/enforce 需已完成 calibration；同时只允许一个活跃 run。
 func (h *PeopleHandler) CreateFaceQualityRescoreRun(c *gin.Context) {
-	if h.faceQualityRescore == nil {
-		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检重评分功能未启用")
-		return
-	}
-	var req model.FaceQualityRescoreRunCreateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-		return
-	}
-	// full 模式必须 enforce（不接受 full+shadow，无意义且误导）。service 内部会归一化
-	// calibration→shadow、full→enforce，故此处固定传 enforce 即可。
-	// mode=full 时 calibration_run_id 必填，指向服务端验证通过的合格校准 run。
-	calibrationRunID := uint(0)
-	if req.CalibrationRunID != nil {
-		calibrationRunID = *req.CalibrationRunID
-	}
-	// 证据管线：未填默认 independent_v2（本任务主链路）；显式 legacy_v1 仍可用以复跑 v1 历史链路。
-	pipelineVersion := req.PipelineVersion
-	if pipelineVersion == "" {
-		pipelineVersion = model.FaceQualityRescorePipelineIndependentV2
-	}
-	// rule_version：face_quality_v3 启用目标框匹配规则；face_quality_v4 在其上叠加 YuNet
-	// 检测尺度归一化；未填默认 v2（service 内推导）。
-	run, err := h.faceQualityRescore.CreateRun(req.Mode, model.FaceQualityRescoreApplyModeEnforce, req.PhotoLimit, calibrationRunID, pipelineVersion, req.RuleVersion, req.FaceIDs)
-	if err != nil {
-		writeRescoreRunError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, model.Response{Success: true, Data: rescoreRunResponse(run)})
+	writeFaceQualityRetired(c)
 }
+
 
 // ListFaceQualityRescoreRuns 列出重评分运行（最近优先）。
 func (h *PeopleHandler) ListFaceQualityRescoreRuns(c *gin.Context) {
-	if h.faceQualityRescore == nil {
-		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检重评分功能未启用")
-		return
-	}
-	limit := 50
-	if l, err := strconv.Atoi(c.Query("limit")); err == nil && l > 0 && l <= 200 {
-		limit = l
-	}
-	runs, err := h.faceQualityRescore.ListRuns(limit)
-	if err != nil {
-		writePeopleError(c, http.StatusInternalServerError, "RESCORE_LIST_FAILED", err.Error())
-		return
-	}
-	items := make([]model.FaceQualityRescoreRunResponse, 0, len(runs))
-	for _, r := range runs {
-		items = append(items, rescoreRunResponseWithEligibility(r, h.faceQualityRescore.IsEligibleForEnforce(r.ID)))
-	}
-	c.JSON(http.StatusOK, model.Response{Success: true, Data: gin.H{"items": items}})
+	writeFaceQualityRetired(c)
 }
+
 
 // GetFaceQualityRescoreRun 获取单个运行详情。
 func (h *PeopleHandler) GetFaceQualityRescoreRun(c *gin.Context) {
-	if h.faceQualityRescore == nil {
-		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检重评分功能未启用")
-		return
-	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil {
-		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid run id")
-		return
-	}
-	run, err := h.faceQualityRescore.GetRun(uint(id))
-	if err != nil {
-		writeRescoreRunError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, model.Response{Success: true, Data: rescoreRunResponseWithEligibility(run, h.faceQualityRescore.IsEligibleForEnforce(run.ID))})
+	writeFaceQualityRetired(c)
 }
+
 
 // PauseFaceQualityRescoreRun 暂停运行。
 func (h *PeopleHandler) PauseFaceQualityRescoreRun(c *gin.Context) {
-	if h.faceQualityRescore == nil {
-		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检重评分功能未启用")
-		return
-	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil {
-		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid run id")
-		return
-	}
-	if err := h.faceQualityRescore.Pause(uint(id)); err != nil {
-		writeRescoreRunError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, model.Response{Success: true, Message: "重评分运行已暂停"})
+	writeFaceQualityRetired(c)
 }
+
 
 // ResumeFaceQualityRescoreRun 恢复运行（processing item 回到 pending）。
 func (h *PeopleHandler) ResumeFaceQualityRescoreRun(c *gin.Context) {
-	if h.faceQualityRescore == nil {
-		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检重评分功能未启用")
-		return
-	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil {
-		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid run id")
-		return
-	}
-	if err := h.faceQualityRescore.Resume(uint(id)); err != nil {
-		writeRescoreRunError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, model.Response{Success: true, Message: "重评分运行已恢复"})
+	writeFaceQualityRetired(c)
 }
+
 
 // CancelFaceQualityRescoreRun 取消运行（停止未处理 item，不删除审计记录）。
 func (h *PeopleHandler) CancelFaceQualityRescoreRun(c *gin.Context) {
-	if h.faceQualityRescore == nil {
-		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检重评分功能未启用")
-		return
-	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil {
-		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid run id")
-		return
-	}
-	if err := h.faceQualityRescore.Cancel(uint(id)); err != nil {
-		writeRescoreRunError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, model.Response{Success: true, Message: "重评分运行已取消"})
+	writeFaceQualityRetired(c)
 }
+
 
 // RestoreAutoFaceQualityRescoreRun 按运行恢复自动排除（只恢复 rescore_run_id 匹配的样本）。
 func (h *PeopleHandler) RestoreAutoFaceQualityRescoreRun(c *gin.Context) {
-	if h.faceQualityRescore == nil {
-		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检重评分功能未启用")
-		return
-	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil {
-		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid run id")
-		return
-	}
-	limit := 0
-	if l, err := strconv.Atoi(c.Query("limit")); err == nil && l > 0 {
-		limit = l
-	}
-	result, err := h.faceQualityRescore.RestoreAuto(uint(id), limit)
-	if err != nil {
-		writeRescoreRunError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, model.Response{Success: true, Message: "已按运行恢复自动排除样本", Data: result})
+	writeFaceQualityRetired(c)
 }
+
 
 // RetryFaceQualityRescoreRun 以来源 run 的当前失败事件创建新的 shadow calibration 重试运行。
 // 确认文案：只重试技术失败样本，仍为 shadow，不自动隔离。
 func (h *PeopleHandler) RetryFaceQualityRescoreRun(c *gin.Context) {
-	if h.faceQualityRescore == nil {
-		writePeopleError(c, http.StatusServiceUnavailable, "FACE_QUALITY_UNAVAILABLE", "人脸质检重评分功能未启用")
-		return
-	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil {
-		writePeopleError(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid run id")
-		return
-	}
-	run, err := h.faceQualityRescore.RetryRun(uint(id))
-	if err != nil {
-		writeRescoreRunError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, model.Response{Success: true, Data: rescoreRunResponse(run)})
+	writeFaceQualityRetired(c)
 }
+
 
 // writeRescoreRunError 把重评分服务错误映射为统一响应与错误码。
 func writeRescoreRunError(c *gin.Context, err error) {

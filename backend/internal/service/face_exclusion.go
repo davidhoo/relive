@@ -72,54 +72,6 @@ type bboxCandidate struct {
 	x, y, w, h float64
 }
 
-// matchQualityRecords 把新检测框按 bbox IoU 匹配到既有质检人工结论。
-// 只匹配 source=manual 的事件，保证重检后人工结论仍生效，且新规则不得覆盖。
-// 每个 box 最多匹配一条人工事件，IoU 最高者胜。
-func matchQualityRecords(
-	detections []bboxCandidate,
-	records []*model.FaceQualityEvent,
-) map[int]*model.FaceQualityEvent {
-	if len(detections) == 0 || len(records) == 0 {
-		return nil
-	}
-	matched := make(map[int]*model.FaceQualityEvent)
-	usedRecords := make(map[uint]struct{})
-
-	for i, det := range detections {
-		bestIoU := exclusionIoUThreshold
-		var bestRecord *model.FaceQualityEvent
-		for _, rec := range records {
-			if _, used := usedRecords[rec.ID]; used {
-				continue
-			}
-			iou := bboxIoU(det.x, det.y, det.w, det.h, rec.BBoxX, rec.BBoxY, rec.BBoxWidth, rec.BBoxHeight)
-			if iou > bestIoU {
-				bestIoU = iou
-				bestRecord = rec
-			}
-		}
-		if bestRecord != nil {
-			matched[i] = bestRecord
-			usedRecords[bestRecord.ID] = struct{}{}
-		}
-	}
-	return matched
-}
-
-// filterManualQualityEvents 只保留人工来源的当前质检事件。
-func filterManualQualityEvents(records []*model.FaceQualityEvent) []*model.FaceQualityEvent {
-	if len(records) == 0 {
-		return nil
-	}
-	out := make([]*model.FaceQualityEvent, 0, len(records))
-	for _, r := range records {
-		if r != nil && r.Source == model.FaceQualitySourceManual {
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
 // UpdateFaceExclusion marks faces as excluded or restores them.
 // When excluded=true, reason must be a valid exclusion reason ("non_face" or "low_quality").
 // The operation is atomic within a single write transaction.
@@ -178,21 +130,17 @@ func (s *peopleService) UpdateFaceExclusion(faceIDs []uint, excluded bool, reaso
 		return s.db.Transaction(func(tx *gorm.DB) error {
 			for _, face := range faces {
 				if excluded {
-					// Idempotent: already excluded with same reason
-					if face.ClusterStatus == model.FaceClusterStatusExcluded && face.ExclusionReason == reason {
-						continue
-					}
-
-					// Create or update face_exclusion record
+					// 人工排除必须明确写 source=manual。即便已同理由排除也不能幂等跳过，
+					// 否则自动/未知来源无法被人工确认覆盖。
 					var existing model.FaceExclusion
 					if err := tx.Where("photo_id = ? AND source_face_id = ?", face.PhotoID, face.ID).
 						First(&existing).Error; err != nil {
 						if err == gorm.ErrRecordNotFound {
-							// Create new exclusion record
 							existing = model.FaceExclusion{
 								PhotoID:      face.PhotoID,
 								SourceFaceID: face.ID,
 								Reason:       reason,
+								Source:       model.ExclusionSourceManual,
 								BBoxX:        face.BBoxX,
 								BBoxY:        face.BBoxY,
 								BBoxWidth:    face.BBoxWidth,
@@ -205,8 +153,8 @@ func (s *peopleService) UpdateFaceExclusion(faceIDs []uint, excluded bool, reaso
 							return fmt.Errorf("query exclusion record for face %d: %w", face.ID, err)
 						}
 					} else {
-						// Update existing record
 						existing.Reason = reason
+						existing.Source = model.ExclusionSourceManual
 						existing.BBoxX = face.BBoxX
 						existing.BBoxY = face.BBoxY
 						existing.BBoxWidth = face.BBoxWidth
@@ -236,6 +184,36 @@ func (s *peopleService) UpdateFaceExclusion(faceIDs []uint, excluded bool, reaso
 						continue
 					}
 
+					// Old deployments may leave exclusions pointing at a deleted face.
+					// Resolve only unambiguous orphan matches, never another live face.
+					var orphans []model.FaceExclusion
+					if err := tx.Where("photo_id = ? AND NOT EXISTS (SELECT 1 FROM faces WHERE faces.id = face_exclusions.source_face_id)", face.PhotoID).Find(&orphans).Error; err != nil {
+						return err
+					}
+					var matches []uint
+					for _, rec := range orphans {
+						if bboxIoU(face.BBoxX, face.BBoxY, face.BBoxWidth, face.BBoxHeight, rec.BBoxX, rec.BBoxY, rec.BBoxWidth, rec.BBoxHeight) <= exclusionIoUThreshold {
+							continue
+						}
+						var siblings []model.Face
+						if err := tx.Where("photo_id = ? AND id != ?", face.PhotoID, face.ID).Find(&siblings).Error; err != nil {
+							return err
+						}
+						for _, other := range siblings {
+							if bboxIoU(other.BBoxX, other.BBoxY, other.BBoxWidth, other.BBoxHeight, rec.BBoxX, rec.BBoxY, rec.BBoxWidth, rec.BBoxHeight) > exclusionIoUThreshold {
+								return fmt.Errorf("ambiguous historical exclusion %d", rec.ID)
+							}
+						}
+						matches = append(matches, rec.ID)
+					}
+					if len(matches) > 1 {
+						return fmt.Errorf("ambiguous historical exclusions for face %d", face.ID)
+					}
+					if len(matches) == 1 {
+						if err := tx.Delete(&model.FaceExclusion{}, matches[0]).Error; err != nil {
+							return err
+						}
+					}
 					// Delete face_exclusion record
 					if err := tx.Where("photo_id = ? AND source_face_id = ?", face.PhotoID, face.ID).
 						Delete(&model.FaceExclusion{}).Error; err != nil {
@@ -244,17 +222,17 @@ func (s *peopleService) UpdateFaceExclusion(faceIDs []uint, excluded bool, reaso
 
 					// Reset face to pending
 					if err := tx.Model(&model.Face{}).Where("id = ?", face.ID).Updates(map[string]interface{}{
-						"person_id":         nil,
-						"cluster_status":    model.FaceClusterStatusPending,
-						"cluster_score":     0,
-						"manual_locked":     false,
+						"person_id":          nil,
+						"cluster_status":     model.FaceClusterStatusPending,
+						"cluster_score":      0,
+						"manual_locked":      false,
 						"manual_lock_reason": "",
-						"manual_locked_at":  nil,
-						"exclusion_reason":  "",
-						"excluded_at":       nil,
-						"retry_count":       0,
-						"clustered_at":      nil,
-						"updated_at":        now,
+						"manual_locked_at":   nil,
+						"exclusion_reason":   "",
+						"excluded_at":        nil,
+						"retry_count":        0,
+						"clustered_at":       nil,
+						"updated_at":         now,
 					}).Error; err != nil {
 						return fmt.Errorf("restore face %d: %w", face.ID, err)
 					}
@@ -294,7 +272,7 @@ func (s *peopleService) UpdateFaceExclusion(faceIDs []uint, excluded bool, reaso
 	if len(personIDList) > 0 {
 		s.invalidateIdentityProfiles(IdentityProfileInvalidation{
 			DirtyPersonIDs: personIDList,
-			Reason:          "face_exclusion_update",
+			Reason:         "face_exclusion_update",
 		})
 	}
 

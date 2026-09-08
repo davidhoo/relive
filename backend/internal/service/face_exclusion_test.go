@@ -202,7 +202,7 @@ func TestUpdateFaceExclusion_LowQuality(t *testing.T) {
 	assert.Equal(t, 1, updatedPhoto.FaceCount)
 }
 
-func TestUpdateFaceExclusion_Idempotent(t *testing.T) {
+func TestUpdateFaceExclusion_WritesManualSource(t *testing.T) {
 	svc, db := newPeopleServiceForTest(t, nil)
 
 	photo := &model.Photo{
@@ -221,18 +221,88 @@ func TestUpdateFaceExclusion_Idempotent(t *testing.T) {
 	}
 	require.NoError(t, db.Create(face).Error)
 
-	// First exclusion
 	_, err := svc.UpdateFaceExclusion([]uint{face.ID}, true, model.ExclusionReasonNonFace)
 	require.NoError(t, err)
 
-	// Second exclusion with same reason - should be idempotent
-	_, err = svc.UpdateFaceExclusion([]uint{face.ID}, true, model.ExclusionReasonNonFace)
+	var exclusion model.FaceExclusion
+	require.NoError(t, db.Where("source_face_id = ?", face.ID).First(&exclusion).Error)
+	assert.Equal(t, model.ExclusionSourceManual, exclusion.Source)
+}
+
+func TestUpdateFaceExclusion_ReconfirmSameReasonWritesManualSource(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, nil)
+
+	photo := &model.Photo{
+		FilePath:          "/test/photo.jpg",
+		FaceProcessStatus: model.FaceProcessStatusReady,
+		FaceCount:         1,
+	}
+	require.NoError(t, db.Create(photo).Error)
+
+	face := &model.Face{
+		PhotoID:       photo.ID,
+		BBoxX:         0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence:    0.9,
+		QualityScore:  0.8,
+		ClusterStatus: model.FaceClusterStatusExcluded,
+		ExclusionReason: model.ExclusionReasonNonFace,
+	}
+	require.NoError(t, db.Create(face).Error)
+	require.NoError(t, db.Create(&model.FaceExclusion{
+		PhotoID:      photo.ID,
+		SourceFaceID: face.ID,
+		Reason:       model.ExclusionReasonNonFace,
+		Source:       model.ExclusionSourceUnknown,
+		BBoxX:        face.BBoxX,
+		BBoxY:        face.BBoxY,
+		BBoxWidth:    face.BBoxWidth,
+		BBoxHeight:   face.BBoxHeight,
+	}).Error)
+
+	_, err := svc.UpdateFaceExclusion([]uint{face.ID}, true, model.ExclusionReasonNonFace)
 	require.NoError(t, err)
 
-	// Verify only one exclusion record exists
+	var exclusion model.FaceExclusion
+	require.NoError(t, db.Where("source_face_id = ?", face.ID).First(&exclusion).Error)
+	assert.Equal(t, model.ExclusionSourceManual, exclusion.Source)
+
 	var count int64
 	db.Model(&model.FaceExclusion{}).Where("source_face_id = ?", face.ID).Count(&count)
 	assert.Equal(t, int64(1), count)
+}
+
+func TestUpdateFaceExclusion_WorksWithoutFaceQualityRepo(t *testing.T) {
+	svc, db := newPeopleServiceForTest(t, nil)
+	svc.faceQualityRepo = nil
+
+	photo := &model.Photo{
+		FilePath:          "/test/photo.jpg",
+		FaceProcessStatus: model.FaceProcessStatusReady,
+		FaceCount:         1,
+	}
+	require.NoError(t, db.Create(photo).Error)
+
+	face := &model.Face{
+		PhotoID:       photo.ID,
+		BBoxX:         0.1, BBoxY: 0.1, BBoxWidth: 0.2, BBoxHeight: 0.2,
+		Confidence:    0.9,
+		QualityScore:  0.8,
+		ClusterStatus: model.FaceClusterStatusPending,
+	}
+	require.NoError(t, db.Create(face).Error)
+
+	_, err := svc.UpdateFaceExclusion([]uint{face.ID}, true, model.ExclusionReasonLowQuality)
+	require.NoError(t, err)
+
+	var updatedFace model.Face
+	require.NoError(t, db.First(&updatedFace, face.ID).Error)
+	assert.Equal(t, model.FaceClusterStatusExcluded, updatedFace.ClusterStatus)
+	assert.Equal(t, model.ExclusionReasonLowQuality, updatedFace.ExclusionReason)
+
+	_, err = svc.UpdateFaceExclusion([]uint{face.ID}, false, "")
+	require.NoError(t, err)
+	require.NoError(t, db.First(&updatedFace, face.ID).Error)
+	assert.Equal(t, model.FaceClusterStatusPending, updatedFace.ClusterStatus)
 }
 
 func TestUpdateFaceExclusion_ChangeReason(t *testing.T) {

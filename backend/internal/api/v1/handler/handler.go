@@ -52,10 +52,7 @@ func NewHandlers(db *gorm.DB, services *service.Services, repos *repository.Repo
 	handlers.People.SetBackgroundCoordinator(services.BackgroundCoordinator)
 	// 注入人物照片派生表仓库，cursor 分页在迁移完成后走 person_photos 索引。
 	handlers.People.SetPersonPhotoRepo(repos.PersonPhoto)
-	// 注入人脸质检审核服务。
-	handlers.People.SetFaceQualityService(services.FaceQuality)
-	handlers.People.SetFaceQualityBackfill(services.FaceQualityBackfill)
-	handlers.People.SetFaceQualityRescore(services.FaceQualityRescore)
+	// 人脸质检服务不再注入；相关路由由 handler 返回 410 Gone。
 
 	// 设置 ConfigHandler 对 AIHandler 的引用，用于配置变更后热重载
 	handlers.Config.SetAIHandler(handlers.AI)

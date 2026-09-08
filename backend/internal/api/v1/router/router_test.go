@@ -172,3 +172,48 @@ func TestRouter_IdentityProfileStats_GETOnly(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, rec.Code, "POST not registered -> 404 (NoRoute)")
 }
+
+// TestRouter_FaceQualityRetired_NoWorkerWiringAndStaticGone 验证：
+// 1) Setup 返回的 Services 质检三件套为 nil（main 的 if != nil { Run() } 不会执行）
+// 2) 静态 /people/face-quality/* 返回 410，不落入 /:id
+func TestRouter_FaceQualityRetired_NoWorkerWiringAndStaticGone(t *testing.T) {
+	engine, services, token := newAuthedRouterForTest(t)
+
+	require.Nil(t, services.FaceQuality)
+	require.Nil(t, services.FaceQualityBackfill)
+	require.Nil(t, services.FaceQualityRescore)
+
+	ran := false
+	if services.FaceQualityBackfill != nil {
+		ran = true
+		services.FaceQualityBackfill.Run()
+	}
+	if services.FaceQualityRescore != nil {
+		ran = true
+		services.FaceQualityRescore.Run()
+	}
+	require.False(t, ran, "retired wiring must prevent worker Run on startup path")
+
+	paths := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/v1/people/face-quality/stats"},
+		{http.MethodGet, "/api/v1/people/face-quality/reviews"},
+		{http.MethodPost, "/api/v1/people/face-quality/rescore-runs"},
+		{http.MethodPost, "/api/v1/people/face-quality/backfill/resume"},
+	}
+	for _, p := range paths {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(p.method, p.path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		engine.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusGone, rec.Code, "%s %s", p.method, p.path)
+		assert.NotEqual(t, http.StatusBadRequest, rec.Code, "must not fall into /people/:id")
+
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		errObj, _ := body["error"].(map[string]any)
+		assert.Equal(t, "FACE_QUALITY_RETIRED", errObj["code"])
+	}
+}

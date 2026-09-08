@@ -87,19 +87,8 @@ func main() {
 	personPhotosBackfill := service.NewPersonPhotosBackfill(db, services.PersonPhotoRepo, services.BackgroundCoordinator)
 	personPhotosBackfill.Run()
 
-	// 启动存量人脸质检审计后台任务（P2 automatic：foreground/I/O 高时暂停，
-	// 服务重启从 app_config 进度继续，不阻塞启动）。只产候选审计事件，不改人物归属；
-	// 可通过 FaceQualityBackfill.Pause/Resume 暂停继续，按规则版本恢复走 RestoreAuto 接口。
-	if services.FaceQualityBackfill != nil {
-		services.FaceQualityBackfill.Run()
-	}
-
-	// 启动历史人脸质检重评分 worker（P2 automatic：foreground/iowait/cooldown 让步，
-	// 单 run 互斥，进程重启 processing item 回到 pending 不丢失进度）。绝不调用
-	// ApplyDetectionResult，不删除重建 Face，不全库重聚类。
-	if services.FaceQualityRescore != nil {
-		services.FaceQualityRescore.Run()
-	}
+	// 人脸质检模块已退役：不再启动 backfill/rescore worker。
+	// 旧 queued/running/paused 任务因 worker 未启动而不会推进；迁移工具负责终态归档。
 
 	// 启动定时任务调度器
 	services.Scheduler.Start()

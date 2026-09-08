@@ -2209,10 +2209,8 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 		}
 	}()
 
-	// v2 严格准入（任务 §D3）：主检测过线的候选在持久化前执行独立验证。
-	// no_face/uncertain/error 一律保留并标记，由后续质检写 review_required（保留但不进聚类）；
-	// 实时不静默丢弃 no_face 候选，主检测过线的真实脸只进待人工质检。
-	result.Faces = s.filterDetectionsByIndependentVerification(photo, result.Faces)
+	// 独立验证已下线：正常检测不再请求 VerifyKnownFaceCrops。
+	// 人工排除只认 face_exclusions；历史 review_required 由迁移任务处理。
 
 	if len(result.Faces) == 0 {
 		s.appendBackgroundLog(fmt.Sprintf("照片 #%d 无人脸", photo.ID))
@@ -2278,21 +2276,12 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 		return fmt.Errorf("expected %d face thumbnail paths, got %d", len(result.Faces), len(thumbnailPaths))
 	}
 
-	// Load existing exclusion records for this photo to match against new detections
+	// Load existing exclusion records for this photo to match against new detections.
+	// 人工排除以 face_exclusions 为唯一业务真相；不再依赖质检事件回填或自动裁决。
 	var exclusionRecords []*model.FaceExclusion
 	if s.faceExclusionRepo != nil {
 		exclusionRecords, _ = s.faceExclusionRepo.ListByPhotoID(photo.ID)
 	}
-
-	// 加载该照片当前有效的质检人工结论，按 bbox IoU 回填——重检后人工结论仍生效，
-	// 且新模型/规则不得无声覆盖人工接受/排除。优先级：人工 > 自动。
-	var manualQualityRecords []*model.FaceQualityEvent
-	if s.faceQualityRepo != nil {
-		manualQualityRecords, _ = s.faceQualityRepo.ListCurrentByPhotoID(photo.ID)
-	}
-	manualQualityRecords = filterManualQualityEvents(manualQualityRecords)
-
-	qualityMode := qualityModeFromConfig(s.qualityModeSetting())
 
 	// Build detection candidates for bbox matching
 	detectionCandidates := make([]bboxCandidate, len(result.Faces))
@@ -2305,10 +2294,8 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 		}
 	}
 	exclusionMatches := matchExclusionRecords(detectionCandidates, exclusionRecords)
-	qualityMatches := matchQualityRecords(detectionCandidates, manualQualityRecords)
 
 	faceCountForPhoto := 0
-	qualityEventsToWrite := make([]*model.FaceQualityEvent, 0, len(result.Faces))
 	for i, detected := range result.Faces {
 		embeddingPayload := model.EncodeEmbedding(detected.Embedding)
 		face := &model.Face{
@@ -2326,7 +2313,7 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 			ClusteredAt:   nil,
 		}
 
-		// 写入证据快照（便于审核页直接读取，避免 JOIN）。
+		// 保留检测侧质量评分快照（排序/头像等仍可用），但不做自动质检裁决。
 		ev := detected.Evidence
 		face.FaceValidityScore = 0
 		if ev != nil {
@@ -2335,29 +2322,7 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 		face.QualityRuleVersion = qualityRuleVersionFromEvidence(ev)
 		face.QualityModelVersion = qualityModelVersionFromEvidence(ev)
 
-		// 1) 人工结论优先：按 bbox IoU 回填。
-		if mrec, matched := qualityMatches[i]; matched {
-			face.QualityReasonsCSV = mrec.ReasonCodes
-			face.QualityRuleVersion = mrec.RuleVersion
-			face.QualityModelVersion = mrec.ModelVersion
-			switch mrec.Decision {
-			case model.FaceQualityDecisionNonFace, model.FaceQualityDecisionLowQuality:
-				face.ClusterStatus = model.FaceClusterStatusExcluded
-				face.ExclusionReason = mrec.Reason
-				nowQ := time.Now()
-				face.ExcludedAt = &nowQ
-				if mrec.Decision == model.FaceQualityDecisionLowQuality {
-					faceCountForPhoto++
-				}
-			case model.FaceQualityDecisionAccepted:
-				// 人工接受：保持 pending，正常进入聚类。
-				faceCountForPhoto++
-			case model.FaceQualityDecisionReviewRequired:
-				face.ClusterStatus = model.FaceClusterStatusReviewRequired
-				// 待质检不计入 face_count，也不进入聚类。
-			}
-		} else if rec, matched := exclusionMatches[i]; matched {
-			// 2) 旧版 face_exclusions 兼容回填（无质检事件时的存量排除记录）。
+		if rec, matched := exclusionMatches[i]; matched {
 			face.ClusterStatus = model.FaceClusterStatusExcluded
 			face.ExclusionReason = rec.Reason
 			nowQ := time.Now()
@@ -2367,56 +2332,7 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 				faceCountForPhoto++
 			}
 		} else {
-			// 3) 无人工结论：跑自动质检策略引擎。
-			// v2 严格准入（任务 §D3）：独立验证 no_face/uncertain/error 的候选强制 review_required，
-			// 不当作正常人脸进入聚类。实时是单信号路径，no_face 仅表示「未匹配目标脸框」，
-			// 不能等价于自动 non_face——主检测过线的真实脸只能进待人工质检，不得静默丢弃。
-			outcome := evaluateFaceQuality(ev, qualityMode)
-			pipeline := model.FaceQualityEvidencePipelineLegacyV1
-			switch detected.VerifierStatus {
-			case "no_face", "uncertain", "error":
-				outcome = qualityOutcome{
-					Action:      model.FaceQualityActionReviewRequired,
-					Decision:    model.FaceQualityDecisionReviewRequired,
-					ReasonCodes: append(outcome.ReasonCodes, verifierReviewReasonCode(detected.VerifierStatus)),
-				}
-				pipeline = model.FaceQualityEvidencePipelineIndependentV2
-			}
-			face.QualityReasonsCSV = reasonCodesCSV(outcome.ReasonCodes)
-			switch outcome.Action {
-			case model.FaceQualityActionExclude:
-				face.ClusterStatus = model.FaceClusterStatusExcluded
-				face.ExclusionReason = outcome.Reason
-				nowQ := time.Now()
-				face.ExcludedAt = &nowQ
-				if outcome.Reason == model.ExclusionReasonLowQuality {
-					faceCountForPhoto++
-				}
-			case model.FaceQualityActionReviewRequired:
-				face.ClusterStatus = model.FaceClusterStatusReviewRequired
-				// 不计入 face_count，不进入聚类。
-			case model.FaceQualityActionAccept:
-				faceCountForPhoto++
-			}
-			// 追加自动质检事件（FaceID 在事务内创建 Face 后回填）。
-			qualityEventsToWrite = append(qualityEventsToWrite, &model.FaceQualityEvent{
-				PhotoID:          photo.ID,
-				BBoxX:            detected.BBox.X,
-				BBoxY:            detected.BBox.Y,
-				BBoxWidth:        detected.BBox.Width,
-				BBoxHeight:       detected.BBox.Height,
-				Decision:         outcome.Decision,
-				Reason:           outcome.Reason,
-				Source:           model.FaceQualitySourceAuto,
-				RuleVersion:      qualityRuleVersionFromEvidence(ev),
-				ModelVersion:     qualityModelVersionFromEvidence(ev),
-				EvidenceJSON:     marshalEvidence(ev),
-				ReasonCodes:      reasonCodesCSV(outcome.ReasonCodes),
-				EvidenceOrigin:   model.FaceQualityEvidenceOriginRealtime,
-				EvidenceState:    model.FaceQualityEvidenceStateAvailable,
-				EvidencePipeline: pipeline,
-				IsCurrent:        true,
-			})
+			faceCountForPhoto++
 		}
 		createdFaces = append(createdFaces, face)
 	}
@@ -2428,22 +2344,14 @@ func (s *peopleService) ApplyDetectionResult(job *model.PeopleJob, photo *model.
 				return err
 			}
 
-			// 旧质检事件失活（重检后旧结论不再 is_current）。
-			if s.faceQualityRepo != nil {
-				if err := s.faceQualityRepo.ClearCurrentByPhoto(tx, photo.ID); err != nil {
-					return fmt.Errorf("clear current quality events: %w", err)
-				}
-			}
-
-			for idx, face := range createdFaces {
+			for i, face := range createdFaces {
 				if err := tx.Create(face).Error; err != nil {
 					return err
 				}
-				// 回填自动质检事件的 FaceID。
-				if idx < len(qualityEventsToWrite) && qualityEventsToWrite[idx] != nil {
-					fid := face.ID
-					qualityEventsToWrite[idx].FaceID = &fid
-					if err := tx.Create(qualityEventsToWrite[idx]).Error; err != nil {
+				// Keep the persistent exclusion attached to the replacement face.
+				if rec, ok := exclusionMatches[i]; ok {
+					if err := tx.Model(&model.FaceExclusion{}).Where("id = ?", rec.ID).
+						Update("source_face_id", face.ID).Error; err != nil {
 						return err
 					}
 				}
@@ -4355,92 +4263,11 @@ func (s *peopleService) faceDetectionMinConfidence() float64 {
 	return 0.65
 }
 
-// filterDetectionsByIndependentVerification 对主检测过线的候选执行 v2 独立验证（任务 §D3）。
-// 用 PrepareV2FaceCrops 在方向一致原图上裁取每张人脸上下文，调 VerifyKnownFaceCrops：
-//   - no_face/uncertain/error：保留候选并置 VerifierStatus，后续 ApplyDetectionResult 写 review_required
-//     而非进聚类。实时是单信号路径，没有历史 enforce 的双信号门禁，主检测过线的真实脸不能因
-//     一次目标未匹配或验证器灰区/故障而静默丢弃——只进待人工质检。
-//   - face：保留候选，正常进入既有质检/聚类路径。
-//
-// 验证器不可用或读图失败时 fail-open（保留全部候选），由既有 v1 质检兜底，绝不因验证器故障丢脸。
-// 候选 bbox 为归一化坐标，与原图方向一致坐标系对齐（PrepareV2FaceCrops 内部做 EXIF+manual_rotation 校正）。
+// filterDetectionsByIndependentVerification 已退役：不再调用独立验证 ML。
+// 保留函数签名供旧单测直接调用；生产检测路径已不再调用本函数。
 func (s *peopleService) filterDetectionsByIndependentVerification(photo *model.Photo, faces []model.PeopleDetectionFace) []model.PeopleDetectionFace {
-	if len(faces) == 0 || s.client == nil {
-		return faces
-	}
-	// 构造每张人脸的上下文裁剪。任一裁剪失败 → 该候选保留并标 uncertain（不因裁剪故障丢脸）。
-	type prepared struct {
-		idx   int
-		crops *V2FaceCrops
-		face  model.PeopleDetectionFace
-	}
-	preps := make([]prepared, 0, len(faces))
-	for i, f := range faces {
-		crops, err := PrepareV2FaceCrops(photo.FilePath, photo.ManualRotation, f.BBox.X, f.BBox.Y, f.BBox.Width, f.BBox.Height)
-		if err != nil || crops == nil || crops.ContextCropBase64 == "" {
-			// 裁剪失败（读图/EXIF/旋转）：fail-open，保留候选不标记，走既有 v1 质检路径，不丢脸。
-			// 注：这与验证器 uncertain 不同——裁剪失败是技术故障，不应让候选降级为 review_required。
-			continue
-		}
-		preps = append(preps, prepared{idx: i, crops: crops, face: f})
-	}
-	if len(preps) == 0 {
-		return faces
-	}
-
-	targets := make([]mlclient.VerifyKnownFaceCropTarget, 0, len(preps))
-	for _, p := range preps {
-		targets = append(targets, mlclient.VerifyKnownFaceCropTarget{
-			FaceID:               uint(p.idx),
-			ContextCropBase64:    p.crops.ContextCropBase64,
-			FaceBoxWidthPx:       p.crops.FaceBoxWidthPx,
-			FaceBoxHeightPx:      p.crops.FaceBoxHeightPx,
-			FaceBoxOffsetX:       p.crops.FaceBoxOffsetX,
-			FaceBoxOffsetY:       p.crops.FaceBoxOffsetY,
-			PrimaryDetectorScore: p.face.Confidence,
-		})
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	resp, err := s.client.VerifyKnownFaceCrops(ctx, mlclient.VerifyKnownFaceCropsRequest{Targets: targets})
-	if err != nil {
-		// 验证器调用失败：fail-open 保留全部候选（既有 v1 质检兜底），不丢脸。
-		logger.Warnf("realtime independent verification failed for photo %d, fail-open: %v", photo.ID, err)
-		return faces
-	}
-
-	// 按 verification_status 分流：no_face/uncertain/error 保守保留待质检，face 保留。
-	kept := make([]model.PeopleDetectionFace, 0, len(faces))
-	// 保留未裁剪成功（已标 uncertain）的候选顺序：先收集所有未参与验证的索引状态。
-	statusByIDX := make(map[int]string, len(preps))
-	for i, p := range preps {
-		if i < len(resp.Results) {
-			statusByIDX[p.idx] = resp.Results[i].VerificationStatus
-		}
-	}
-
-	for i, f := range faces {
-		st, ok := statusByIDX[i]
-		if !ok {
-			// 未参与验证（裁剪失败 fail-open）：保留候选，不标记，走既有 v1 质检路径。
-			kept = append(kept, f)
-			continue
-		}
-		switch st {
-		case "no_face":
-			// 保留待质检：不静默丢弃。实时单信号未匹配目标脸框不能等价于自动 non_face，
-			// 真实脸（主检测过线）只应进待人工质检，由 ApplyDetectionResult 写 review_required。
-			f.VerifierStatus = "no_face"
-			s.appendBackgroundLog(fmt.Sprintf("照片 #%d 候选 %d 独立验证 no_face（未匹配目标脸框），保留待质检", photo.ID, i))
-		case "uncertain", "error":
-			f.VerifierStatus = st
-		default:
-			f.VerifierStatus = "face"
-		}
-		kept = append(kept, f)
-	}
-	return kept
+	_ = photo
+	return faces
 }
 
 // verifierReviewReasonCode 把实时独立验证的非 face 状态映射为 review_required 原因码。

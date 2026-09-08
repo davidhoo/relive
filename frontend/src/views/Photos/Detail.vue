@@ -240,20 +240,13 @@
                    >
                      恢复
                    </el-button>
-                   <el-button
-                     link
-                     size="small"
-                     @click="goToFaceQualityReview"
-                   >
-                     在质检页查看
-                   </el-button>
                  </div>
                </el-collapse-item>
              </el-collapse>
 
-             <!-- 待质检样本 -->
+             <!-- 历史待质检样本：模块已下线，仅展示状态，不再跳转质检页 -->
              <el-collapse v-if="pendingReviewFaces.length > 0" class="pending-review-faces-collapse">
-               <el-collapse-item :title="`待质检样本（${pendingReviewFaces.length}）`" name="pending_review">
+               <el-collapse-item :title="`历史待质检样本（${pendingReviewFaces.length}）`" name="pending_review">
                  <div v-for="face in pendingReviewFaces" :key="face.id" class="excluded-face-item">
                    <img
                      :src="getFaceThumbnailUrl(face.id, String(imageVersion))"
@@ -261,18 +254,11 @@
                      class="excluded-face-thumb"
                    />
                    <div class="excluded-face-info">
-                     <el-tag size="small" type="info">待质检</el-tag>
+                     <el-tag size="small" type="info">历史待质检</el-tag>
                      <span class="excluded-face-meta">
                        置信度 {{ ((face.confidence ?? 0) * 100).toFixed(0) }}% · 质量 {{ ((face.quality_score ?? 0) * 100).toFixed(0) }}%
                      </span>
                    </div>
-                   <el-button
-                     link
-                     size="small"
-                     @click="goToFaceQualityReview"
-                   >
-                     在质检页查看
-                   </el-button>
                  </div>
                </el-collapse-item>
              </el-collapse>
@@ -873,11 +859,6 @@ const handleRestoreFace = async (faceId: number) => {
   } finally {
     excluding.value = false
   }
-}
-
-// 跳转到人脸质检审核页（保留当前照片上下文，便于在质检页处理该照片样本）。
-const goToFaceQualityReview = () => {
-  router.push({ name: 'FaceQualityReview', query: { photo_id: String(photo.value?.id ?? '') } })
 }
 
 const loadPhotoPeople = async (photoId?: number) => {

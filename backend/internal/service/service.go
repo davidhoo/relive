@@ -130,13 +130,8 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 	peopleSvc.(*peopleService).setMergeSuggestionDirtyHook(mergeSuggestionService.MarkDirty)
 	peopleSvc.(*peopleService).setANNCandidateFn(mergeSuggestionService.(*personMergeSuggestionService).FindCandidates)
 	peopleSvc.(*peopleService).SetFeedbackEventRepo(repos.FeedbackEvent)
-	// 人脸质检审核服务：复用 peopleService 的写入与受影响人物刷新能力。
-	faceQualitySvc := NewFaceQualityService(peopleSvc.(*peopleService))
-	// 存量质检审计后台任务：低并对历史 Face 生成质检候选与审计事件，不改人物归属。
-	faceQualityBackfill := NewFaceQualityBackfill(peopleSvc.(*peopleService), backgroundCoordinator, repos.Config)
-	// 历史重评分运行管理：可暂停/恢复进度的 run + 目标快照，调用 score-known-faces 补证据。
-	faceQualityRescoreRepo := repository.NewFaceQualityRescoreRepository(db)
-	faceQualityRescoreSvc := NewFaceQualityRescoreService(peopleSvc.(*peopleService), faceQualityRescoreRepo, backgroundCoordinator)
+	// 人脸质检模块已退役：不再创建/注入审核、backfill、rescore 服务。
+	// 旧接口由 handler 统一返回 410；历史数据迁移见 retire-face-quality 工具。
 	// 后台任务治理：把统一准入控制器注入 peopleService（Task 8 起前台 mutation 通过它
 	// 注册 foreground scope）。Task 7 先注入；foreground scope 接管在 Task 8 完成。
 	peopleSvc.(*peopleService).SetBackgroundCoordinator(backgroundCoordinator)
@@ -277,9 +272,9 @@ func NewServices(repos *repository.Repositories, cfg *config.Config, db *gorm.DB
 		BackgroundCoordinator:   backgroundCoordinator,
 		BackgroundLoadSampler:   loadSampler,
 		PersonPhotoRepo:         repos.PersonPhoto,
-		FaceQuality:             faceQualitySvc,
-		FaceQualityBackfill:     faceQualityBackfill,
-		FaceQualityRescore:      faceQualityRescoreSvc,
+		FaceQuality:             nil,
+		FaceQualityBackfill:     nil,
+		FaceQualityRescore:      nil,
 		ProtoCacheRebuildStatus: peopleSvc.(*peopleService).ProtoCacheRebuildStatus,
 	}
 }

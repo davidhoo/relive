@@ -80,9 +80,24 @@ const (
 	ExclusionReasonLowQuality = "low_quality"
 )
 
+// 排除来源枚举（face_exclusions.source）
+// 历史数据默认 unknown；禁止把未知记录默认标成 manual 或自动推定来源。
+const (
+	ExclusionSourceManual  = "manual"
+	ExclusionSourceAuto    = "auto"
+	ExclusionSourceUnknown = "unknown"
+)
+
 // IsValidExclusionReason 校验排除原因是否合法
 func IsValidExclusionReason(reason string) bool {
 	return reason == ExclusionReasonNonFace || reason == ExclusionReasonLowQuality
+}
+
+// IsValidExclusionSource 校验排除来源是否合法
+func IsValidExclusionSource(source string) bool {
+	return source == ExclusionSourceManual ||
+		source == ExclusionSourceAuto ||
+		source == ExclusionSourceUnknown
 }
 
 // FaceExclusion 持久化的人脸排除记录，跨重新检测保持排除结论
@@ -93,10 +108,12 @@ type FaceExclusion struct {
 	PhotoID      uint      `gorm:"not null;index:idx_face_exclusion_photo" json:"photo_id"`
 	SourceFaceID uint      `gorm:"not null" json:"source_face_id"`
 	Reason       string    `gorm:"type:varchar(20);not null" json:"reason"`
-	BBoxX        float64   `gorm:"not null" json:"bbox_x"`
-	BBoxY        float64   `gorm:"not null" json:"bbox_y"`
-	BBoxWidth    float64   `gorm:"not null" json:"bbox_width"`
-	BBoxHeight   float64   `gorm:"not null" json:"bbox_height"`
+	// Source 排除来源：manual / auto / unknown。历史缺省为 unknown。
+	Source     string  `gorm:"type:varchar(10);not null;default:'unknown';index:idx_face_exclusion_source" json:"source"`
+	BBoxX      float64 `gorm:"not null" json:"bbox_x"`
+	BBoxY      float64 `gorm:"not null" json:"bbox_y"`
+	BBoxWidth  float64 `gorm:"not null" json:"bbox_width"`
+	BBoxHeight float64 `gorm:"not null" json:"bbox_height"`
 }
 
 func (FaceExclusion) TableName() string {

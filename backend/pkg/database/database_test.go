@@ -147,6 +147,40 @@ func TestAutoMigrateAddsPhotoPeopleExclusion(t *testing.T) {
 	}
 }
 
+func TestMigrateFaceExclusionSourceDefaultsUnknown(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.AppConfig{}))
+
+	require.NoError(t, db.Exec(`CREATE TABLE face_exclusions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		created_at datetime,
+		updated_at datetime,
+		photo_id INTEGER NOT NULL,
+		source_face_id INTEGER NOT NULL,
+		reason VARCHAR(20) NOT NULL,
+		bbox_x REAL NOT NULL,
+		bbox_y REAL NOT NULL,
+		bbox_width REAL NOT NULL,
+		bbox_height REAL NOT NULL
+	)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO face_exclusions
+		(photo_id, source_face_id, reason, bbox_x, bbox_y, bbox_width, bbox_height)
+		VALUES (1, 2, 'non_face', 0.1, 0.1, 0.2, 0.2)`).Error)
+
+	require.NoError(t, migrateFaceExclusionSourceColumn(db))
+	require.True(t, db.Migrator().HasColumn(&model.FaceExclusion{}, "source"))
+
+	var source string
+	require.NoError(t, db.Raw(`SELECT source FROM face_exclusions WHERE id = 1`).Scan(&source).Error)
+	assert.Equal(t, model.ExclusionSourceUnknown, source)
+
+	var cfg model.AppConfig
+	require.NoError(t, db.Where("key = ?", "migration.face_exclusion_source_v1").First(&cfg).Error)
+
+	require.NoError(t, migrateFaceExclusionSourceColumn(db))
+}
+
 func TestAutoMigrateAddsPeopleFeedbackIndexes(t *testing.T) {
 	db := openMigratedTestDB(t)
 

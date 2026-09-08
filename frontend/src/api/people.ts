@@ -4,14 +4,6 @@ import type { Photo } from '@/types/photo'
 import type {
   ExclusionReason,
   Face,
-  FaceQualityAction,
-  FaceQualityDecisionResult,
-  FaceQualityRescoreRun,
-  FaceQualityRescoreRunCreateRequest,
-  FaceQualityRestoreResult,
-  FaceQualityReviewPage,
-  FaceQualityReviewParams,
-  FaceQualityStats,
   PeopleBackgroundLogsResponse,
   PeopleListParams,
   PeopleMergeJob,
@@ -101,75 +93,6 @@ export const peopleApi = {
       excluded,
       reason: excluded ? reason : undefined,
     })
-  },
-
-  // ---- 人脸质检审核 ----
-
-  getFaceQualityStats() {
-    return http.get<ApiResponse<FaceQualityStats>>('/people/face-quality/stats')
-  },
-
-  listFaceQualityReviews(params?: FaceQualityReviewParams) {
-    return http.get<ApiResponse<FaceQualityReviewPage>>('/people/face-quality/reviews', { params })
-  },
-
-  applyFaceQualityDecision(eventIds: number[], action: FaceQualityAction, reason?: string) {
-    return http.patch<ApiResponse<FaceQualityDecisionResult>>('/people/faces/quality-decision', {
-      event_ids: eventIds,
-      action,
-      reason,
-    })
-  },
-
-  restoreAutoFaceQuality(ruleVersion: string, limit?: number) {
-    return http.post<ApiResponse<FaceQualityRestoreResult>>('/people/face-quality/restore-auto', {
-      rule_version: ruleVersion,
-      limit,
-    })
-  },
-
-  // ---- 历史重评分运行 ----
-
-  listFaceQualityRescoreRuns(limit?: number) {
-    return http.get<ApiResponse<{ items: FaceQualityRescoreRun[] }>>('/people/face-quality/rescore-runs', {
-      params: limit ? { limit } : undefined,
-    })
-  },
-
-  getFaceQualityRescoreRun(id: number) {
-    return http.get<ApiResponse<FaceQualityRescoreRun>>(`/people/face-quality/rescore-runs/${id}`)
-  },
-
-  createFaceQualityRescoreRun(req: FaceQualityRescoreRunCreateRequest) {
-    return http.post<ApiResponse<FaceQualityRescoreRun>>('/people/face-quality/rescore-runs', req)
-  },
-
-  pauseFaceQualityRescoreRun(id: number) {
-    return http.post<ApiResponse<void>>(`/people/face-quality/rescore-runs/${id}/pause`)
-  },
-
-  resumeFaceQualityRescoreRun(id: number) {
-    return http.post<ApiResponse<void>>(`/people/face-quality/rescore-runs/${id}/resume`)
-  },
-
-  cancelFaceQualityRescoreRun(id: number) {
-    return http.post<ApiResponse<void>>(`/people/face-quality/rescore-runs/${id}/cancel`)
-  },
-
-  restoreAutoFaceQualityRescoreRun(id: number, limit?: number) {
-    return http.post<ApiResponse<FaceQualityRestoreResult>>(
-      `/people/face-quality/rescore-runs/${id}/restore-auto`,
-      null,
-      { params: limit ? { limit } : undefined },
-    )
-  },
-
-  // 按来源 run 重试：只快照该 run 的当前失败事件，创建新的 shadow calibration。
-  retryFaceQualityRescoreRun(id: number) {
-    return http.post<ApiResponse<FaceQualityRescoreRun>>(
-      `/people/face-quality/rescore-runs/${id}/retry`,
-      null,
-    )
   },
 
   getTask() {

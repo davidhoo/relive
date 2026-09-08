@@ -298,6 +298,10 @@ func AutoMigrate(db *gorm.DB) error {
 		log.Printf("[database] warning: face exclusion columns migration failed: %v", err)
 	}
 
+	if err := migrateFaceExclusionSourceColumn(db); err != nil {
+		log.Printf("[database] warning: face exclusion source column migration failed: %v", err)
+	}
+
 	if err := migrateFaceQualityColumns(db); err != nil {
 		log.Printf("[database] warning: face quality columns migration failed: %v", err)
 	}
@@ -358,6 +362,38 @@ func migrateFaceExclusionColumns(db *gorm.DB) error {
 	}
 
 	log.Printf("[database] face exclusion columns added")
+	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
+	return nil
+}
+
+// migrateFaceExclusionSourceColumn 给 face_exclusions 补 source 列。
+// 历史行一律 unknown，禁止默认 manual 或自动推定来源。
+func migrateFaceExclusionSourceColumn(db *gorm.DB) error {
+	const migrationKey = "migration.face_exclusion_source_v1"
+
+	var cfg model.AppConfig
+	if err := db.Where("key = ?", migrationKey).First(&cfg).Error; err == nil {
+		return nil
+	}
+
+	log.Printf("[database] adding face_exclusions.source column...")
+
+	if db.Migrator().HasTable(&model.FaceExclusion{}) {
+		if !db.Migrator().HasColumn(&model.FaceExclusion{}, "source") {
+			if err := db.Exec("ALTER TABLE face_exclusions ADD COLUMN source VARCHAR(10) NOT NULL DEFAULT 'unknown'").Error; err != nil {
+				return fmt.Errorf("add face_exclusions.source column: %w", err)
+			}
+		}
+		// 显式回填，避免个别 SQLite 构建对 DEFAULT 行为不一致。
+		if err := db.Exec("UPDATE face_exclusions SET source = 'unknown' WHERE source IS NULL OR TRIM(source) = ''").Error; err != nil {
+			return fmt.Errorf("backfill face_exclusions.source unknown: %w", err)
+		}
+		if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_face_exclusion_source ON face_exclusions(source)").Error; err != nil {
+			return fmt.Errorf("create idx_face_exclusion_source: %w", err)
+		}
+	}
+
+	log.Printf("[database] face_exclusions.source column ready")
 	db.Create(&model.AppConfig{Key: migrationKey, Value: "done"})
 	return nil
 }

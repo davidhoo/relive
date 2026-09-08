@@ -37,6 +37,8 @@ type fakePeopleMLClient struct {
 	// verifyStatus 按 target 顺序返回的验证状态（face/no_face/uncertain/error）。nil 时全部 no_face。
 	verifyStatus []string
 	verifyErr    error
+	// verifyCalls 记录独立验证被调用次数；任务 3 起正常检测不得再调。
+	verifyCalls int32
 	// healthReady 控制 Health() 返回的就绪判定。默认 true（既有测试不涉及 v2 门禁）；
 	// v2 verifier-unavailable 用例显式置 false。
 	healthReady bool
@@ -70,6 +72,7 @@ func (c *fakePeopleMLClient) ScoreKnownFaces(ctx context.Context, req mlclient.S
 
 // VerifyKnownFaceCrops 满足 PeopleMLClient 接口；测试默认返回 no_face（v2 默认）。
 func (c *fakePeopleMLClient) VerifyKnownFaceCrops(ctx context.Context, req mlclient.VerifyKnownFaceCropsRequest) (*mlclient.VerifyKnownFaceCropsResponse, error) {
+	atomic.AddInt32(&c.verifyCalls, 1)
 	if c.verifyErr != nil {
 		return nil, c.verifyErr
 	}
@@ -5499,15 +5502,12 @@ func writePlainJPEGFile(t *testing.T, path string, width, height int) {
 }
 
 // TestFilterDetectionsByIndependentVerification_NoFaceKeptForReview
-// 主检测过线（>=0.65）+ 独立验证 no_face 的候选不得静默丢弃：保留并置 VerifierStatus=no_face，
-// 由 ApplyDetectionResult 写 review_required。实时是单信号路径，没有历史 enforce 的双信号门禁，
-// 真实脸不能因一次目标未匹配而丢失。
+// 独立验证已退役：函数直接原样返回候选，不再调 ML、不改 VerifierStatus。
 func TestFilterDetectionsByIndependentVerification_NoFaceKeptForReview(t *testing.T) {
 	dir := t.TempDir()
 	jpg := filepath.Join(dir, "p.jpg")
 	writePlainJPEGFile(t, jpg, 200, 200)
 
-	// 两个候选：第一个 no_face（保留待质检），第二个 face（正常保留）。
 	client := &fakePeopleMLClient{verifyStatus: []string{"no_face", "face"}}
 	svc, _ := newPeopleServiceForTest(t, client)
 	photo := &model.Photo{FilePath: jpg, ManualRotation: 0, FaceProcessStatus: model.FaceProcessStatusReady}
@@ -5517,12 +5517,13 @@ func TestFilterDetectionsByIndependentVerification_NoFaceKeptForReview(t *testin
 		{BBox: model.BoundingBox{X: 0.5, Y: 0.5, Width: 0.25, Height: 0.25}, Confidence: 0.9},
 	}
 	got := svc.filterDetectionsByIndependentVerification(photo, faces)
-	require.Len(t, got, 2, "no_face 候选应保留待质检，不得剔除")
-	assert.Equal(t, "no_face", got[0].VerifierStatus)
-	assert.Equal(t, "face", got[1].VerifierStatus)
+	require.Len(t, got, 2)
+	assert.Equal(t, "", got[0].VerifierStatus)
+	assert.Equal(t, "", got[1].VerifierStatus)
+	assert.Equal(t, int32(0), atomic.LoadInt32(&client.verifyCalls))
 }
 
-// TestFilterDetectionsByIndependentVerification_UncertainMarked uncertain 候选保留但标记。
+// TestFilterDetectionsByIndependentVerification_UncertainMarked 退役后 uncertain 也不再标记。
 func TestFilterDetectionsByIndependentVerification_UncertainMarked(t *testing.T) {
 	dir := t.TempDir()
 	jpg := filepath.Join(dir, "p.jpg")
@@ -5536,11 +5537,12 @@ func TestFilterDetectionsByIndependentVerification_UncertainMarked(t *testing.T)
 		{BBox: model.BoundingBox{X: 0.2, Y: 0.2, Width: 0.25, Height: 0.25}, Confidence: 0.9},
 	}
 	got := svc.filterDetectionsByIndependentVerification(photo, faces)
-	require.Len(t, got, 1, "uncertain 候选应保留")
-	assert.Equal(t, "uncertain", got[0].VerifierStatus)
+	require.Len(t, got, 1)
+	assert.Equal(t, "", got[0].VerifierStatus)
+	assert.Equal(t, int32(0), atomic.LoadInt32(&client.verifyCalls))
 }
 
-// TestFilterDetectionsByIndependentVerification_VerifierErrorFailOpen 验证器调用失败 → fail-open 保留全部。
+// TestFilterDetectionsByIndependentVerification_VerifierErrorFailOpen 退役后即使客户端会报错也不调用。
 func TestFilterDetectionsByIndependentVerification_VerifierErrorFailOpen(t *testing.T) {
 	dir := t.TempDir()
 	jpg := filepath.Join(dir, "p.jpg")
@@ -5554,17 +5556,17 @@ func TestFilterDetectionsByIndependentVerification_VerifierErrorFailOpen(t *test
 		{BBox: model.BoundingBox{X: 0.2, Y: 0.2, Width: 0.25, Height: 0.25}, Confidence: 0.9},
 	}
 	got := svc.filterDetectionsByIndependentVerification(photo, faces)
-	require.Len(t, got, 1, "验证器故障应 fail-open 不丢脸")
+	require.Len(t, got, 1)
+	assert.Equal(t, int32(0), atomic.LoadInt32(&client.verifyCalls))
 }
 
-// TestPeopleService_RealtimeNoFaceBecomesReviewRequired
-// 主检测过线 + 独立验证 no_face 的候选不得静默丢弃：必须落库为 review_required，
-// 不删除 Face、不进入人物聚类（person_id 为空）。
-func TestPeopleService_RealtimeNoFaceBecomesReviewRequired(t *testing.T) {
+// TestPeopleService_RealtimeNoFaceStaysPendingWithoutAutoQuality
+// 下线实时自动质检后：主检测过线候选即使独立验证为 no_face，也按普通检测落库 pending，
+// 不再强制 review_required；是否排除只认人物管理人工排除。
+func TestPeopleService_RealtimeNoFaceStaysPendingWithoutAutoQuality(t *testing.T) {
 	rootDir := t.TempDir()
 	photoPath := createTestImageFile(t, rootDir, "admit.jpg")
 
-	// 主检测返回两张脸；独立验证：第一张 no_face（落库 review_required），第二张 face（正常）。
 	client := &fakePeopleMLClient{
 		responses: map[string]*mlclient.DetectFacesResponse{
 			photoPath: {
@@ -5577,6 +5579,8 @@ func TestPeopleService_RealtimeNoFaceBecomesReviewRequired(t *testing.T) {
 		verifyStatus: []string{"no_face", "face"},
 	}
 	svc, db := newPeopleServiceForTest(t, client)
+	svc.faceQualityRepo = nil
+	svc.config.People.FaceQualityMode = "enforce"
 	svc.config.Photos.ThumbnailPath = filepath.Join(rootDir, ".thumbnails")
 
 	photoRepo := repository.NewPhotoRepository(db)
@@ -5593,24 +5597,16 @@ func TestPeopleService_RealtimeNoFaceBecomesReviewRequired(t *testing.T) {
 
 	faces, err := faceRepo.ListByPhotoID(photo.ID)
 	require.NoError(t, err)
-	// 两张脸都落库：no_face 候选不再静默丢弃，而是落库为 review_required。
-	require.Len(t, faces, 2, "no_face 候选应落库为 review_required，不得静默删除")
+	require.Len(t, faces, 2)
 
-	// 按 bbox 定位两张脸，断言 no_face 候选为 review_required 且不聚类。
-	var noFaceFace, faceFace *model.Face
-	for i := range faces {
-		if faces[i].BBoxX < 0.3 {
-			noFaceFace = faces[i]
-		} else {
-			faceFace = faces[i]
-		}
+	for _, face := range faces {
+		assert.Equal(t, model.FaceClusterStatusPending, face.ClusterStatus)
+		assert.NotContains(t, face.QualityReasonsCSV, "verifier_no_target_match")
 	}
-	require.NotNil(t, noFaceFace, "no_face 候选必须落库")
-	assert.Equal(t, model.FaceClusterStatusReviewRequired, noFaceFace.ClusterStatus, "no_face 候选须为 review_required")
-	assert.Nil(t, noFaceFace.PersonID, "review_required 不得进入人物聚类")
-	// 原因码须含 verifier_no_target_match。
-	assert.Contains(t, noFaceFace.QualityReasonsCSV, "verifier_no_target_match")
+	updated, err := photoRepo.GetByID(photo.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, updated.FaceCount)
 
-	require.NotNil(t, faceFace)
-	assert.NotEqual(t, model.FaceClusterStatusReviewRequired, faceFace.ClusterStatus)
+	assert.Equal(t, int32(0), atomic.LoadInt32(&client.verifyCalls),
+		"正常检测不得再调用独立验证端点")
 }
