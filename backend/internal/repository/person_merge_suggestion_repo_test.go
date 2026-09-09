@@ -311,6 +311,48 @@ func TestPersonMergeSuggestionRepository_MarkItemsStatusOnTerminalSuggestionNoOp
 	assert.Empty(t, mergedItems)
 }
 
+func TestPersonMergeSuggestionRepository_PersistsIdentityMetadata(t *testing.T) {
+	db := setupTestDB(t)
+	defer teardownTestDB(db)
+
+	repo := NewPersonMergeSuggestionRepository(db)
+	margin := 0.12
+	require.NoError(t, repo.ReplacePendingForTarget(1200, model.PersonCategoryFamily, []model.PersonMergeSuggestionItem{
+		{
+			CandidatePersonID:          1201,
+			SimilarityScore:            0.58,
+			Rank:                       1,
+			MatchSource:                model.PersonMergeMatchSourceIdentityProfile,
+			Reason:                     "score_below_threshold",
+			CandidateProfileGeneration: 7,
+			Margin:                     &margin,
+			EngineVersion:              "identity-engine-v1",
+			StrategyVersion:            "identity-suggest-v1",
+			ConfigFingerprint:          "fp-abc",
+			IndexGeneration:            3,
+			TargetProfileGeneration:    5,
+		},
+	}))
+
+	suggestions, _, err := repo.ListPending(1, 10)
+	require.NoError(t, err)
+	require.Len(t, suggestions, 1)
+	assert.Equal(t, "identity-engine-v1", suggestions[0].EngineVersion)
+	assert.Equal(t, "identity-suggest-v1", suggestions[0].StrategyVersion)
+	assert.Equal(t, "fp-abc", suggestions[0].ConfigFingerprint)
+	assert.Equal(t, 3, suggestions[0].IndexGeneration)
+	assert.Equal(t, 5, suggestions[0].TargetProfileGeneration)
+
+	items, err := repo.GetItems(suggestions[0].ID, model.PersonMergeSuggestionItemStatusPending)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, model.PersonMergeMatchSourceIdentityProfile, items[0].MatchSource)
+	assert.Equal(t, "score_below_threshold", items[0].Reason)
+	assert.Equal(t, 7, items[0].CandidateProfileGeneration)
+	require.NotNil(t, items[0].Margin)
+	assert.InDelta(t, 0.12, *items[0].Margin, 1e-9)
+}
+
 func TestPersonMergeSuggestionRepository_PersistsMatchSourceAndWarning(t *testing.T) {
 	db := setupTestDB(t)
 	defer teardownTestDB(db)

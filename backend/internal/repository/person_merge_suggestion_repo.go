@@ -9,12 +9,15 @@ import (
 
 type PersonMergeSuggestionRepository interface {
 	ReplacePendingForTarget(targetPersonID uint, targetCategory string, items []model.PersonMergeSuggestionItem) error
+	FindPendingByTarget(targetPersonID uint) (*model.PersonMergeSuggestion, error)
 	ListPending(page, pageSize int) ([]*model.PersonMergeSuggestion, int64, error)
 	GetByID(id uint) (*model.PersonMergeSuggestion, error)
 	GetItems(suggestionID uint, status string) ([]*model.PersonMergeSuggestionItem, error)
 	MarkItemsStatus(suggestionID uint, candidateIDs []uint, status string) error
 	UpdateSuggestionStatus(id uint, status string, reviewedAt *time.Time) error
 	FindPendingSuggestionByCandidate(candidatePersonID uint) (*model.PersonMergeSuggestion, error)
+	// MarkPendingStaleReason 给指定目标的 pending 建议写入 stale_reason（保持 pending，标明需重验）。
+	MarkPendingStaleReason(targetPersonIDs []uint, reason string) (int64, error)
 }
 
 type personMergeSuggestionRepository struct {
@@ -64,11 +67,16 @@ func (r *personMergeSuggestionRepository) ReplacePendingForTarget(targetPersonID
 		}
 
 		suggestion := &model.PersonMergeSuggestion{
-			TargetPersonID:         targetPersonID,
-			TargetCategorySnapshot: targetCategory,
-			Status:                 model.PersonMergeSuggestionStatusPending,
-			CandidateCount:         len(items),
-			TopSimilarity:          topSimilarity(items),
+			TargetPersonID:          targetPersonID,
+			TargetCategorySnapshot:  targetCategory,
+			Status:                  model.PersonMergeSuggestionStatusPending,
+			CandidateCount:          len(items),
+			TopSimilarity:           topSimilarity(items),
+			EngineVersion:           items[0].EngineVersion,
+			StrategyVersion:         items[0].StrategyVersion,
+			ConfigFingerprint:       items[0].ConfigFingerprint,
+			IndexGeneration:         items[0].IndexGeneration,
+			TargetProfileGeneration: items[0].TargetProfileGeneration,
 		}
 		if err := tx.Create(suggestion).Error; err != nil {
 			return err
@@ -77,11 +85,14 @@ func (r *personMergeSuggestionRepository) ReplacePendingForTarget(targetPersonID
 		records := make([]model.PersonMergeSuggestionItem, 0, len(items))
 		for _, item := range items {
 			record := model.PersonMergeSuggestionItem{
-				SuggestionID:      suggestion.ID,
-				CandidatePersonID: item.CandidatePersonID,
-				SimilarityScore:   item.SimilarityScore,
-				Rank:              item.Rank,
-				Status:            model.PersonMergeSuggestionItemStatusPending,
+				SuggestionID:               suggestion.ID,
+				CandidatePersonID:          item.CandidatePersonID,
+				SimilarityScore:            item.SimilarityScore,
+				Rank:                       item.Rank,
+				Status:                     model.PersonMergeSuggestionItemStatusPending,
+				Reason:                     item.Reason,
+				CandidateProfileGeneration: item.CandidateProfileGeneration,
+				Margin:                     item.Margin,
 			}
 			// 保留来源与警告；未显式设置时按 legacy / 无警告兜底，保证历史与回退路径一致。
 			if item.MatchSource == model.PersonMergeMatchSourceIdentityProfile {
@@ -96,6 +107,32 @@ func (r *personMergeSuggestionRepository) ReplacePendingForTarget(targetPersonID
 		}
 		return tx.Create(&records).Error
 	})
+}
+
+func (r *personMergeSuggestionRepository) FindPendingByTarget(targetPersonID uint) (*model.PersonMergeSuggestion, error) {
+	var suggestion model.PersonMergeSuggestion
+	err := r.db.Where("target_person_id = ? AND status = ?", targetPersonID, model.PersonMergeSuggestionStatusPending).
+		Order("id DESC").
+		First(&suggestion).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &suggestion, nil
+}
+
+// MarkPendingStaleReason 为指定目标的 pending 建议写入 stale_reason，不改变 status。
+// 用于重试预算耗尽等场景：历史建议仍可见，但必须标明证据可能过期、审核前需重验。
+func (r *personMergeSuggestionRepository) MarkPendingStaleReason(targetPersonIDs []uint, reason string) (int64, error) {
+	if len(targetPersonIDs) == 0 || reason == "" {
+		return 0, nil
+	}
+	res := r.db.Model(&model.PersonMergeSuggestion{}).
+		Where("target_person_id IN ? AND status = ?", targetPersonIDs, model.PersonMergeSuggestionStatusPending).
+		Update("stale_reason", reason)
+	return res.RowsAffected, res.Error
 }
 
 func (r *personMergeSuggestionRepository) ListPending(page, pageSize int) ([]*model.PersonMergeSuggestion, int64, error) {

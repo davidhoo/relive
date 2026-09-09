@@ -33,6 +33,13 @@ const (
 	PersonMergeWarningSamePhotoCooccurrence = "same_photo_cooccurrence"
 )
 
+// 待审建议过期/需重验原因（写入 StaleReason，保留 pending 供展示，审核前须重验）。
+const (
+	// PersonMergeStaleReasonRetryExhausted 表示目标因技术不可用耗尽重试预算，
+	// 历史 pending 证据可能过期，不能无条件接受。
+	PersonMergeStaleReasonRetryExhausted = "retry_exhausted_needs_revalidation"
+)
+
 type PersonMergeSuggestion struct {
 	ID                     uint       `gorm:"primarykey" json:"id"`
 	CreatedAt              time.Time  `json:"created_at"`
@@ -78,6 +85,13 @@ type PersonMergeSuggestionItem struct {
 	CandidateProfileGeneration int `gorm:"not null;default:0" json:"candidate_profile_generation,omitempty"`
 	// Margin 是生成时最佳与次佳候选的分数差（可空表示单候选）。
 	Margin *float64 `json:"margin,omitempty"`
+
+	// 以下字段仅用于 ReplacePending 写入父建议行，不落 item 表。
+	EngineVersion           string `gorm:"-" json:"-"`
+	StrategyVersion         string `gorm:"-" json:"-"`
+	ConfigFingerprint       string `gorm:"-" json:"-"`
+	IndexGeneration         int    `gorm:"-" json:"-"`
+	TargetProfileGeneration int    `gorm:"-" json:"-"`
 }
 
 func (PersonMergeSuggestionItem) TableName() string {

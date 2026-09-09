@@ -42,6 +42,10 @@ type personMergeSuggestionState struct {
 	CursorTargetID  uint      `json:"cursor_target_id"`
 	LastRunAt       time.Time `json:"last_run_at,omitempty"`
 	DirtyGeneration uint64    `json:"dirty_generation,omitempty"`
+	// RetryTargets 记录技术不可用目标及预算；重启后保留。
+	RetryTargets []mergeSuggestionRetryEntry `json:"retry_targets,omitempty"`
+	// RetryOnly 为 true 时本轮只处理到期重试目标，不做全库 cursor 扫描。
+	RetryOnly bool `json:"retry_only,omitempty"`
 }
 
 type personMergeSuggestionService struct {
@@ -62,20 +66,20 @@ type personMergeSuggestionService struct {
 	profileProvider PersonProfileSimilarityProvider
 
 	// identityMatchingEngine + mode/strategy：primary 模式走统一引擎，禁止 legacy 隐式回退。
-	identityMatchingEngine  *IdentityMatchingEngine
-	identityProfileMode     string
-	identitySuggestStrategy IdentityStrategy
+	identityMatchingEngine    *IdentityMatchingEngine
+	identityProfileMode       string
+	identitySuggestStrategy   IdentityStrategy
 	identityConfigFingerprint string
 
 	mu             sync.RWMutex
 	task           *model.PersonMergeSuggestionTask
 	state          personMergeSuggestionState
 	backgroundLogs []string
-	annMu sync.Mutex // guards all ANN build state below for concurrent access
+	annMu          sync.Mutex // guards all ANN build state below for concurrent access
 	// annBuildCond 在 annMu 上等待 annBuilding 完成通知。ensureANNIndex 的并发等待者用它
 	// 复用第一个调用者的构建结果，避免重复 DB 读取与 HNSW 建图。
 	annBuildCond *sync.Cond
-	annIdx *annIndex
+	annIdx       *annIndex
 	// ANN rebuild 单实例与 generation 协调：
 	//   - annGeneration：单调递增，每次 MarkDirty 推进。记录“最新一次被标记 dirty 的 generation”。
 	//   - targetGeneration：当前正在构建（或最近一次启动构建）的目标 generation。
@@ -117,15 +121,20 @@ type personMergeSuggestionService struct {
 }
 
 type mergeSuggestionCandidate struct {
-	targetID     uint
-	candidateID  uint
-	score        float64
-	targetPerson *model.Person
-	source       string // legacy / identity_profile
-	warning      string // "" / same_photo_cooccurrence
-	reason       string
-	margin       *float64
-	profileGen   int
+	targetID          uint
+	candidateID       uint
+	score             float64
+	targetPerson      *model.Person
+	source            string // legacy / identity_profile
+	warning           string // "" / same_photo_cooccurrence
+	reason            string
+	margin            *float64
+	profileGen        int
+	engineVersion     string
+	strategyVersion   string
+	configFingerprint string
+	indexGeneration   int
+	targetProfileGen  int
 }
 
 // mergeSuggestionProfileK 是非 legacy 模式下每个目标人物从身份画像召回的最大候选数。
@@ -494,6 +503,8 @@ func mergeSourceRank(source string) int {
 }
 
 // buildItemsFromBest 将全局 bestByCandidate 按 target 聚合，分数降序、candidate ID 升序排序并赋予 rank。
+// 仅返回 bestByCandidate 中出现的目标；调用方若需对「确实算完且无建议」的目标写空替换，
+// 应自行保证这些目标以空 slice 出现在返回 map 中。
 func (s *personMergeSuggestionService) buildItemsFromBest(bestByCandidate map[uint]mergeSuggestionCandidate, targets []*model.Person) map[uint][]model.PersonMergeSuggestionItem {
 	assignments := make(map[uint][]model.PersonMergeSuggestionItem, len(targets))
 	for _, assignment := range bestByCandidate {
@@ -502,14 +513,19 @@ func (s *personMergeSuggestionService) buildItemsFromBest(bestByCandidate map[ui
 			source = model.PersonMergeMatchSourceLegacy
 		}
 		assignments[assignment.targetID] = append(assignments[assignment.targetID], model.PersonMergeSuggestionItem{
-			CandidatePersonID: assignment.candidateID,
-			SimilarityScore:   assignment.score,
-			Status:            model.PersonMergeSuggestionItemStatusPending,
-			MatchSource:       source,
-			Warning:           assignment.warning,
-			Reason:            assignment.reason,
-			Margin:            assignment.margin,
+			CandidatePersonID:          assignment.candidateID,
+			SimilarityScore:            assignment.score,
+			Status:                     model.PersonMergeSuggestionItemStatusPending,
+			MatchSource:                source,
+			Warning:                    assignment.warning,
+			Reason:                     assignment.reason,
+			Margin:                     assignment.margin,
 			CandidateProfileGeneration: assignment.profileGen,
+			EngineVersion:              assignment.engineVersion,
+			StrategyVersion:            assignment.strategyVersion,
+			ConfigFingerprint:          assignment.configFingerprint,
+			IndexGeneration:            assignment.indexGeneration,
+			TargetProfileGeneration:    assignment.targetProfileGen,
 		})
 	}
 	for _, target := range targets {
@@ -664,7 +680,7 @@ func (s *personMergeSuggestionService) SetIdentityConfigFingerprint(fp string) {
 }
 
 // primaryAssignments 使用统一引擎生成推荐，禁止任何 legacy 隐式回退。
-// 硬冲突直接丢弃；unavailable 目标标记到任务状态，不伪装成无推荐。
+// 硬冲突直接丢弃；unavailable 目标不进入返回 map（调用方不得对其空替换 pending）。
 func (s *personMergeSuggestionService) primaryAssignments(targets []*model.Person, cannotLinkCache map[uint]map[uint]bool) (map[uint][]model.PersonMergeSuggestionItem, error) {
 	strategy := s.identitySuggestStrategy
 	if strategy.Name == "" && s.config != nil {
@@ -689,7 +705,17 @@ func (s *personMergeSuggestionService) primaryAssignments(targets []*model.Perso
 	results := s.identityMatchingEngine.SimilarPeople(targetIDs, opts)
 
 	bestByCandidate := make(map[uint]mergeSuggestionCandidate)
+	completeTargets := make([]*model.Person, 0, len(targets))
 	var unavailableTargets []uint
+	unavailReasonByTarget := make(map[uint]string)
+	indexGen := 0
+	if s.identityMatchingEngine != nil {
+		indexGen = s.identityMatchingEngine.IndexGeneration()
+	}
+	engineVersion := identityEngineVersion
+	if s.identityMatchingEngine != nil {
+		engineVersion = s.identityMatchingEngine.EngineVersion()
+	}
 
 	for _, tid := range targetIDs {
 		res, ok := results[tid]
@@ -700,12 +726,21 @@ func (s *personMergeSuggestionService) primaryAssignments(targets []*model.Perso
 		switch res.Status {
 		case IdentityMatchStatusUnavailable, IdentityMatchStatusInvalid:
 			unavailableTargets = append(unavailableTargets, tid)
+			if res.BlockReason != "" {
+				unavailReasonByTarget[tid] = res.BlockReason
+			} else {
+				unavailReasonByTarget[tid] = string(res.Status)
+			}
 			continue
 		case IdentityMatchStatusNoCandidate:
+			if p := targetByID[tid]; p != nil {
+				completeTargets = append(completeTargets, p)
+			}
 			continue
+		case IdentityMatchStatusHardConflict:
+			// 最佳候选硬冲突：本目标仍算计算完成（不写该候选），继续看 Candidates 列表。
 		}
 
-		// 对召回候选批量 ComparePeople 做精确分数（与 SimilarPeople 共用引擎）
 		pairs := make([]PersonPair, 0, len(res.Candidates))
 		for _, c := range res.Candidates {
 			if c.PersonID == 0 || cannotLinkBlocked(cannotLinkCache, tid, c.PersonID) {
@@ -715,9 +750,18 @@ func (s *personMergeSuggestionService) primaryAssignments(targets []*model.Perso
 		}
 		comparisons := s.identityMatchingEngine.ComparePeople(pairs)
 
+		pairUnavailable := res.IncompleteEvidence
+		if res.IncompleteEvidence {
+			unavailReasonByTarget[tid] = blockProfileUnavailable
+		}
+		acceptedForTarget := false
 		for _, pr := range pairs {
 			cmp := comparisons[pr]
-			if cmp.Status == IdentityMatchStatusHardConflict || cmp.Status == IdentityMatchStatusUnavailable || cmp.Status == IdentityMatchStatusInvalid {
+			if cmp.Status == IdentityMatchStatusUnavailable || cmp.Status == IdentityMatchStatusInvalid {
+				pairUnavailable = true
+				continue
+			}
+			if cmp.Status == IdentityMatchStatusHardConflict {
 				continue
 			}
 			if cmp.Best == nil || cmp.Best.PersonID == 0 {
@@ -735,29 +779,75 @@ func (s *personMergeSuggestionService) primaryAssignments(targets []*model.Perso
 				m := cmp.Margin
 				margin = &m
 			}
+			acceptedForTarget = true
+			candGen := 0
+			if cmp.Best != nil {
+				candGen = cmp.Best.ProfileGeneration
+			}
 			s.updateBestCandidate(bestByCandidate, mergeSuggestionCandidate{
-				targetID:     tid,
-				candidateID:  dec.PersonID,
-				score:        dec.Score,
-				targetPerson: targetByID[tid],
-				source:       model.PersonMergeMatchSourceIdentityProfile,
-				warning:      "", // primary 硬阻断，不写 warning 推荐
-				reason:       cmp.BlockReason,
-				margin:       margin,
-				profileGen:   0,
+				targetID:          tid,
+				candidateID:       dec.PersonID,
+				score:             dec.Score,
+				targetPerson:      targetByID[tid],
+				source:            model.PersonMergeMatchSourceIdentityProfile,
+				warning:           "",
+				reason:            cmp.BlockReason,
+				margin:            margin,
+				profileGen:        candGen,
+				engineVersion:     engineVersion,
+				strategyVersion:   strategy.Version,
+				configFingerprint: s.identityConfigFingerprint,
+				indexGeneration:   indexGen,
+				targetProfileGen:  cmp.TargetProfileGeneration,
 			})
 		}
-	}
-
-	if len(unavailableTargets) > 0 {
-		s.mu.Lock()
-		if s.task != nil {
-			s.task.CurrentMessage = fmt.Sprintf("partial: %d targets waiting on identity engine", len(unavailableTargets))
+		if pairUnavailable && !acceptedForTarget {
+			// 必要配对不可用且无任何可写结果：禁止空替换。
+			unavailableTargets = append(unavailableTargets, tid)
+			continue
 		}
-		s.mu.Unlock()
+		if pairUnavailable {
+			// 有部分可写结果，仍记入重试，但允许写入已接受候选。
+			unavailableTargets = append(unavailableTargets, tid)
+		}
+		if p := targetByID[tid]; p != nil {
+			completeTargets = append(completeTargets, p)
+		}
 	}
 
-	return s.buildItemsFromBest(bestByCandidate, targets), nil
+	now := time.Now()
+	s.mu.Lock()
+	for _, tid := range unavailableTargets {
+		reason := unavailReasonByTarget[tid]
+		if reason == "" {
+			reason = blockProfileUnavailable
+		}
+		s.state.RetryTargets = upsertMergeSuggestionRetry(s.state.RetryTargets, tid, reason, now)
+	}
+	if len(unavailableTargets) > 0 {
+		msg := fmt.Sprintf("partial: %d targets waiting on identity engine", len(unavailableTargets))
+		if s.task != nil {
+			s.task.CurrentMessage = msg
+		}
+		s.appendBackgroundLogLocked(msg)
+	}
+	// 本批完整成功的目标从重试集合移除。
+	if len(completeTargets) > 0 {
+		done := make(map[uint]struct{}, len(completeTargets))
+		unavail := make(map[uint]struct{}, len(unavailableTargets))
+		for _, uid := range unavailableTargets {
+			unavail[uid] = struct{}{}
+		}
+		for _, p := range completeTargets {
+			if _, keep := unavail[p.ID]; !keep {
+				done[p.ID] = struct{}{}
+			}
+		}
+		s.state.RetryTargets = removeMergeSuggestionRetries(s.state.RetryTargets, done)
+	}
+	s.mu.Unlock()
+
+	return s.buildItemsFromBest(bestByCandidate, completeTargets), nil
 }
 
 // recordFeedbackEvent 在核心人物变更已提交后单独写入一条反馈事件。必须在任何
@@ -770,7 +860,17 @@ func (s *personMergeSuggestionService) recordFeedbackEvent(event *model.PeopleFe
 func (s *personMergeSuggestionService) GetTask() *model.PersonMergeSuggestionTask {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return clonePersonMergeSuggestionTask(s.task)
+	cloned := clonePersonMergeSuggestionTask(s.task)
+	if cloned == nil {
+		return nil
+	}
+	now := time.Now()
+	due, deferred, _ := classifyMergeSuggestionRetries(s.state.RetryTargets, now)
+	cloned.RetryDueCount = len(due)
+	cloned.RetryDeferredCount = len(deferred)
+	cloned.RetryTotalCount = len(s.state.RetryTargets)
+	cloned.Partial = cloned.RetryTotalCount > 0
+	return cloned
 }
 
 func (s *personMergeSuggestionService) GetStats() (*model.PersonMergeSuggestionStatsResponse, error) {
@@ -886,6 +986,7 @@ func (s *personMergeSuggestionService) Rebuild() error {
 
 	s.state.Dirty = true
 	s.state.CursorTargetID = 0
+	s.state.RetryOnly = false
 	s.annMu.Lock()
 	s.annIdx = nil
 	// Rebuild 推进 generation 并标记 dirty：下一次 ensureANNIndex 必须重新建图。
@@ -907,6 +1008,7 @@ func (s *personMergeSuggestionService) MarkDirty(reason string) error {
 
 	s.state.Dirty = true
 	s.state.CursorTargetID = 0
+	s.state.RetryOnly = false
 	s.state.DirtyGeneration++
 	// 推进 annGeneration 并标记 dirty。即使当前有 rebuild 正在进行，旧 rebuild 完成时
 	// 会发现 targetGeneration != annGeneration 而保持 pending，新 dirty 不会被清除。
@@ -944,29 +1046,41 @@ func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 		return nil
 	}
 
-	// 兜底重跑：距上次巡检超过配置时间自动标记 dirty
+	// 兜底重跑：距上次巡检超过配置时间自动标记 dirty；到期技术重试单独激活 RetryOnly。
 	if !s.state.Dirty {
-		staleSeconds := s.config.People.MergeSuggestionStaleSeconds
-		if staleSeconds <= 0 {
-			staleSeconds = 86400
-		}
-		if !s.state.LastRunAt.IsZero() && time.Since(s.state.LastRunAt) > time.Duration(staleSeconds)*time.Second {
+		now := time.Now()
+		dueIDs := dueMergeSuggestionRetryIDs(s.state.RetryTargets, now)
+		if len(dueIDs) > 0 {
 			s.state.Dirty = true
-			s.annMu.Lock()
-			s.annGeneration++
-			s.annDirty = true
-			s.annMu.Unlock()
-			s.appendBackgroundLogLocked(fmt.Sprintf("自动重跑: 距上次巡检超过 %d 秒", staleSeconds))
+			s.state.RetryOnly = true
+			s.state.CursorTargetID = 0
+			s.appendBackgroundLogLocked(fmt.Sprintf("到期重试 %d 个不可用目标", len(dueIDs)))
 			_ = s.saveStateLocked()
 		} else {
-			s.mu.Unlock()
-			return nil
+			staleSeconds := s.config.People.MergeSuggestionStaleSeconds
+			if staleSeconds <= 0 {
+				staleSeconds = 86400
+			}
+			if !s.state.LastRunAt.IsZero() && time.Since(s.state.LastRunAt) > time.Duration(staleSeconds)*time.Second {
+				s.state.Dirty = true
+				s.state.RetryOnly = false
+				s.annMu.Lock()
+				s.annGeneration++
+				s.annDirty = true
+				s.annMu.Unlock()
+				s.appendBackgroundLogLocked(fmt.Sprintf("自动重跑: 距上次巡检超过 %d 秒", staleSeconds))
+				_ = s.saveStateLocked()
+			} else {
+				s.mu.Unlock()
+				return nil
+			}
 		}
 	}
 
 	// 读取状态后释放锁
 	cursor := s.state.CursorTargetID
 	dirtyGen := s.state.DirtyGeneration
+	retryOnly := s.state.RetryOnly
 	s.mu.Unlock()
 
 	// Task 12：heavy work 前请求 BackgroundTaskMergeSuggestion 准入。被拒绝（foreground
@@ -991,21 +1105,59 @@ func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 	// Use background-dedicated repos for the heavy work in this slice.
 	_, _, _, bgMergeSuggestionRepo := s.bgRepos()
 
-	// 用 SQL cursor 分页获取目标人物（不再全量加载）
-	targets, err := s.listSuggestionTargets(cursor)
+	// 用 SQL cursor 分页获取目标人物（不再全量加载）；RetryOnly 只拉到期重试目标。
+	var targets []*model.Person
+	var err error
+	var droppedRetryIDs []uint
+	if retryOnly {
+		targets, droppedRetryIDs, err = s.listDueRetryTargets()
+	} else {
+		targets, err = s.listSuggestionTargets(cursor)
+	}
 	if err != nil {
 		return err
 	}
+	if len(droppedRetryIDs) > 0 {
+		s.mu.Lock()
+		dropSet := make(map[uint]struct{}, len(droppedRetryIDs))
+		for _, id := range droppedRetryIDs {
+			dropSet[id] = struct{}{}
+		}
+		s.state.RetryTargets = removeMergeSuggestionRetries(s.state.RetryTargets, dropSet)
+		s.appendBackgroundLogLocked(fmt.Sprintf("移除 %d 个不再合格的重试目标", len(droppedRetryIDs)))
+		_ = s.saveStateLocked()
+		s.mu.Unlock()
+	}
 	if len(targets) == 0 {
-		// 没有更多目标，本轮巡检完成 — 只写状态，不需要 writeGate
 		s.mu.Lock()
 		now := time.Now()
+		due, remaining, exhausted := classifyMergeSuggestionRetries(s.state.RetryTargets, now)
+		if len(exhausted) > 0 {
+			exIDs := make(map[uint]struct{}, len(exhausted))
+			for _, e := range exhausted {
+				exIDs[e.TargetID] = struct{}{}
+			}
+			s.state.RetryTargets = removeMergeSuggestionRetries(s.state.RetryTargets, exIDs)
+			s.appendBackgroundLogLocked(fmt.Sprintf("放弃 %d 个耗尽重试预算的目标", len(exhausted)))
+			s.markExhaustedRetriesNeedsRevalidationLocked(exhausted)
+		}
+		s.state.RetryTargets = remaining
+		dirty, retryOnlyNext := mergeSuggestionEndOfPassFlags(due, remaining)
 		s.state.CursorTargetID = 0
-		s.state.Dirty = false
+		s.state.Dirty = dirty
+		s.state.RetryOnly = retryOnlyNext
 		s.state.LastRunAt = now
 		s.task.Status = model.TaskStatusIdle
-		s.task.CurrentMessage = "本轮巡检完成"
 		s.task.StoppedAt = &now
+		switch {
+		case dirty && retryOnlyNext:
+			s.task.CurrentMessage = fmt.Sprintf("partial: %d targets due for identity retry", len(due))
+		case len(remaining) > 0:
+			s.task.CurrentMessage = fmt.Sprintf("partial: %d targets deferred for identity retry", len(remaining))
+			s.appendBackgroundLogLocked(s.task.CurrentMessage)
+		default:
+			s.task.CurrentMessage = "本轮巡检完成"
+		}
 		err := s.saveStateLocked()
 		s.mu.Unlock()
 		return err
@@ -1035,9 +1187,22 @@ func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 	s.task.CurrentMessage = "保存合并建议"
 
 	processedPairs := 0
+	skippedReplace := 0
 	writeErr := s.executeWrite(func() error {
 		for _, target := range targets {
-			items := assignments[target.ID]
+			items, ok := assignments[target.ID]
+			if !ok {
+				// primary 不可用目标：禁止空替换已有 pending。
+				skippedReplace++
+				continue
+			}
+			same, err := s.pendingSuggestionUnchanged(bgMergeSuggestionRepo, target.ID, items)
+			if err != nil {
+				return err
+			}
+			if same {
+				continue
+			}
 			if err := bgMergeSuggestionRepo.ReplacePendingForTarget(target.ID, target.Category, items); err != nil {
 				return err
 			}
@@ -1055,9 +1220,40 @@ func (s *personMergeSuggestionService) RunBackgroundSlice() error {
 	// detect the bump, keep cursor at 0 so the next run re-scans from scratch with
 	// a fresh ANN index built after the concurrent write.
 	if s.state.DirtyGeneration == dirtyGen {
-		s.state.CursorTargetID = targets[len(targets)-1].ID
+		if retryOnly {
+			// RetryOnly 批次不得落入全库扫描：按最新重试预算决定是否保持 Dirty。
+			s.state.CursorTargetID = 0
+			due, remaining, exhausted := classifyMergeSuggestionRetries(s.state.RetryTargets, now)
+			if len(exhausted) > 0 {
+				exIDs := make(map[uint]struct{}, len(exhausted))
+				for _, e := range exhausted {
+					exIDs[e.TargetID] = struct{}{}
+				}
+				s.state.RetryTargets = removeMergeSuggestionRetries(s.state.RetryTargets, exIDs)
+				s.appendBackgroundLogLocked(fmt.Sprintf("放弃 %d 个耗尽重试预算的目标", len(exhausted)))
+				s.markExhaustedRetriesNeedsRevalidationLocked(exhausted)
+				due, remaining, _ = classifyMergeSuggestionRetries(s.state.RetryTargets, now)
+			}
+			s.state.RetryTargets = remaining
+			dirty, ro := mergeSuggestionEndOfPassFlags(due, remaining)
+			s.state.Dirty = dirty
+			s.state.RetryOnly = ro
+		} else {
+			s.state.CursorTargetID = targets[len(targets)-1].ID
+		}
 	}
-	s.finishSliceLocked(now, processedPairs, fmt.Sprintf("完成 %d 个目标人物巡检", len(targets)))
+	msg := fmt.Sprintf("完成 %d 个目标人物巡检", len(targets))
+	if skippedReplace > 0 {
+		msg = fmt.Sprintf("完成 %d 个目标人物巡检（跳过 %d 个不可用目标的空替换）", len(targets), skippedReplace)
+	}
+	if retryOnly {
+		if s.state.Dirty && s.state.RetryOnly {
+			msg = fmt.Sprintf("partial: retry batch done, %d targets still due", len(dueMergeSuggestionRetryIDs(s.state.RetryTargets, now)))
+		} else if len(s.state.RetryTargets) > 0 {
+			msg = fmt.Sprintf("partial: retry batch done, %d targets deferred", len(s.state.RetryTargets))
+		}
+	}
+	s.finishSliceLocked(now, processedPairs, msg)
 	return nil
 }
 
@@ -1162,6 +1358,13 @@ func (s *personMergeSuggestionService) ApplySuggestion(suggestionID uint, candid
 	}
 	if suggestion == nil {
 		return fmt.Errorf("merge suggestion %d not found", suggestionID)
+	}
+	if suggestion.Status != model.PersonMergeSuggestionStatusPending {
+		return fmt.Errorf("merge suggestion %d is not pending", suggestionID)
+	}
+	// 证据过期/重试耗尽等：禁止无条件接受，须先重跑巡检刷新建议。
+	if suggestion.StaleReason != "" {
+		return fmt.Errorf("merge suggestion %d needs revalidation (stale_reason=%s); rebuild merge suggestions before applying", suggestionID, suggestion.StaleReason)
 	}
 
 	// Fail-closed: re-read person state before applying. Reject if target or
@@ -1268,6 +1471,86 @@ func (s *personMergeSuggestionService) listSuggestionTargets(cursorID uint) ([]*
 	}
 	bgPersonRepo, _, _, _ := s.bgRepos()
 	return bgPersonRepo.ListMergeSuggestionTargets(cursorID, batchSize)
+}
+
+// listDueRetryTargets 仅返回到期且仍在预算内的重试目标（有界，不做全库扫描）。
+// dropped 是 due 但已删除/隐藏/无脸/分类不合格的 ID，调用方必须移出 RetryTargets，避免永久忙循环。
+func (s *personMergeSuggestionService) listDueRetryTargets() (targets []*model.Person, dropped []uint, err error) {
+	s.mu.RLock()
+	ids := dueMergeSuggestionRetryIDs(s.state.RetryTargets, time.Now())
+	s.mu.RUnlock()
+	if len(ids) == 0 {
+		return nil, nil, nil
+	}
+	bgPersonRepo, _, _, _ := s.bgRepos()
+	people, err := bgPersonRepo.ListByIDs(ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	found := make(map[uint]*model.Person, len(people))
+	for _, p := range people {
+		if p != nil {
+			found[p.ID] = p
+		}
+	}
+	out := make([]*model.Person, 0, len(ids))
+	for _, id := range ids {
+		p := found[id]
+		if p == nil || p.Hidden || p.FaceCount <= 0 {
+			dropped = append(dropped, id)
+			continue
+		}
+		switch p.Category {
+		case model.PersonCategoryFamily, model.PersonCategoryFriend, model.PersonCategoryAcquaintance:
+			out = append(out, p)
+		default:
+			dropped = append(dropped, id)
+		}
+	}
+	return out, dropped, nil
+}
+
+// pendingSuggestionUnchanged 判断新计算结果与当前 pending 是否等价，避免无意义 obsolete+重建。
+func (s *personMergeSuggestionService) pendingSuggestionUnchanged(
+	repo repository.PersonMergeSuggestionRepository,
+	targetID uint,
+	items []model.PersonMergeSuggestionItem,
+) (bool, error) {
+	existing, err := repo.FindPendingByTarget(targetID)
+	if err != nil {
+		return false, err
+	}
+	if existing == nil {
+		return len(items) == 0, nil
+	}
+	dbItems, err := repo.GetItems(existing.ID, model.PersonMergeSuggestionItemStatusPending)
+	if err != nil {
+		return false, err
+	}
+	a := make([]modelPersonMergeItemView, 0, len(dbItems))
+	for _, it := range dbItems {
+		if it == nil {
+			continue
+		}
+		a = append(a, modelPersonMergeItemView{
+			CandidateID: it.CandidatePersonID,
+			Score:       it.SimilarityScore,
+			MatchSource: it.MatchSource,
+			Reason:      it.Reason,
+			ProfileGen:  it.CandidateProfileGeneration,
+		})
+	}
+	b := make([]modelPersonMergeItemView, 0, len(items))
+	for _, it := range items {
+		b = append(b, modelPersonMergeItemView{
+			CandidateID: it.CandidatePersonID,
+			Score:       it.SimilarityScore,
+			MatchSource: it.MatchSource,
+			Reason:      it.Reason,
+			ProfileGen:  it.CandidateProfileGeneration,
+		})
+	}
+	return pendingSuggestionItemsEquivalent(a, b), nil
 }
 
 // rejectIfHidden re-reads target and candidate person state from the database
@@ -1506,6 +1789,28 @@ func clonePersonMergeSuggestionTask(task *model.PersonMergeSuggestionTask) *mode
 	}
 	cloned := *task
 	return &cloned
+}
+
+// markExhaustedRetriesNeedsRevalidationLocked 在已持锁时调用：给耗尽重试目标的 pending 写 stale_reason。
+// 失败只记日志，不回滚重试移除（避免因标记失败再次制造忙循环）。
+func (s *personMergeSuggestionService) markExhaustedRetriesNeedsRevalidationLocked(exhausted []mergeSuggestionRetryEntry) {
+	if len(exhausted) == 0 || s.mergeSuggestionRepo == nil {
+		return
+	}
+	ids := make([]uint, 0, len(exhausted))
+	for _, e := range exhausted {
+		if e.TargetID != 0 {
+			ids = append(ids, e.TargetID)
+		}
+	}
+	n, err := s.mergeSuggestionRepo.MarkPendingStaleReason(ids, model.PersonMergeStaleReasonRetryExhausted)
+	if err != nil {
+		s.appendBackgroundLogLocked(fmt.Sprintf("标记耗尽重试目标需重验失败: %v", err))
+		return
+	}
+	if n > 0 {
+		s.appendBackgroundLogLocked(fmt.Sprintf("已标记 %d 条 pending 建议需重验（重试预算耗尽）", n))
+	}
 }
 
 func bestSuggestionSimilarity(targetEmbeddings, candidateEmbeddings []faceWithEmbedding) float64 {

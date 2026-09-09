@@ -487,6 +487,14 @@ type PersonMergeSuggestionTask struct {
 	ProcessedPairs int64      `json:"processed_pairs"`
 	StartedAt      *time.Time `json:"started_at,omitempty"`
 	StoppedAt      *time.Time `json:"stopped_at,omitempty"`
+	// Partial 表示本轮未完整成功（有重试/延期/失败目标），前端应显示「部分完成」。
+	Partial bool `json:"partial,omitempty"`
+	// RetryDueCount 到期待重试目标数（单位：目标）。
+	RetryDueCount int `json:"retry_due_count,omitempty"`
+	// RetryDeferredCount 退避中尚未到期的重试目标数。
+	RetryDeferredCount int `json:"retry_deferred_count,omitempty"`
+	// RetryTotalCount 当前仍在预算内的重试目标总数。
+	RetryTotalCount int `json:"retry_total_count,omitempty"`
 }
 
 type PersonMergeSuggestionStatsResponse struct {
