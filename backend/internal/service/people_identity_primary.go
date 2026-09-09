@@ -7,8 +7,8 @@ import (
 
 	"github.com/davidhoo/relive/internal/model"
 	"github.com/davidhoo/relive/internal/repository"
-	"github.com/google/uuid"
 	"github.com/davidhoo/relive/pkg/logger"
+	"github.com/google/uuid"
 )
 
 // IdentityComponentMatcher 是 primary 聚类决策所需的最小引擎接口。
@@ -69,18 +69,34 @@ func (s *peopleService) decidePrimaryComponent(component []*model.Face) primaryC
 		res.Status = IdentityMatchStatusInvalid
 		res.BlockReason = blockInvalidQuery
 	}
-	dec := ApplyIdentityStrategy(res, strategy)
 
 	out := primaryComponentDecision{
 		engineRes: res,
-		decision:  dec,
-		score:     dec.Score,
-		reason:    dec.Reason,
 	}
 	if res.MarginApplicable {
 		m := res.Margin
 		out.margin = &m
 	}
+
+	// 部分召回证据不可读：与旧 matcher Available=false 对齐，fail-closed 等待，禁止带病自动吸附。
+	if res.IncompleteEvidence {
+		out.action = primaryActionWait
+		out.reason = blockProfileUnavailable
+		if res.BlockReason != "" {
+			out.reason = res.BlockReason
+		}
+		// 仍记录已算出的 Best 分数，避免 wait 落库时 cluster_score 被抹成 0。
+		if res.Best != nil {
+			out.score = res.Best.Score
+			out.personID = res.Best.PersonID
+		}
+		return out
+	}
+
+	dec := ApplyIdentityStrategy(res, strategy)
+	out.decision = dec
+	out.score = dec.Score
+	out.reason = dec.Reason
 
 	switch res.Status {
 	case IdentityMatchStatusUnavailable:

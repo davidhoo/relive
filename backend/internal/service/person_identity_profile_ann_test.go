@@ -76,6 +76,43 @@ func TestIdentityProfileANN_EmptySnapshotReadyNoResults(t *testing.T) {
 	assert.Empty(t, got)
 }
 
+func TestIdentityProfileANN_RebuildOrderDeterministicByCenterID(t *testing.T) {
+	// 同一中心集合、不同输入顺序：建图后对固定查询的召回序列必须一致。
+	centersA := []*model.PersonIdentityCenter{
+		annCenter(30, 3, 1, 1, emb3(0, 0, 1)),
+		annCenter(10, 1, 1, 1, emb3(1, 0, 0)),
+		annCenter(20, 2, 1, 1, emb3(0, 1, 0)),
+		annCenter(40, 4, 1, 1, emb3(0.7, 0.7, 0)),
+		annCenter(50, 5, 1, 1, emb3(0.7, 0, 0.7)),
+	}
+	centersB := []*model.PersonIdentityCenter{
+		annCenter(50, 5, 1, 1, emb3(0.7, 0, 0.7)),
+		annCenter(40, 4, 1, 1, emb3(0.7, 0.7, 0)),
+		annCenter(20, 2, 1, 1, emb3(0, 1, 0)),
+		annCenter(30, 3, 1, 1, emb3(0, 0, 1)),
+		annCenter(10, 1, 1, 1, emb3(1, 0, 0)),
+	}
+
+	annA := newIdentityProfileANN("emb-v1")
+	annB := newIdentityProfileANN("emb-v1")
+	require.NoError(t, annA.Rebuild(centersA, "emb-v1"))
+	require.NoError(t, annB.Rebuild(centersB, "emb-v1"))
+
+	q := emb3(1, 0.05, 0)
+	gotA, readyA := annA.Search(q, 5, "emb-v1")
+	gotB, readyB := annB.Search(q, 5, "emb-v1")
+	require.True(t, readyA)
+	require.True(t, readyB)
+	require.Equal(t, gotA, gotB, "shuffled center input must not change Search ranking after CenterID-ordered build")
+
+	// 同一输入连续 Rebuild 两次：固定 Rng + 排序后必须完全一致（否则量化实验不可复现）。
+	annC := newIdentityProfileANN("emb-v1")
+	require.NoError(t, annC.Rebuild(centersA, "emb-v1"))
+	gotC, readyC := annC.Search(q, 5, "emb-v1")
+	require.True(t, readyC)
+	require.Equal(t, gotA, gotC, "repeated Rebuild of same centers must be deterministic")
+}
+
 func TestIdentityProfileANN_ValidationRejectsBadCenters(t *testing.T) {
 	ann := newIdentityProfileANN("emb-v1")
 

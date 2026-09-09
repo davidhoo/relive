@@ -11,7 +11,7 @@ package service
 
 // identityEngineVersion 是统一身份匹配引擎的版本标识。
 // 打分公式、证据聚合或状态分类语义发生变化时必须提升该版本。
-const identityEngineVersion = "identity-engine-v1"
+const identityEngineVersion = "identity-engine-v3"
 
 // IdentityMatchStatus 是引擎结果的固定分类。稳定字符串，可持久化到推荐与撤销日志。
 //
@@ -83,6 +83,8 @@ type IdentityEvidence struct {
 	Kind string
 	// PersonID 是人物证据的人物 ID；待聚类组件为 0（不为组件创建持久化假人物）。
 	PersonID uint
+	// Generation 是人物活动画像代次；组件证据为 0。
+	Generation int
 	// Units 是证据单元集合。
 	Units []IdentityEvidenceUnit
 	// SourcePersonIDs 是组件人脸的来源人物 ID（去重升序），用于 cannot-link 查询。
@@ -101,7 +103,10 @@ type IdentityPairScore struct {
 	// ForwardScore 是 left→right 方向的聚合覆盖度。
 	ForwardScore float64
 	// ReverseScore 是 right→left 方向的聚合覆盖度。
+	// 当 SingleDirection=true（组件→人物）时 ReverseScore 固定为 0，不得当作真实反向分。
 	ReverseScore float64
+	// SingleDirection 为 true 表示只计算了单向覆盖（组件→人物）；此时 ReverseScore 无意义。
+	SingleDirection bool
 	// Boundary 是两个方向中心 P10 边界的较大值（fail closed）。
 	Boundary float64
 	// CenterFitOK 表示两个方向的覆盖度均不低于各自的中心 P10 边界。
@@ -120,14 +125,15 @@ type IdentityPairScore struct {
 
 // IdentityCandidateResult 是单个候选人物的打分与证据摘要。
 type IdentityCandidateResult struct {
-	PersonID        uint
-	Score           float64
-	Boundary        float64
-	CenterFitOK     bool
-	CenterIDs       []uint
-	SupportingUnits int
-	MinSupportCount int
-	StableCenters   bool
+	PersonID          uint
+	Score             float64
+	Boundary          float64
+	CenterFitOK       bool
+	CenterIDs         []uint
+	SupportingUnits   int
+	MinSupportCount   int
+	StableCenters     bool
+	ProfileGeneration int
 	// Status 是该候选自身的分类（match / insufficient / hard_conflict）。
 	Status IdentityMatchStatus
 	// BlockReason 是固定枚举字符串（复用 matcher 的 block* 常量），空串表示未被阻断。
@@ -154,6 +160,10 @@ type IdentityMatchResult struct {
 	// MarginApplicable 表示 Margin 来自同一召回上下文、可用于策略判定。
 	// 显式人物对比较没有候选集合，Margin 无意义，此处为 false，自动策略必须 fail closed。
 	MarginApplicable bool
+	// TargetProfileGeneration 是目标侧活动画像代次（人物证据）。
+	TargetProfileGeneration int
+	// IncompleteEvidence 表示召回候选中有证据不可读被跳过；不得视为完整成功空结果。
+	IncompleteEvidence bool
 	// Candidates 是本次参与排序的全部候选（含被硬阻断者），按分数降序、人物 ID 升序。
 	Candidates []IdentityCandidateResult
 }
@@ -172,17 +182,25 @@ func newIdentityMatchResult(status IdentityMatchStatus, blockReason string) Iden
 type IdentityRecallOptions struct {
 	// ANNK 是单个查询向量向 ANN 请求的最大候选人物数。
 	ANNK int
+	// ExactK 是单个查询向量精确 cosine 补召的最大人物数。
+	// 0 表示使用默认 identityProfileMatcherExactK；负数表示关闭精确补召（仅 ANN）。
+	ExactK int
 	// MaxCandidates 是候选并集的最大保留数。
 	MaxCandidates int
 	// TopK 是每个目标最终保留的候选数（<=0 表示不额外截断）。
 	TopK int
 }
 
-// normalized 用引擎默认预算补齐未设置项。默认值与既有 matcher 常量一致，
-// 保证不显式传入 options 时行为不变。
+// normalized 用引擎默认预算补齐未设置项。
+// ExactK：0→默认开启有界精确补召；负数→关闭（仅 ANN，供诊断/夹具）。
 func (o IdentityRecallOptions) normalized() IdentityRecallOptions {
 	if o.ANNK <= 0 {
 		o.ANNK = identityProfileMatcherANNK
+	}
+	if o.ExactK == 0 {
+		o.ExactK = identityProfileMatcherExactK
+	} else if o.ExactK < 0 {
+		o.ExactK = 0
 	}
 	if o.MaxCandidates <= 0 {
 		o.MaxCandidates = identityProfileMatcherMaxCandidates

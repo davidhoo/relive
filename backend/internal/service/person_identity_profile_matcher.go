@@ -11,6 +11,9 @@ import (
 const (
 	// identityProfileMatcherANNK 是每张查询脸向 ANN 请求的最大候选人物数。
 	identityProfileMatcherANNK = 50
+	// identityProfileMatcherExactK 是每查询向量精确 cosine 补召人物上限。
+	// 用于覆盖 HNSW 边界漏召；O(中心数)，与 ANNK 抬升不同，结果不依赖图结构。
+	identityProfileMatcherExactK = 100
 	// identityProfileMatcherMaxCandidates 是组件候选并集的最大保留数。
 	identityProfileMatcherMaxCandidates = 200
 )

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -18,6 +19,10 @@ const identityProfileANNM = 16
 
 // identityProfileANNEfSearch 是身份画像中心 HNSW 查询的搜索束宽。
 const identityProfileANNEfSearch = 200
+
+// identityProfileANNRNGSeed 固定 HNSW 层高随机源，避免每次 Rebuild 因 time.Now 种子导致边界召回漂移。
+// 与按 CenterID 排序插入配合，使同中心集合的建图可复现。
+const identityProfileANNRNGSeed int64 = 0x52454c49564501 // "RELIVE\x01"
 
 // identityProfileANNDeltaMax 是 delta 增量索引的内部上限。达到上限后不再继续无界增长，
 // 而是标记 ANN 不可用并请求完整重建（fail-closed）。
@@ -34,11 +39,12 @@ type profileCenterVector struct {
 // identityCenterIndex 是一次完整 snapshot 的不可变 HNSW 索引及其元数据。
 // 发布后不得修改其 graph 与 map；查询只读访问。
 type identityCenterIndex struct {
-	graph       *hnsw.Graph[uint] // key = center ID
-	centerOwner map[uint]uint     // center ID → person ID
-	generation  map[uint]int      // center ID → generation
-	model       string            // 构建时的 embedding 模型签名
-	dim         int               // 向量维度（0 表示空 snapshot）
+	graph       *hnsw.Graph[uint]     // key = center ID
+	centerOwner map[uint]uint         // center ID → person ID
+	generation  map[uint]int          // center ID → generation
+	centers     []profileCenterVector // CenterID 序；供有界精确补召（不依赖 HNSW）
+	model       string                // 构建时的 embedding 模型签名
+	dim         int                   // 向量维度（0 表示空 snapshot）
 }
 
 // identityProfileANN 维护人物多中心身份画像的可并发查询、可原子替换的 ANN 缓存。
@@ -215,6 +221,104 @@ func (a *identityProfileANN) Search(query []float32, k int, model string) ([]uin
 		return cands[i].personID < cands[j].personID
 	})
 
+	if k < len(cands) {
+		cands = cands[:k]
+	}
+	out := make([]uint, 0, len(cands))
+	for _, c := range cands {
+		out = append(out, c.personID)
+	}
+	return out, true
+}
+
+// ExactTopPeople 对 snapshot+delta 中心做有界精确 cosine 扫描，返回最近的 k 个去重人物。
+// 不依赖 HNSW 图；用于补召 ANN 边界漏掉的阈值邻近候选。ready=false 语义与 Search 一致。
+// 复杂度 O(中心数)；k<=0 时返回空切片且 ready=true（显式关闭补召）。
+func (a *identityProfileANN) ExactTopPeople(query []float32, k int, model string) ([]uint, bool) {
+	if a.unavailable.Load() {
+		return nil, false
+	}
+	if k <= 0 {
+		return []uint{}, true
+	}
+	if !validVector(query) {
+		return nil, false
+	}
+
+	snap := a.snapshot.Load()
+	if snap == nil {
+		return nil, false
+	}
+	if snap.model != model {
+		return nil, false
+	}
+	if snap.dim > 0 && len(query) != snap.dim {
+		return nil, false
+	}
+
+	a.deltaMu.RLock()
+	if a.unavailable.Load() {
+		a.deltaMu.RUnlock()
+		return nil, false
+	}
+	deltaCopy := make(map[uint]profileCenterVector, len(a.delta))
+	for id, v := range a.delta {
+		deltaCopy[id] = v
+	}
+	invalidCopy := make(map[uint]struct{}, len(a.invalid))
+	for id := range a.invalid {
+		invalidCopy[id] = struct{}{}
+	}
+	activeGen := make(map[uint]int, len(a.activeGeneration))
+	for pid, g := range a.activeGeneration {
+		activeGen[pid] = g
+	}
+	a.deltaMu.RUnlock()
+
+	type cand struct {
+		personID uint
+		dist     float32
+	}
+	bestDist := make(map[uint]float32)
+	consider := func(personID uint, emb []float32) {
+		if personID == 0 || len(emb) != len(query) {
+			return
+		}
+		d := hnsw.CosineDistance(query, emb)
+		if prev, ok := bestDist[personID]; !ok || d < prev {
+			bestDist[personID] = d
+		}
+	}
+
+	for _, c := range snap.centers {
+		if _, bad := invalidCopy[c.CenterID]; bad {
+			continue
+		}
+		if active, ok := activeGen[c.PersonID]; ok && c.Generation != active {
+			continue
+		}
+		consider(c.PersonID, c.Embedding)
+	}
+	for id, v := range deltaCopy {
+		if _, bad := invalidCopy[id]; bad {
+			continue
+		}
+		if active, ok := activeGen[v.PersonID]; ok && v.Generation != active {
+			continue
+		}
+		consider(v.PersonID, v.Embedding)
+	}
+
+	cands := make([]cand, 0, len(bestDist))
+	for pid, d := range bestDist {
+		cands = append(cands, cand{personID: pid, dist: d})
+	}
+	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].dist != cands[j].dist {
+			return cands[i].dist < cands[j].dist
+		}
+		return cands[i].personID < cands[j].personID
+	})
 	if k < len(cands) {
 		cands = cands[:k]
 	}
@@ -495,13 +599,27 @@ func (a *identityProfileANN) buildIndex(centers []*model.PersonIdentityCenter, e
 		return nil, errANNModelMismatch
 	}
 
-	var dim int
-	nodes := make([]hnsw.Node[uint], 0, len(centers))
-	centerOwner := make(map[uint]uint, len(centers))
-	generation := make(map[uint]int, len(centers))
-	seen := make(map[uint]struct{})
+	// 按 CenterID 稳定排序后再插入，避免 ListAllActiveCenters 无序导致 HNSW 图结构漂移、边界召回不可复现。
+	ordered := append([]*model.PersonIdentityCenter(nil), centers...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		ci, cj := ordered[i], ordered[j]
+		if ci == nil {
+			return false
+		}
+		if cj == nil {
+			return true
+		}
+		return ci.ID < cj.ID
+	})
 
-	for _, c := range centers {
+	var dim int
+	nodes := make([]hnsw.Node[uint], 0, len(ordered))
+	centerOwner := make(map[uint]uint, len(ordered))
+	generation := make(map[uint]int, len(ordered))
+	seen := make(map[uint]struct{})
+	centerVecs := make([]profileCenterVector, 0, len(ordered))
+
+	for _, c := range ordered {
 		if c == nil {
 			return nil, errors.New("identity profile ANN: nil center")
 		}
@@ -534,12 +652,20 @@ func (a *identityProfileANN) buildIndex(centers []*model.PersonIdentityCenter, e
 		nodes = append(nodes, hnsw.MakeNode(c.ID, emb))
 		centerOwner[c.ID] = c.PersonID
 		generation[c.ID] = c.Generation
+		centerVecs = append(centerVecs, profileCenterVector{
+			CenterID:   c.ID,
+			PersonID:   c.PersonID,
+			Generation: c.Generation,
+			Embedding:  emb,
+		})
 	}
 
 	g := hnsw.NewGraph[uint]()
 	g.Distance = hnsw.CosineDistance
 	g.M = identityProfileANNM
 	g.EfSearch = identityProfileANNEfSearch
+	// coder/hnsw 默认 Rng=time.Now；不固定则同数据多次 Rebuild 召回不稳定。
+	g.Rng = rand.New(rand.NewSource(identityProfileANNRNGSeed))
 	if len(nodes) > 0 {
 		g.Add(nodes...)
 	}
@@ -548,6 +674,7 @@ func (a *identityProfileANN) buildIndex(centers []*model.PersonIdentityCenter, e
 		graph:       g,
 		centerOwner: centerOwner,
 		generation:  generation,
+		centers:     centerVecs,
 		model:       embeddingModel,
 		dim:         dim,
 	}, nil

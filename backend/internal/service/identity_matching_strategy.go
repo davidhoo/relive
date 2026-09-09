@@ -205,6 +205,8 @@ type identityStrategyFingerprintPayload struct {
 	MinCenterPhotos        int     `json:"min_center_photos"`
 	MaxCenters             int     `json:"max_centers"`
 	SuggestScoreThreshold  float64 `json:"suggest_score_threshold"`
+	RecallANNK             int     `json:"recall_ann_k"`
+	RecallExactK           int     `json:"recall_exact_k"`
 }
 
 // IdentityStrategyFingerprint 返回生效策略配置的 SHA256 十六进制指纹。
@@ -224,6 +226,8 @@ func IdentityStrategyFingerprint(cfg config.PeopleConfig) string {
 		MinCenterPhotos:        cfg.IdentityProfileMinCenterPhotos,
 		MaxCenters:             cfg.IdentityProfileMaxCenters,
 		SuggestScoreThreshold:  suggest.ScoreThreshold,
+		RecallANNK:             identityProfileMatcherANNK,
+		RecallExactK:           identityProfileMatcherExactK,
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {

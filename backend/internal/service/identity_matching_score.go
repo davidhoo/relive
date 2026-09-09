@@ -64,6 +64,37 @@ func ScoreIdentityEvidence(left, right IdentityEvidence) IdentityPairScore {
 	}
 }
 
+// ScoreComponentAgainstPerson 计算「待聚类组件 → 已有人物」的身份分数。
+//
+// 与人物对打分共用 scoreIdentityDirection / aggregateWeighted / cosine，但只取
+// 组件→人物单向覆盖度：不要求人物全部外观中心反向覆盖小组件。支撑样本与稳定性
+// 取自匹配到的人物中心真实 SupportCount。
+func ScoreComponentAgainstPerson(component, person IdentityEvidence) IdentityPairScore {
+	if len(component.Units) == 0 || len(person.Units) == 0 {
+		return IdentityPairScore{Status: IdentityMatchStatusInvalid}
+	}
+	if !identityUnitsUsable(component.Units) || !identityUnitsUsable(person.Units) {
+		return IdentityPairScore{Status: IdentityMatchStatusInvalid}
+	}
+	forward, ok := scoreIdentityDirection(component.Units, person.Units)
+	if !ok {
+		return IdentityPairScore{Status: IdentityMatchStatusInvalid}
+	}
+	return IdentityPairScore{
+		Status:          IdentityMatchStatusInsufficient,
+		Score:           forward.score,
+		ForwardScore:    forward.score,
+		ReverseScore:    0, // 单向评分，不伪造反向分量
+		SingleDirection: true,
+		Boundary:        forward.boundary,
+		CenterFitOK:     forward.score >= forward.boundary,
+		CenterIDs:       dedupSortUint(forward.matchedCenterIDs),
+		SupportingUnits: forward.supportingUnits,
+		MinSupportCount: forward.minSupportCount,
+		StableCenters:   forward.stableCenters,
+	}
+}
+
 // identityDirectionScore 是单方向覆盖度的计算结果。
 type identityDirectionScore struct {
 	score    float64
