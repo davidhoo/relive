@@ -94,7 +94,10 @@ export function isMergeSuggestionWarning(item: Pick<PersonMergeSuggestionItem, '
   return item.warning === 'same_photo_cooccurrence'
 }
 
-export function getMergeSuggestionTaskStatusMeta(task?: Pick<PersonMergeSuggestionTask, 'status'> | string | null): TaskStatusMeta {
+export function getMergeSuggestionTaskStatusMeta(task?: Pick<PersonMergeSuggestionTask, 'status' | 'partial'> | string | null): TaskStatusMeta {
+  if (task && typeof task !== 'string' && task.partial) {
+    return { label: '部分完成', type: 'warning' }
+  }
   const status = typeof task === 'string' ? task : task?.status
   if (status === 'running') {
     return { label: '巡检中', type: 'warning' }

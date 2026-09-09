@@ -373,6 +373,10 @@
 
               <div class="task-summary">
                 <span>累计扫描候选对 <strong>{{ mergeSuggestionTask?.processed_pairs || 0 }}</strong></span>
+                <span v-if="mergeSuggestionTask?.retry_total_count">
+                  · 身份重试 <strong>{{ mergeSuggestionTask.retry_total_count }}</strong>
+                  （到期 {{ mergeSuggestionTask.retry_due_count || 0 }} / 延期 {{ mergeSuggestionTask.retry_deferred_count || 0 }}）
+                </span>
               </div>
             </div>
           </el-card>

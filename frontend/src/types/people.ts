@@ -110,6 +110,10 @@ export interface PersonMergeSuggestionTask {
   processed_pairs: number
   started_at?: string
   stopped_at?: string
+  partial?: boolean
+  retry_due_count?: number
+  retry_deferred_count?: number
+  retry_total_count?: number
 }
 
 export interface PersonMergeSuggestionStats {
